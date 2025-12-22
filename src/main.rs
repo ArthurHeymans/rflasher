@@ -6,7 +6,7 @@ mod cli;
 mod commands;
 
 use clap::Parser;
-use cli::{Cli, Commands};
+use cli::{Cli, Commands, LayoutCommands};
 use rflasher_core::chip::ChipDatabase;
 use rflasher_core::flash;
 use rflasher_dummy::DummyFlash;
@@ -42,22 +42,28 @@ fn main() {
             programmer,
             output,
             chip: _,
+            layout: _,
         } => cmd_read(&programmer, &output, &db),
         Commands::Write {
             programmer,
             input,
             chip: _,
-            verify: _,
-            no_erase: _,
-        } => cmd_write(&programmer, &input, &db),
+            verify,
+            no_erase,
+            layout: _,
+        } => cmd_write(&programmer, &input, verify, no_erase, &db),
         Commands::Erase {
             programmer,
             chip: _,
-        } => cmd_erase(&programmer, &db),
+            start,
+            length,
+            layout: _,
+        } => cmd_erase(&programmer, start, length, &db),
         Commands::Verify {
             programmer,
             input,
             chip: _,
+            layout: _,
         } => cmd_verify(&programmer, &input, &db),
         Commands::Info {
             programmer,
@@ -71,6 +77,21 @@ fn main() {
             commands::list_chips(&db, vendor.as_deref());
             Ok(())
         }
+        Commands::Layout(subcmd) => match subcmd {
+            LayoutCommands::Show { file } => commands::layout::cmd_show(&file),
+            LayoutCommands::Extract { input, output } => {
+                commands::layout::cmd_extract(&input, &output)
+            }
+            LayoutCommands::Ifd { input, output } => {
+                commands::layout::cmd_ifd(&input, output.as_deref())
+            }
+            LayoutCommands::Fmap { input, output } => {
+                commands::layout::cmd_fmap(&input, output.as_deref())
+            }
+            LayoutCommands::Create { output, size } => {
+                commands::layout::cmd_create(&output, &size)
+            }
+        },
     };
 
     if let Err(e) = result {
@@ -124,107 +145,71 @@ fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::
 }
 
 fn cmd_probe(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
-    match programmer {
-        "dummy" => {
-            let mut master = DummyFlash::new_default();
-            commands::run_probe(&mut master, db)
-        }
-        _ => {
-            eprintln!("Unknown programmer: {}", programmer);
-            eprintln!("Use 'rflasher list-programmers' to see available programmers");
-            Err("Unknown programmer".into())
-        }
-    }
+    with_programmer(programmer, |master| commands::run_probe(master, db))
 }
 
 fn cmd_read(
     programmer: &str,
-    output: &PathBuf,
+    output: &Path,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match programmer {
-        "dummy" => {
-            let mut master = DummyFlash::new_default();
-            let ctx = flash::probe(&mut master, db)?;
-            println!("Would read {} bytes to {:?}", ctx.chip.total_size, output);
-            Ok(())
-        }
-        _ => {
-            eprintln!("Unknown programmer: {}", programmer);
-            Err("Unknown programmer".into())
-        }
-    }
+    with_programmer(programmer, |master| commands::run_read(master, db, output))
 }
 
 fn cmd_write(
     programmer: &str,
-    input: &PathBuf,
+    input: &Path,
+    verify: bool,
+    no_erase: bool,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match programmer {
-        "dummy" => {
-            let mut master = DummyFlash::new_default();
-            let ctx = flash::probe(&mut master, db)?;
-            println!(
-                "Would write {:?} to {} byte chip",
-                input, ctx.chip.total_size
-            );
-            Ok(())
-        }
-        _ => {
-            eprintln!("Unknown programmer: {}", programmer);
-            Err("Unknown programmer".into())
-        }
-    }
+    with_programmer(programmer, |master| {
+        commands::run_write(master, db, input, verify, no_erase)
+    })
 }
 
-fn cmd_erase(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
-    match programmer {
-        "dummy" => {
-            let mut master = DummyFlash::new_default();
-            let ctx = flash::probe(&mut master, db)?;
-            println!("Would erase {} byte chip", ctx.chip.total_size);
-            Ok(())
-        }
-        _ => {
-            eprintln!("Unknown programmer: {}", programmer);
-            Err("Unknown programmer".into())
-        }
-    }
+fn cmd_erase(
+    programmer: &str,
+    start: Option<u32>,
+    length: Option<u32>,
+    db: &ChipDatabase,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_programmer(programmer, |master| {
+        commands::run_erase(master, db, start, length)
+    })
 }
 
 fn cmd_verify(
     programmer: &str,
-    input: &PathBuf,
+    input: &Path,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match programmer {
-        "dummy" => {
-            let mut master = DummyFlash::new_default();
-            let ctx = flash::probe(&mut master, db)?;
-            println!(
-                "Would verify {:?} against {} byte chip",
-                input, ctx.chip.total_size
-            );
-            Ok(())
-        }
-        _ => {
-            eprintln!("Unknown programmer: {}", programmer);
-            Err("Unknown programmer".into())
-        }
-    }
+    with_programmer(programmer, |master| {
+        commands::run_verify(master, db, input)
+    })
 }
 
 fn cmd_info(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
+    with_programmer(programmer, |master| {
+        let ctx = flash::probe(master, db)?;
+        print_chip_info(&ctx);
+        Ok(())
+    })
+}
+
+/// Execute a function with the specified programmer
+fn with_programmer<F>(programmer: &str, f: F) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: FnOnce(&mut DummyFlash) -> Result<(), Box<dyn std::error::Error>>,
+{
     match programmer {
         "dummy" => {
             let mut master = DummyFlash::new_default();
-            let ctx = flash::probe(&mut master, db)?;
-            print_chip_info(&ctx);
-            Ok(())
+            f(&mut master)
         }
         _ => {
             eprintln!("Unknown programmer: {}", programmer);
+            eprintln!("Use 'rflasher list-programmers' to see available programmers");
             Err("Unknown programmer".into())
         }
     }

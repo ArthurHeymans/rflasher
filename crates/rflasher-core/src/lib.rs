@@ -38,6 +38,8 @@ extern crate std;
 pub mod chip;
 pub mod error;
 pub mod flash;
+#[cfg(feature = "alloc")]
+pub mod layout;
 pub mod programmer;
 pub mod protocol;
 pub mod spi;

@@ -156,24 +156,47 @@ rflasher/
 
 **Reference**: `flashprog/flashchips.c` contains ~600 chip definitions (more can be ported)
 
-### Phase 3: Complete CLI Commands
+### Phase 3: Complete CLI Commands - COMPLETE
 
 **Goal**: Fully functional read/write/erase/verify commands
 
-**Tasks**:
-1. Implement `read` command:
+**Implemented**:
+1. `read` command:
    - File I/O with progress bar (indicatif)
-   - Chunked reading for large chips
-2. Implement `write` command:
+   - Chunked reading (4 KiB chunks)
+2. `write` command:
    - Read file, erase, program, verify cycle
-   - Smart erase (only erase sectors that differ)
-   - Progress reporting
-3. Implement `erase` command:
+   - Progress reporting for each phase
+   - Optional verification (`--verify`)
+   - Optional skip erase (`--no-erase`)
+3. `erase` command:
    - Full chip erase
-   - Sector-level erase option
-4. Implement `verify` command:
+   - Sector-level erase with `--start` and `--length` options
+4. `verify` command:
    - Compare file against flash contents
-5. Add progress bars using `indicatif` crate
+   - Reports first mismatch location and total mismatch count
+5. Progress bars using `indicatif` crate for all operations
+
+**Usage Examples**:
+```bash
+# Read flash to file
+rflasher read -p dummy -o flash.bin
+
+# Write file to flash (with erase and verify)
+rflasher write -p dummy -i flash.bin
+
+# Write without erasing
+rflasher write -p dummy -i flash.bin --no-erase
+
+# Erase entire chip
+rflasher erase -p dummy
+
+# Erase 64 KiB starting at 0x10000
+rflasher erase -p dummy --start 0x10000 --length 0x10000
+
+# Verify flash against file
+rflasher verify -p dummy -i flash.bin
+```
 
 ### Phase 4: CH341A Programmer
 
@@ -256,17 +279,68 @@ rflasher/
 
 **Note**: This is an `OpaqueMaster` implementation, not `SpiMaster`
 
-### Phase 9: Advanced Features
+### Phase 9: Layout Support - COMPLETE
+
+**Goal**: Flash layout support for region-based operations
+
+**Implemented**:
+1. TOML-based layout file format with:
+   - Named regions with start/end addresses
+   - `readonly` and `dangerous` flags per region
+   - Optional chip size validation
+2. Intel Flash Descriptor (IFD) parsing:
+   - Automatic detection via signature (0x0FF0A55A)
+   - Extracts region names (descriptor, bios, me, gbe, etc.)
+   - Marks dangerous regions (ME, descriptor)
+3. FMAP parsing (Chromebook-style):
+   - Signature search ("__FMAP__")
+   - Extracts regions with names and flags
+   - Supports version 1.x
+4. Layout CLI commands:
+   - `layout show` - Display layout from TOML file
+   - `layout extract` - Auto-detect and extract IFD/FMAP
+   - `layout ifd` - Extract IFD specifically
+   - `layout fmap` - Extract FMAP specifically
+   - `layout create` - Create template layout file
+5. Layout options on read/write/erase/verify:
+   - `--layout <file>` - Use layout file
+   - `--include <regions>` - Include specific regions
+   - `--exclude <regions>` - Exclude regions
+   - `--region <name>` - Single region shorthand
+
+**Layout File Format (TOML)**:
+```toml
+[layout]
+name = "My BIOS"
+chip_size = "16 MiB"
+
+[[region]]
+name = "descriptor"
+start = 0x000000
+end = 0x000FFF
+readonly = true
+
+[[region]]
+name = "bios"
+start = 0x001000
+end = 0x7FFFFF
+
+[[region]]
+name = "me"
+start = 0x800000
+end = 0xFFFFFF
+dangerous = true
+```
+
+### Phase 10: Remaining Features
 
 **Goal**: Production-ready tool
 
 **Tasks**:
-1. Layout file support (FMAP, IFD)
-2. Partial read/write by region name
-3. Optimal erase algorithm (minimize erase operations)
-4. Write protection management
-5. SFDP parsing for auto-detection
-6. Comprehensive test suite
+1. Optimal erase algorithm (minimize erase operations)
+2. Write protection management
+3. SFDP parsing for auto-detection
+4. Comprehensive test suite
 
 ---
 
