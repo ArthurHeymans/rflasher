@@ -7,6 +7,8 @@ bitflags! {
     ///
     /// These flags describe what capabilities and behaviors a flash chip has.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "std", serde(transparent))]
     pub struct Features: u32 {
         // Write enable behavior
         /// Use WREN (0x06) before WRSR

@@ -1,5 +1,7 @@
 //! High-level flash operations
 
+#[cfg(feature = "alloc")]
+use crate::chip::ChipDatabase;
 use crate::chip::EraseBlock;
 use crate::error::{Error, Result};
 use crate::programmer::SpiMaster;
@@ -7,13 +9,24 @@ use crate::protocol;
 
 use super::context::{AddressMode, FlashContext};
 
-/// Probe for a flash chip and return a context if found
-pub fn probe<M: SpiMaster>(master: &mut M) -> Result<FlashContext> {
+/// Probe for a flash chip using a chip database and return a context if found
+#[cfg(feature = "alloc")]
+pub fn probe<M: SpiMaster>(master: &mut M, db: &ChipDatabase) -> Result<FlashContext> {
     let (manufacturer, device) = protocol::read_jedec_id(master)?;
 
-    let chip = crate::chip::find_by_jedec_id(manufacturer, device).ok_or(Error::ChipNotFound)?;
+    let chip = db
+        .find_by_jedec_id(manufacturer, device)
+        .ok_or(Error::ChipNotFound)?
+        .clone();
 
     Ok(FlashContext::new(chip))
+}
+
+/// Read the JEDEC ID from the flash chip
+///
+/// Returns (manufacturer_id, device_id) tuple.
+pub fn read_jedec_id<M: SpiMaster>(master: &mut M) -> Result<(u8, u16)> {
+    protocol::read_jedec_id(master)
 }
 
 /// Read flash contents
@@ -117,7 +130,7 @@ pub fn erase<M: SpiMaster>(master: &mut M, ctx: &FlashContext, addr: u32, len: u
 
     // Find the best erase block size for this operation
     let erase_block =
-        select_erase_block(ctx.chip.erase_blocks, addr, len).ok_or(Error::InvalidAlignment)?;
+        select_erase_block(ctx.chip.erase_blocks(), addr, len).ok_or(Error::InvalidAlignment)?;
 
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
     let use_native = ctx.use_native_4byte;
@@ -206,7 +219,7 @@ pub fn verify<M: SpiMaster>(
 }
 
 /// Select the best erase block size for the given operation
-fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> Option<&EraseBlock> {
+fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> Option<EraseBlock> {
     // Find the largest block size that:
     // 1. Evenly divides the length
     // 2. The address is aligned to
@@ -219,6 +232,7 @@ fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> Optio
         })
         .filter(|eb| addr.is_multiple_of(eb.size) && len.is_multiple_of(eb.size))
         .max_by_key(|eb| eb.size)
+        .copied()
 }
 
 /// Map a 3-byte erase opcode to its 4-byte equivalent

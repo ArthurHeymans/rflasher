@@ -6,5 +6,11 @@
 mod features;
 mod types;
 
+#[cfg(feature = "std")]
+mod database;
+
 pub use features::Features;
 pub use types::*;
+
+#[cfg(feature = "std")]
+pub use database::*;

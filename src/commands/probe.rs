@@ -1,10 +1,14 @@
 //! Probe command implementation
 
+use rflasher_core::chip::ChipDatabase;
 use rflasher_core::flash;
 use rflasher_core::programmer::SpiMaster;
 
-pub fn run_probe<M: SpiMaster>(master: &mut M) -> Result<(), Box<dyn std::error::Error>> {
-    match flash::probe(master) {
+pub fn run_probe<M: SpiMaster>(
+    master: &mut M,
+    db: &ChipDatabase,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match flash::probe(master, db) {
         Ok(ctx) => {
             println!("Found flash chip:");
             println!("  Vendor: {}", ctx.chip.vendor);

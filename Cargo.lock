@@ -482,6 +482,8 @@ dependencies = [
  "embedded-io",
  "embedded-io-async",
  "rflasher-chips-codegen",
+ "ron",
+ "serde",
  "thiserror",
 ]
 

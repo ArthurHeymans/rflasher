@@ -1,6 +1,6 @@
 //! List commands implementation
 
-use rflasher_core::chip;
+use rflasher_core::chip::ChipDatabase;
 
 /// List all supported programmers
 pub fn list_programmers() {
@@ -14,9 +14,9 @@ pub fn list_programmers() {
     println!("  linux_spi - Linux spidev (not yet implemented)");
 }
 
-/// List all supported chips
-pub fn list_chips(vendor_filter: Option<&str>) {
-    println!("Supported flash chips:");
+/// List all supported chips from the database
+pub fn list_chips(db: &ChipDatabase, vendor_filter: Option<&str>) {
+    println!("Supported flash chips ({} total):", db.len());
     println!();
     println!(
         "{:<12} {:<20} {:>10} {:>10}",
@@ -24,7 +24,7 @@ pub fn list_chips(vendor_filter: Option<&str>) {
     );
     println!("{}", "-".repeat(60));
 
-    for chip in chip::CHIPS {
+    for chip in db.iter() {
         // Apply vendor filter if specified
         if let Some(vendor) = vendor_filter {
             if !chip.vendor.to_lowercase().contains(&vendor.to_lowercase()) {

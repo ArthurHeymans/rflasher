@@ -303,24 +303,40 @@ pub trait OpaqueMaster {
         (
             name: "W25Q128.V",
             device_id: 0x4018,
-            total_size: 16777216,  // 16 MiB
-            page_size: 256,
-            features: ["wrsr_wren", "fast_read", "dual_io", "quad_io", "otp",
-                       "erase_4k", "erase_32k", "erase_64k", "status_reg_2",
-                       "qe_sr2", "wp_tb", "wp_sec", "wp_cmp"],
+            total_size: MiB(16),  // Human-readable sizes: B(n), KiB(n), MiB(n)
+            features: (
+                wrsr_wren: true,
+                fast_read: true,
+                dual_io: true,
+                quad_io: true,
+                otp: true,
+                erase_4k: true,
+                erase_32k: true,
+                erase_64k: true,
+                status_reg_2: true,
+                qe_sr2: true,
+                wp_tb: true,
+                wp_sec: true,
+                wp_cmp: true,
+            ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: 4096),
-                (opcode: 0x52, size: 32768),
-                (opcode: 0xD8, size: 65536),
-                (opcode: 0x60, size: 16777216),
-                (opcode: 0xC7, size: 16777216),
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0x60, size: MiB(16)),
+                (opcode: 0xC7, size: MiB(16)),
             ],
             tested: (probe: Ok, read: Ok, erase: Ok, write: Ok, wp: Ok),
         ),
     ],
 )
 ```
+
+**Schema features:**
+- `Size` enum: `B(n)`, `KiB(n)`, `MiB(n)` for human-readable sizes
+- `features` struct with bool fields instead of string array
+- Code generation uses `quote` + `prettyplease` for clean output
 
 ---
 

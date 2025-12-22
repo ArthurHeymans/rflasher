@@ -7,9 +7,10 @@ mod commands;
 
 use clap::Parser;
 use cli::{Cli, Commands};
+use rflasher_core::chip::ChipDatabase;
 use rflasher_core::flash;
 use rflasher_dummy::DummyFlash;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
     // Initialize logger
@@ -24,39 +25,50 @@ fn main() {
         _ => log::set_max_level(log::LevelFilter::Trace),
     }
 
+    // Load chip database
+    let db = match load_chip_database(cli.chip_db.as_deref()) {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("Failed to load chip database: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    log::info!("Loaded {} chip definitions", db.len());
+
     let result = match cli.command {
-        Commands::Probe { programmer } => cmd_probe(&programmer),
+        Commands::Probe { programmer } => cmd_probe(&programmer, &db),
         Commands::Read {
             programmer,
             output,
             chip: _,
-        } => cmd_read(&programmer, &output),
+        } => cmd_read(&programmer, &output, &db),
         Commands::Write {
             programmer,
             input,
             chip: _,
             verify: _,
             no_erase: _,
-        } => cmd_write(&programmer, &input),
+        } => cmd_write(&programmer, &input, &db),
         Commands::Erase {
             programmer,
             chip: _,
-        } => cmd_erase(&programmer),
+        } => cmd_erase(&programmer, &db),
         Commands::Verify {
             programmer,
             input,
             chip: _,
-        } => cmd_verify(&programmer, &input),
+        } => cmd_verify(&programmer, &input, &db),
         Commands::Info {
             programmer,
             chip: _,
-        } => cmd_info(&programmer),
+        } => cmd_info(&programmer, &db),
         Commands::ListProgrammers => {
             commands::list_programmers();
             Ok(())
         }
         Commands::ListChips { vendor } => {
-            commands::list_chips(vendor.as_deref());
+            commands::list_chips(&db, vendor.as_deref());
             Ok(())
         }
     };
@@ -67,11 +79,55 @@ fn main() {
     }
 }
 
-fn cmd_probe(programmer: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// Load the chip database from the specified path or default locations
+fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::error::Error>> {
+    let mut db = ChipDatabase::new();
+
+    if let Some(path) = path {
+        // User specified a path
+        if path.is_dir() {
+            db.load_dir(path)?;
+        } else if path.is_file() {
+            db.load_file(path)?;
+        } else {
+            return Err(format!("Chip database path not found: {}", path.display()).into());
+        }
+    } else {
+        // Try default locations
+        let default_paths = [
+            PathBuf::from("chips/vendors"),
+            PathBuf::from("/usr/share/rflasher/chips"),
+            PathBuf::from("/usr/local/share/rflasher/chips"),
+        ];
+
+        let mut loaded = false;
+        for dir in &default_paths {
+            if dir.is_dir() {
+                match db.load_dir(dir) {
+                    Ok(count) => {
+                        log::debug!("Loaded {} chips from {}", count, dir.display());
+                        loaded = true;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to load chips from {}: {}", dir.display(), e);
+                    }
+                }
+            }
+        }
+
+        if !loaded {
+            log::warn!("No chip database found in default locations");
+        }
+    }
+
+    Ok(db)
+}
+
+fn cmd_probe(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
     match programmer {
         "dummy" => {
             let mut master = DummyFlash::new_default();
-            commands::run_probe(&mut master)
+            commands::run_probe(&mut master, db)
         }
         _ => {
             eprintln!("Unknown programmer: {}", programmer);
@@ -81,11 +137,15 @@ fn cmd_probe(programmer: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn cmd_read(programmer: &str, output: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_read(
+    programmer: &str,
+    output: &PathBuf,
+    db: &ChipDatabase,
+) -> Result<(), Box<dyn std::error::Error>> {
     match programmer {
         "dummy" => {
             let mut master = DummyFlash::new_default();
-            let ctx = flash::probe(&mut master)?;
+            let ctx = flash::probe(&mut master, db)?;
             println!("Would read {} bytes to {:?}", ctx.chip.total_size, output);
             Ok(())
         }
@@ -96,11 +156,15 @@ fn cmd_read(programmer: &str, output: &PathBuf) -> Result<(), Box<dyn std::error
     }
 }
 
-fn cmd_write(programmer: &str, input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_write(
+    programmer: &str,
+    input: &PathBuf,
+    db: &ChipDatabase,
+) -> Result<(), Box<dyn std::error::Error>> {
     match programmer {
         "dummy" => {
             let mut master = DummyFlash::new_default();
-            let ctx = flash::probe(&mut master)?;
+            let ctx = flash::probe(&mut master, db)?;
             println!(
                 "Would write {:?} to {} byte chip",
                 input, ctx.chip.total_size
@@ -114,11 +178,11 @@ fn cmd_write(programmer: &str, input: &PathBuf) -> Result<(), Box<dyn std::error
     }
 }
 
-fn cmd_erase(programmer: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_erase(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
     match programmer {
         "dummy" => {
             let mut master = DummyFlash::new_default();
-            let ctx = flash::probe(&mut master)?;
+            let ctx = flash::probe(&mut master, db)?;
             println!("Would erase {} byte chip", ctx.chip.total_size);
             Ok(())
         }
@@ -129,11 +193,15 @@ fn cmd_erase(programmer: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn cmd_verify(programmer: &str, input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_verify(
+    programmer: &str,
+    input: &PathBuf,
+    db: &ChipDatabase,
+) -> Result<(), Box<dyn std::error::Error>> {
     match programmer {
         "dummy" => {
             let mut master = DummyFlash::new_default();
-            let ctx = flash::probe(&mut master)?;
+            let ctx = flash::probe(&mut master, db)?;
             println!(
                 "Would verify {:?} against {} byte chip",
                 input, ctx.chip.total_size
@@ -147,11 +215,11 @@ fn cmd_verify(programmer: &str, input: &PathBuf) -> Result<(), Box<dyn std::erro
     }
 }
 
-fn cmd_info(programmer: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_info(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
     match programmer {
         "dummy" => {
             let mut master = DummyFlash::new_default();
-            let ctx = flash::probe(&mut master)?;
+            let ctx = flash::probe(&mut master, db)?;
             print_chip_info(&ctx);
             Ok(())
         }
@@ -163,7 +231,7 @@ fn cmd_info(programmer: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_chip_info(ctx: &flash::FlashContext) {
-    let chip = ctx.chip;
+    let chip = &ctx.chip;
 
     println!("Flash Chip Information");
     println!("======================");
@@ -189,7 +257,7 @@ fn print_chip_info(ctx: &flash::FlashContext) {
     );
     println!();
     println!("Erase blocks:");
-    for eb in chip.erase_blocks {
+    for eb in chip.erase_blocks() {
         let size_str = if eb.size >= 1024 * 1024 {
             format!("{} MiB", eb.size / (1024 * 1024))
         } else if eb.size >= 1024 {

@@ -17,8 +17,21 @@ pub enum AddressMode {
 /// This structure holds the state needed to interact with a specific
 /// flash chip through a programmer.
 #[derive(Debug)]
+#[cfg(feature = "alloc")]
 pub struct FlashContext {
-    /// The identified flash chip
+    /// The identified flash chip (owned)
+    pub chip: FlashChip,
+    /// Current address mode
+    pub address_mode: AddressMode,
+    /// Whether to use native 4-byte commands or mode switching
+    pub use_native_4byte: bool,
+}
+
+/// Runtime context for flash operations (no_std version with static reference)
+#[derive(Debug)]
+#[cfg(not(feature = "alloc"))]
+pub struct FlashContext {
+    /// The identified flash chip (static reference)
     pub chip: &'static FlashChip,
     /// Current address mode
     pub address_mode: AddressMode,
@@ -26,6 +39,53 @@ pub struct FlashContext {
     pub use_native_4byte: bool,
 }
 
+#[cfg(feature = "alloc")]
+impl FlashContext {
+    /// Create a new flash context for the given chip
+    pub fn new(chip: FlashChip) -> Self {
+        let address_mode = if chip.requires_4byte_addr() {
+            AddressMode::FourByte
+        } else {
+            AddressMode::ThreeByte
+        };
+
+        let use_native_4byte = chip
+            .features
+            .contains(crate::chip::Features::FOUR_BYTE_NATIVE);
+
+        Self {
+            chip,
+            address_mode,
+            use_native_4byte,
+        }
+    }
+
+    /// Get the page size for this chip
+    pub fn page_size(&self) -> usize {
+        self.chip.page_size as usize
+    }
+
+    /// Get the total size of this chip
+    pub fn total_size(&self) -> usize {
+        self.chip.total_size as usize
+    }
+
+    /// Check if an address is valid for this chip
+    pub fn is_valid_address(&self, addr: u32) -> bool {
+        addr < self.chip.total_size
+    }
+
+    /// Check if an address range is valid for this chip
+    pub fn is_valid_range(&self, addr: u32, len: usize) -> bool {
+        if addr >= self.chip.total_size {
+            return false;
+        }
+        let end = addr as u64 + len as u64;
+        end <= self.chip.total_size as u64
+    }
+}
+
+#[cfg(not(feature = "alloc"))]
 impl FlashContext {
     /// Create a new flash context for the given chip
     pub fn new(chip: &'static FlashChip) -> Self {

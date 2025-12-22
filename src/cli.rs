@@ -11,6 +11,11 @@ pub struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     pub verbose: u8,
 
+    /// Path to chip database directory (contains .ron files)
+    /// Defaults to looking in ./chips/vendors/ and /usr/share/rflasher/chips/
+    #[arg(long, global = true)]
+    pub chip_db: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
