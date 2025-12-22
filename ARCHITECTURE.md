@@ -59,12 +59,11 @@ rflasher/
 ├── Cargo.toml                      # Workspace definition
 ├── ARCHITECTURE.md                 # This file
 │
-├── chips/                          # YAML flash chip database (TODO)
-│   ├── schema.json                 # JSON Schema for validation
+├── chips/                          # RON flash chip database
 │   └── vendors/
-│       ├── winbond.yaml
-│       ├── gigadevice.yaml
-│       └── ...
+│       ├── winbond.ron             # Winbond W25Q/W25X series
+│       ├── gigadevice.ron          # GigaDevice GD25Q/GD25LQ series
+│       └── macronix.ron            # Macronix MX25L/MX25U/MX66 series
 │
 ├── crates/
 │   ├── rflasher-core/              # Core library (no_std) - COMPLETE
@@ -96,9 +95,9 @@ rflasher/
 │   │           ├── mod.rs
 │   │           └── ranges.rs       # Write protection decoding
 │   │
-│   ├── rflasher-chips-codegen/     # Build-time code generator - STUB
+│   ├── rflasher-chips-codegen/     # Build-time code generator - COMPLETE
 │   │   ├── Cargo.toml
-│   │   └── src/lib.rs
+│   │   └── src/lib.rs              # RON parsing, validation, codegen
 │   │
 │   ├── rflasher-ch341a/            # CH341A USB programmer - STUB
 │   │   ├── Cargo.toml
@@ -139,24 +138,23 @@ rflasher/
 
 ## Remaining Implementation Phases
 
-### Phase 2: Chip Database (NEXT)
+### Phase 2: Chip Database - COMPLETE
 
-**Goal**: YAML-based chip database with build-time codegen
+**Goal**: RON-based chip database with build-time codegen
 
-**Tasks**:
-1. Create JSON schema for chip YAML files (`chips/schema.json`)
-2. Implement `rflasher-chips-codegen` crate:
-   - YAML parsing with serde
-   - Schema validation
+**Implemented**:
+1. `rflasher-chips-codegen` crate with:
+   - RON parsing with serde
+   - Chip database validation
    - Rust code generation
-3. Create YAML files for common chips:
-   - Port Winbond W25Q series from `flashprog/flashchips.c`
-   - Port GigaDevice GD25Q series
-   - Port Macronix MX25 series
-4. Set up `build.rs` for rflasher-core to use codegen
-5. Replace hardcoded chip database in `chip/types.rs`
+2. RON files for common chips (57 chips total):
+   - Winbond W25Q/W25X series (24 chips)
+   - GigaDevice GD25Q/GD25LQ series (15 chips)
+   - Macronix MX25L/MX25U/MX25R/MX66 series (18 chips)
+3. Build-time codegen via `build.rs` in rflasher-core
+4. Generated chip database replaces hardcoded chips
 
-**Reference**: `flashprog/flashchips.c` contains ~600 chip definitions
+**Reference**: `flashprog/flashchips.c` contains ~600 chip definitions (more can be ported)
 
 ### Phase 3: Complete CLI Commands
 
@@ -294,31 +292,34 @@ pub trait OpaqueMaster {
 }
 ```
 
-### YAML Chip Schema (To Be Implemented)
+### RON Chip Schema
 
-```yaml
-# chips/vendors/winbond.yaml
-vendor: Winbond
-jedec_manufacturer_id: 0xEF
-
-chips:
-  - name: W25Q128FV
-    jedec_device_id: 0x4018
-    total_size: 16777216  # 16 MiB
-    page_size: 256
-    features:
-      - wrsr_wren
-      - fast_read
-      - dual_io
-      - quad_io
-    voltage:
-      min: 2700
-      max: 3600
-    erase_blocks:
-      - { opcode: 0x20, size: 4096 }
-      - { opcode: 0x52, size: 32768 }
-      - { opcode: 0xD8, size: 65536 }
-      - { opcode: 0xC7, size: 16777216 }
+```ron
+// chips/vendors/winbond.ron
+(
+    vendor: "Winbond",
+    manufacturer_id: 0xEF,
+    chips: [
+        (
+            name: "W25Q128.V",
+            device_id: 0x4018,
+            total_size: 16777216,  // 16 MiB
+            page_size: 256,
+            features: ["wrsr_wren", "fast_read", "dual_io", "quad_io", "otp",
+                       "erase_4k", "erase_32k", "erase_64k", "status_reg_2",
+                       "qe_sr2", "wp_tb", "wp_sec", "wp_cmp"],
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: 4096),
+                (opcode: 0x52, size: 32768),
+                (opcode: 0xD8, size: 65536),
+                (opcode: 0x60, size: 16777216),
+                (opcode: 0xC7, size: 16777216),
+            ],
+            tested: (probe: Ok, read: Ok, erase: Ok, write: Ok, wp: Ok),
+        ),
+    ],
+)
 ```
 
 ---

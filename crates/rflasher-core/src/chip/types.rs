@@ -1,6 +1,6 @@
 //! Flash chip type definitions
 
-use super::Features;
+use super::features::Features;
 
 /// Erase block definition
 ///
@@ -172,146 +172,8 @@ pub mod manufacturer {
     pub const XMC: u8 = 0x20;
 }
 
-/// Static chip database
-///
-/// This will be populated by the build script from YAML files.
-/// For now, we include a few common chips for testing.
-pub static CHIPS: &[FlashChip] = &[
-    FlashChip {
-        vendor: "Winbond",
-        name: "W25Q128FV",
-        jedec_manufacturer: manufacturer::WINBOND,
-        jedec_device: 0x4018,
-        total_size: 16 * 1024 * 1024,
-        page_size: 256,
-        features: Features::WRSR_WREN
-            .union(Features::FAST_READ)
-            .union(Features::DUAL_IO)
-            .union(Features::QUAD_IO)
-            .union(Features::ERASE_4K)
-            .union(Features::ERASE_32K)
-            .union(Features::ERASE_64K)
-            .union(Features::STATUS_REG_2)
-            .union(Features::QE_SR2)
-            .union(Features::WP_TB)
-            .union(Features::WP_SEC)
-            .union(Features::WP_CMP),
-        voltage_min_mv: 2700,
-        voltage_max_mv: 3600,
-        write_granularity: WriteGranularity::Page,
-        erase_blocks: &[
-            EraseBlock::new(0x20, 4 * 1024),
-            EraseBlock::new(0x52, 32 * 1024),
-            EraseBlock::new(0xD8, 64 * 1024),
-            EraseBlock::new(0xC7, 16 * 1024 * 1024),
-        ],
-        tested: ChipTestStatus {
-            probe: TestStatus::Ok,
-            read: TestStatus::Ok,
-            erase: TestStatus::Ok,
-            write: TestStatus::Ok,
-            wp: TestStatus::Ok,
-        },
-    },
-    FlashChip {
-        vendor: "Winbond",
-        name: "W25Q64FV",
-        jedec_manufacturer: manufacturer::WINBOND,
-        jedec_device: 0x4017,
-        total_size: 8 * 1024 * 1024,
-        page_size: 256,
-        features: Features::WRSR_WREN
-            .union(Features::FAST_READ)
-            .union(Features::DUAL_IO)
-            .union(Features::QUAD_IO)
-            .union(Features::ERASE_4K)
-            .union(Features::ERASE_32K)
-            .union(Features::ERASE_64K)
-            .union(Features::STATUS_REG_2)
-            .union(Features::QE_SR2),
-        voltage_min_mv: 2700,
-        voltage_max_mv: 3600,
-        write_granularity: WriteGranularity::Page,
-        erase_blocks: &[
-            EraseBlock::new(0x20, 4 * 1024),
-            EraseBlock::new(0x52, 32 * 1024),
-            EraseBlock::new(0xD8, 64 * 1024),
-            EraseBlock::new(0xC7, 8 * 1024 * 1024),
-        ],
-        tested: ChipTestStatus {
-            probe: TestStatus::Ok,
-            read: TestStatus::Ok,
-            erase: TestStatus::Ok,
-            write: TestStatus::Ok,
-            wp: TestStatus::Untested,
-        },
-    },
-    FlashChip {
-        vendor: "Winbond",
-        name: "W25Q32FV",
-        jedec_manufacturer: manufacturer::WINBOND,
-        jedec_device: 0x4016,
-        total_size: 4 * 1024 * 1024,
-        page_size: 256,
-        features: Features::WRSR_WREN
-            .union(Features::FAST_READ)
-            .union(Features::DUAL_IO)
-            .union(Features::QUAD_IO)
-            .union(Features::ERASE_4K)
-            .union(Features::ERASE_32K)
-            .union(Features::ERASE_64K)
-            .union(Features::STATUS_REG_2)
-            .union(Features::QE_SR2),
-        voltage_min_mv: 2700,
-        voltage_max_mv: 3600,
-        write_granularity: WriteGranularity::Page,
-        erase_blocks: &[
-            EraseBlock::new(0x20, 4 * 1024),
-            EraseBlock::new(0x52, 32 * 1024),
-            EraseBlock::new(0xD8, 64 * 1024),
-            EraseBlock::new(0xC7, 4 * 1024 * 1024),
-        ],
-        tested: ChipTestStatus {
-            probe: TestStatus::Ok,
-            read: TestStatus::Ok,
-            erase: TestStatus::Ok,
-            write: TestStatus::Ok,
-            wp: TestStatus::Untested,
-        },
-    },
-    FlashChip {
-        vendor: "GigaDevice",
-        name: "GD25Q128",
-        jedec_manufacturer: manufacturer::GIGADEVICE,
-        jedec_device: 0x4018,
-        total_size: 16 * 1024 * 1024,
-        page_size: 256,
-        features: Features::WRSR_WREN
-            .union(Features::FAST_READ)
-            .union(Features::DUAL_IO)
-            .union(Features::QUAD_IO)
-            .union(Features::ERASE_4K)
-            .union(Features::ERASE_32K)
-            .union(Features::ERASE_64K)
-            .union(Features::STATUS_REG_2),
-        voltage_min_mv: 2700,
-        voltage_max_mv: 3600,
-        write_granularity: WriteGranularity::Page,
-        erase_blocks: &[
-            EraseBlock::new(0x20, 4 * 1024),
-            EraseBlock::new(0x52, 32 * 1024),
-            EraseBlock::new(0xD8, 64 * 1024),
-            EraseBlock::new(0xC7, 16 * 1024 * 1024),
-        ],
-        tested: ChipTestStatus {
-            probe: TestStatus::Ok,
-            read: TestStatus::Ok,
-            erase: TestStatus::Ok,
-            write: TestStatus::Ok,
-            wp: TestStatus::Untested,
-        },
-    },
-];
+// Include the generated chip database
+include!(concat!(env!("OUT_DIR"), "/chips_generated.rs"));
 
 /// Find a chip by its JEDEC ID
 pub fn find_by_jedec_id(manufacturer: u8, device: u16) -> Option<&'static FlashChip> {
