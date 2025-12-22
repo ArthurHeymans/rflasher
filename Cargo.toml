@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rflasher-core",
+    "crates/rflasher-chips-codegen",
+    "crates/rflasher-ch341a",
+    "crates/rflasher-serprog",
+    "crates/rflasher-ftdi",
+    "crates/rflasher-internal",
+    "crates/rflasher-linux-spi",
+    "crates/rflasher-dummy",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/user/rflasher"
+
+[workspace.dependencies]
+# Internal crates
+rflasher-core = { path = "crates/rflasher-core", default-features = false }
+
+# Core
+bitflags = "2"
+embedded-io = "0.6"
+embedded-io-async = "0.6"
+log = "0.4"
+
+# std-only
+thiserror = "2"
+env_logger = "0.11"
+tokio = { version = "1", features = ["full"] }
+nusb = "0.1"
+clap = { version = "4", features = ["derive"] }
+indicatif = "0.17"
+
+# Build/codegen
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+[package]
+name = "rflasher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rflasher-core = { workspace = true, features = ["std"] }
+rflasher-dummy = { path = "crates/rflasher-dummy" }
+clap.workspace = true
+env_logger.workspace = true
+log.workspace = true
+indicatif.workspace = true
+thiserror.workspace = true

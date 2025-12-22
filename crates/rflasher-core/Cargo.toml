@@ -1,0 +1,17 @@
+[package]
+name = "rflasher-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core library for flash chip programming (no_std compatible)"
+
+[features]
+default = []
+std = ["alloc", "thiserror"]
+alloc = []
+
+[dependencies]
+bitflags.workspace = true
+embedded-io.workspace = true
+embedded-io-async.workspace = true
+thiserror = { workspace = true, optional = true }

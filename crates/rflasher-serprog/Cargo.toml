@@ -1,0 +1,16 @@
+[package]
+name = "rflasher-serprog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Serial Flasher Protocol (serprog) support for rflasher"
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std"]
+
+[dependencies]
+rflasher-core.workspace = true
+embedded-io.workspace = true
+embedded-io-async.workspace = true
+log.workspace = true

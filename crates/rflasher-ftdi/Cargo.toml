@@ -1,0 +1,14 @@
+[package]
+name = "rflasher-ftdi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FTDI MPSSE programmer support for rflasher"
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std"]
+
+[dependencies]
+rflasher-core.workspace = true
+log.workspace = true

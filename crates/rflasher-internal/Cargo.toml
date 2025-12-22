@@ -1,0 +1,14 @@
+[package]
+name = "rflasher-internal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Intel chipset internal flash programmer support for rflasher"
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std"]
+
+[dependencies]
+rflasher-core.workspace = true
+log.workspace = true

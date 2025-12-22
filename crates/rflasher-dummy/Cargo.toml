@@ -1,0 +1,15 @@
+[package]
+name = "rflasher-dummy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dummy/emulator flash programmer for testing"
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std", "alloc"]
+alloc = ["rflasher-core/alloc"]
+
+[dependencies]
+rflasher-core.workspace = true
+log.workspace = true

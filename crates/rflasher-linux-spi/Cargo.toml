@@ -1,0 +1,14 @@
+[package]
+name = "rflasher-linux-spi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Linux spidev support for rflasher"
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std"]
+
+[dependencies]
+rflasher-core.workspace = true
+log.workspace = true

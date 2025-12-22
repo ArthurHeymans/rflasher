@@ -1,0 +1,10 @@
+[package]
+name = "rflasher-chips-codegen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Build-time code generator for flash chip database"
+
+[dependencies]
+serde.workspace = true
+serde_yaml.workspace = true

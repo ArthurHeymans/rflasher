@@ -1,0 +1,15 @@
+[package]
+name = "rflasher-ch341a"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CH341A USB programmer support for rflasher"
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std", "nusb"]
+
+[dependencies]
+rflasher-core.workspace = true
+nusb = { workspace = true, optional = true }
+log.workspace = true
