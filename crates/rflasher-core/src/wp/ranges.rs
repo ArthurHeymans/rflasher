@@ -22,7 +22,10 @@ impl ProtectedRange {
 
     /// Create a range representing full chip protection
     pub const fn full(size: u32) -> Self {
-        Self { start: 0, end: size }
+        Self {
+            start: 0,
+            end: size,
+        }
     }
 
     /// Check if this range protects any part of the chip
@@ -32,11 +35,7 @@ impl ProtectedRange {
 
     /// Get the size of the protected region
     pub const fn size(&self) -> u32 {
-        if self.end > self.start {
-            self.end - self.start
-        } else {
-            0
-        }
+        self.end.saturating_sub(self.start)
     }
 
     /// Check if an address is within the protected range
@@ -65,9 +64,7 @@ pub fn decode_spi25_wp(
 ) -> ProtectedRange {
     use crate::spi::opcodes::{SR1_BP0, SR1_BP1, SR1_BP2, SR1_SEC, SR1_TB};
 
-    let bp = ((sr1 & SR1_BP0) >> 2)
-        | ((sr1 & SR1_BP1) >> 2)
-        | ((sr1 & SR1_BP2) >> 2);
+    let bp = ((sr1 & SR1_BP0) >> 2) | ((sr1 & SR1_BP1) >> 2) | ((sr1 & SR1_BP2) >> 2);
 
     let tb = has_tb && (sr1 & SR1_TB) != 0;
     let sec = has_sec && (sr1 & SR1_SEC) != 0;
@@ -76,13 +73,49 @@ pub fn decode_spi25_wp(
     // Calculate protected size based on BP bits
     let protected_size = match bp {
         0 => 0,
-        1 => if sec { 4 * 1024 } else { 64 * 1024 },
-        2 => if sec { 8 * 1024 } else { 128 * 1024 },
-        3 => if sec { 16 * 1024 } else { 256 * 1024 },
-        4 => if sec { 32 * 1024 } else { 512 * 1024 },
-        5 => if sec { 64 * 1024 } else { 1024 * 1024 },
-        6 => if sec { 128 * 1024 } else { 2 * 1024 * 1024 },
-        7 | _ => total_size,
+        1 => {
+            if sec {
+                4 * 1024
+            } else {
+                64 * 1024
+            }
+        }
+        2 => {
+            if sec {
+                8 * 1024
+            } else {
+                128 * 1024
+            }
+        }
+        3 => {
+            if sec {
+                16 * 1024
+            } else {
+                256 * 1024
+            }
+        }
+        4 => {
+            if sec {
+                32 * 1024
+            } else {
+                512 * 1024
+            }
+        }
+        5 => {
+            if sec {
+                64 * 1024
+            } else {
+                1024 * 1024
+            }
+        }
+        6 => {
+            if sec {
+                128 * 1024
+            } else {
+                2 * 1024 * 1024
+            }
+        }
+        _ => total_size,
     };
 
     // Clamp to chip size

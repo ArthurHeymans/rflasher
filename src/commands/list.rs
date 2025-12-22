@@ -18,7 +18,10 @@ pub fn list_programmers() {
 pub fn list_chips(vendor_filter: Option<&str>) {
     println!("Supported flash chips:");
     println!();
-    println!("{:<12} {:<20} {:>10} {:>10}", "Vendor", "Name", "Size", "JEDEC ID");
+    println!(
+        "{:<12} {:<20} {:>10} {:>10}",
+        "Vendor", "Name", "Size", "JEDEC ID"
+    );
     println!("{}", "-".repeat(60));
 
     for chip in chip::CHIPS {
@@ -31,12 +34,10 @@ pub fn list_chips(vendor_filter: Option<&str>) {
 
         let size_str = format_size(chip.total_size);
         let jedec_str = format!("{:02X} {:04X}", chip.jedec_manufacturer, chip.jedec_device);
-        
-        println!("{:<12} {:<20} {:>10} {:>10}", 
-            chip.vendor, 
-            chip.name, 
-            size_str,
-            jedec_str
+
+        println!(
+            "{:<12} {:<20} {:>10} {:>10}",
+            chip.vendor, chip.name, size_str, jedec_str
         );
     }
 }

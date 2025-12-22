@@ -131,7 +131,7 @@ impl FlashChip {
     /// Check if a given address and length are aligned to an erase block boundary
     pub fn is_erase_aligned(&self, addr: u32, len: u32) -> bool {
         if let Some(min_erase) = self.min_erase_size() {
-            addr % min_erase == 0 && len % min_erase == 0
+            addr.is_multiple_of(min_erase) && len.is_multiple_of(min_erase)
         } else {
             false
         }
@@ -315,7 +315,9 @@ pub static CHIPS: &[FlashChip] = &[
 
 /// Find a chip by its JEDEC ID
 pub fn find_by_jedec_id(manufacturer: u8, device: u16) -> Option<&'static FlashChip> {
-    CHIPS.iter().find(|c| c.matches_jedec_id(manufacturer, device))
+    CHIPS
+        .iter()
+        .find(|c| c.matches_jedec_id(manufacturer, device))
 }
 
 /// Find chips by name (case-insensitive partial match)

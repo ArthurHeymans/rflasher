@@ -35,7 +35,9 @@ impl FlashContext {
             AddressMode::ThreeByte
         };
 
-        let use_native_4byte = chip.features.contains(crate::chip::Features::FOUR_BYTE_NATIVE);
+        let use_native_4byte = chip
+            .features
+            .contains(crate::chip::Features::FOUR_BYTE_NATIVE);
 
         Self {
             chip,

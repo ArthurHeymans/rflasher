@@ -255,15 +255,9 @@ impl SpiMaster for DummyFlash {
             opcodes::PP_4B => self.handle_page_program(cmd),
 
             // Erase commands
-            opcodes::SE_20 | opcodes::SE_21 => {
-                self.handle_sector_erase(cmd, 4 * 1024)
-            }
-            opcodes::BE_52 | opcodes::BE_5C => {
-                self.handle_sector_erase(cmd, 32 * 1024)
-            }
-            opcodes::BE_D8 | opcodes::BE_DC => {
-                self.handle_sector_erase(cmd, 64 * 1024)
-            }
+            opcodes::SE_20 | opcodes::SE_21 => self.handle_sector_erase(cmd, 4 * 1024),
+            opcodes::BE_52 | opcodes::BE_5C => self.handle_sector_erase(cmd, 32 * 1024),
+            opcodes::BE_D8 | opcodes::BE_DC => self.handle_sector_erase(cmd, 64 * 1024),
             opcodes::CE_60 | opcodes::CE_C7 => self.handle_chip_erase(),
 
             // 4-byte address mode

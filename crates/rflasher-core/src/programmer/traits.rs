@@ -80,7 +80,10 @@ pub trait AsyncSpiMaster {
     fn max_write_len(&self) -> usize;
 
     /// Execute a single SPI command
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> impl core::future::Future<Output = Result<()>>;
+    fn execute(
+        &mut self,
+        cmd: &mut SpiCommand<'_>,
+    ) -> impl core::future::Future<Output = Result<()>>;
 
     /// Check if an opcode is supported by this programmer
     fn probe_opcode(&self, opcode: u8) -> bool {
@@ -129,7 +132,8 @@ pub trait AsyncOpaqueMaster {
     fn size(&self) -> usize;
 
     /// Read flash contents into the provided buffer
-    fn read(&mut self, addr: u32, buf: &mut [u8]) -> impl core::future::Future<Output = Result<()>>;
+    fn read(&mut self, addr: u32, buf: &mut [u8])
+        -> impl core::future::Future<Output = Result<()>>;
 
     /// Write data to flash (assumes the region is already erased)
     fn write(&mut self, addr: u32, data: &[u8]) -> impl core::future::Future<Output = Result<()>>;

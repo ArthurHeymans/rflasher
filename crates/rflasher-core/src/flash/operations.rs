@@ -11,8 +11,7 @@ use super::context::{AddressMode, FlashContext};
 pub fn probe<M: SpiMaster>(master: &mut M) -> Result<FlashContext> {
     let (manufacturer, device) = protocol::read_jedec_id(master)?;
 
-    let chip = crate::chip::find_by_jedec_id(manufacturer, device)
-        .ok_or(Error::ChipNotFound)?;
+    let chip = crate::chip::find_by_jedec_id(manufacturer, device).ok_or(Error::ChipNotFound)?;
 
     Ok(FlashContext::new(chip))
 }
@@ -111,19 +110,14 @@ pub fn write<M: SpiMaster>(
 /// Erase a region of flash
 ///
 /// The region must be aligned to erase block boundaries.
-pub fn erase<M: SpiMaster>(
-    master: &mut M,
-    ctx: &FlashContext,
-    addr: u32,
-    len: u32,
-) -> Result<()> {
+pub fn erase<M: SpiMaster>(master: &mut M, ctx: &FlashContext, addr: u32, len: u32) -> Result<()> {
     if !ctx.is_valid_range(addr, len as usize) {
         return Err(Error::AddressOutOfBounds);
     }
 
     // Find the best erase block size for this operation
-    let erase_block = select_erase_block(ctx.chip.erase_blocks, addr, len)
-        .ok_or(Error::InvalidAlignment)?;
+    let erase_block =
+        select_erase_block(ctx.chip.erase_blocks, addr, len).ok_or(Error::InvalidAlignment)?;
 
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
     let use_native = ctx.use_native_4byte;
@@ -145,10 +139,10 @@ pub fn erase<M: SpiMaster>(
 
     // Erase timeout depends on block size (larger blocks take longer)
     let timeout_us = match erase_block.size {
-        s if s <= 4096 => 500_000,        // 4KB: 500ms
-        s if s <= 32768 => 1_000_000,     // 32KB: 1s
-        s if s <= 65536 => 2_000_000,     // 64KB: 2s
-        _ => 60_000_000,                   // Chip erase: 60s
+        s if s <= 4096 => 500_000,    // 4KB: 500ms
+        s if s <= 32768 => 1_000_000, // 32KB: 1s
+        s if s <= 65536 => 2_000_000, // 64KB: 2s
+        _ => 60_000_000,              // Chip erase: 60s
     };
 
     while current_addr < end_addr {
@@ -212,11 +206,7 @@ pub fn verify<M: SpiMaster>(
 }
 
 /// Select the best erase block size for the given operation
-fn select_erase_block(
-    erase_blocks: &[EraseBlock],
-    addr: u32,
-    len: u32,
-) -> Option<&EraseBlock> {
+fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> Option<&EraseBlock> {
     // Find the largest block size that:
     // 1. Evenly divides the length
     // 2. The address is aligned to
@@ -225,11 +215,9 @@ fn select_erase_block(
         .iter()
         .filter(|eb| {
             // Skip chip erase for partial operations
-            eb.size < len || eb.size == len
+            eb.size <= len
         })
-        .filter(|eb| {
-            addr % eb.size == 0 && len % eb.size == 0
-        })
+        .filter(|eb| addr.is_multiple_of(eb.size) && len.is_multiple_of(eb.size))
         .max_by_key(|eb| eb.size)
 }
 

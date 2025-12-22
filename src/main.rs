@@ -13,9 +13,7 @@ use std::path::PathBuf;
 
 fn main() {
     // Initialize logger
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info")
-    ).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let cli = Cli::parse();
 
@@ -28,13 +26,31 @@ fn main() {
 
     let result = match cli.command {
         Commands::Probe { programmer } => cmd_probe(&programmer),
-        Commands::Read { programmer, output, chip: _ } => cmd_read(&programmer, &output),
-        Commands::Write { programmer, input, chip: _, verify: _, no_erase: _ } => {
-            cmd_write(&programmer, &input)
-        }
-        Commands::Erase { programmer, chip: _ } => cmd_erase(&programmer),
-        Commands::Verify { programmer, input, chip: _ } => cmd_verify(&programmer, &input),
-        Commands::Info { programmer, chip: _ } => cmd_info(&programmer),
+        Commands::Read {
+            programmer,
+            output,
+            chip: _,
+        } => cmd_read(&programmer, &output),
+        Commands::Write {
+            programmer,
+            input,
+            chip: _,
+            verify: _,
+            no_erase: _,
+        } => cmd_write(&programmer, &input),
+        Commands::Erase {
+            programmer,
+            chip: _,
+        } => cmd_erase(&programmer),
+        Commands::Verify {
+            programmer,
+            input,
+            chip: _,
+        } => cmd_verify(&programmer, &input),
+        Commands::Info {
+            programmer,
+            chip: _,
+        } => cmd_info(&programmer),
         Commands::ListProgrammers => {
             commands::list_programmers();
             Ok(())
@@ -85,7 +101,10 @@ fn cmd_write(programmer: &str, input: &PathBuf) -> Result<(), Box<dyn std::error
         "dummy" => {
             let mut master = DummyFlash::new_default();
             let ctx = flash::probe(&mut master)?;
-            println!("Would write {:?} to {} byte chip", input, ctx.chip.total_size);
+            println!(
+                "Would write {:?} to {} byte chip",
+                input, ctx.chip.total_size
+            );
             Ok(())
         }
         _ => {
@@ -115,7 +134,10 @@ fn cmd_verify(programmer: &str, input: &PathBuf) -> Result<(), Box<dyn std::erro
         "dummy" => {
             let mut master = DummyFlash::new_default();
             let ctx = flash::probe(&mut master)?;
-            println!("Would verify {:?} against {} byte chip", input, ctx.chip.total_size);
+            println!(
+                "Would verify {:?} against {} byte chip",
+                input, ctx.chip.total_size
+            );
             Ok(())
         }
         _ => {
@@ -142,21 +164,26 @@ fn cmd_info(programmer: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_chip_info(ctx: &flash::FlashContext) {
     let chip = ctx.chip;
-    
+
     println!("Flash Chip Information");
     println!("======================");
     println!();
     println!("Vendor:          {}", chip.vendor);
     println!("Name:            {}", chip.name);
-    println!("JEDEC ID:        {:02X} {:04X}", chip.jedec_manufacturer, chip.jedec_device);
-    println!("Size:            {} bytes ({} KiB / {} MiB)", 
-        chip.total_size, 
+    println!(
+        "JEDEC ID:        {:02X} {:04X}",
+        chip.jedec_manufacturer, chip.jedec_device
+    );
+    println!(
+        "Size:            {} bytes ({} KiB / {} MiB)",
+        chip.total_size,
         chip.total_size / 1024,
         chip.total_size / (1024 * 1024)
     );
     println!("Page size:       {} bytes", chip.page_size);
     println!();
-    println!("Voltage range:   {:.1}V - {:.1}V", 
+    println!(
+        "Voltage range:   {:.1}V - {:.1}V",
         chip.voltage_min_mv as f32 / 1000.0,
         chip.voltage_max_mv as f32 / 1000.0
     );

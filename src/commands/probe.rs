@@ -9,13 +9,14 @@ pub fn run_probe<M: SpiMaster>(master: &mut M) -> Result<(), Box<dyn std::error:
             println!("Found flash chip:");
             println!("  Vendor: {}", ctx.chip.vendor);
             println!("  Name:   {}", ctx.chip.name);
-            println!("  Size:   {} bytes ({} KiB)", 
-                ctx.chip.total_size, 
+            println!(
+                "  Size:   {} bytes ({} KiB)",
+                ctx.chip.total_size,
                 ctx.chip.total_size / 1024
             );
-            println!("  JEDEC ID: {:02X} {:04X}", 
-                ctx.chip.jedec_manufacturer, 
-                ctx.chip.jedec_device
+            println!(
+                "  JEDEC ID: {:02X} {:04X}",
+                ctx.chip.jedec_manufacturer, ctx.chip.jedec_device
             );
             Ok(())
         }

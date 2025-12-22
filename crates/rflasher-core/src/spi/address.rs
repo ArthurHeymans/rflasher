@@ -26,8 +26,8 @@ impl AddressWidth {
     pub const fn max_size(&self) -> u32 {
         match self {
             Self::None => 0,
-            Self::ThreeByte => 16 * 1024 * 1024,  // 16 MiB
-            Self::FourByte => u32::MAX,            // ~4 GiB
+            Self::ThreeByte => 16 * 1024 * 1024, // 16 MiB
+            Self::FourByte => u32::MAX,          // ~4 GiB
         }
     }
 
