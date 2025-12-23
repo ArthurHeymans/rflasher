@@ -46,6 +46,7 @@ pub mod amd_enable;
 pub mod amd_pci;
 pub mod amd_spi100;
 pub mod chipset;
+pub mod controller;
 pub mod error;
 pub mod ich_regs;
 pub mod ichspi;

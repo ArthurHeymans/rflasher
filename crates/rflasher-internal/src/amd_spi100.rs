@@ -22,6 +22,7 @@
 //!
 //! - flashprog/amd_spi100.c - Original C implementation
 
+use crate::controller::Controller;
 use crate::error::InternalError;
 use crate::physmap::PhysMap;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
@@ -590,6 +591,87 @@ impl Drop for Spi100Controller {
     fn drop(&mut self) {
         // Restore original alternate speed
         self.restore_altspeed();
+    }
+}
+
+#[cfg(all(feature = "std", target_os = "linux"))]
+impl Controller for Spi100Controller {
+    fn is_locked(&self) -> bool {
+        // AMD SPI100 doesn't have a lock bit like Intel
+        false
+    }
+
+    fn writes_enabled(&self) -> bool {
+        // AMD SPI100 doesn't need BIOS_CNTL write enable - it's always writable
+        true
+    }
+
+    fn enable_bios_write(&mut self) -> Result<(), InternalError> {
+        // AMD doesn't need explicit write enable
+        Ok(())
+    }
+
+    fn controller_read(&mut self, addr: u32, buf: &mut [u8], chip_size: usize) -> CoreResult<()> {
+        // AMD read needs chip_size parameter, use provided chip_size or default
+        let chip_size_u64 = if chip_size > 0 {
+            chip_size as u64
+        } else {
+            16 * 1024 * 1024 // Default to 16MB if not yet probed
+        };
+        self.read(chip_size_u64, addr, buf)
+            .map_err(|e| match e {
+                InternalError::NoChipset
+                | InternalError::UnsupportedChipset { .. }
+                | InternalError::MultipleChipsets => CoreError::ProgrammerNotReady,
+                InternalError::PciAccess(_) | InternalError::MemoryMap { .. } => {
+                    CoreError::ProgrammerError
+                }
+                InternalError::AccessDenied { .. } => CoreError::RegionProtected,
+                InternalError::Io(_) => CoreError::IoError,
+                InternalError::ChipsetEnable(_) | InternalError::SpiInit(_) => {
+                    CoreError::ProgrammerError
+                }
+                InternalError::InvalidDescriptor => CoreError::ProgrammerError,
+                InternalError::NotSupported(_) => CoreError::OpcodeNotSupported,
+            })
+    }
+
+    fn controller_write(&mut self, _addr: u32, _data: &[u8]) -> CoreResult<()> {
+        // AMD SPI100 uses SpiMaster for write operations, not OpaqueMaster
+        // Caller should use SpiMaster::execute() with appropriate SPI commands
+        log::warn!("OpaqueMaster::write() not supported for AMD SPI100 - use SpiMaster instead");
+        Err(CoreError::OpcodeNotSupported)
+    }
+
+    fn controller_erase(&mut self, _addr: u32, _len: u32) -> CoreResult<()> {
+        // AMD SPI100 uses SpiMaster for erase operations, not OpaqueMaster
+        // Caller should use SpiMaster::execute() with appropriate SPI commands
+        log::warn!("OpaqueMaster::erase() not supported for AMD SPI100 - use SpiMaster instead");
+        Err(CoreError::OpcodeNotSupported)
+    }
+
+    fn controller_name(&self) -> &'static str {
+        "AMD SPI100"
+    }
+
+    fn features(&self) -> SpiFeatures {
+        <Self as SpiMaster>::features(self)
+    }
+
+    fn max_read_len(&self) -> usize {
+        <Self as SpiMaster>::max_read_len(self)
+    }
+
+    fn max_write_len(&self) -> usize {
+        <Self as SpiMaster>::max_write_len(self)
+    }
+
+    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        <Self as SpiMaster>::execute(self, cmd)
+    }
+
+    fn probe_opcode(&self, opcode: u8) -> bool {
+        <Self as SpiMaster>::probe_opcode(self, opcode)
     }
 }
 

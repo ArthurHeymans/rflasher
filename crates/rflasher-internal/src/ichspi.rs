@@ -19,6 +19,7 @@
 //!   More flexible but may not be available on locked-down systems.
 
 use crate::chipset::IchChipset;
+use crate::controller::Controller;
 use crate::error::InternalError;
 use crate::ich_regs::*;
 use crate::pci::{
@@ -26,6 +27,9 @@ use crate::pci::{
 };
 use crate::physmap::PhysMap;
 use crate::DetectedChipset;
+use rflasher_core::error::{Error as CoreError, Result as CoreResult};
+use rflasher_core::programmer::SpiFeatures;
+use rflasher_core::spi::SpiCommand;
 
 /// Maximum SPI data transfer size for hardware sequencing
 pub const HWSEQ_MAX_DATA: usize = 64;
@@ -839,15 +843,16 @@ impl IchSpiController {
 
     /// Check if an opcode is available in the OPMENU table
     ///
-    /// This is useful for the SpiMaster trait's `probe_opcode` method.
-    pub fn has_opcode(&self, opcode: u8) -> bool {
+    /// This is used internally for the Controller trait's `probe_opcode` method.
+    fn has_opcode(&self, opcode: u8) -> bool {
         self.find_opcode_index(opcode).is_some()
     }
 
     /// Get the opcode type for an opcode in the table
     ///
     /// Returns the SPI opcode type (read/write, with/without address) if found.
-    pub fn get_opcode_type(&self, opcode: u8) -> Option<u8> {
+    #[allow(dead_code)]
+    fn get_opcode_type(&self, opcode: u8) -> Option<u8> {
         let idx = self.find_opcode_index(opcode)?;
         self.opcodes.as_ref().map(|ops| ops.opcode[idx].spi_type)
     }
@@ -1017,38 +1022,10 @@ impl IchSpiController {
         self.mode
     }
 
-    /// Get the requested operating mode (from user)
-    pub fn requested_mode(&self) -> SpiMode {
-        self.requested_mode
-    }
-
     /// Check if the controller is locked (HSFS.FLOCKDN)
-    pub fn is_locked(&self) -> bool {
+    #[allow(dead_code)]
+    fn is_locked(&self) -> bool {
         self.locked
-    }
-
-    /// Check if software sequencing is locked (DLOCK.SSEQ_LOCKDN on PCH100+)
-    pub fn is_swseq_locked(&self) -> bool {
-        self.swseq_locked
-    }
-
-    /// Check if hardware sequencing is available
-    ///
-    /// Returns true if hwseq can be used (supported by chipset and descriptor valid)
-    pub fn is_hwseq_available(&self) -> bool {
-        self.generation.supports_hwseq() && self.desc_valid
-    }
-
-    /// Check if software sequencing is available
-    ///
-    /// Returns true if swseq can be used (not locked by DLOCK.SSEQ_LOCKDN)
-    pub fn is_swseq_available(&self) -> bool {
-        !self.swseq_locked
-    }
-
-    /// Check if flash descriptor is valid
-    pub fn has_valid_descriptor(&self) -> bool {
-        self.desc_valid
     }
 
     /// Get the chipset generation
@@ -1790,6 +1767,185 @@ impl IchSpiController {
         }
 
         Err(InternalError::Io("Timeout waiting for WIP to clear"))
+    }
+}
+
+#[cfg(all(feature = "std", target_os = "linux"))]
+impl Controller for IchSpiController {
+    fn is_locked(&self) -> bool {
+        self.locked
+    }
+
+    fn writes_enabled(&self) -> bool {
+        // Intel controllers need to check BIOS_CNTL.BIOSWE
+        // This is checked during enable_bios_write()
+        // For now, we assume if enable_bios_write succeeded, writes are enabled
+        true
+    }
+
+    fn enable_bios_write(&mut self) -> Result<(), InternalError> {
+        self.enable_bios_write()
+    }
+
+    fn controller_read(&mut self, addr: u32, buf: &mut [u8], _chip_size: usize) -> CoreResult<()> {
+        let result = if self.mode == SpiMode::HardwareSequencing {
+            self.hwseq_read(addr, buf)
+        } else {
+            self.swseq_read(addr, buf)
+        };
+        result.map_err(Self::map_internal_error)
+    }
+
+    fn controller_write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
+        let result = if self.mode == SpiMode::HardwareSequencing {
+            self.hwseq_write(addr, data)
+        } else {
+            self.swseq_write(addr, data)
+        };
+        result.map_err(Self::map_internal_error)
+    }
+
+    fn controller_erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
+        let result = if self.mode == SpiMode::HardwareSequencing {
+            self.hwseq_erase(addr, len)
+        } else {
+            self.swseq_erase(addr, len)
+        };
+        result.map_err(Self::map_internal_error)
+    }
+
+    fn controller_name(&self) -> &'static str {
+        "Intel ICH/PCH"
+    }
+
+    fn features(&self) -> SpiFeatures {
+        // Intel ICH/PCH SPI controller only supports single I/O mode
+        // No 4-byte addressing, dual, or quad support
+        SpiFeatures::empty()
+    }
+
+    fn max_read_len(&self) -> usize {
+        Self::SWSEQ_MAX_DATA
+    }
+
+    fn max_write_len(&self) -> usize {
+        Self::SWSEQ_MAX_DATA
+    }
+
+    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        use rflasher_core::spi::{AddressWidth, IoMode};
+
+        // SpiMaster requires software sequencing mode
+        if self.mode == SpiMode::HardwareSequencing {
+            log::warn!(
+                "SpiMaster::execute() called in hwseq mode - this mode doesn't support raw SPI commands"
+            );
+            return Err(CoreError::OpcodeNotSupported);
+        }
+
+        // WREN (0x06) and EWSR (0x50) are preops on Intel, not regular opcodes.
+        // They're handled automatically via atomic mode when a write/erase command
+        // is executed. The higher-level protocol sends these separately, so we
+        // silently succeed here - the actual WREN will be sent atomically with
+        // the next write/erase command.
+        if cmd.opcode == 0x06 || cmd.opcode == 0x50 {
+            log::trace!(
+                "Ignoring preop {:#04x} - will be sent atomically with next command",
+                cmd.opcode
+            );
+            return Ok(());
+        }
+
+        // Intel controller doesn't support dummy cycles in swseq
+        if cmd.dummy_cycles > 0 {
+            log::debug!(
+                "Dummy cycles ({}) not supported by Intel swseq",
+                cmd.dummy_cycles
+            );
+            return Err(CoreError::OpcodeNotSupported);
+        }
+
+        // Only single I/O mode supported
+        if cmd.io_mode != IoMode::Single {
+            log::debug!("Only single I/O mode supported by Intel swseq");
+            return Err(CoreError::OpcodeNotSupported);
+        }
+
+        // Build the write array for swseq_send_command
+        // Format: opcode + [address bytes] + [write data]
+        let mut writearr = [0u8; 68]; // 1 opcode + 3 addr + 64 data max
+        let mut write_len = 0;
+
+        // Opcode is always first
+        writearr[0] = cmd.opcode;
+        write_len += 1;
+
+        // Add address if present
+        if let Some(addr) = cmd.address {
+            match cmd.address_width {
+                AddressWidth::ThreeByte => {
+                    writearr[1] = ((addr >> 16) & 0xff) as u8;
+                    writearr[2] = ((addr >> 8) & 0xff) as u8;
+                    writearr[3] = (addr & 0xff) as u8;
+                    write_len += 3;
+                }
+                AddressWidth::FourByte => {
+                    // Intel swseq doesn't support 4-byte addresses
+                    log::debug!("4-byte addressing not supported by Intel swseq");
+                    return Err(CoreError::OpcodeNotSupported);
+                }
+                AddressWidth::None => {
+                    // Address provided but width is None - shouldn't happen but handle it
+                }
+            }
+        }
+
+        // Add write data if present
+        if !cmd.write_data.is_empty() {
+            let data_len = cmd.write_data.len();
+            if write_len + data_len > 68 {
+                log::debug!("Write data too long for Intel swseq");
+                return Err(CoreError::IoError);
+            }
+            writearr[write_len..write_len + data_len].copy_from_slice(cmd.write_data);
+            write_len += data_len;
+        }
+
+        // Execute the command
+        self.swseq_send_command(&writearr[..write_len], cmd.read_buf)
+            .map_err(Self::map_internal_error)
+    }
+
+    fn probe_opcode(&self, opcode: u8) -> bool {
+        // In hwseq mode, no raw opcodes are available
+        if self.mode == SpiMode::HardwareSequencing {
+            return false;
+        }
+
+        // Check if the opcode is in the OPMENU table
+        self.has_opcode(opcode)
+    }
+}
+
+#[cfg(all(feature = "std", target_os = "linux"))]
+impl IchSpiController {
+    /// Map InternalError to CoreError
+    fn map_internal_error(e: InternalError) -> CoreError {
+        match e {
+            InternalError::NoChipset
+            | InternalError::UnsupportedChipset { .. }
+            | InternalError::MultipleChipsets => CoreError::ProgrammerNotReady,
+            InternalError::PciAccess(_) | InternalError::MemoryMap { .. } => {
+                CoreError::ProgrammerError
+            }
+            InternalError::AccessDenied { .. } => CoreError::RegionProtected,
+            InternalError::Io(_) => CoreError::IoError,
+            InternalError::ChipsetEnable(_) | InternalError::SpiInit(_) => {
+                CoreError::ProgrammerError
+            }
+            InternalError::InvalidDescriptor => CoreError::ProgrammerError,
+            InternalError::NotSupported(_) => CoreError::OpcodeNotSupported,
+        }
     }
 }
 
