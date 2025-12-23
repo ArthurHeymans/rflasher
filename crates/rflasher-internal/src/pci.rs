@@ -249,6 +249,93 @@ pub fn find_intel_chipset() -> Result<Option<DetectedChipset>, InternalError> {
 // PCI Configuration Space Access
 // ============================================================================
 
+// PCI Configuration Mechanism 1 I/O ports
+const PCI_CONFIG_ADDR: u16 = 0xCF8;
+const PCI_CONFIG_DATA: u16 = 0xCFC;
+
+/// Build a PCI Configuration Mechanism 1 address
+#[inline]
+fn pci_cfg_addr(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
+    0x8000_0000
+        | ((bus as u32) << 16)
+        | ((device as u32) << 11)
+        | ((function as u32) << 8)
+        | ((offset as u32) & 0xFC)
+}
+
+/// Read a dword from PCI config space using direct I/O port access (Mechanism 1)
+///
+/// This works even for hidden PCI devices that don't appear in sysfs.
+/// Requires root/CAP_SYS_RAWIO and x86 architecture.
+#[cfg(all(
+    feature = "std",
+    target_os = "linux",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
+pub fn pci_read_config32_direct(
+    bus: u8,
+    device: u8,
+    function: u8,
+    offset: u8,
+) -> Result<u32, InternalError> {
+    // Request I/O port access permission for PCI config ports (0xCF8-0xCFF)
+    // This requires CAP_SYS_RAWIO (usually root)
+    let ret = unsafe { libc::iopl(3) };
+    if ret != 0 {
+        log::debug!(
+            "iopl(3) failed with error: {}",
+            std::io::Error::last_os_error()
+        );
+        return Err(InternalError::PciAccess(PciAccessError::ConfigRead {
+            bus,
+            device,
+            function,
+            register: offset,
+        }));
+    }
+
+    // Build the PCI config address
+    let addr = pci_cfg_addr(bus, device, function, offset);
+
+    // Use inline assembly for proper 32-bit I/O port access
+    let data: u32;
+    unsafe {
+        // Write address to CONFIG_ADDRESS port (0xCF8)
+        std::arch::asm!(
+            "out dx, eax",
+            in("dx") PCI_CONFIG_ADDR,
+            in("eax") addr,
+            options(nomem, nostack, preserves_flags)
+        );
+
+        // Read data from CONFIG_DATA port (0xCFC)
+        std::arch::asm!(
+            "in eax, dx",
+            in("dx") PCI_CONFIG_DATA,
+            out("eax") data,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+
+    Ok(data)
+}
+
+#[cfg(not(all(
+    feature = "std",
+    target_os = "linux",
+    any(target_arch = "x86", target_arch = "x86_64")
+)))]
+pub fn pci_read_config32_direct(
+    _bus: u8,
+    _device: u8,
+    _function: u8,
+    _offset: u8,
+) -> Result<u32, InternalError> {
+    Err(InternalError::NotSupported(
+        "Direct PCI access only supported on x86 Linux",
+    ))
+}
+
 /// Read a byte from PCI configuration space via sysfs
 #[cfg(all(feature = "std", target_os = "linux"))]
 pub fn pci_read_config8(

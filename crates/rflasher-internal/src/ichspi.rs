@@ -21,7 +21,9 @@
 use crate::chipset::IchChipset;
 use crate::error::InternalError;
 use crate::ich_regs::*;
-use crate::pci::{pci_read_config32, pci_read_config8, pci_write_config8};
+use crate::pci::{
+    pci_read_config32, pci_read_config32_direct, pci_read_config8, pci_write_config8,
+};
 use crate::physmap::PhysMap;
 use crate::DetectedChipset;
 
@@ -237,31 +239,49 @@ impl IchSpiController {
         let gen = chipset.chipset_type();
 
         if gen.is_pch100_compatible() {
-            // PCH100+: SPI controller is a separate PCI function (usually 00:1f.5)
-            // or the SPIBAR is directly in the LPC bridge
-            // For now, try to read from LPC bridge BAR0
-            let spibar = pci_read_config32(
+            // PCH100+ (Sunrise Point and later): SPI controller is a separate PCI device
+            // at function 5 (00:1f.5), not part of the LPC bridge at function 0.
+            // The chipset detection finds the LPC bridge, but we need to read BAR0
+            // from the SPI controller device.
+            //
+            // IMPORTANT: The SPI device is often hidden by firmware (vendor/device IDs
+            // read as 0xFFFF), so it doesn't appear in sysfs. We must use direct I/O
+            // port access (PCI Configuration Mechanism 1) to read from it.
+            const SPI_FUNCTION: u8 = 5;
+
+            // Use direct I/O port access since the SPI device may be hidden
+            let spibar_raw = pci_read_config32_direct(
                 chipset.bus,
                 chipset.device,
-                chipset.function,
+                SPI_FUNCTION,
                 PCI_REG_SPIBAR,
             )?;
 
-            // BAR is usually 64-bit, get the high part too
-            let spibar_hi = pci_read_config32(
-                chipset.bus,
-                chipset.device,
-                chipset.function,
-                PCI_REG_SPIBAR + 4,
-            )?;
+            // SPIBAR is a 32-bit memory BAR. Mask off the lower 12 bits (BAR type indicators)
+            // to get the physical address (4KB aligned).
+            let addr = (spibar_raw & 0xFFFF_F000) as u64;
 
-            // Mask off the lower bits (BAR type indicators)
-            let addr = ((spibar_hi as u64) << 32) | ((spibar & !0xFFF) as u64);
+            log::debug!(
+                "Raw SPIBAR register: {:#010x}, masked addr: {:#010x}",
+                spibar_raw,
+                addr
+            );
 
             if addr == 0 {
-                // Try the RCBA method as fallback
-                return Self::get_spibar_via_rcba(chipset);
+                // SPIBAR is 0 - the SPI device may be hidden or disabled
+                // Note: RCBA does NOT exist on PCH100+, so we cannot fall back to it
+                return Err(InternalError::ChipsetEnable(
+                    "SPIBAR is 0 - SPI controller may be hidden or disabled by firmware",
+                ));
             }
+
+            log::debug!(
+                "Read SPIBAR {:#x} from PCI {:02x}:{:02x}.{} (via direct I/O)",
+                addr,
+                chipset.bus,
+                chipset.device,
+                SPI_FUNCTION
+            );
 
             Ok(addr)
         } else if gen.is_ich9_compatible() || gen == IchChipset::Ich7 {
