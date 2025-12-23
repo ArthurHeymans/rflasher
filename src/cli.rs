@@ -1,5 +1,6 @@
 //! CLI argument parsing
 
+use crate::programmers;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -10,6 +11,14 @@ fn parse_hex_u32(s: &str) -> Result<u32, String> {
     } else {
         s.parse::<u32>().map_err(|e| format!("Invalid number: {}", e))
     }
+}
+
+/// Generate dynamic help text for the programmer argument
+fn programmer_help() -> String {
+    format!(
+        "Programmer to use [available: {}]",
+        programmers::programmer_names_short()
+    )
 }
 
 #[derive(Parser)]
@@ -53,15 +62,15 @@ pub struct LayoutArgs {
 pub enum Commands {
     /// Probe for flash chip
     Probe {
-        /// Programmer to use (e.g., "dummy", "ch341a", "serprog:dev=/dev/ttyUSB0")
-        #[arg(short, long)]
+        /// Programmer to use
+        #[arg(short, long, help = programmer_help())]
         programmer: String,
     },
 
     /// Read flash contents to file
     Read {
         /// Programmer to use
-        #[arg(short, long)]
+        #[arg(short, long, help = programmer_help())]
         programmer: String,
 
         /// Output file path (or directory if using --layout with multiple regions)
@@ -79,7 +88,7 @@ pub enum Commands {
     /// Write file to flash
     Write {
         /// Programmer to use
-        #[arg(short, long)]
+        #[arg(short, long, help = programmer_help())]
         programmer: String,
 
         /// Input file path
@@ -105,7 +114,7 @@ pub enum Commands {
     /// Erase flash chip
     Erase {
         /// Programmer to use
-        #[arg(short, long)]
+        #[arg(short, long, help = programmer_help())]
         programmer: String,
 
         /// Chip name (optional, auto-detected if not specified)
@@ -127,7 +136,7 @@ pub enum Commands {
     /// Verify flash contents against file
     Verify {
         /// Programmer to use
-        #[arg(short, long)]
+        #[arg(short, long, help = programmer_help())]
         programmer: String,
 
         /// Input file path to verify against
@@ -145,7 +154,7 @@ pub enum Commands {
     /// Show chip information
     Info {
         /// Programmer to use
-        #[arg(short, long)]
+        #[arg(short, long, help = programmer_help())]
         programmer: String,
 
         /// Chip name (optional, auto-detected if not specified)

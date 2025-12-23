@@ -49,12 +49,32 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["dummy", "ch341a"]
+
+# Programmer features
+dummy = ["dep:rflasher-dummy"]
+ch341a = ["dep:rflasher-ch341a"]
+serprog = ["dep:rflasher-serprog"]
+ftdi = ["dep:rflasher-ftdi"]
+linux-spi = ["dep:rflasher-linux-spi"]
+internal = ["dep:rflasher-internal"]
+
+# Enable all programmers
+all-programmers = ["dummy", "ch341a", "serprog", "ftdi", "linux-spi", "internal"]
+
 [dependencies]
 rflasher-core = { workspace = true, features = ["std"] }
-rflasher-dummy = { path = "crates/rflasher-dummy" }
-rflasher-ch341a = { path = "crates/rflasher-ch341a" }
 clap.workspace = true
 env_logger.workspace = true
 log.workspace = true
 indicatif.workspace = true
 thiserror.workspace = true
+
+# Optional programmer dependencies
+rflasher-dummy = { path = "crates/rflasher-dummy", optional = true }
+rflasher-ch341a = { path = "crates/rflasher-ch341a", optional = true }
+rflasher-serprog = { path = "crates/rflasher-serprog", optional = true }
+rflasher-ftdi = { path = "crates/rflasher-ftdi", optional = true }
+rflasher-linux-spi = { path = "crates/rflasher-linux-spi", optional = true }
+rflasher-internal = { path = "crates/rflasher-internal", optional = true }

@@ -1,17 +1,24 @@
 //! List commands implementation
 
+use crate::programmers;
 use rflasher_core::chip::ChipDatabase;
 
 /// List all supported programmers
 pub fn list_programmers() {
-    println!("Supported programmers:");
+    let progs = programmers::available_programmers();
+
+    println!("Supported programmers ({} enabled):", progs.len());
     println!();
-    println!("  dummy     - In-memory flash emulator for testing");
-    println!("  ch341a    - CH341A USB SPI programmer (VID:1a86 PID:5512)");
-    println!("  serprog   - Serial Flasher Protocol (not yet implemented)");
-    println!("  ftdi      - FTDI MPSSE programmer (not yet implemented)");
-    println!("  internal  - Intel chipset internal flash (not yet implemented)");
-    println!("  linux_spi - Linux spidev (not yet implemented)");
+
+    for p in &progs {
+        let status = if p.implemented { "" } else { " [not yet implemented]" };
+        print!("  {:12} - {}{}", p.name, p.description, status);
+        if !p.aliases.is_empty() {
+            print!(" (aliases: {})", p.aliases.join(", "));
+        }
+        println!();
+    }
+
     println!();
     println!("Usage: rflasher <command> -p <programmer>");
     println!();
@@ -19,6 +26,21 @@ pub fn list_programmers() {
     println!("  rflasher probe -p ch341a");
     println!("  rflasher read -p ch341a -o flash.bin");
     println!("  rflasher write -p ch341a -i flash.bin");
+
+    // Show which programmers are available vs compiled out
+    #[cfg(not(all(
+        feature = "dummy",
+        feature = "ch341a",
+        feature = "serprog",
+        feature = "ftdi",
+        feature = "linux-spi",
+        feature = "internal"
+    )))]
+    {
+        println!();
+        println!("Note: Some programmers may be disabled at compile time.");
+        println!("Rebuild with --features all-programmers to enable all.");
+    }
 }
 
 /// List all supported chips from the database

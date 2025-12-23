@@ -510,6 +510,10 @@ dependencies = [
  "rflasher-ch341a",
  "rflasher-core",
  "rflasher-dummy",
+ "rflasher-ftdi",
+ "rflasher-internal",
+ "rflasher-linux-spi",
+ "rflasher-serprog",
  "thiserror",
 ]
 

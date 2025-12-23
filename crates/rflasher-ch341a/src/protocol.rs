@@ -3,6 +3,10 @@
 //! This module contains the USB protocol constants and bit manipulation
 //! functions needed to communicate with the CH341A.
 
+// Allow unused constants - these are register/command definitions for documentation
+// and potential future use
+#![allow(dead_code)]
+
 // USB device identifiers
 pub const CH341A_USB_VENDOR: u16 = 0x1A86;
 pub const CH341A_USB_PRODUCT: u16 = 0x5512;
