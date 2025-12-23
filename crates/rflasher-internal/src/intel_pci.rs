@@ -2,7 +2,7 @@
 //!
 //! This table is ported from flashprog's chipset_enable.c
 
-use crate::chipset::{ChipsetEnable, IchChipset, TestStatus, B_FL, B_FS, B_P, B_S};
+use crate::chipset::{ChipsetEnable, IchChipset, TestStatus, B_FS, B_S};
 
 /// Intel vendor ID
 pub const INTEL_VID: u16 = 0x8086;
@@ -48,25 +48,6 @@ pub static INTEL_CHIPSETS: &[ChipsetEnable] = &[
         "Intel",
         "Bay Trail",
         IchChipset::BayTrail,
-    ),
-    // PIIX series (very old, parallel only)
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x122e,
-        B_P,
-        TestStatus::Ok,
-        "Intel",
-        "PIIX",
-        IchChipset::Ich,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x1234,
-        B_P,
-        TestStatus::Untested,
-        "Intel",
-        "MPIIX",
-        IchChipset::Ich,
     ),
     // 6 Series (Cougar Point)
     ChipsetEnable::new(
@@ -451,144 +432,6 @@ pub static INTEL_CHIPSETS: &[ChipsetEnable] = &[
         "Coleto Creek",
         IchChipset::Series7PantherPoint,
     ),
-    // ICH / ICH0
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x2410,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "ICH",
-        IchChipset::Ich,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x2420,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "ICH0",
-        IchChipset::Ich,
-    ),
-    // ICH2 - ICH5
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x2440,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "ICH2",
-        IchChipset::Ich2345,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x244c,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "ICH2-M",
-        IchChipset::Ich2345,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x2450,
-        B_FL,
-        TestStatus::Untested,
-        "Intel",
-        "C-ICH",
-        IchChipset::Ich2345,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x2480,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "ICH3-S",
-        IchChipset::Ich2345,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x248c,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "ICH3-M",
-        IchChipset::Ich2345,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x24c0,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "ICH4/ICH4-L",
-        IchChipset::Ich2345,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x24cc,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "ICH4-M",
-        IchChipset::Ich2345,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x24d0,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "ICH5/ICH5R",
-        IchChipset::Ich2345,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x25a1,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "6300ESB",
-        IchChipset::Ich2345,
-    ),
-    // ICH6
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x2640,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "ICH6/ICH6R",
-        IchChipset::Ich6,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x2641,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "ICH6-M",
-        IchChipset::Ich6,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x2642,
-        B_FL,
-        TestStatus::Untested,
-        "Intel",
-        "ICH6W/ICH6RW",
-        IchChipset::Ich6,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x2670,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "631xESB/632xESB/3100",
-        IchChipset::Ich6,
-    ),
     // ICH7
     ChipsetEnable::new(
         INTEL_VID,
@@ -964,44 +807,7 @@ pub static INTEL_CHIPSETS: &[ChipsetEnable] = &[
         "EP80579",
         IchChipset::Ich7,
     ),
-    // PIIX3/PIIX4
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x7000,
-        B_P,
-        TestStatus::Ok,
-        "Intel",
-        "PIIX3",
-        IchChipset::Ich,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x7110,
-        B_P,
-        TestStatus::Ok,
-        "Intel",
-        "PIIX4/4E/4M",
-        IchChipset::Ich,
-    ),
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x7198,
-        B_P,
-        TestStatus::Ok,
-        "Intel",
-        "440MX",
-        IchChipset::Ich,
-    ),
-    // SCH Poulsbo / Tunnel Creek
-    ChipsetEnable::new(
-        INTEL_VID,
-        0x8119,
-        B_FL,
-        TestStatus::Ok,
-        "Intel",
-        "SCH Poulsbo",
-        IchChipset::Poulsbo,
-    ),
+    // Atom E6xx(T) (Tunnel Creek)
     ChipsetEnable::new(
         INTEL_VID,
         0x8186,

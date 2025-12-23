@@ -131,7 +131,8 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
             let bytes_to_page_end = page_size - page_offset;
             let remaining = data.len() - offset;
             // Respect both page boundaries and the master's maximum write length
-            let chunk_size = core::cmp::min(core::cmp::min(bytes_to_page_end, remaining), max_write);
+            let chunk_size =
+                core::cmp::min(core::cmp::min(bytes_to_page_end, remaining), max_write);
 
             let chunk = &data[offset..offset + chunk_size];
 
