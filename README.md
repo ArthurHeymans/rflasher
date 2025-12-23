@@ -1,11 +1,11 @@
 # rflasher
 
-A modern Rust implementation for reading, writing, and erasing SPI flash chips. This is a loose port of [flashprog](https://github.com/SourceArcade/flashprog), designed with a clean architecture, `no_std` compatibility, and comprehensive programmer support.
+A modern Rust implementation for reading, writing, and erasing SPI flash chips. This is a loose port of [flashprog](https://github.com/SourceArcade/flashprog).
 
 ## Features
 
 - **Modern Rust Architecture**: Clean separation of concerns with workspace organization
-- **`no_std` Compatible Core**: Designed for potential embedded and async use cases
+- **`no_std` Compatible Core**: Designed for potential embedded and async use cases. WIP
 - **RON-based Chip Database**: Human-readable chip definitions with build-time code generation
 - **Trait-based Programmer Abstraction**: Extensible design for adding new programmers
 - **Layout Support**: Intel Flash Descriptor (IFD) and FMAP parsing for region-based operations
