@@ -60,7 +60,7 @@ impl Region {
 
     /// Check if this region is aligned to the given boundary
     pub fn is_aligned(&self, alignment: u32) -> bool {
-        self.start % alignment == 0 && (self.end + 1) % alignment == 0
+        self.start.is_multiple_of(alignment) && (self.end + 1).is_multiple_of(alignment)
     }
 }
 

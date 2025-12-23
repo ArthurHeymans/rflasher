@@ -11,7 +11,11 @@ pub fn list_programmers() {
     println!();
 
     for p in &progs {
-        let status = if p.implemented { "" } else { " [not yet implemented]" };
+        let status = if p.implemented {
+            ""
+        } else {
+            " [not yet implemented]"
+        };
         print!("  {:12} - {}{}", p.name, p.description, status);
         if !p.aliases.is_empty() {
             print!(" (aliases: {})", p.aliases.join(", "));

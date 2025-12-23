@@ -19,11 +19,11 @@
 //! end = 0x7FFFFF
 //! ```
 
+use std::format;
 use std::fs;
 use std::path::Path;
 use std::string::String;
 use std::vec::Vec;
-use std::format;
 
 use super::{Layout, LayoutError, LayoutSource, Region};
 
@@ -118,7 +118,9 @@ fn parse_size(s: &str) -> Result<u32, String> {
         return Err(format!("invalid size: {}", s));
     };
 
-    let num: u32 = num_str.parse().map_err(|_| format!("invalid size: {}", s))?;
+    let num: u32 = num_str
+        .parse()
+        .map_err(|_| format!("invalid size: {}", s))?;
     Ok(num * multiplier)
 }
 
@@ -131,8 +133,7 @@ impl Layout {
 
     /// Parse a layout from a TOML string
     pub fn from_toml_str(content: &str) -> Result<Self, LayoutError> {
-        let file: TomlLayoutFile =
-            toml::from_str(content).map_err(|_| LayoutError::ParseError)?;
+        let file: TomlLayoutFile = toml::from_str(content).map_err(|_| LayoutError::ParseError)?;
 
         let mut layout = Layout::with_source(LayoutSource::Toml);
 
@@ -140,7 +141,8 @@ impl Layout {
         if let Some(meta) = file.layout {
             layout.name = meta.name;
             if let Some(size_str) = meta.chip_size {
-                layout.chip_size = Some(parse_size(&size_str).map_err(|_| LayoutError::ParseError)?);
+                layout.chip_size =
+                    Some(parse_size(&size_str).map_err(|_| LayoutError::ParseError)?);
             }
         }
 
@@ -201,9 +203,9 @@ impl Layout {
 
 /// Format a size as human-readable string
 fn format_size(size: u32) -> String {
-    if size >= 1024 * 1024 && size % (1024 * 1024) == 0 {
+    if size >= 1024 * 1024 && size.is_multiple_of(1024 * 1024) {
         format!("{} MiB", size / (1024 * 1024))
-    } else if size >= 1024 && size % 1024 == 0 {
+    } else if size >= 1024 && size.is_multiple_of(1024) {
         format!("{} KiB", size / 1024)
     } else {
         format!("{}", size)

@@ -25,10 +25,7 @@ pub fn run_erase<M: SpiMaster + ?Sized>(
         (Some(start_addr), Some(len)) => {
             // Partial erase
             erase_region_with_progress(master, &ctx, start_addr, len)?;
-            println!(
-                "Erased {} bytes starting at 0x{:08X}",
-                len, start_addr
-            );
+            println!("Erased {} bytes starting at 0x{:08X}", len, start_addr);
         }
         (Some(_), None) | (None, Some(_)) => {
             return Err("Both --start and --length must be specified for partial erase".into());
@@ -51,10 +48,7 @@ pub fn chip_erase_with_progress<M: SpiMaster + ?Sized>(
     let total_size = ctx.total_size();
 
     let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")?,
-    );
+    pb.set_style(ProgressStyle::default_spinner().template("{spinner:.green} {msg}")?);
     pb.set_message(format!(
         "Erasing {} bytes (this may take a while)...",
         total_size

@@ -82,10 +82,7 @@ pub fn erase_flash_with_progress<M: SpiMaster + ?Sized>(
     let total_size = ctx.total_size();
 
     let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")?,
-    );
+    pb.set_style(ProgressStyle::default_spinner().template("{spinner:.green} {msg}")?);
     pb.set_message(format!("Erasing {} bytes...", total_size));
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
 

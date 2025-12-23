@@ -9,7 +9,8 @@ fn parse_hex_u32(s: &str) -> Result<u32, String> {
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         u32::from_str_radix(hex, 16).map_err(|e| format!("Invalid hex value: {}", e))
     } else {
-        s.parse::<u32>().map_err(|e| format!("Invalid number: {}", e))
+        s.parse::<u32>()
+            .map_err(|e| format!("Invalid number: {}", e))
     }
 }
 

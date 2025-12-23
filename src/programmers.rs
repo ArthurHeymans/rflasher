@@ -42,8 +42,8 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
     programmers.push(ProgrammerInfo {
         name: "serprog",
         aliases: &[],
-        description: "Serial Flasher Protocol over serial/network",
-        implemented: false,
+        description: "Serial Flasher Protocol over serial/network (dev=<port> or ip=<host:port>)",
+        implemented: true,
     });
 
     #[cfg(feature = "ftdi")]
@@ -84,7 +84,11 @@ pub fn programmer_help() -> String {
     let mut help = String::from("Available programmers:\n");
 
     for p in &programmers {
-        let status = if p.implemented { "" } else { " [not yet implemented]" };
+        let status = if p.implemented {
+            ""
+        } else {
+            " [not yet implemented]"
+        };
         help.push_str(&format!("  {:12} - {}{}\n", p.name, p.description, status));
     }
 
@@ -179,23 +183,93 @@ where
 
         #[cfg(feature = "serprog")]
         "serprog" => {
-            Err("serprog programmer is not yet implemented".into())
+            use rflasher_serprog::SerprogConnection;
+
+            // Parse options
+            let (_, options) = parse_programmer_string(programmer);
+
+            // Build connection string from options
+            let conn_str = options
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join(",");
+
+            if conn_str.is_empty() {
+                return Err("serprog requires connection parameters.\n\
+                    Usage: serprog:dev=/dev/ttyUSB0[:baud] or serprog:ip=host:port\n\
+                    Optional: spispeed=<hz>, cs=<num>"
+                    .into());
+            }
+
+            // Parse connection
+            let conn = SerprogConnection::parse(&conn_str)
+                .map_err(|e| format!("Invalid serprog parameters: {}", e))?;
+
+            // Extract optional parameters
+            let spispeed: Option<u32> = options
+                .iter()
+                .find(|(k, _)| *k == "spispeed")
+                .and_then(|(_, v)| v.parse().ok());
+            let cs: Option<u8> = options
+                .iter()
+                .find(|(k, _)| *k == "cs")
+                .and_then(|(_, v)| v.parse().ok());
+
+            log::info!("Opening serprog programmer...");
+
+            match conn {
+                SerprogConnection::Serial { device, baud } => {
+                    let transport = rflasher_serprog::SerialTransport::open(&device, baud)
+                        .map_err(|e| format!("Failed to open serial port {}: {}", device, e))?;
+                    let mut serprog = rflasher_serprog::Serprog::new(transport)
+                        .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
+
+                    // Apply optional settings
+                    if let Some(speed) = spispeed {
+                        if let Err(e) = serprog.set_spi_speed(speed) {
+                            log::warn!("Failed to set SPI speed: {}", e);
+                        }
+                    }
+                    if let Some(chip_select) = cs {
+                        serprog
+                            .set_spi_cs(chip_select)
+                            .map_err(|e| format!("Failed to set chip select: {}", e))?;
+                    }
+
+                    f(&mut serprog)
+                }
+                SerprogConnection::Tcp { host, port } => {
+                    let transport = rflasher_serprog::TcpTransport::connect(&host, port)
+                        .map_err(|e| format!("Failed to connect to {}:{}: {}", host, port, e))?;
+                    let mut serprog = rflasher_serprog::Serprog::new(transport)
+                        .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
+
+                    // Apply optional settings
+                    if let Some(speed) = spispeed {
+                        if let Err(e) = serprog.set_spi_speed(speed) {
+                            log::warn!("Failed to set SPI speed: {}", e);
+                        }
+                    }
+                    if let Some(chip_select) = cs {
+                        serprog
+                            .set_spi_cs(chip_select)
+                            .map_err(|e| format!("Failed to set chip select: {}", e))?;
+                    }
+
+                    f(&mut serprog)
+                }
+            }
         }
 
         #[cfg(feature = "ftdi")]
-        "ftdi" => {
-            Err("ftdi programmer is not yet implemented".into())
-        }
+        "ftdi" => Err("ftdi programmer is not yet implemented".into()),
 
         #[cfg(feature = "linux-spi")]
-        "linux_spi" => {
-            Err("linux_spi programmer is not yet implemented".into())
-        }
+        "linux_spi" => Err("linux_spi programmer is not yet implemented".into()),
 
         #[cfg(feature = "internal")]
-        "internal" => {
-            Err("internal programmer is not yet implemented".into())
-        }
+        "internal" => Err("internal programmer is not yet implemented".into()),
 
         _ => Err(unknown_programmer_error(name)),
     }

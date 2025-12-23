@@ -88,9 +88,7 @@ fn main() {
             LayoutCommands::Fmap { input, output } => {
                 commands::layout::cmd_fmap(&input, output.as_deref())
             }
-            LayoutCommands::Create { output, size } => {
-                commands::layout::cmd_create(&output, &size)
-            }
+            LayoutCommands::Create { output, size } => commands::layout::cmd_create(&output, &size),
         },
     };
 

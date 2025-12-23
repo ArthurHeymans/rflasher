@@ -130,7 +130,12 @@ pub fn write<M: SpiMaster + ?Sized>(
 /// Erase a region of flash
 ///
 /// The region must be aligned to erase block boundaries.
-pub fn erase<M: SpiMaster + ?Sized>(master: &mut M, ctx: &FlashContext, addr: u32, len: u32) -> Result<()> {
+pub fn erase<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    len: u32,
+) -> Result<()> {
     if !ctx.is_valid_range(addr, len as usize) {
         return Err(Error::AddressOutOfBounds);
     }
@@ -1150,10 +1155,7 @@ mod tests {
 
         // Should have no writes (no data to restore)
         let writes = mock.get_writes();
-        assert!(
-            writes.is_empty(),
-            "Aligned erase should not require writes"
-        );
+        assert!(writes.is_empty(), "Aligned erase should not require writes");
     }
 
     #[test]
@@ -1163,9 +1165,9 @@ mod tests {
         let mut mock = MockFlash::with_contents(
             65536,
             &[
-                (0x0F00, &[0xAA; 0x100]), // Before first block (0x0F00-0x0FFF)
+                (0x0F00, &[0xAA; 0x100]),  // Before first block (0x0F00-0x0FFF)
                 (0x1000, &[0xBB; 0x3000]), // In region (0x1000-0x3FFF)
-                (0x4000, &[0xCC; 0x100]), // After last block (0x4000-0x40FF)
+                (0x4000, &[0xCC; 0x100]),  // After last block (0x4000-0x40FF)
             ],
         );
 

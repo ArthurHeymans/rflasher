@@ -41,9 +41,7 @@ impl Ch341a {
     /// Useful when multiple CH341A devices are connected.
     pub fn open_nth(index: usize) -> Result<Self> {
         let devices: Vec<_> = nusb::list_devices()?
-            .filter(|d| {
-                d.vendor_id() == CH341A_USB_VENDOR && d.product_id() == CH341A_USB_PRODUCT
-            })
+            .filter(|d| d.vendor_id() == CH341A_USB_VENDOR && d.product_id() == CH341A_USB_PRODUCT)
             .collect();
 
         let device_info = devices.get(index).ok_or(Ch341aError::DeviceNotFound)?;
@@ -86,9 +84,7 @@ impl Ch341a {
     /// List all connected CH341A devices
     pub fn list_devices() -> Result<Vec<Ch341aDeviceInfo>> {
         let devices: Vec<_> = nusb::list_devices()?
-            .filter(|d| {
-                d.vendor_id() == CH341A_USB_VENDOR && d.product_id() == CH341A_USB_PRODUCT
-            })
+            .filter(|d| d.vendor_id() == CH341A_USB_VENDOR && d.product_id() == CH341A_USB_PRODUCT)
             .map(|d| Ch341aDeviceInfo {
                 bus: d.bus_number(),
                 address: d.device_address(),
@@ -124,7 +120,11 @@ impl Ch341a {
 
     /// Enable or disable output pins
     fn enable_pins(&mut self, enable: bool) -> Result<()> {
-        let dir = if enable { UIO_DIR_OUTPUT } else { UIO_DIR_INPUT };
+        let dir = if enable {
+            UIO_DIR_OUTPUT
+        } else {
+            UIO_DIR_INPUT
+        };
 
         let buf = vec![
             CH341A_CMD_UIO_STREAM,

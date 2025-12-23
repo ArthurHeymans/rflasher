@@ -17,22 +17,22 @@ const MAX_IFD_REGIONS: usize = 16;
 
 /// IFD region names (based on Intel documentation)
 const IFD_REGION_NAMES: [&str; MAX_IFD_REGIONS] = [
-    "descriptor",  // 0: Flash Descriptor
-    "bios",        // 1: BIOS
-    "me",          // 2: Intel ME
-    "gbe",         // 3: Gigabit Ethernet
-    "platform",    // 4: Platform Data
-    "devexp",      // 5: Device Expansion
-    "bios2",       // 6: Secondary BIOS
-    "ec",          // 7: Embedded Controller
-    "ie",          // 8: Innovation Engine
-    "10gbe",       // 9: 10 Gigabit Ethernet
-    "oprom",       // 10: Option ROM
-    "region11",    // 11: Reserved
-    "region12",    // 12: Reserved
-    "region13",    // 13: Reserved
-    "region14",    // 14: Reserved
-    "ptt",         // 15: Platform Trust Technology
+    "descriptor", // 0: Flash Descriptor
+    "bios",       // 1: BIOS
+    "me",         // 2: Intel ME
+    "gbe",        // 3: Gigabit Ethernet
+    "platform",   // 4: Platform Data
+    "devexp",     // 5: Device Expansion
+    "bios2",      // 6: Secondary BIOS
+    "ec",         // 7: Embedded Controller
+    "ie",         // 8: Innovation Engine
+    "10gbe",      // 9: 10 Gigabit Ethernet
+    "oprom",      // 10: Option ROM
+    "region11",   // 11: Reserved
+    "region12",   // 12: Reserved
+    "region13",   // 13: Reserved
+    "region14",   // 14: Reserved
+    "ptt",        // 15: Platform Trust Technology
 ];
 
 /// Dangerous regions that can brick the system
@@ -74,7 +74,7 @@ pub fn parse_ifd(data: &[u8]) -> Result<Layout, LayoutError> {
     layout.name = Some("Intel Flash Descriptor".to_string());
 
     // Parse each region
-    for i in 0..num_regions {
+    for (i, &name) in IFD_REGION_NAMES.iter().enumerate().take(num_regions) {
         let offset = frba + i * 4;
         let freg = u32::from_le_bytes([
             data[offset],
@@ -95,8 +95,6 @@ pub fn parse_ifd(data: &[u8]) -> Result<Layout, LayoutError> {
 
         // The actual end address is limit + 0xFFF (inclusive)
         let end = limit | 0xFFF;
-
-        let name = IFD_REGION_NAMES[i];
 
         let mut region = Region::new(name, base, end);
         region.readonly = READONLY_REGIONS.contains(&name);

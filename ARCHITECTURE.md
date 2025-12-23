@@ -235,21 +235,53 @@ rflasher read -p ch341a -o flash.bin
 rflasher write -p ch341a -i flash.bin
 ```
 
-### Phase 5: Serprog Programmer
+### Phase 5: Serprog Programmer - COMPLETE
 
 **Goal**: Serial Flasher Protocol support
 
-**Tasks**:
-1. Implement protocol from `flashprog/serprog.c`
-2. Support serial port backend (using `serialport` crate)
-3. Support TCP socket backend
-4. Implement all required commands:
-   - `S_CMD_NOP` (0x00)
-   - `S_CMD_Q_IFACE` (0x01)
-   - `S_CMD_Q_CMDMAP` (0x02)
-   - `S_CMD_O_SPIOP` (0x13)
-   - `S_CMD_S_SPI_FREQ` (0x14)
-5. Parse programmer string: `serprog:dev=/dev/ttyUSB0,spispeed=2000000`
+**Implemented**:
+1. Full protocol implementation from `flashprog/serprog.c`:
+   - Protocol synchronization (SYNCNOP)
+   - Interface version query (Q_IFACE)
+   - Command map query (Q_CMDMAP)
+   - Bus type query and setting (Q_BUSTYPE, S_BUSTYPE)
+   - Programmer name query (Q_PGMNAME)
+   - SPI operation command (O_SPIOP)
+   - SPI frequency setting (S_SPI_FREQ)
+   - Chip select setting (S_SPI_CS)
+   - Pin state control (S_PIN_STATE)
+2. Serial port backend using `serialport` crate
+3. TCP socket backend for network-attached programmers
+4. `SpiMaster` trait implementation
+5. Programmer string parsing with options
+
+**Crate Structure** (`rflasher-serprog`):
+```
+src/
+├── lib.rs       # Public exports, convenience functions
+├── device.rs    # Serprog struct and SpiMaster impl
+├── protocol.rs  # Protocol constants and types
+├── transport.rs # Serial and TCP transport backends
+└── error.rs     # Error types
+```
+
+**Usage Examples**:
+```bash
+# Probe via serial port (default baud rate)
+rflasher probe -p serprog:dev=/dev/ttyUSB0
+
+# Probe via serial port with specific baud rate
+rflasher probe -p serprog:dev=/dev/ttyUSB0:115200
+
+# Probe via TCP (e.g., ESP8266 serprog)
+rflasher probe -p serprog:ip=192.168.1.100:5000
+
+# Read flash with SPI speed setting
+rflasher read -p serprog:dev=/dev/ttyUSB0,spispeed=2000000 -o flash.bin
+
+# Write with specific chip select
+rflasher write -p serprog:dev=/dev/ttyUSB0,cs=1 -i flash.bin
+```
 
 ### Phase 6: FTDI Programmer
 

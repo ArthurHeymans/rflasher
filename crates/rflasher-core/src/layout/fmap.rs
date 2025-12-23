@@ -17,8 +17,6 @@ const FMAP_SIGNATURE: &[u8; 8] = b"__FMAP__";
 /// Maximum supported FMAP major version
 const FMAP_VER_MAJOR: u8 = 1;
 
-
-
 /// Size of FMAP header
 const FMAP_HEADER_SIZE: usize = 56;
 

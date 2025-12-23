@@ -129,7 +129,9 @@ fn parse_size(s: &str) -> Result<u32, String> {
         return Err(format!("invalid size: {}", s));
     };
 
-    let num: u32 = num_str.parse().map_err(|_| format!("invalid size: {}", s))?;
+    let num: u32 = num_str
+        .parse()
+        .map_err(|_| format!("invalid size: {}", s))?;
     Ok(num * multiplier)
 }
 
