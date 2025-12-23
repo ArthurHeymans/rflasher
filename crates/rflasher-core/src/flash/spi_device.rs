@@ -113,6 +113,10 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
         let use_4byte = self.ctx.address_mode == AddressMode::FourByte;
         let use_native = self.ctx.use_native_4byte;
 
+        // Get the master's maximum write length - some controllers have limits
+        // smaller than a full page (e.g., Intel swseq is limited to 64 bytes)
+        let max_write = self.master.max_write_len();
+
         // Enter 4-byte mode if needed and not using native commands
         if use_4byte && !use_native {
             protocol::enter_4byte_mode(self.master)?;
@@ -126,7 +130,8 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
             let page_offset = (current_addr as usize) % page_size;
             let bytes_to_page_end = page_size - page_offset;
             let remaining = data.len() - offset;
-            let chunk_size = core::cmp::min(bytes_to_page_end, remaining);
+            // Respect both page boundaries and the master's maximum write length
+            let chunk_size = core::cmp::min(core::cmp::min(bytes_to_page_end, remaining), max_write);
 
             let chunk = &data[offset..offset + chunk_size];
 
