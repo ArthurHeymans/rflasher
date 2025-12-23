@@ -148,7 +148,7 @@ mod tests {
 
         // FRBA at 0x40
         // Region 0 (descriptor): 0x000000 - 0x000FFF
-        let freg0: u32 = (0x0000 << 16) | 0x0000; // limit=0, base=0
+        let freg0: u32 = 0x0000_0000; // limit=0, base=0
         data[0x40..0x44].copy_from_slice(&freg0.to_le_bytes());
 
         // Region 1 (bios): 0x001000 - 0x7FFFFF

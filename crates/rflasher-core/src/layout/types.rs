@@ -215,11 +215,14 @@ impl Layout {
             }
         }
 
-        // Check for overlapping regions
+        // Check for overlapping regions and duplicate names
         for (i, r1) in self.regions.iter().enumerate() {
             for r2 in self.regions.iter().skip(i + 1) {
                 if r1.overlaps(r2) {
                     return Err(LayoutError::OverlappingRegions);
+                }
+                if r1.name.eq_ignore_ascii_case(&r2.name) {
+                    return Err(LayoutError::DuplicateRegionName);
                 }
             }
         }
@@ -262,6 +265,8 @@ pub enum LayoutError {
     InvalidRegion,
     /// Two regions overlap
     OverlappingRegions,
+    /// Two regions have the same name
+    DuplicateRegionName,
     /// Chip size doesn't match expected
     ChipSizeMismatch {
         /// Expected chip size
@@ -286,6 +291,7 @@ impl std::fmt::Display for LayoutError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::RegionNotFound => write!(f, "region not found"),
+            Self::DuplicateRegionName => write!(f, "duplicate region name"),
             Self::RegionOutOfBounds => write!(f, "region extends beyond chip size"),
             Self::InvalidRegion => write!(f, "invalid region bounds"),
             Self::OverlappingRegions => write!(f, "overlapping regions"),

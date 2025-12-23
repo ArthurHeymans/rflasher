@@ -59,6 +59,10 @@ pub enum Error {
     ReadError,
     /// I/O error occurred
     IoError,
+
+    // Layout errors
+    /// Layout validation failed (e.g., duplicate region names, overlapping regions)
+    LayoutError,
 }
 
 impl fmt::Display for Error {
@@ -83,6 +87,7 @@ impl fmt::Display for Error {
             Self::ProgrammerError => write!(f, "programmer error"),
             Self::ReadError => write!(f, "read operation failed"),
             Self::IoError => write!(f, "I/O error"),
+            Self::LayoutError => write!(f, "layout validation failed"),
         }
     }
 }

@@ -3,6 +3,7 @@
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rflasher_core::chip::ChipDatabase;
 use rflasher_core::flash::{self, FlashContext, WriteProgress, WriteStats};
+use rflasher_core::layout::Layout;
 use rflasher_core::programmer::SpiMaster;
 use std::fs::File;
 use std::io::Read;
@@ -183,6 +184,139 @@ pub fn run_write<M: SpiMaster + ?Sized>(
 
     println!("Write complete!");
 
+    Ok(())
+}
+
+/// Run the write command with layout support
+pub fn run_write_with_layout<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    db: &ChipDatabase,
+    input: &Path,
+    layout: &mut Layout,
+    do_verify: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Probe for chip
+    let ctx = flash::probe(master, db)?;
+
+    println!(
+        "Found: {} {} ({} bytes)",
+        ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
+    );
+
+    // Read input file
+    let mut file = File::open(input)?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)?;
+
+    println!("Read {} bytes from {:?}", data.len(), input);
+
+    // Validate size - input file must be at least as large as the chip
+    if data.len() < ctx.total_size() {
+        // Pad to chip size if needed (with 0xFF)
+        println!(
+            "Padding file from {} to {} bytes with 0xFF",
+            data.len(),
+            ctx.total_size()
+        );
+        data.resize(ctx.total_size(), 0xFF);
+    }
+
+    // Display included regions
+    let included: Vec<_> = layout.included_regions().collect();
+    if included.is_empty() {
+        return Err("No regions selected for writing. Use --include to select regions.".into());
+    }
+
+    println!("Writing {} region(s):", included.len());
+    for region in &included {
+        println!(
+            "  {} (0x{:08X} - 0x{:08X}, {} bytes)",
+            region.name,
+            region.start,
+            region.end,
+            region.size()
+        );
+    }
+
+    // Check for readonly regions
+    let readonly = layout.readonly_included();
+    if !readonly.is_empty() {
+        let names: Vec<_> = readonly.iter().map(|r| r.name.as_str()).collect();
+        return Err(format!("Cannot write to readonly region(s): {}", names.join(", ")).into());
+    }
+
+    // Smart write using layout
+    let mut progress = IndicatifProgress::new();
+    let stats = flash::smart_write_by_layout(master, &ctx, layout, &data, &mut progress)?;
+
+    // Verify if requested (but skip if no changes were made)
+    if do_verify {
+        if stats.flash_modified {
+            verify_regions_with_progress(master, &ctx, layout, &data)?;
+        } else {
+            println!("Skipping verification - no changes were made");
+        }
+    }
+
+    println!("Write complete!");
+
+    Ok(())
+}
+
+/// Verify included regions against expected data
+fn verify_regions_with_progress<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    layout: &Layout,
+    expected: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let included: Vec<_> = layout.included_regions().collect();
+    let total_bytes: usize = included.iter().map(|r| r.size() as usize).sum();
+
+    let pb = ProgressBar::new(total_bytes as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta}) Verifying")?
+            .progress_chars("#>-"),
+    );
+
+    let mut bytes_verified = 0usize;
+    let mut buf = vec![0u8; 4096];
+
+    for region in included {
+        let mut offset = region.start;
+        while offset <= region.end {
+            let chunk_size = std::cmp::min(4096, (region.end - offset + 1) as usize);
+            let chunk = &mut buf[..chunk_size];
+
+            flash::read(master, ctx, offset, chunk)?;
+
+            // Compare
+            let expected_chunk = &expected[offset as usize..offset as usize + chunk_size];
+            if chunk != expected_chunk {
+                pb.abandon_with_message("Verification failed!");
+                // Find first difference
+                for (i, (a, b)) in chunk.iter().zip(expected_chunk.iter()).enumerate() {
+                    if a != b {
+                        return Err(format!(
+                            "Verification failed in region '{}' at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
+                            region.name,
+                            offset as usize + i,
+                            b,
+                            a
+                        )
+                        .into());
+                    }
+                }
+            }
+
+            offset += chunk_size as u32;
+            bytes_verified += chunk_size;
+            pb.set_position(bytes_verified as u64);
+        }
+    }
+
+    pb.finish_with_message("Verification passed");
     Ok(())
 }
 

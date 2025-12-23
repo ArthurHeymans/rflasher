@@ -146,8 +146,17 @@ impl Layout {
             }
         }
 
-        // Add regions
+        // Add regions (checking for duplicates)
         for toml_region in file.region {
+            // Check for duplicate region name
+            if layout
+                .regions
+                .iter()
+                .any(|r| r.name.eq_ignore_ascii_case(&toml_region.name))
+            {
+                return Err(LayoutError::DuplicateRegionName);
+            }
+
             layout.add_region(Region {
                 name: toml_region.name,
                 start: toml_region.start,

@@ -7,9 +7,10 @@ mod commands;
 mod programmers;
 
 use clap::Parser;
-use cli::{Cli, Commands, LayoutCommands};
+use cli::{Cli, Commands, LayoutArgs, LayoutCommands};
 use rflasher_core::chip::ChipDatabase;
 use rflasher_core::flash;
+use rflasher_core::layout::Layout;
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -50,15 +51,15 @@ fn main() {
             chip: _,
             verify,
             no_erase,
-            layout: _,
-        } => cmd_write(&programmer, &input, verify, no_erase, &db),
+            layout,
+        } => cmd_write(&programmer, &input, verify, no_erase, layout, &db),
         Commands::Erase {
             programmer,
             chip: _,
             start,
             length,
-            layout: _,
-        } => cmd_erase(&programmer, start, length, &db),
+            layout,
+        } => cmd_erase(&programmer, start, length, layout, &db),
         Commands::Verify {
             programmer,
             input,
@@ -159,22 +160,116 @@ fn cmd_write(
     input: &Path,
     verify: bool,
     no_erase: bool,
+    layout_args: LayoutArgs,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |master| {
-        commands::run_write(master, db, input, verify, no_erase)
-    })
+    // Check if we need layout-based write
+    if layout_args.layout.is_some()
+        || !layout_args.include.is_empty()
+        || !layout_args.exclude.is_empty()
+        || layout_args.region.is_some()
+    {
+        // Load and configure layout
+        let mut layout = match &layout_args.layout {
+            Some(path) => Layout::from_toml_file(path)?,
+            None => {
+                return Err(
+                    "Layout file required when using --include, --exclude, or --region".into(),
+                )
+            }
+        };
+
+        // Handle --region shorthand (equivalent to --include with one region)
+        if let Some(region_name) = &layout_args.region {
+            layout.include_region(region_name)?;
+        }
+
+        // Handle --include
+        for name in &layout_args.include {
+            layout.include_region(name)?;
+        }
+
+        // Handle --exclude (only applies if some regions are already included)
+        for name in &layout_args.exclude {
+            layout.exclude_region(name)?;
+        }
+
+        // If no regions specified, include all
+        if !layout.has_included_regions() {
+            layout.include_all();
+        }
+
+        programmers::with_programmer(programmer, |master| {
+            commands::run_write_with_layout(master, db, input, &mut layout, verify)
+        })
+    } else {
+        // No layout - use standard write
+        programmers::with_programmer(programmer, |master| {
+            commands::run_write(master, db, input, verify, no_erase)
+        })
+    }
 }
 
 fn cmd_erase(
     programmer: &str,
     start: Option<u32>,
     length: Option<u32>,
+    layout_args: LayoutArgs,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |master| {
-        commands::run_erase(master, db, start, length)
-    })
+    // Check if we need layout-based erase
+    if layout_args.layout.is_some()
+        || !layout_args.include.is_empty()
+        || !layout_args.exclude.is_empty()
+        || layout_args.region.is_some()
+    {
+        // Layout-based erase - can't combine with start/length
+        if start.is_some() || length.is_some() {
+            return Err(
+                "Cannot use --start/--length with layout options. Use --include to select regions."
+                    .into(),
+            );
+        }
+
+        // Load and configure layout
+        let mut layout = match &layout_args.layout {
+            Some(path) => Layout::from_toml_file(path)?,
+            None => {
+                return Err(
+                    "Layout file required when using --include, --exclude, or --region".into(),
+                )
+            }
+        };
+
+        // Handle --region shorthand
+        if let Some(region_name) = &layout_args.region {
+            layout.include_region(region_name)?;
+        }
+
+        // Handle --include
+        for name in &layout_args.include {
+            layout.include_region(name)?;
+        }
+
+        // Handle --exclude
+        for name in &layout_args.exclude {
+            layout.exclude_region(name)?;
+        }
+
+        // If no regions specified, include all
+        if !layout.has_included_regions() {
+            layout.include_all();
+        }
+
+        programmers::with_programmer(programmer, |master| {
+            commands::run_erase_with_layout(master, db, &layout)
+        })
+    } else {
+        // No layout - use standard erase
+        programmers::with_programmer(programmer, |master| {
+            commands::run_erase(master, db, start, length)
+        })
+    }
 }
 
 fn cmd_verify(

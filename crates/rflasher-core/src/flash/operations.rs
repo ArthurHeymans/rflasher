@@ -10,7 +10,7 @@ use crate::chip::ChipDatabase;
 use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{Error, Result};
 #[cfg(feature = "alloc")]
-use crate::layout::{Layout, Region};
+use crate::layout::{Layout, LayoutError, Region};
 use crate::programmer::SpiMaster;
 use crate::protocol;
 
@@ -45,9 +45,7 @@ pub fn need_erase(have: &[u8], want: &[u8], granularity: WriteGranularity) -> bo
             // For bit-granularity, we can only clear bits (1->0).
             // We need erase if any bit needs to go from 0->1
             // (have & want) != want means some bit in want is 1 but in have is 0
-            have.iter()
-                .zip(want.iter())
-                .any(|(h, w)| (h & w) != *w)
+            have.iter().zip(want.iter()).any(|(h, w)| (h & w) != *w)
         }
         WriteGranularity::Byte => {
             // For byte-granularity, if bytes differ, the old byte must be
@@ -64,13 +62,15 @@ pub fn need_erase(have: &[u8], want: &[u8], granularity: WriteGranularity) -> bo
             // For page granularity, we operate on pages (256 bytes typically)
             // but the logic is the same as byte - if any byte differs,
             // the source must be erased
-            have.iter().zip(want.iter()).any(|(h, w)| {
-                if h == w {
-                    false
-                } else {
-                    *h != ERASED_VALUE
-                }
-            })
+            have.iter().zip(want.iter()).any(
+                |(h, w)| {
+                    if h == w {
+                        false
+                    } else {
+                        *h != ERASED_VALUE
+                    }
+                },
+            )
         }
     }
 }
@@ -1079,7 +1079,12 @@ pub fn smart_write<M: SpiMaster + ?Sized, P: WriteProgress>(
     let mut bytes_read = 0;
     while bytes_read < chip_size {
         let chunk_size = core::cmp::min(READ_CHUNK_SIZE, chip_size - bytes_read);
-        read(master, ctx, bytes_read as u32, &mut current[bytes_read..bytes_read + chunk_size])?;
+        read(
+            master,
+            ctx,
+            bytes_read as u32,
+            &mut current[bytes_read..bytes_read + chunk_size],
+        )?;
         bytes_read += chunk_size;
         progress.read_progress(bytes_read);
     }
@@ -1350,8 +1355,8 @@ pub fn smart_write_region<M: SpiMaster + ?Sized, P: WriteProgress>(
             // Update current to reflect erased state
             for block in &blocks_to_erase {
                 let rel_start = block.start.saturating_sub(addr) as usize;
-                let rel_end = ((block.start + block.size).saturating_sub(addr) as usize)
-                    .min(current.len());
+                let rel_end =
+                    ((block.start + block.size).saturating_sub(addr) as usize).min(current.len());
                 for byte in &mut current[rel_start..rel_end] {
                     *byte = ERASED_VALUE;
                 }
@@ -1383,6 +1388,127 @@ pub fn smart_write_region<M: SpiMaster + ?Sized, P: WriteProgress>(
 
     progress.complete(&stats);
     Ok(stats)
+}
+
+/// Perform a smart write operation for all included regions in a layout
+///
+/// This function writes data to all included regions in the layout,
+/// using smart write semantics (only erasing/writing changed bytes).
+///
+/// # Arguments
+/// * `master` - SPI master for flash communication
+/// * `ctx` - Flash context with chip information
+/// * `layout` - Layout with regions marked as included
+/// * `image` - Full flash image (must be at least chip size)
+/// * `progress` - Progress callback
+///
+/// # Returns
+/// Combined statistics about all operations performed
+#[cfg(feature = "alloc")]
+pub fn smart_write_by_layout<M: SpiMaster + ?Sized, P: WriteProgress>(
+    master: &mut M,
+    ctx: &FlashContext,
+    layout: &Layout,
+    image: &[u8],
+    progress: &mut P,
+) -> Result<WriteStats> {
+    // Validate layout against chip
+    layout.validate(ctx.chip.total_size).map_err(|e| match e {
+        LayoutError::RegionOutOfBounds => Error::AddressOutOfBounds,
+        LayoutError::ChipSizeMismatch { .. } => Error::AddressOutOfBounds,
+        _ => Error::LayoutError,
+    })?;
+
+    // Image must cover the chip (or at least the included regions)
+    if image.len() < ctx.chip.total_size as usize {
+        return Err(Error::BufferTooSmall);
+    }
+
+    // Collect included regions
+    let included: Vec<_> = layout.included_regions().collect();
+    if included.is_empty() {
+        // Nothing to do
+        let stats = WriteStats::default();
+        progress.complete(&stats);
+        return Ok(stats);
+    }
+
+    // Calculate total bytes across all included regions
+    let total_bytes: usize = included.iter().map(|r| r.size() as usize).sum();
+
+    let mut combined_stats = WriteStats::default();
+
+    // For progress reporting, we track overall progress across all regions
+    let mut overall_bytes_read = 0usize;
+    let mut overall_bytes_written = 0usize;
+
+    // Read phase: read all included regions
+    progress.reading(total_bytes);
+
+    // We'll process each region and accumulate stats
+    for region in &included {
+        let region_data = &image[region.start as usize..=region.end as usize];
+
+        // Create a sub-progress reporter that offsets the overall progress
+        #[allow(dead_code)]
+        struct OffsetProgress<'a, P: WriteProgress> {
+            inner: &'a mut P,
+            read_offset: usize,
+            write_offset: usize,
+            total_read: usize,
+            total_write: usize,
+        }
+
+        impl<P: WriteProgress> WriteProgress for OffsetProgress<'_, P> {
+            fn reading(&mut self, _total_bytes: usize) {
+                // Already called at the outer level
+            }
+            fn read_progress(&mut self, bytes_read: usize) {
+                self.inner.read_progress(self.read_offset + bytes_read);
+            }
+            fn erasing(&mut self, blocks_to_erase: usize, bytes_to_erase: usize) {
+                self.inner.erasing(blocks_to_erase, bytes_to_erase);
+            }
+            fn erase_progress(&mut self, blocks_erased: usize, bytes_erased: usize) {
+                self.inner.erase_progress(blocks_erased, bytes_erased);
+            }
+            fn writing(&mut self, _bytes_to_write: usize) {
+                // Use total write across all regions
+                self.inner.writing(self.total_write);
+            }
+            fn write_progress(&mut self, bytes_written: usize) {
+                self.inner.write_progress(self.write_offset + bytes_written);
+            }
+            fn complete(&mut self, _stats: &WriteStats) {
+                // Don't call complete for individual regions
+            }
+        }
+
+        let mut offset_progress = OffsetProgress {
+            inner: progress,
+            read_offset: overall_bytes_read,
+            write_offset: overall_bytes_written,
+            total_read: total_bytes,
+            total_write: total_bytes,
+        };
+
+        let stats =
+            smart_write_region(master, ctx, region.start, region_data, &mut offset_progress)?;
+
+        // Accumulate stats
+        combined_stats.bytes_changed += stats.bytes_changed;
+        combined_stats.erases_performed += stats.erases_performed;
+        combined_stats.bytes_erased += stats.bytes_erased;
+        combined_stats.writes_performed += stats.writes_performed;
+        combined_stats.bytes_written += stats.bytes_written;
+        combined_stats.flash_modified |= stats.flash_modified;
+
+        overall_bytes_read += region.size() as usize;
+        overall_bytes_written += stats.bytes_written;
+    }
+
+    progress.complete(&combined_stats);
+    Ok(combined_stats)
 }
 
 // =============================================================================
@@ -2334,7 +2460,10 @@ mod tests {
 
         assert!(stats.flash_modified);
         assert_eq!(stats.bytes_changed, 1);
-        assert_eq!(stats.erases_performed, 0, "Should not need erase for already erased flash");
+        assert_eq!(
+            stats.erases_performed, 0,
+            "Should not need erase for already erased flash"
+        );
         assert_eq!(stats.bytes_written, 1);
 
         // Verify the byte was written
