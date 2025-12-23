@@ -243,7 +243,10 @@ pub fn read_with_progress<D: FlashDevice, P: WriteProgress>(
     let mut bytes_read = 0;
     while bytes_read < total {
         let chunk_size = core::cmp::min(READ_CHUNK_SIZE, total - bytes_read);
-        device.read(bytes_read as u32, &mut buf[bytes_read..bytes_read + chunk_size])?;
+        device.read(
+            bytes_read as u32,
+            &mut buf[bytes_read..bytes_read + chunk_size],
+        )?;
         bytes_read += chunk_size;
         progress.read_progress(bytes_read);
     }
@@ -293,7 +296,10 @@ pub fn smart_write<D: FlashDevice, P: WriteProgress>(
     let mut bytes_read = 0;
     while bytes_read < flash_size {
         let chunk_size = core::cmp::min(READ_CHUNK_SIZE, flash_size - bytes_read);
-        device.read(bytes_read as u32, &mut current[bytes_read..bytes_read + chunk_size])?;
+        device.read(
+            bytes_read as u32,
+            &mut current[bytes_read..bytes_read + chunk_size],
+        )?;
         bytes_read += chunk_size;
         progress.read_progress(bytes_read);
     }
@@ -452,7 +458,8 @@ pub fn smart_write_region<D: FlashDevice, P: WriteProgress>(
 
             // Update our view of current contents
             let rel_start = block.start.saturating_sub(addr) as usize;
-            let rel_end = ((block.start + block.size).saturating_sub(addr) as usize).min(current.len());
+            let rel_end =
+                ((block.start + block.size).saturating_sub(addr) as usize).min(current.len());
             for byte in &mut current[rel_start..rel_end] {
                 *byte = ERASED_VALUE;
             }

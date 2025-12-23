@@ -72,10 +72,7 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
     }
 
     fn erase_granularity(&self) -> u32 {
-        self.ctx
-            .chip
-            .min_erase_size()
-            .unwrap_or(4096) // Default to 4KB if no erase blocks defined
+        self.ctx.chip.min_erase_size().unwrap_or(4096) // Default to 4KB if no erase blocks defined
     }
 
     fn write_granularity(&self) -> WriteGranularity {
@@ -168,8 +165,8 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
         }
 
         // Find the best erase block size for this operation
-        let erase_block =
-            select_erase_block(self.ctx.chip.erase_blocks(), addr, len).ok_or(Error::InvalidAlignment)?;
+        let erase_block = select_erase_block(self.ctx.chip.erase_blocks(), addr, len)
+            .ok_or(Error::InvalidAlignment)?;
 
         let use_4byte = self.ctx.address_mode == AddressMode::FourByte;
         let use_native = self.ctx.use_native_4byte;

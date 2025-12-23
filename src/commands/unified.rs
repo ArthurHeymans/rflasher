@@ -163,7 +163,11 @@ pub fn run_read<D: FlashDevice>(
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!("Flash size: {} bytes ({} KiB)", flash_size, flash_size / 1024);
+    println!(
+        "Flash size: {} bytes ({} KiB)",
+        flash_size,
+        flash_size / 1024
+    );
 
     // Read the chip
     let data = read_flash(device)?;
@@ -184,7 +188,11 @@ pub fn run_read_with_layout<D: FlashDevice>(
     layout: &Layout,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!("Flash size: {} bytes ({} KiB)", flash_size, flash_size / 1024);
+    println!(
+        "Flash size: {} bytes ({} KiB)",
+        flash_size,
+        flash_size / 1024
+    );
 
     // Display included regions
     let included: Vec<_> = layout.included_regions().collect();
@@ -261,7 +269,11 @@ pub fn run_write<D: FlashDevice>(
     do_verify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!("Flash size: {} bytes ({} KiB)", flash_size, flash_size / 1024);
+    println!(
+        "Flash size: {} bytes ({} KiB)",
+        flash_size,
+        flash_size / 1024
+    );
 
     // Read input file
     let mut file = File::open(input)?;
@@ -316,7 +328,11 @@ pub fn run_write_with_layout<D: FlashDevice>(
     do_verify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!("Flash size: {} bytes ({} KiB)", flash_size, flash_size / 1024);
+    println!(
+        "Flash size: {} bytes ({} KiB)",
+        flash_size,
+        flash_size / 1024
+    );
 
     // Read input file
     let mut file = File::open(input)?;
@@ -440,7 +456,11 @@ pub fn run_erase<D: FlashDevice>(
     length: Option<u32>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!("Flash size: {} bytes ({} KiB)", flash_size, flash_size / 1024);
+    println!(
+        "Flash size: {} bytes ({} KiB)",
+        flash_size,
+        flash_size / 1024
+    );
 
     let (start_addr, len) = match (start, length) {
         (Some(s), Some(l)) => (s, l),
@@ -457,10 +477,7 @@ pub fn run_erase<D: FlashDevice>(
     if start_addr == 0 && len == flash_size {
         pb.set_message(format!("Erasing {} bytes (full chip)...", flash_size));
     } else {
-        pb.set_message(format!(
-            "Erasing {} bytes at 0x{:08X}...",
-            len, start_addr
-        ));
+        pb.set_message(format!("Erasing {} bytes at 0x{:08X}...", len, start_addr));
     }
 
     device.erase(start_addr, len)?;
@@ -477,7 +494,11 @@ pub fn run_erase_with_layout<D: FlashDevice>(
     layout: &Layout,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!("Flash size: {} bytes ({} KiB)", flash_size, flash_size / 1024);
+    println!(
+        "Flash size: {} bytes ({} KiB)",
+        flash_size,
+        flash_size / 1024
+    );
 
     let included: Vec<_> = layout.included_regions().collect();
     if included.is_empty() {
@@ -573,7 +594,11 @@ pub fn run_verify<D: FlashDevice>(
     input: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!("Flash size: {} bytes ({} KiB)", flash_size, flash_size / 1024);
+    println!(
+        "Flash size: {} bytes ({} KiB)",
+        flash_size,
+        flash_size / 1024
+    );
 
     // Read input file
     let mut file = File::open(input)?;

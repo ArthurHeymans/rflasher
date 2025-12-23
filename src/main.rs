@@ -160,7 +160,9 @@ fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::
 // =============================================================================
 
 /// Get flash size from an opaque programmer by reading IFD
-fn get_flash_size_from_ifd(master: &mut dyn OpaqueMaster) -> Result<u32, Box<dyn std::error::Error>> {
+fn get_flash_size_from_ifd(
+    master: &mut dyn OpaqueMaster,
+) -> Result<u32, Box<dyn std::error::Error>> {
     let mut header = [0u8; 4096];
     master.read(0, &mut header)?;
 
@@ -180,7 +182,9 @@ fn get_flash_size_from_ifd(master: &mut dyn OpaqueMaster) -> Result<u32, Box<dyn
 }
 
 /// Load layout from IFD on an opaque device
-fn load_layout_from_opaque(device: &mut dyn FlashDevice) -> Result<Layout, Box<dyn std::error::Error>> {
+fn load_layout_from_opaque(
+    device: &mut dyn FlashDevice,
+) -> Result<Layout, Box<dyn std::error::Error>> {
     let mut header = [0u8; 4096];
     device.read(0, &mut header)?;
     let layout = parse_ifd(&header)?;
@@ -258,36 +262,34 @@ fn cmd_write(
     layout_args: LayoutArgs,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| {
-        match prog {
-            programmers::Programmer::Spi(master) => {
-                let ctx = flash::probe(master, db)?;
-                println!(
-                    "Found: {} {} ({} bytes)",
-                    ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
-                );
+    programmers::with_programmer(programmer, |prog| match prog {
+        programmers::Programmer::Spi(master) => {
+            let ctx = flash::probe(master, db)?;
+            println!(
+                "Found: {} {} ({} bytes)",
+                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
+            );
 
-                let mut device = SpiFlashDevice::new(master, ctx);
+            let mut device = SpiFlashDevice::new(master, ctx);
 
-                if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                    let mut layout = load_layout_from_device(&mut device, &layout_args)?;
-                    apply_region_filters(&mut layout, &layout_args)?;
-                    commands::unified::run_write_with_layout(&mut device, input, &mut layout, verify)
-                } else {
-                    commands::unified::run_write(&mut device, input, verify)
-                }
+            if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                let mut layout = load_layout_from_device(&mut device, &layout_args)?;
+                apply_region_filters(&mut layout, &layout_args)?;
+                commands::unified::run_write_with_layout(&mut device, input, &mut layout, verify)
+            } else {
+                commands::unified::run_write(&mut device, input, verify)
             }
-            programmers::Programmer::Opaque(master) => {
-                let flash_size = get_flash_size_from_ifd(master)?;
-                let mut device = OpaqueFlashDevice::with_size(master, flash_size);
+        }
+        programmers::Programmer::Opaque(master) => {
+            let flash_size = get_flash_size_from_ifd(master)?;
+            let mut device = OpaqueFlashDevice::with_size(master, flash_size);
 
-                if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                    let mut layout = load_layout_from_opaque(&mut device)?;
-                    apply_region_filters(&mut layout, &layout_args)?;
-                    commands::unified::run_write_with_layout(&mut device, input, &mut layout, verify)
-                } else {
-                    commands::unified::run_write(&mut device, input, verify)
-                }
+            if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                let mut layout = load_layout_from_opaque(&mut device)?;
+                apply_region_filters(&mut layout, &layout_args)?;
+                commands::unified::run_write_with_layout(&mut device, input, &mut layout, verify)
+            } else {
+                commands::unified::run_write(&mut device, input, verify)
             }
         }
     })
@@ -310,36 +312,34 @@ fn cmd_erase(
         );
     }
 
-    programmers::with_programmer(programmer, |prog| {
-        match prog {
-            programmers::Programmer::Spi(master) => {
-                let ctx = flash::probe(master, db)?;
-                println!(
-                    "Found: {} {} ({} bytes)",
-                    ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
-                );
+    programmers::with_programmer(programmer, |prog| match prog {
+        programmers::Programmer::Spi(master) => {
+            let ctx = flash::probe(master, db)?;
+            println!(
+                "Found: {} {} ({} bytes)",
+                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
+            );
 
-                let mut device = SpiFlashDevice::new(master, ctx);
+            let mut device = SpiFlashDevice::new(master, ctx);
 
-                if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                    let mut layout = load_layout_from_device(&mut device, &layout_args)?;
-                    apply_region_filters(&mut layout, &layout_args)?;
-                    commands::unified::run_erase_with_layout(&mut device, &layout)
-                } else {
-                    commands::unified::run_erase(&mut device, start, length)
-                }
+            if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                let mut layout = load_layout_from_device(&mut device, &layout_args)?;
+                apply_region_filters(&mut layout, &layout_args)?;
+                commands::unified::run_erase_with_layout(&mut device, &layout)
+            } else {
+                commands::unified::run_erase(&mut device, start, length)
             }
-            programmers::Programmer::Opaque(master) => {
-                let flash_size = get_flash_size_from_ifd(master)?;
-                let mut device = OpaqueFlashDevice::with_size(master, flash_size);
+        }
+        programmers::Programmer::Opaque(master) => {
+            let flash_size = get_flash_size_from_ifd(master)?;
+            let mut device = OpaqueFlashDevice::with_size(master, flash_size);
 
-                if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                    let mut layout = load_layout_from_opaque(&mut device)?;
-                    apply_region_filters(&mut layout, &layout_args)?;
-                    commands::unified::run_erase_with_layout(&mut device, &layout)
-                } else {
-                    commands::unified::run_erase(&mut device, start, length)
-                }
+            if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                let mut layout = load_layout_from_opaque(&mut device)?;
+                apply_region_filters(&mut layout, &layout_args)?;
+                commands::unified::run_erase_with_layout(&mut device, &layout)
+            } else {
+                commands::unified::run_erase(&mut device, start, length)
             }
         }
     })
@@ -350,23 +350,21 @@ fn cmd_verify(
     input: &Path,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| {
-        match prog {
-            programmers::Programmer::Spi(master) => {
-                let ctx = flash::probe(master, db)?;
-                println!(
-                    "Found: {} {} ({} bytes)",
-                    ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
-                );
+    programmers::with_programmer(programmer, |prog| match prog {
+        programmers::Programmer::Spi(master) => {
+            let ctx = flash::probe(master, db)?;
+            println!(
+                "Found: {} {} ({} bytes)",
+                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
+            );
 
-                let mut device = SpiFlashDevice::new(master, ctx);
-                commands::unified::run_verify(&mut device, input)
-            }
-            programmers::Programmer::Opaque(master) => {
-                let flash_size = get_flash_size_from_ifd(master)?;
-                let mut device = OpaqueFlashDevice::with_size(master, flash_size);
-                commands::unified::run_verify(&mut device, input)
-            }
+            let mut device = SpiFlashDevice::new(master, ctx);
+            commands::unified::run_verify(&mut device, input)
+        }
+        programmers::Programmer::Opaque(master) => {
+            let flash_size = get_flash_size_from_ifd(master)?;
+            let mut device = OpaqueFlashDevice::with_size(master, flash_size);
+            commands::unified::run_verify(&mut device, input)
         }
     })
 }
@@ -386,7 +384,11 @@ fn cmd_info(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::erro
                 println!("Flash Information (Opaque Programmer)");
                 println!("=====================================");
                 println!();
-                println!("Size: {} bytes ({} MiB)", flash_size, flash_size / (1024 * 1024));
+                println!(
+                    "Size: {} bytes ({} MiB)",
+                    flash_size,
+                    flash_size / (1024 * 1024)
+                );
                 println!();
 
                 // Try to show IFD regions
