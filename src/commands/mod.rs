@@ -1,20 +1,24 @@
 //! CLI command implementations
+//!
+//! This module provides command implementations that work with the unified
+//! `FlashDevice` abstraction.
+//!
+//! ## Unified commands (FlashDevice-based)
+//!
+//! The `unified` module contains command implementations that work with any
+//! `FlashDevice` implementation - both SPI-based (CH341A, FTDI, etc.) and
+//! opaque programmers (Intel internal).
+//!
+//! ## Probe commands
+//!
+//! Probe commands are special because they need to identify the chip type:
+//! - SPI: Uses JEDEC ID probing
+//! - Opaque: Uses Intel Flash Descriptor
 
-mod erase;
 pub mod layout;
 mod list;
-pub mod opaque;
 mod probe;
-mod read;
-mod verify;
-mod write;
+pub mod unified;
 
-pub use erase::{run_erase, run_erase_with_layout};
 pub use list::{list_chips, list_programmers};
-pub use opaque::{
-    run_erase_opaque, run_probe_opaque, run_read_opaque, run_verify_opaque, run_write_opaque,
-};
-pub use probe::run_probe;
-pub use read::{run_read, run_read_with_layout};
-pub use verify::run_verify;
-pub use write::{run_write, run_write_with_layout};
+pub use probe::{run_probe, run_probe_opaque};

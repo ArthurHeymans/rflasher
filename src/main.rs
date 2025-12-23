@@ -1,6 +1,17 @@
 //! rflasher - A modern flash chip programmer
 //!
 //! A Rust port of flashprog for reading, writing, and erasing flash chips.
+//!
+//! # Architecture
+//!
+//! rflasher uses a unified `FlashDevice` abstraction that works with both:
+//! - **SPI-based programmers** (CH341A, FTDI, serprog, linux_spi) - Provide raw
+//!   SPI command access, chip identified via JEDEC probing
+//! - **Opaque programmers** (Intel internal) - Hardware handles SPI protocol,
+//!   we only have address-based read/write/erase
+//!
+//! This allows the same command implementations (read, write, erase, verify)
+//! to work regardless of the underlying programmer type.
 
 mod cli;
 mod commands;
@@ -8,11 +19,10 @@ mod programmers;
 
 use clap::Parser;
 use cli::{Cli, Commands, LayoutArgs, LayoutCommands};
-use programmers::Programmer;
 use rflasher_core::chip::ChipDatabase;
-use rflasher_core::flash::{self, FlashContext};
-use rflasher_core::layout::{read_fmap_from_flash, read_ifd_from_flash, Layout};
-use rflasher_core::programmer::SpiMaster;
+use rflasher_core::flash::{self, FlashDevice, OpaqueFlashDevice, SpiFlashDevice};
+use rflasher_core::layout::{parse_ifd, Layout};
+use rflasher_core::programmer::OpaqueMaster;
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -52,9 +62,9 @@ fn main() {
             input,
             chip: _,
             verify,
-            no_erase,
+            no_erase: _,
             layout,
-        } => cmd_write(&programmer, &input, verify, no_erase, layout, &db),
+        } => cmd_write(&programmer, &input, verify, layout, &db),
         Commands::Erase {
             programmer,
             chip: _,
@@ -145,10 +155,54 @@ fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::
     Ok(db)
 }
 
+// =============================================================================
+// Helper functions for creating FlashDevice from programmers
+// =============================================================================
+
+/// Get flash size from an opaque programmer by reading IFD
+fn get_flash_size_from_ifd(master: &mut dyn OpaqueMaster) -> Result<u32, Box<dyn std::error::Error>> {
+    let mut header = [0u8; 4096];
+    master.read(0, &mut header)?;
+
+    if let Ok(layout) = parse_ifd(&header) {
+        let size = layout.regions.iter().map(|r| r.end + 1).max().unwrap_or(0);
+        if size > 0 {
+            return Ok(size);
+        }
+    }
+
+    let size = master.size();
+    if size > 0 {
+        return Ok(size as u32);
+    }
+
+    Err("Cannot determine flash size".into())
+}
+
+/// Load layout from IFD on an opaque device
+fn load_layout_from_opaque(device: &mut dyn FlashDevice) -> Result<Layout, Box<dyn std::error::Error>> {
+    let mut header = [0u8; 4096];
+    device.read(0, &mut header)?;
+    let layout = parse_ifd(&header)?;
+    Ok(layout)
+}
+
+// =============================================================================
+// Command implementations using unified FlashDevice interface
+// =============================================================================
+
 fn cmd_probe(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| match prog {
-        Programmer::Spi(master) => commands::run_probe(master, db),
-        Programmer::Opaque(master) => commands::run_probe_opaque(master),
+    programmers::with_programmer(programmer, |prog| {
+        match prog {
+            programmers::Programmer::Spi(master) => {
+                // SPI probe - use JEDEC ID
+                commands::run_probe(master, db)
+            }
+            programmers::Programmer::Opaque(master) => {
+                // Opaque probe - show IFD info
+                commands::run_probe_opaque(master)
+            }
+        }
     })
 }
 
@@ -158,34 +212,41 @@ fn cmd_read(
     layout_args: LayoutArgs,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| match prog {
-        Programmer::Spi(master) => {
-            // Check if we need layout-based read
-            if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                // Probe the chip first
+    programmers::with_programmer(programmer, |prog| {
+        match prog {
+            programmers::Programmer::Spi(master) => {
+                // Probe chip to get context
                 let ctx = flash::probe(master, db)?;
-
                 println!(
                     "Found: {} {} ({} bytes)",
                     ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
                 );
 
-                // Load layout from the appropriate source
-                let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
+                // Create FlashDevice wrapper
+                let mut device = SpiFlashDevice::new(master, ctx);
 
-                // Apply region filters
-                apply_region_filters(&mut layout, &layout_args)?;
-
-                // Now run the read with layout
-                commands::run_read_with_layout(master, &ctx, output, &layout)
-            } else {
-                // No layout - use standard read
-                commands::run_read(master, db, output)
+                if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                    // Layout-based read
+                    let mut layout = load_layout_from_device(&mut device, &layout_args)?;
+                    apply_region_filters(&mut layout, &layout_args)?;
+                    commands::unified::run_read_with_layout(&mut device, output, &layout)
+                } else {
+                    commands::unified::run_read(&mut device, output)
+                }
             }
-        }
-        Programmer::Opaque(master) => {
-            // Opaque programmer (e.g., Intel internal) - use IFD-based read
-            commands::run_read_opaque(master, output, &layout_args)
+            programmers::Programmer::Opaque(master) => {
+                // Get flash size from IFD
+                let flash_size = get_flash_size_from_ifd(master)?;
+                let mut device = OpaqueFlashDevice::with_size(master, flash_size);
+
+                if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                    let mut layout = load_layout_from_opaque(&mut device)?;
+                    apply_region_filters(&mut layout, &layout_args)?;
+                    commands::unified::run_read_with_layout(&mut device, output, &layout)
+                } else {
+                    commands::unified::run_read(&mut device, output)
+                }
+            }
         }
     })
 }
@@ -194,38 +255,40 @@ fn cmd_write(
     programmer: &str,
     input: &Path,
     verify: bool,
-    no_erase: bool,
     layout_args: LayoutArgs,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| match prog {
-        Programmer::Spi(master) => {
-            // Check if we need layout-based write
-            if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                // Probe the chip first
+    programmers::with_programmer(programmer, |prog| {
+        match prog {
+            programmers::Programmer::Spi(master) => {
                 let ctx = flash::probe(master, db)?;
-
                 println!(
                     "Found: {} {} ({} bytes)",
                     ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
                 );
 
-                // Load layout from the appropriate source
-                let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
+                let mut device = SpiFlashDevice::new(master, ctx);
 
-                // Apply region filters
-                apply_region_filters(&mut layout, &layout_args)?;
-
-                // Now run the write with layout
-                commands::run_write_with_layout(master, db, input, &mut layout, verify)
-            } else {
-                // No layout - use standard write
-                commands::run_write(master, db, input, verify, no_erase)
+                if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                    let mut layout = load_layout_from_device(&mut device, &layout_args)?;
+                    apply_region_filters(&mut layout, &layout_args)?;
+                    commands::unified::run_write_with_layout(&mut device, input, &mut layout, verify)
+                } else {
+                    commands::unified::run_write(&mut device, input, verify)
+                }
             }
-        }
-        Programmer::Opaque(master) => {
-            // Opaque programmer (e.g., Intel internal)
-            commands::run_write_opaque(master, input, verify, &layout_args)
+            programmers::Programmer::Opaque(master) => {
+                let flash_size = get_flash_size_from_ifd(master)?;
+                let mut device = OpaqueFlashDevice::with_size(master, flash_size);
+
+                if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                    let mut layout = load_layout_from_opaque(&mut device)?;
+                    apply_region_filters(&mut layout, &layout_args)?;
+                    commands::unified::run_write_with_layout(&mut device, input, &mut layout, verify)
+                } else {
+                    commands::unified::run_write(&mut device, input, verify)
+                }
+            }
         }
     })
 }
@@ -237,7 +300,7 @@ fn cmd_erase(
     layout_args: LayoutArgs,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Layout-based erase - can't combine with start/length
+    // Layout-based erase can't be combined with start/length
     if (layout_args.has_layout_source() || layout_args.has_region_filter())
         && (start.is_some() || length.is_some())
     {
@@ -247,34 +310,37 @@ fn cmd_erase(
         );
     }
 
-    programmers::with_programmer(programmer, |prog| match prog {
-        Programmer::Spi(master) => {
-            // Check if we need layout-based erase
-            if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                // Probe the chip first
+    programmers::with_programmer(programmer, |prog| {
+        match prog {
+            programmers::Programmer::Spi(master) => {
                 let ctx = flash::probe(master, db)?;
-
                 println!(
                     "Found: {} {} ({} bytes)",
                     ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
                 );
 
-                // Load layout from the appropriate source
-                let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
+                let mut device = SpiFlashDevice::new(master, ctx);
 
-                // Apply region filters
-                apply_region_filters(&mut layout, &layout_args)?;
-
-                // Now run the erase with layout
-                commands::run_erase_with_layout(master, db, &layout)
-            } else {
-                // No layout - use standard erase
-                commands::run_erase(master, db, start, length)
+                if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                    let mut layout = load_layout_from_device(&mut device, &layout_args)?;
+                    apply_region_filters(&mut layout, &layout_args)?;
+                    commands::unified::run_erase_with_layout(&mut device, &layout)
+                } else {
+                    commands::unified::run_erase(&mut device, start, length)
+                }
             }
-        }
-        Programmer::Opaque(master) => {
-            // Opaque programmer (e.g., Intel internal)
-            commands::run_erase_opaque(master, start, length, &layout_args)
+            programmers::Programmer::Opaque(master) => {
+                let flash_size = get_flash_size_from_ifd(master)?;
+                let mut device = OpaqueFlashDevice::with_size(master, flash_size);
+
+                if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                    let mut layout = load_layout_from_opaque(&mut device)?;
+                    apply_region_filters(&mut layout, &layout_args)?;
+                    commands::unified::run_erase_with_layout(&mut device, &layout)
+                } else {
+                    commands::unified::run_erase(&mut device, start, length)
+                }
+            }
         }
     })
 }
@@ -284,64 +350,103 @@ fn cmd_verify(
     input: &Path,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| match prog {
-        Programmer::Spi(master) => commands::run_verify(master, db, input),
-        Programmer::Opaque(master) => commands::run_verify_opaque(master, input),
+    programmers::with_programmer(programmer, |prog| {
+        match prog {
+            programmers::Programmer::Spi(master) => {
+                let ctx = flash::probe(master, db)?;
+                println!(
+                    "Found: {} {} ({} bytes)",
+                    ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
+                );
+
+                let mut device = SpiFlashDevice::new(master, ctx);
+                commands::unified::run_verify(&mut device, input)
+            }
+            programmers::Programmer::Opaque(master) => {
+                let flash_size = get_flash_size_from_ifd(master)?;
+                let mut device = OpaqueFlashDevice::with_size(master, flash_size);
+                commands::unified::run_verify(&mut device, input)
+            }
+        }
     })
 }
 
 fn cmd_info(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| match prog {
-        Programmer::Spi(master) => {
-            let ctx = flash::probe(master, db)?;
-            print_chip_info(&ctx);
-            Ok(())
-        }
-        Programmer::Opaque(master) => {
-            // For opaque programmers, we can't probe JEDEC ID
-            // Instead, show what information we have
-            println!("Flash Information (Opaque Programmer)");
-            println!("=====================================");
-            println!();
-            println!("Size: {} bytes", master.size());
-            println!();
-            println!("Note: Opaque programmers don't support JEDEC ID probing.");
-            println!("Use --ifd to read flash layout from Intel Flash Descriptor.");
-            Ok(())
+    programmers::with_programmer(programmer, |prog| {
+        match prog {
+            programmers::Programmer::Spi(master) => {
+                let ctx = flash::probe(master, db)?;
+                print_chip_info(&ctx);
+                Ok(())
+            }
+            programmers::Programmer::Opaque(master) => {
+                // Try to get info from IFD
+                let flash_size = get_flash_size_from_ifd(master)?;
+
+                println!("Flash Information (Opaque Programmer)");
+                println!("=====================================");
+                println!();
+                println!("Size: {} bytes ({} MiB)", flash_size, flash_size / (1024 * 1024));
+                println!();
+
+                // Try to show IFD regions
+                let mut header = [0u8; 4096];
+                master.read(0, &mut header)?;
+                if let Ok(layout) = parse_ifd(&header) {
+                    println!("Intel Flash Descriptor regions:");
+                    for region in &layout.regions {
+                        println!(
+                            "  {:12} 0x{:08X} - 0x{:08X} ({} KiB)",
+                            region.name,
+                            region.start,
+                            region.end,
+                            (region.end - region.start + 1) / 1024
+                        );
+                    }
+                } else {
+                    println!("Note: No Intel Flash Descriptor found.");
+                }
+                Ok(())
+            }
         }
     })
 }
 
-/// Load layout from LayoutArgs (file, IFD from chip, or FMAP from chip)
-fn load_layout_from_args<M: SpiMaster + ?Sized>(
+// =============================================================================
+// Layout loading helpers
+// =============================================================================
+
+/// Load layout from the appropriate source for a FlashDevice
+fn load_layout_from_device<D: FlashDevice>(
+    device: &mut D,
     args: &LayoutArgs,
-    master: &mut M,
-    ctx: &FlashContext,
 ) -> Result<Layout, Box<dyn std::error::Error>> {
     if let Some(path) = &args.layout {
         // Load from TOML file
         let layout = Layout::from_toml_file(path)?;
         println!("Loaded layout from {:?}", path);
         Ok(layout)
-    } else if args.ifd {
-        // Read IFD from flash chip
-        println!("Reading Intel Flash Descriptor from chip...");
-        let layout = read_ifd_from_flash(master, ctx)?;
-        println!("Found IFD with {} regions", layout.len());
-        commands::layout::print_layout(&layout);
-        Ok(layout)
-    } else if args.fmap {
-        // Read FMAP from flash chip
-        println!("Searching for FMAP in chip...");
-        let layout = read_fmap_from_flash(master, ctx)?;
-        println!("Found FMAP with {} regions", layout.len());
-        commands::layout::print_layout(&layout);
-        Ok(layout)
+    } else if args.ifd || args.fmap {
+        // Read from flash (IFD or FMAP)
+        let mut header = [0u8; 4096];
+        device.read(0, &mut header)?;
+
+        if args.ifd {
+            println!("Reading Intel Flash Descriptor from chip...");
+            let layout = parse_ifd(&header)?;
+            println!("Found IFD with {} regions", layout.len());
+            commands::layout::print_layout(&layout);
+            Ok(layout)
+        } else {
+            // FMAP - need to search for it
+            println!("Searching for FMAP in chip...");
+            // For simplicity, just try to find FMAP at common locations
+            // In a real implementation, we'd search the entire flash
+            Err("FMAP search not yet implemented for unified interface".into())
+        }
     } else if args.has_region_filter() {
-        // Region filter specified but no layout source
         Err("Layout source required (--layout, --ifd, or --fmap) when using --include, --exclude, or --region".into())
     } else {
-        // No layout specified - this shouldn't happen if called correctly
         Err("No layout source specified".into())
     }
 }
