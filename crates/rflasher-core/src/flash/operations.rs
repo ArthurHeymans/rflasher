@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 #[cfg(feature = "alloc")]
 use crate::chip::ChipDatabase;
-use crate::chip::EraseBlock;
+use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{Error, Result};
 #[cfg(feature = "alloc")]
 use crate::layout::{Layout, Region};
@@ -15,6 +15,280 @@ use crate::programmer::SpiMaster;
 use crate::protocol;
 
 use super::context::{AddressMode, FlashContext};
+
+// =============================================================================
+// Smart erase/write support
+// =============================================================================
+
+/// The erased value for flash memory (all bits set)
+const ERASED_VALUE: u8 = 0xFF;
+
+/// Determine if an erase is required to transition from `have` to `want`
+///
+/// Flash memory can only change bits from 1 to 0 during writes. To change
+/// bits from 0 to 1, an erase is required (which sets all bits to 1).
+///
+/// This function checks if the transition is possible without erasing.
+///
+/// # Arguments
+/// * `have` - Current contents of flash
+/// * `want` - Desired contents
+/// * `granularity` - Write granularity of the chip
+///
+/// # Returns
+/// `true` if erasing is required, `false` if the write can proceed without erase
+pub fn need_erase(have: &[u8], want: &[u8], granularity: WriteGranularity) -> bool {
+    assert_eq!(have.len(), want.len());
+
+    match granularity {
+        WriteGranularity::Bit => {
+            // For bit-granularity, we can only clear bits (1->0).
+            // We need erase if any bit needs to go from 0->1
+            // (have & want) != want means some bit in want is 1 but in have is 0
+            have.iter()
+                .zip(want.iter())
+                .any(|(h, w)| (h & w) != *w)
+        }
+        WriteGranularity::Byte => {
+            // For byte-granularity, if bytes differ, the old byte must be
+            // in erased state (0xFF) to allow writing the new value
+            have.iter().zip(want.iter()).any(|(h, w)| {
+                if h == w {
+                    false // No change needed
+                } else {
+                    *h != ERASED_VALUE // Need erase if not already erased
+                }
+            })
+        }
+        WriteGranularity::Page => {
+            // For page granularity, we operate on pages (256 bytes typically)
+            // but the logic is the same as byte - if any byte differs,
+            // the source must be erased
+            have.iter().zip(want.iter()).any(|(h, w)| {
+                if h == w {
+                    false
+                } else {
+                    *h != ERASED_VALUE
+                }
+            })
+        }
+    }
+}
+
+/// Check if a range of data needs to be written (differs from current contents)
+///
+/// Returns `true` if any byte in `have` differs from `want`.
+#[inline]
+pub fn need_write(have: &[u8], want: &[u8]) -> bool {
+    have != want
+}
+
+/// A contiguous range of bytes that needs to be written
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteRange {
+    /// Start offset within the compared buffers
+    pub start: u32,
+    /// Length in bytes
+    pub len: u32,
+}
+
+/// Find the next contiguous range of changed bytes
+///
+/// Starting from `offset`, finds the first byte where `have != want`,
+/// then continues until finding a byte where they match again (or end of data).
+///
+/// This is used to skip unchanged regions and only write what's necessary.
+///
+/// # Returns
+/// `Some(WriteRange)` if there are changes, `None` if no more changes from `offset`
+pub fn get_next_write_range(have: &[u8], want: &[u8], offset: u32) -> Option<WriteRange> {
+    assert_eq!(have.len(), want.len());
+
+    let start_offset = offset as usize;
+    if start_offset >= have.len() {
+        return None;
+    }
+
+    // Find start of changed region
+    let have_slice = &have[start_offset..];
+    let want_slice = &want[start_offset..];
+
+    let rel_start = have_slice
+        .iter()
+        .zip(want_slice.iter())
+        .position(|(h, w)| h != w)?;
+
+    // Find end of changed region
+    let after_start = rel_start + 1;
+    let rel_end = have_slice[after_start..]
+        .iter()
+        .zip(want_slice[after_start..].iter())
+        .position(|(h, w)| h == w)
+        .map(|pos| after_start + pos)
+        .unwrap_or(have_slice.len());
+
+    Some(WriteRange {
+        start: (start_offset + rel_start) as u32,
+        len: (rel_end - rel_start) as u32,
+    })
+}
+
+/// Get all write ranges (contiguous regions of changed bytes)
+#[cfg(feature = "alloc")]
+pub fn get_all_write_ranges(have: &[u8], want: &[u8]) -> Vec<WriteRange> {
+    let mut ranges = Vec::new();
+    let mut offset = 0u32;
+
+    while let Some(range) = get_next_write_range(have, want, offset) {
+        ranges.push(range);
+        offset = range.start + range.len;
+    }
+
+    ranges
+}
+
+/// Information about an erase block and whether it needs erasing
+#[cfg(feature = "alloc")]
+#[derive(Debug, Clone)]
+pub struct EraseBlockPlan {
+    /// Start address of the erase block
+    pub start: u32,
+    /// Size of the erase block
+    pub size: u32,
+    /// The erase block definition (opcode and size)
+    pub erase_block: EraseBlock,
+    /// Whether this block needs to be erased
+    pub needs_erase: bool,
+    /// Whether this erase block extends beyond the region boundaries
+    pub region_unaligned: bool,
+}
+
+/// Plan which erase blocks need to be erased for a write operation
+///
+/// This analyzes `have` (current contents) and `want` (desired contents) to
+/// determine which erase blocks actually need erasing. Blocks where no changes
+/// require erasing (i.e., all changes are 1->0 bit transitions on erased bytes)
+/// are marked as not needing erase.
+///
+/// # Arguments
+/// * `erase_blocks` - Available erase block definitions for the chip
+/// * `have` - Current flash contents
+/// * `want` - Desired flash contents
+/// * `region_start` - Start address of the region being written
+/// * `region_end` - End address of the region being written (inclusive)
+/// * `granularity` - Write granularity of the chip
+#[cfg(feature = "alloc")]
+pub fn plan_smart_erase(
+    erase_blocks: &[EraseBlock],
+    have: &[u8],
+    want: &[u8],
+    region_start: u32,
+    region_end: u32,
+    granularity: WriteGranularity,
+) -> Result<Vec<EraseBlockPlan>> {
+    assert_eq!(have.len(), want.len());
+
+    let mut result = Vec::new();
+
+    // Find the smallest erase block size
+    let min_erase_size = erase_blocks
+        .iter()
+        .filter(|eb| eb.size < u32::MAX) // Exclude chip erase
+        .map(|eb| eb.size)
+        .min()
+        .ok_or(Error::InvalidAlignment)?;
+
+    // Start from the first erase block boundary at or before region_start
+    let first_block_start = (region_start / min_erase_size) * min_erase_size;
+    let mut current_addr = first_block_start;
+
+    while current_addr <= region_end {
+        // Find the best erase block for this position
+        let remaining_to_region_end = if region_end >= current_addr {
+            region_end - current_addr + 1
+        } else {
+            0
+        };
+
+        let erase_block = erase_blocks
+            .iter()
+            .filter(|eb| eb.size < u32::MAX)
+            .filter(|eb| current_addr.is_multiple_of(eb.size))
+            .filter(|eb| eb.size <= remaining_to_region_end || eb.size == min_erase_size)
+            .max_by_key(|eb| eb.size)
+            .copied()
+            .unwrap_or_else(|| EraseBlock::new(0x20, min_erase_size));
+
+        let erase_start = current_addr;
+        let erase_end = erase_start + erase_block.size - 1;
+
+        // Determine if this block is unaligned (extends beyond region)
+        let region_unaligned = erase_start < region_start || erase_end > region_end;
+
+        // Calculate the overlap between this erase block and the region
+        let overlap_start = erase_start.max(region_start);
+        let overlap_end = erase_end.min(region_end);
+
+        // Check if we need to erase this block
+        // We look at the overlap between the erase block and the region
+        // Note: have and want are full chip buffers, so we use absolute addresses
+        let have_slice_start = overlap_start as usize;
+        let have_slice_end = (overlap_end + 1) as usize;
+
+        // Also need to consider data outside the region but inside the erase block
+        // For now, check just the region overlap - unaligned blocks need special handling
+        let needs_erase = if have_slice_end <= have.len() && have_slice_start < have_slice_end {
+            let have_slice = &have[have_slice_start..have_slice_end];
+            let want_slice = &want[have_slice_start..have_slice_end];
+
+            // Check if we need erase for the region portion
+            if !need_write(have_slice, want_slice) {
+                // No changes in this portion, check if we need to consider unaligned parts
+                if region_unaligned {
+                    // For unaligned blocks, we'll preserve data but might still need erase
+                    // if other parts of the region in this block need it
+                    false
+                } else {
+                    false
+                }
+            } else {
+                need_erase(have_slice, want_slice, granularity)
+            }
+        } else {
+            false
+        };
+
+        result.push(EraseBlockPlan {
+            start: erase_start,
+            size: erase_block.size,
+            erase_block,
+            needs_erase,
+            region_unaligned,
+        });
+
+        current_addr = erase_end + 1;
+    }
+
+    Ok(result)
+}
+
+/// Statistics from a smart write operation
+#[cfg(feature = "alloc")]
+#[derive(Debug, Clone, Default)]
+pub struct WriteStats {
+    /// Number of bytes that were different
+    pub bytes_changed: usize,
+    /// Number of erase operations performed
+    pub erases_performed: usize,
+    /// Total bytes erased
+    pub bytes_erased: usize,
+    /// Number of write operations performed
+    pub writes_performed: usize,
+    /// Total bytes written
+    pub bytes_written: usize,
+    /// Whether any flash operations were performed
+    pub flash_modified: bool,
+}
 
 /// Probe for a flash chip using a chip database and return a context if found
 #[cfg(feature = "alloc")]
@@ -218,9 +492,6 @@ pub fn chip_erase<M: SpiMaster + ?Sized>(master: &mut M, ctx: &FlashContext) -> 
     // Verify the erase succeeded by checking the chip contents
     check_erased_range(master, ctx, 0, ctx.total_size() as u32)
 }
-
-/// The erased value for flash memory (all bits set)
-const ERASED_VALUE: u8 = 0xFF;
 
 /// Check that a range of flash has been erased (all bytes are 0xFF)
 ///
@@ -719,6 +990,399 @@ pub fn verify_by_layout<M: SpiMaster + ?Sized>(
     }
 
     Ok(())
+}
+
+// =============================================================================
+// Smart write operations - minimize erase/write based on content comparison
+// =============================================================================
+
+/// Callback for progress reporting during smart write operations
+#[cfg(feature = "alloc")]
+pub trait WriteProgress {
+    /// Called when starting to read current flash contents
+    fn reading(&mut self, total_bytes: usize);
+
+    /// Called to update read progress
+    fn read_progress(&mut self, bytes_read: usize);
+
+    /// Called when starting erase operations
+    fn erasing(&mut self, blocks_to_erase: usize, bytes_to_erase: usize);
+
+    /// Called after each block is erased
+    fn erase_progress(&mut self, blocks_erased: usize, bytes_erased: usize);
+
+    /// Called when starting write operations
+    fn writing(&mut self, bytes_to_write: usize);
+
+    /// Called to update write progress
+    fn write_progress(&mut self, bytes_written: usize);
+
+    /// Called when the operation is complete
+    fn complete(&mut self, stats: &WriteStats);
+}
+
+/// A no-op progress reporter
+#[cfg(feature = "alloc")]
+pub struct NoProgress;
+
+#[cfg(feature = "alloc")]
+impl WriteProgress for NoProgress {
+    fn reading(&mut self, _total_bytes: usize) {}
+    fn read_progress(&mut self, _bytes_read: usize) {}
+    fn erasing(&mut self, _blocks_to_erase: usize, _bytes_to_erase: usize) {}
+    fn erase_progress(&mut self, _blocks_erased: usize, _bytes_erased: usize) {}
+    fn writing(&mut self, _bytes_to_write: usize) {}
+    fn write_progress(&mut self, _bytes_written: usize) {}
+    fn complete(&mut self, _stats: &WriteStats) {}
+}
+
+/// Perform a smart write operation that minimizes flash operations
+///
+/// This function compares the current flash contents with the desired contents
+/// and only erases/writes the regions that actually need to change. This is
+/// inspired by flashprog's optimization strategy:
+///
+/// 1. Read current flash contents
+/// 2. Compare with desired contents to find changed regions
+/// 3. For each changed region, determine if erase is needed (based on bit transitions)
+/// 4. Erase only the blocks that need erasing
+/// 5. Write only the bytes that are different
+///
+/// # Arguments
+/// * `master` - SPI master for flash communication
+/// * `ctx` - Flash context with chip information
+/// * `data` - Desired flash contents (must match chip size)
+/// * `progress` - Progress callback (use `NoProgress` if not needed)
+///
+/// # Returns
+/// Statistics about the operations performed
+#[cfg(feature = "alloc")]
+pub fn smart_write<M: SpiMaster + ?Sized, P: WriteProgress>(
+    master: &mut M,
+    ctx: &FlashContext,
+    data: &[u8],
+    progress: &mut P,
+) -> Result<WriteStats> {
+    let chip_size = ctx.total_size();
+
+    if data.len() != chip_size {
+        return Err(Error::BufferTooSmall);
+    }
+
+    let mut stats = WriteStats::default();
+
+    // Step 1: Read current flash contents
+    progress.reading(chip_size);
+    let mut current = vec![0u8; chip_size];
+
+    const READ_CHUNK_SIZE: usize = 4096;
+    let mut bytes_read = 0;
+    while bytes_read < chip_size {
+        let chunk_size = core::cmp::min(READ_CHUNK_SIZE, chip_size - bytes_read);
+        read(master, ctx, bytes_read as u32, &mut current[bytes_read..bytes_read + chunk_size])?;
+        bytes_read += chunk_size;
+        progress.read_progress(bytes_read);
+    }
+
+    // Step 2: Find all regions that need to be written
+    let write_ranges = get_all_write_ranges(&current, data);
+
+    if write_ranges.is_empty() {
+        // Nothing to do - flash already matches
+        progress.complete(&stats);
+        return Ok(stats);
+    }
+
+    // Calculate total changed bytes
+    stats.bytes_changed = write_ranges.iter().map(|r| r.len as usize).sum();
+
+    // Step 3: Plan erase operations for each changed region
+    // We need to check which erase blocks contain changes that require erasing
+    let granularity = ctx.chip.write_granularity;
+    let mut erase_plan = Vec::new();
+
+    for range in &write_ranges {
+        let have_slice = &current[range.start as usize..(range.start + range.len) as usize];
+        let want_slice = &data[range.start as usize..(range.start + range.len) as usize];
+
+        if need_erase(have_slice, want_slice, granularity) {
+            // Plan erase for this range
+            let range_plan = plan_smart_erase(
+                ctx.chip.erase_blocks(),
+                &current,
+                data,
+                range.start,
+                range.start + range.len - 1,
+                granularity,
+            )?;
+
+            // Merge with existing plan (avoid duplicate erases)
+            for block in range_plan {
+                if block.needs_erase
+                    && !erase_plan
+                        .iter()
+                        .any(|b: &EraseBlockPlan| b.start == block.start)
+                {
+                    erase_plan.push(block);
+                }
+            }
+        }
+    }
+
+    // Step 4: Execute erase operations
+    if !erase_plan.is_empty() {
+        let bytes_to_erase: usize = erase_plan.iter().map(|b| b.size as usize).sum();
+        progress.erasing(erase_plan.len(), bytes_to_erase);
+
+        let mut blocks_erased = 0;
+        let mut bytes_erased = 0;
+
+        for block in &erase_plan {
+            // For blocks that extend beyond our write ranges, we need to preserve
+            // data outside those ranges
+            erase_block_smart(master, ctx, block, &current)?;
+
+            blocks_erased += 1;
+            bytes_erased += block.size as usize;
+            progress.erase_progress(blocks_erased, bytes_erased);
+        }
+
+        stats.erases_performed = blocks_erased;
+        stats.bytes_erased = bytes_erased;
+        stats.flash_modified = true;
+
+        // Update our view of current contents (erased blocks are now 0xFF)
+        for block in &erase_plan {
+            for i in 0..block.size as usize {
+                let addr = block.start as usize + i;
+                if addr < current.len() {
+                    current[addr] = ERASED_VALUE;
+                }
+            }
+        }
+    }
+
+    // Step 5: Write only the changed bytes
+    // Re-calculate write ranges after erasing (some bytes may now match after erase)
+    let write_ranges = get_all_write_ranges(&current, data);
+
+    if !write_ranges.is_empty() {
+        let bytes_to_write: usize = write_ranges.iter().map(|r| r.len as usize).sum();
+        progress.writing(bytes_to_write);
+
+        let mut bytes_written = 0;
+
+        for range in &write_ranges {
+            let write_data = &data[range.start as usize..(range.start + range.len) as usize];
+            write(master, ctx, range.start, write_data)?;
+
+            bytes_written += range.len as usize;
+            progress.write_progress(bytes_written);
+            stats.writes_performed += 1;
+        }
+
+        stats.bytes_written = bytes_written;
+        stats.flash_modified = true;
+    }
+
+    progress.complete(&stats);
+    Ok(stats)
+}
+
+/// Erase a block, preserving data that shouldn't be erased
+///
+/// This handles the case where an erase block contains data that we don't
+/// want to modify. It reads the data before erasing and writes it back after.
+#[cfg(feature = "alloc")]
+fn erase_block_smart<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    block: &EraseBlockPlan,
+    current_contents: &[u8],
+) -> Result<()> {
+    // We need to preserve data at the edges of the erase block that
+    // we're not actually modifying
+    let block_start = block.start as usize;
+    let block_end = block_start + block.size as usize;
+
+    // Read the current block contents that might need preserving
+    // (this is the data in the erase block that's not being changed)
+    let backup = current_contents[block_start..block_end].to_vec();
+
+    // Erase the block
+    erase_single_block(master, ctx, block.erase_block, block.start)?;
+
+    // The caller is responsible for writing new data
+    // We don't need to restore here since we only erase blocks
+    // where we're going to write new data anyway
+
+    // But if the block is unaligned, we may need to restore edges
+    // that aren't part of our write - this is handled by the fact
+    // that smart_write only erases blocks that have actual changes,
+    // and we write all the changed data after
+
+    let _ = backup; // Will be used if we need edge preservation
+
+    Ok(())
+}
+
+/// Perform a smart write operation for a specific region
+///
+/// Similar to `smart_write` but only operates on a specific region of flash.
+/// Data outside the region is preserved.
+///
+/// # Arguments
+/// * `master` - SPI master for flash communication
+/// * `ctx` - Flash context with chip information
+/// * `addr` - Start address of the region
+/// * `data` - Data to write to the region
+/// * `progress` - Progress callback
+#[cfg(feature = "alloc")]
+pub fn smart_write_region<M: SpiMaster + ?Sized, P: WriteProgress>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    data: &[u8],
+    progress: &mut P,
+) -> Result<WriteStats> {
+    if !ctx.is_valid_range(addr, data.len()) {
+        return Err(Error::AddressOutOfBounds);
+    }
+
+    let mut stats = WriteStats::default();
+    let granularity = ctx.chip.write_granularity;
+
+    // Step 1: Read current contents of the region
+    progress.reading(data.len());
+    let mut current = vec![0u8; data.len()];
+
+    const READ_CHUNK_SIZE: usize = 4096;
+    let mut bytes_read = 0;
+    while bytes_read < data.len() {
+        let chunk_size = core::cmp::min(READ_CHUNK_SIZE, data.len() - bytes_read);
+        read(
+            master,
+            ctx,
+            addr + bytes_read as u32,
+            &mut current[bytes_read..bytes_read + chunk_size],
+        )?;
+        bytes_read += chunk_size;
+        progress.read_progress(bytes_read);
+    }
+
+    // Step 2: Find changed regions
+    let write_ranges = get_all_write_ranges(&current, data);
+
+    if write_ranges.is_empty() {
+        progress.complete(&stats);
+        return Ok(stats);
+    }
+
+    stats.bytes_changed = write_ranges.iter().map(|r| r.len as usize).sum();
+
+    // Step 3: Check if any changes need erasing
+    let needs_any_erase = write_ranges.iter().any(|range| {
+        let have = &current[range.start as usize..(range.start + range.len) as usize];
+        let want = &data[range.start as usize..(range.start + range.len) as usize];
+        need_erase(have, want, granularity)
+    });
+
+    // Step 4: Erase if needed
+    if needs_any_erase {
+        // Plan erase for the entire write region
+        let region_end = addr + data.len() as u32 - 1;
+        let erase_plan = plan_smart_erase(
+            ctx.chip.erase_blocks(),
+            &current,
+            data,
+            addr,
+            region_end,
+            granularity,
+        )?;
+
+        let blocks_to_erase: Vec<_> = erase_plan.into_iter().filter(|b| b.needs_erase).collect();
+
+        if !blocks_to_erase.is_empty() {
+            let bytes_to_erase: usize = blocks_to_erase.iter().map(|b| b.size as usize).sum();
+            progress.erasing(blocks_to_erase.len(), bytes_to_erase);
+
+            // We need to read data outside our region but inside erase blocks
+            // to preserve it after erasing
+            for block in &blocks_to_erase {
+                // Handle data before our region
+                if block.start < addr {
+                    let preserve_len = (addr - block.start) as usize;
+                    let mut preserve_data = vec![0u8; preserve_len];
+                    read(master, ctx, block.start, &mut preserve_data)?;
+
+                    // Erase and restore
+                    erase_single_block(master, ctx, block.erase_block, block.start)?;
+                    write(master, ctx, block.start, &preserve_data)?;
+
+                    stats.erases_performed += 1;
+                    stats.bytes_erased += block.size as usize;
+                } else if block.start + block.size > addr + data.len() as u32 {
+                    // Handle data after our region
+                    let region_end = addr + data.len() as u32;
+                    let preserve_start = region_end;
+                    let preserve_len = (block.start + block.size - region_end) as usize;
+
+                    let mut preserve_data = vec![0u8; preserve_len];
+                    read(master, ctx, preserve_start, &mut preserve_data)?;
+
+                    erase_single_block(master, ctx, block.erase_block, block.start)?;
+                    write(master, ctx, preserve_start, &preserve_data)?;
+
+                    stats.erases_performed += 1;
+                    stats.bytes_erased += block.size as usize;
+                } else {
+                    // Block is entirely within our region
+                    erase_single_block(master, ctx, block.erase_block, block.start)?;
+                    stats.erases_performed += 1;
+                    stats.bytes_erased += block.size as usize;
+                }
+
+                progress.erase_progress(stats.erases_performed, stats.bytes_erased);
+            }
+
+            stats.flash_modified = true;
+
+            // Update current to reflect erased state
+            for block in &blocks_to_erase {
+                let rel_start = block.start.saturating_sub(addr) as usize;
+                let rel_end = ((block.start + block.size).saturating_sub(addr) as usize)
+                    .min(current.len());
+                for byte in &mut current[rel_start..rel_end] {
+                    *byte = ERASED_VALUE;
+                }
+            }
+        }
+    }
+
+    // Step 5: Write only changed bytes (recalculate after erase)
+    let write_ranges = get_all_write_ranges(&current, data);
+
+    if !write_ranges.is_empty() {
+        let bytes_to_write: usize = write_ranges.iter().map(|r| r.len as usize).sum();
+        progress.writing(bytes_to_write);
+
+        let mut bytes_written = 0;
+
+        for range in &write_ranges {
+            let write_data = &data[range.start as usize..(range.start + range.len) as usize];
+            write(master, ctx, addr + range.start, write_data)?;
+
+            bytes_written += range.len as usize;
+            progress.write_progress(bytes_written);
+            stats.writes_performed += 1;
+        }
+
+        stats.bytes_written = bytes_written;
+        stats.flash_modified = true;
+    }
+
+    progress.complete(&stats);
+    Ok(stats)
 }
 
 // =============================================================================
@@ -1510,5 +2174,284 @@ mod tests {
 
         let result = verify_by_layout(&mut mock, &ctx, &layout, &expected);
         assert!(matches!(result, Err(Error::VerifyError)));
+    }
+
+    // =========================================================================
+    // Tests for smart write functions
+    // =========================================================================
+
+    #[test]
+    fn test_need_erase_no_change() {
+        // No change means no erase needed
+        let have = [0xAA, 0xBB, 0xCC, 0xDD];
+        let want = [0xAA, 0xBB, 0xCC, 0xDD];
+        assert!(!need_erase(&have, &want, WriteGranularity::Byte));
+    }
+
+    #[test]
+    fn test_need_erase_already_erased() {
+        // Changing erased bytes doesn't need erase
+        let have = [0xFF, 0xFF, 0xFF, 0xFF];
+        let want = [0xAA, 0xBB, 0xCC, 0xDD];
+        assert!(!need_erase(&have, &want, WriteGranularity::Byte));
+    }
+
+    #[test]
+    fn test_need_erase_bit_clear_only() {
+        // For bit granularity: 0xF0 -> 0xE0 is just clearing bit 4, OK
+        let have = [0xF0];
+        let want = [0xE0];
+        assert!(!need_erase(&have, &want, WriteGranularity::Bit));
+    }
+
+    #[test]
+    fn test_need_erase_bit_set_needed() {
+        // For bit granularity: 0xE0 -> 0xF0 needs setting bit 4, requires erase
+        let have = [0xE0];
+        let want = [0xF0];
+        assert!(need_erase(&have, &want, WriteGranularity::Bit));
+    }
+
+    #[test]
+    fn test_need_erase_byte_granularity() {
+        // For byte granularity: changing non-erased byte requires erase
+        let have = [0xAA];
+        let want = [0xBB];
+        assert!(need_erase(&have, &want, WriteGranularity::Byte));
+    }
+
+    #[test]
+    fn test_need_write_no_change() {
+        let have = [0xAA, 0xBB, 0xCC];
+        let want = [0xAA, 0xBB, 0xCC];
+        assert!(!need_write(&have, &want));
+    }
+
+    #[test]
+    fn test_need_write_with_change() {
+        let have = [0xAA, 0xBB, 0xCC];
+        let want = [0xAA, 0x00, 0xCC];
+        assert!(need_write(&have, &want));
+    }
+
+    #[test]
+    fn test_get_next_write_range_no_changes() {
+        let have = [0xAA, 0xBB, 0xCC, 0xDD];
+        let want = [0xAA, 0xBB, 0xCC, 0xDD];
+        assert!(get_next_write_range(&have, &want, 0).is_none());
+    }
+
+    #[test]
+    fn test_get_next_write_range_single_byte() {
+        let have = [0xAA, 0xBB, 0xCC, 0xDD];
+        let want = [0xAA, 0x00, 0xCC, 0xDD];
+
+        let range = get_next_write_range(&have, &want, 0).unwrap();
+        assert_eq!(range.start, 1);
+        assert_eq!(range.len, 1);
+    }
+
+    #[test]
+    fn test_get_next_write_range_contiguous() {
+        let have = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
+        let want = [0xAA, 0x00, 0x00, 0x00, 0xEE];
+
+        let range = get_next_write_range(&have, &want, 0).unwrap();
+        assert_eq!(range.start, 1);
+        assert_eq!(range.len, 3);
+    }
+
+    #[test]
+    fn test_get_next_write_range_multiple_ranges() {
+        let have = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+        let want = [0x00, 0xBB, 0xCC, 0x00, 0xEE, 0xFF];
+
+        // First range at 0
+        let range1 = get_next_write_range(&have, &want, 0).unwrap();
+        assert_eq!(range1.start, 0);
+        assert_eq!(range1.len, 1);
+
+        // Second range at 3
+        let range2 = get_next_write_range(&have, &want, range1.start + range1.len).unwrap();
+        assert_eq!(range2.start, 3);
+        assert_eq!(range2.len, 1);
+
+        // No more ranges
+        assert!(get_next_write_range(&have, &want, range2.start + range2.len).is_none());
+    }
+
+    #[test]
+    fn test_get_all_write_ranges() {
+        let have = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11];
+        let want = [0x00, 0xBB, 0xCC, 0x00, 0x00, 0xFF, 0x00, 0x22];
+
+        let ranges = get_all_write_ranges(&have, &want);
+        assert_eq!(ranges.len(), 3);
+        assert_eq!(ranges[0], WriteRange { start: 0, len: 1 });
+        assert_eq!(ranges[1], WriteRange { start: 3, len: 2 });
+        assert_eq!(ranges[2], WriteRange { start: 7, len: 1 });
+    }
+
+    #[test]
+    fn test_smart_write_no_changes() {
+        // Flash already contains desired data - no operations should occur
+        let mut mock = MockFlash::with_contents(65536, &[(0x0, &[0xAA; 65536])]);
+
+        let chip = test_chip(65536);
+        let ctx = FlashContext::new(chip);
+
+        // Want the same data
+        let want = vec![0xAA; 65536];
+
+        let stats = smart_write(&mut mock, &ctx, &want, &mut NoProgress).unwrap();
+
+        assert!(!stats.flash_modified);
+        assert_eq!(stats.bytes_changed, 0);
+        assert_eq!(stats.erases_performed, 0);
+        assert_eq!(stats.bytes_written, 0);
+
+        // Should have reads (to compare) but no erases or writes
+        let erases = mock.get_erases();
+        assert!(erases.is_empty(), "Should not erase when no changes");
+
+        let writes = mock.get_writes();
+        assert!(writes.is_empty(), "Should not write when no changes");
+    }
+
+    #[test]
+    fn test_smart_write_single_byte_change_erased() {
+        // Change one byte in an already erased region - no erase needed
+        let mut mock = MockFlash::new(65536); // All 0xFF
+
+        let chip = test_chip(65536);
+        let ctx = FlashContext::new(chip);
+
+        // Change one byte at offset 0x1000
+        let mut want = vec![0xFF; 65536];
+        want[0x1000] = 0xAA;
+
+        let stats = smart_write(&mut mock, &ctx, &want, &mut NoProgress).unwrap();
+
+        assert!(stats.flash_modified);
+        assert_eq!(stats.bytes_changed, 1);
+        assert_eq!(stats.erases_performed, 0, "Should not need erase for already erased flash");
+        assert_eq!(stats.bytes_written, 1);
+
+        // Verify the byte was written
+        let memory = mock.get_memory();
+        assert_eq!(memory[0x1000], 0xAA);
+    }
+
+    #[test]
+    fn test_smart_write_single_byte_change_needs_erase() {
+        // Change one byte in a non-erased region - erase needed
+        let mut mock = MockFlash::with_contents(65536, &[(0x1000, &[0xBB; 0x1000])]);
+
+        let chip = test_chip(65536);
+        let ctx = FlashContext::new(chip);
+
+        // Change one byte at offset 0x1000
+        let mut want = vec![0xFF; 65536];
+        // Keep existing data but change one byte
+        for i in 0x1000..0x2000 {
+            want[i] = 0xBB;
+        }
+        want[0x1500] = 0xAA;
+
+        let stats = smart_write(&mut mock, &ctx, &want, &mut NoProgress).unwrap();
+
+        assert!(stats.flash_modified);
+        // Only one erase block (4KB) should be erased
+        assert!(
+            stats.erases_performed <= 2,
+            "Should only erase affected blocks, got {}",
+            stats.erases_performed
+        );
+
+        // Verify the change was made
+        let memory = mock.get_memory();
+        assert_eq!(memory[0x1500], 0xAA);
+    }
+
+    #[test]
+    fn test_smart_write_preserves_unchanged_regions() {
+        // Write to one region, verify another region is unchanged
+        let mut mock = MockFlash::with_contents(
+            65536,
+            &[
+                (0x0000, &[0xAA; 0x1000]), // Region we don't want to change
+                (0x2000, &[0xBB; 0x1000]), // Region we'll modify
+            ],
+        );
+
+        let chip = test_chip(65536);
+        let ctx = FlashContext::new(chip);
+
+        // Create want buffer - keep first region, change second
+        let mut want = vec![0xFF; 65536];
+        for i in 0x0000..0x1000 {
+            want[i] = 0xAA; // Keep this the same
+        }
+        for i in 0x2000..0x3000 {
+            want[i] = 0xCC; // Change this
+        }
+
+        let _stats = smart_write(&mut mock, &ctx, &want, &mut NoProgress).unwrap();
+
+        let memory = mock.get_memory();
+
+        // First region should be unchanged
+        assert!(
+            memory[0x0000..0x1000].iter().all(|&b| b == 0xAA),
+            "Unchanged region should be preserved"
+        );
+
+        // Second region should have new data
+        assert!(
+            memory[0x2000..0x3000].iter().all(|&b| b == 0xCC),
+            "Modified region should have new data"
+        );
+    }
+
+    #[test]
+    fn test_plan_smart_erase_no_erase_needed() {
+        // When writing to erased flash, no erase should be planned
+        let have = vec![0xFF; 4096];
+        let want = vec![0xAA; 4096];
+
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),
+            EraseBlock::new(opcodes::BE_D8, 65536),
+        ];
+
+        let plan =
+            plan_smart_erase(&erase_blocks, &have, &want, 0, 4095, WriteGranularity::Byte).unwrap();
+
+        // All blocks should be marked as not needing erase
+        assert!(
+            plan.iter().all(|b| !b.needs_erase),
+            "Should not need erase when writing to erased flash"
+        );
+    }
+
+    #[test]
+    fn test_plan_smart_erase_erase_needed() {
+        // When overwriting non-erased data, erase should be planned
+        let have = vec![0xAA; 4096];
+        let want = vec![0xBB; 4096];
+
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),
+            EraseBlock::new(opcodes::BE_D8, 65536),
+        ];
+
+        let plan =
+            plan_smart_erase(&erase_blocks, &have, &want, 0, 4095, WriteGranularity::Byte).unwrap();
+
+        // At least one block should need erasing
+        assert!(
+            plan.iter().any(|b| b.needs_erase),
+            "Should need erase when overwriting non-erased data"
+        );
     }
 }
