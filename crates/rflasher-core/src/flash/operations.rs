@@ -18,7 +18,7 @@ use super::context::{AddressMode, FlashContext};
 
 /// Probe for a flash chip using a chip database and return a context if found
 #[cfg(feature = "alloc")]
-pub fn probe<M: SpiMaster>(master: &mut M, db: &ChipDatabase) -> Result<FlashContext> {
+pub fn probe<M: SpiMaster + ?Sized>(master: &mut M, db: &ChipDatabase) -> Result<FlashContext> {
     let (manufacturer, device) = protocol::read_jedec_id(master)?;
 
     let chip = db
@@ -32,12 +32,12 @@ pub fn probe<M: SpiMaster>(master: &mut M, db: &ChipDatabase) -> Result<FlashCon
 /// Read the JEDEC ID from the flash chip
 ///
 /// Returns (manufacturer_id, device_id) tuple.
-pub fn read_jedec_id<M: SpiMaster>(master: &mut M) -> Result<(u8, u16)> {
+pub fn read_jedec_id<M: SpiMaster + ?Sized>(master: &mut M) -> Result<(u8, u16)> {
     protocol::read_jedec_id(master)
 }
 
 /// Read flash contents
-pub fn read<M: SpiMaster>(
+pub fn read<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
@@ -67,7 +67,7 @@ pub fn read<M: SpiMaster>(
 ///
 /// This function handles page alignment and splitting large writes
 /// into page-sized chunks. The target region must be erased first.
-pub fn write<M: SpiMaster>(
+pub fn write<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
@@ -130,7 +130,7 @@ pub fn write<M: SpiMaster>(
 /// Erase a region of flash
 ///
 /// The region must be aligned to erase block boundaries.
-pub fn erase<M: SpiMaster>(master: &mut M, ctx: &FlashContext, addr: u32, len: u32) -> Result<()> {
+pub fn erase<M: SpiMaster + ?Sized>(master: &mut M, ctx: &FlashContext, addr: u32, len: u32) -> Result<()> {
     if !ctx.is_valid_range(addr, len as usize) {
         return Err(Error::AddressOutOfBounds);
     }
@@ -193,14 +193,14 @@ pub fn erase<M: SpiMaster>(master: &mut M, ctx: &FlashContext, addr: u32, len: u
 }
 
 /// Erase the entire chip
-pub fn chip_erase<M: SpiMaster>(master: &mut M, _ctx: &FlashContext) -> Result<()> {
+pub fn chip_erase<M: SpiMaster + ?Sized>(master: &mut M, _ctx: &FlashContext) -> Result<()> {
     // Chip erase timeout: up to 2 minutes for large chips
     let timeout_us = 120_000_000;
     protocol::chip_erase(master, timeout_us)
 }
 
 /// Verify flash contents match the provided data
-pub fn verify<M: SpiMaster>(
+pub fn verify<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
@@ -369,7 +369,7 @@ fn plan_erase_for_region(
 /// 3. Erase the full block
 /// 4. Write back the preserved data
 #[cfg(feature = "alloc")]
-fn erase_block_with_preserve<M: SpiMaster>(
+fn erase_block_with_preserve<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     info: &EraseBlockInfo,
@@ -434,7 +434,7 @@ fn erase_block_with_preserve<M: SpiMaster>(
 
 /// Erase a single block using the specified erase block definition
 #[cfg(feature = "alloc")]
-fn erase_single_block<M: SpiMaster>(
+fn erase_single_block<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     erase_block: EraseBlock,
@@ -482,7 +482,7 @@ fn erase_single_block<M: SpiMaster>(
 ///
 /// This matches flashprog's behavior for layout-based operations.
 #[cfg(feature = "alloc")]
-pub fn erase_region<M: SpiMaster>(
+pub fn erase_region<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     region: &Region,
@@ -507,7 +507,7 @@ pub fn erase_region<M: SpiMaster>(
 /// This function iterates through all included regions in the layout and
 /// erases them, properly handling erase block boundary crossing.
 #[cfg(feature = "alloc")]
-pub fn erase_by_layout<M: SpiMaster>(
+pub fn erase_by_layout<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     layout: &Layout,
@@ -534,7 +534,7 @@ pub fn erase_by_layout<M: SpiMaster>(
 ///
 /// The `data` slice must match the region size.
 #[cfg(feature = "alloc")]
-pub fn write_region<M: SpiMaster>(
+pub fn write_region<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     region: &Region,
@@ -564,7 +564,7 @@ pub fn write_region<M: SpiMaster>(
 ///
 /// The `image` buffer must be at least as large as `chip_size`.
 #[cfg(feature = "alloc")]
-pub fn write_by_layout<M: SpiMaster>(
+pub fn write_by_layout<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     layout: &Layout,
@@ -596,7 +596,7 @@ pub fn write_by_layout<M: SpiMaster>(
 ///
 /// The `buffer` must be at least as large as `chip_size`.
 #[cfg(feature = "alloc")]
-pub fn read_by_layout<M: SpiMaster>(
+pub fn read_by_layout<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     layout: &Layout,
@@ -626,7 +626,7 @@ pub fn read_by_layout<M: SpiMaster>(
 /// This function reads each included region and compares it against the
 /// expected image data.
 #[cfg(feature = "alloc")]
-pub fn verify_by_layout<M: SpiMaster>(
+pub fn verify_by_layout<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     layout: &Layout,

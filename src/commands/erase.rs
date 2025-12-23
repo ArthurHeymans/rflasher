@@ -7,7 +7,7 @@ use rflasher_core::programmer::SpiMaster;
 use std::time::Duration;
 
 /// Run the erase command
-pub fn run_erase<M: SpiMaster>(
+pub fn run_erase<M: SpiMaster + ?Sized>(
     master: &mut M,
     db: &ChipDatabase,
     start: Option<u32>,
@@ -44,7 +44,7 @@ pub fn run_erase<M: SpiMaster>(
 }
 
 /// Erase entire chip with progress spinner
-pub fn chip_erase_with_progress<M: SpiMaster>(
+pub fn chip_erase_with_progress<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -68,7 +68,7 @@ pub fn chip_erase_with_progress<M: SpiMaster>(
 }
 
 /// Erase a region with progress bar
-pub fn erase_region_with_progress<M: SpiMaster>(
+pub fn erase_region_with_progress<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     start: u32,

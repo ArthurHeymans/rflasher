@@ -198,27 +198,41 @@ rflasher erase -p dummy --start 0x10000 --length 0x10000
 rflasher verify -p dummy -i flash.bin
 ```
 
-### Phase 4: CH341A Programmer
+### Phase 4: CH341A Programmer - COMPLETE
 
 **Goal**: Working CH341A USB programmer
 
-**Tasks**:
-1. Implement USB communication using `nusb` crate
-2. Port protocol from `flashprog/ch341a_spi.c`:
+**Implemented**:
+1. USB communication using `nusb` crate with blocking I/O via `futures-lite`
+2. Full protocol implementation from `flashprog/ch341a_spi.c`:
    - VID: 0x1A86, PID: 0x5512
    - Bulk transfers for SPI streaming
    - CS control via UIO stream commands
-   - Bit reversal on data bytes
-3. Implement `SpiMaster` trait
-4. Add device detection and initialization
-5. Handle USB error conditions
+   - Bit reversal on data bytes (lookup table)
+   - Delay accumulation for CS timing
+3. `SpiMaster` trait implementation with 4KB read/write support
+4. Device detection, initialization, and enumeration
+5. Comprehensive error handling for USB conditions
 
-**Key Constants** (from ch341a_spi.c):
-```c
-#define CH341A_USB_VENDOR  0x1A86
-#define CH341A_USB_PRODUCT 0x5512
-#define CH341A_PACKET_LENGTH 32
-#define CH341A_MAX_TRANSFER_SIZE 4096
+**Crate Structure** (`rflasher-ch341a`):
+```
+src/
+├── lib.rs       # Public exports
+├── device.rs    # Ch341a struct and SpiMaster impl
+├── protocol.rs  # USB protocol constants
+└── error.rs     # Error types
+```
+
+**Usage Examples**:
+```bash
+# Probe for chip using CH341A
+rflasher probe -p ch341a
+
+# Read flash to file
+rflasher read -p ch341a -o flash.bin
+
+# Write file to flash
+rflasher write -p ch341a -i flash.bin
 ```
 
 ### Phase 5: Serprog Programmer

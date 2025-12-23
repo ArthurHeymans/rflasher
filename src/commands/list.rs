@@ -7,11 +7,18 @@ pub fn list_programmers() {
     println!("Supported programmers:");
     println!();
     println!("  dummy     - In-memory flash emulator for testing");
-    println!("  ch341a    - CH341A USB programmer (not yet implemented)");
+    println!("  ch341a    - CH341A USB SPI programmer (VID:1a86 PID:5512)");
     println!("  serprog   - Serial Flasher Protocol (not yet implemented)");
     println!("  ftdi      - FTDI MPSSE programmer (not yet implemented)");
     println!("  internal  - Intel chipset internal flash (not yet implemented)");
     println!("  linux_spi - Linux spidev (not yet implemented)");
+    println!();
+    println!("Usage: rflasher <command> -p <programmer>");
+    println!();
+    println!("Examples:");
+    println!("  rflasher probe -p ch341a");
+    println!("  rflasher read -p ch341a -o flash.bin");
+    println!("  rflasher write -p ch341a -i flash.bin");
 }
 
 /// List all supported chips from the database

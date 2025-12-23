@@ -12,7 +12,7 @@ use std::path::Path;
 const VERIFY_CHUNK_SIZE: usize = 4096;
 
 /// Run the verify command
-pub fn run_verify<M: SpiMaster>(
+pub fn run_verify<M: SpiMaster + ?Sized>(
     master: &mut M,
     db: &ChipDatabase,
     input: &Path,
@@ -60,7 +60,7 @@ pub fn run_verify<M: SpiMaster>(
 }
 
 /// Verify flash contents against expected data with progress bar
-pub fn verify_flash_with_progress<M: SpiMaster>(
+pub fn verify_flash_with_progress<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     expected: &[u8],

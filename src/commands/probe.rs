@@ -4,7 +4,7 @@ use rflasher_core::chip::ChipDatabase;
 use rflasher_core::flash;
 use rflasher_core::programmer::SpiMaster;
 
-pub fn run_probe<M: SpiMaster>(
+pub fn run_probe<M: SpiMaster + ?Sized>(
     master: &mut M,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {

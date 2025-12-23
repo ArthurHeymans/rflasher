@@ -14,7 +14,7 @@ const WRITE_CHUNK_SIZE: usize = 4096;
 const VERIFY_CHUNK_SIZE: usize = 4096;
 
 /// Run the write command
-pub fn run_write<M: SpiMaster>(
+pub fn run_write<M: SpiMaster + ?Sized>(
     master: &mut M,
     db: &ChipDatabase,
     input: &Path,
@@ -75,7 +75,7 @@ pub fn run_write<M: SpiMaster>(
 }
 
 /// Erase entire flash with progress bar
-pub fn erase_flash_with_progress<M: SpiMaster>(
+pub fn erase_flash_with_progress<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -96,7 +96,7 @@ pub fn erase_flash_with_progress<M: SpiMaster>(
 }
 
 /// Write data to flash with progress bar
-pub fn write_flash_with_progress<M: SpiMaster>(
+pub fn write_flash_with_progress<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     data: &[u8],
@@ -126,7 +126,7 @@ pub fn write_flash_with_progress<M: SpiMaster>(
 }
 
 /// Verify flash contents against expected data with progress bar
-pub fn verify_flash_with_progress<M: SpiMaster>(
+pub fn verify_flash_with_progress<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     expected: &[u8],

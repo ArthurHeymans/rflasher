@@ -12,7 +12,7 @@ use std::path::Path;
 const READ_CHUNK_SIZE: usize = 4096;
 
 /// Run the read command
-pub fn run_read<M: SpiMaster>(
+pub fn run_read<M: SpiMaster + ?Sized>(
     master: &mut M,
     db: &ChipDatabase,
     output: &Path,
@@ -38,7 +38,7 @@ pub fn run_read<M: SpiMaster>(
 }
 
 /// Read entire flash contents with progress bar
-pub fn read_flash_with_progress<M: SpiMaster>(
+pub fn read_flash_with_progress<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {

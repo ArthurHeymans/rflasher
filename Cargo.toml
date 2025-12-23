@@ -52,6 +52,7 @@ license.workspace = true
 [dependencies]
 rflasher-core = { workspace = true, features = ["std"] }
 rflasher-dummy = { path = "crates/rflasher-dummy" }
+rflasher-ch341a = { path = "crates/rflasher-ch341a" }
 clap.workspace = true
 env_logger.workspace = true
 log.workspace = true

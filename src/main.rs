@@ -7,8 +7,10 @@ mod commands;
 
 use clap::Parser;
 use cli::{Cli, Commands, LayoutCommands};
+use rflasher_ch341a::Ch341a;
 use rflasher_core::chip::ChipDatabase;
 use rflasher_core::flash;
+use rflasher_core::programmer::SpiMaster;
 use rflasher_dummy::DummyFlash;
 use std::path::{Path, PathBuf};
 
@@ -184,9 +186,7 @@ fn cmd_verify(
     input: &Path,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_programmer(programmer, |master| {
-        commands::run_verify(master, db, input)
-    })
+    with_programmer(programmer, |master| commands::run_verify(master, db, input))
 }
 
 fn cmd_info(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
@@ -198,20 +198,56 @@ fn cmd_info(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::erro
 }
 
 /// Execute a function with the specified programmer
+///
+/// The programmer string can be just the name (e.g., "ch341a") or include
+/// parameters (e.g., "ch341a:index=1").
 fn with_programmer<F>(programmer: &str, f: F) -> Result<(), Box<dyn std::error::Error>>
 where
-    F: FnOnce(&mut DummyFlash) -> Result<(), Box<dyn std::error::Error>>,
+    F: FnOnce(&mut dyn SpiMaster) -> Result<(), Box<dyn std::error::Error>>,
 {
-    match programmer {
+    // Parse programmer name and options
+    let (name, _options) = parse_programmer_string(programmer);
+
+    match name {
         "dummy" => {
             let mut master = DummyFlash::new_default();
             f(&mut master)
         }
-        _ => {
-            eprintln!("Unknown programmer: {}", programmer);
-            eprintln!("Use 'rflasher list-programmers' to see available programmers");
-            Err("Unknown programmer".into())
+        "ch341a" | "ch341a_spi" => {
+            log::info!("Opening CH341A programmer...");
+            let mut master = Ch341a::open().map_err(|e| {
+                format!(
+                    "Failed to open CH341A: {}\nMake sure the device is connected and you have permissions.",
+                    e
+                )
+            })?;
+            f(&mut master)
         }
+        _ => {
+            eprintln!("Unknown programmer: {}", name);
+            eprintln!();
+            eprintln!("Available programmers:");
+            eprintln!("  dummy       - In-memory dummy programmer for testing");
+            eprintln!("  ch341a      - CH341A USB SPI programmer");
+            eprintln!();
+            eprintln!("Use 'rflasher list-programmers' for more details");
+            Err(format!("Unknown programmer: {}", name).into())
+        }
+    }
+}
+
+/// Parse a programmer string into name and options
+///
+/// Format: "name" or "name:option1=value1,option2=value2"
+fn parse_programmer_string(s: &str) -> (&str, Vec<(&str, &str)>) {
+    if let Some((name, opts)) = s.split_once(':') {
+        let options: Vec<_> = opts
+            .split(',')
+            .filter_map(|opt| opt.split_once('='))
+            .collect();
+        (name, options)
+    } else {
+        (s, Vec::new())
     }
 }
 
