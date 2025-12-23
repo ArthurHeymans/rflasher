@@ -8,6 +8,7 @@ use std::fs;
 #[cfg(all(feature = "std", target_os = "linux"))]
 use std::path::Path;
 
+use crate::amd_pci::{find_chipset as find_amd_chipset_entry, AmdChipsetEnable, AMD_VID};
 use crate::error::{InternalError, PciAccessError};
 use crate::intel_pci::{find_chipset, INTEL_VID};
 use crate::DetectedChipset;
@@ -720,6 +721,178 @@ pub fn scan_for_intel_chipsets() -> Result<alloc::vec::Vec<DetectedChipset>, Int
 
 #[cfg(not(all(feature = "std", target_os = "linux")))]
 pub fn find_intel_chipset() -> Result<Option<DetectedChipset>, InternalError> {
+    Err(InternalError::NotSupported(
+        "PCI scanning only supported on Linux",
+    ))
+}
+
+// =============================================================================
+// AMD Chipset Detection
+// =============================================================================
+
+/// Information about a detected AMD chipset
+#[derive(Debug, Clone)]
+pub struct DetectedAmdChipset {
+    /// The chipset enable entry from the database
+    pub enable: &'static AmdChipsetEnable,
+    /// PCI bus number
+    pub bus: u8,
+    /// PCI device number
+    pub device: u8,
+    /// PCI function number
+    pub function: u8,
+    /// PCI revision ID
+    pub revision_id: u8,
+}
+
+impl DetectedAmdChipset {
+    /// Returns the chipset name
+    pub fn name(&self) -> &'static str {
+        self.enable.device_name
+    }
+
+    /// Returns the vendor name
+    pub fn vendor(&self) -> &'static str {
+        self.enable.vendor_name
+    }
+
+    /// Returns the test status
+    pub fn status(&self) -> crate::chipset::TestStatus {
+        self.enable.status
+    }
+
+    /// Returns the chipset type
+    pub fn chipset_type(&self) -> crate::amd_pci::AmdChipset {
+        self.enable.chipset
+    }
+
+    /// Returns true if this chipset should generate a warning
+    pub fn should_warn(&self) -> bool {
+        self.enable.status.should_warn()
+    }
+
+    /// Get the warning/status message for this chipset
+    pub fn status_message(&self) -> Option<&'static str> {
+        self.enable.status.message()
+    }
+
+    /// Log warnings for untested/dependent chipsets
+    pub fn log_warnings(&self) {
+        use crate::chipset::TestStatus;
+        match self.enable.status {
+            TestStatus::Untested => {
+                log::warn!(
+                    "Chipset {} {} ({:04x}:{:04x} rev {:02x}) is UNTESTED.",
+                    self.enable.vendor_name,
+                    self.enable.device_name,
+                    self.enable.vendor_id,
+                    self.enable.device_id,
+                    self.revision_id
+                );
+                log::warn!(
+                    "If you are using an up-to-date version and were (not) able to \
+                     successfully access flash with it, please report your results."
+                );
+            }
+            TestStatus::Depends => {
+                log::info!(
+                    "Support for {} {} depends on configuration \
+                     (e.g., BIOS settings, flash descriptor).",
+                    self.enable.vendor_name,
+                    self.enable.device_name
+                );
+            }
+            TestStatus::Bad => {
+                log::error!(
+                    "Chipset {} {} is NOT SUPPORTED.",
+                    self.enable.vendor_name,
+                    self.enable.device_name
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Scan for AMD chipsets and return any matches
+///
+/// This function scans the PCI bus and looks for known AMD chipsets
+/// in the chipset enable table.
+#[cfg(all(feature = "std", target_os = "linux"))]
+pub fn scan_for_amd_chipsets() -> Result<alloc::vec::Vec<DetectedAmdChipset>, InternalError> {
+    let devices = scan_pci_bus()?;
+    let mut found = alloc::vec::Vec::new();
+
+    for dev in devices {
+        // Only check AMD devices (0x1022 and old ATI 0x1002)
+        if dev.vendor_id != AMD_VID && dev.vendor_id != 0x1002 {
+            continue;
+        }
+
+        // Look up in our chipset table
+        if let Some(enable) = find_amd_chipset_entry(dev.vendor_id, dev.device_id, dev.revision_id) {
+            log::debug!(
+                "Found AMD chipset {} {} (rev {:02x}) at {:02x}:{:02x}.{:x}",
+                enable.vendor_name,
+                enable.device_name,
+                dev.revision_id,
+                dev.bus,
+                dev.device,
+                dev.function
+            );
+
+            found.push(DetectedAmdChipset {
+                enable,
+                bus: dev.bus,
+                device: dev.device,
+                function: dev.function,
+                revision_id: dev.revision_id,
+            });
+        }
+    }
+
+    Ok(found)
+}
+
+/// Find a single AMD chipset, warning about duplicates
+///
+/// This function scans for AMD chipsets and returns the first one found,
+/// logging a warning if multiple chipsets are detected.
+#[cfg(all(feature = "std", target_os = "linux"))]
+pub fn find_amd_chipset() -> Result<Option<DetectedAmdChipset>, InternalError> {
+    let chipsets = scan_for_amd_chipsets()?;
+
+    match chipsets.len() {
+        0 => Ok(None),
+        1 => Ok(Some(chipsets[0].clone())),
+        _ => {
+            log::warn!("Multiple AMD chipsets found:");
+            for cs in &chipsets {
+                log::warn!(
+                    "  {} {} at {:02x}:{:02x}.{:x}",
+                    cs.vendor(),
+                    cs.name(),
+                    cs.bus,
+                    cs.device,
+                    cs.function
+                );
+            }
+            log::warn!("Using first chipset: {} {}", chipsets[0].vendor(), chipsets[0].name());
+            Ok(Some(chipsets[0].clone()))
+        }
+    }
+}
+
+// Non-Linux stubs for AMD functions
+#[cfg(not(all(feature = "std", target_os = "linux")))]
+pub fn scan_for_amd_chipsets() -> Result<alloc::vec::Vec<DetectedAmdChipset>, InternalError> {
+    Err(InternalError::NotSupported(
+        "PCI scanning only supported on Linux",
+    ))
+}
+
+#[cfg(not(all(feature = "std", target_os = "linux")))]
+pub fn find_amd_chipset() -> Result<Option<DetectedAmdChipset>, InternalError> {
     Err(InternalError::NotSupported(
         "PCI scanning only supported on Linux",
     ))

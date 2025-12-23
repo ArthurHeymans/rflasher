@@ -364,7 +364,7 @@ where
             // Parse options
             let (_, options) = parse_programmer_string(programmer);
 
-            log::info!("Opening Intel internal programmer...");
+            log::info!("Opening internal programmer...");
 
             // Parse internal-specific options
             let internal_opts = InternalOptions::from_options(&options)
@@ -378,9 +378,9 @@ where
             let mut programmer = InternalProgrammer::with_options(internal_opts).map_err(|e| {
                 format!(
                     "Failed to initialize internal programmer: {}\n\
-                     Make sure you have root privileges and an Intel chipset.\n\
-                     For ICH7, only swseq is supported.\n\
-                     For PCH100+, swseq may be locked (use ich_spi_mode=hwseq).",
+                     Make sure you have root privileges and a supported Intel or AMD chipset.\n\
+                     For Intel ICH7, only swseq is supported.\n\
+                     For Intel PCH100+, swseq may be locked (use ich_spi_mode=hwseq).",
                     e
                 )
             })?;
