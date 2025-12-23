@@ -12,3 +12,6 @@ std = ["rflasher-core/std"]
 [dependencies]
 rflasher-core.workspace = true
 log.workspace = true
+thiserror.workspace = true
+libc = "0.2"
+nix = { version = "0.29", features = ["ioctl"] }

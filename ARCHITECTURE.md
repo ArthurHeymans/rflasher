@@ -338,18 +338,45 @@ rflasher read -p ftdi:type=232h -o flash.bin
 - libftdi1 development headers (e.g., `libftdi1-dev` on Debian/Ubuntu)
 - May need to unbind ftdi_sio kernel driver
 
-### Phase 7: Linux SPI
+### Phase 7: Linux SPI - COMPLETE
 
 **Goal**: Linux spidev support
 
-**Tasks**:
-1. Implement using `/dev/spidevX.Y` interface
-2. Use `spidev` crate or raw ioctl
-3. Support configurable:
-   - SPI mode (0-3)
-   - Clock speed
-   - Bits per word
-4. Port from `flashprog/linux_spi.c`
+**Implemented**:
+1. Full spidev implementation using raw ioctl via `nix` crate
+2. `SpiMaster` trait implementation with two-transfer SPI operations
+3. Automatic kernel buffer size detection from sysfs
+4. Configurable options:
+   - Device path (`dev=/dev/spidevX.Y`)
+   - SPI clock speed in kHz (`spispeed=<kHz>`, default: 2000)
+   - SPI mode 0-3 (`mode=<0-3>`, default: 0)
+5. Proper error handling for device access and ioctl operations
+
+**Crate Structure** (`rflasher-linux-spi`):
+```
+src/
+├── lib.rs       # Public exports, open_linux_spi convenience function
+├── device.rs    # LinuxSpi struct, LinuxSpiConfig, SpiMaster impl
+└── error.rs     # Error types
+```
+
+**Usage Examples**:
+```bash
+# Probe chip using spidev
+rflasher probe -p linux_spi:dev=/dev/spidev0.0
+
+# Specify SPI speed in kHz
+rflasher read -p linux_spi:dev=/dev/spidev0.0,spispeed=4000 -o flash.bin
+
+# Specify SPI mode
+rflasher write -p linux_spi:dev=/dev/spidev0.0,mode=3 -i flash.bin
+```
+
+**System Requirements**:
+- Linux kernel with spidev support (`CONFIG_SPI_SPIDEV`)
+- Read/write access to `/dev/spidevX.Y` (may need `spi` group or udev rules)
+
+**Reference**: Ported from `flashprog/linux_spi.c`
 
 ### Phase 8: Intel Internal Programmer
 

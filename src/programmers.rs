@@ -58,8 +58,8 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
     programmers.push(ProgrammerInfo {
         name: "linux_spi",
         aliases: &["linux-spi", "spidev"],
-        description: "Linux spidev interface",
-        implemented: false,
+        description: "Linux spidev interface (dev=/dev/spidevX.Y,spispeed=<kHz>,mode=<0-3>)",
+        implemented: true,
     });
 
     #[cfg(feature = "internal")]
@@ -290,7 +290,29 @@ where
         }
 
         #[cfg(feature = "linux-spi")]
-        "linux_spi" => Err("linux_spi programmer is not yet implemented".into()),
+        "linux_spi" => {
+            use rflasher_linux_spi::{parse_options, LinuxSpi};
+
+            // Parse options
+            let (_, options) = parse_programmer_string(programmer);
+
+            log::info!("Opening Linux SPI programmer...");
+
+            // Parse configuration from options
+            let config = parse_options(&options)
+                .map_err(|e| format!("Invalid linux_spi parameters: {}", e))?;
+
+            let mut master = LinuxSpi::open(&config).map_err(|e| {
+                format!(
+                    "Failed to open Linux SPI device: {}\n\
+                     Make sure the device exists and you have read/write permissions.\n\
+                     You may need to: sudo usermod -aG spi $USER",
+                    e
+                )
+            })?;
+
+            f(&mut master)
+        }
 
         #[cfg(feature = "internal")]
         "internal" => Err("internal programmer is not yet implemented".into()),
