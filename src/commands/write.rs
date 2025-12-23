@@ -160,19 +160,25 @@ pub fn run_write<M: SpiMaster + ?Sized>(
         data.resize(ctx.total_size(), 0xFF);
     }
 
-    if no_erase {
+    let flash_modified = if no_erase {
         // Legacy mode: just write without smart comparison
         // (User explicitly requested no erase, implying they know what they're doing)
         write_flash_with_progress(master, &ctx, &data)?;
+        true // Assume modified in legacy mode
     } else {
         // Smart write mode: compare, erase only changed blocks, write only changed bytes
         let mut progress = IndicatifProgress::new();
-        flash::smart_write(master, &ctx, &data, &mut progress)?;
-    }
+        let stats = flash::smart_write(master, &ctx, &data, &mut progress)?;
+        stats.flash_modified
+    };
 
-    // Verify if requested
+    // Verify if requested (but skip if no changes were made)
     if do_verify {
-        verify_flash_with_progress(master, &ctx, &data)?;
+        if flash_modified {
+            verify_flash_with_progress(master, &ctx, &data)?;
+        } else {
+            println!("Skipping verification - no changes were made");
+        }
     }
 
     println!("Write complete!");
