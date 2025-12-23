@@ -16,7 +16,7 @@ pub enum AddressMode {
 ///
 /// This structure holds the state needed to interact with a specific
 /// flash chip through a programmer.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg(feature = "alloc")]
 pub struct FlashContext {
     /// The identified flash chip (owned)

@@ -76,7 +76,7 @@ impl BusType {
 
     /// Parallel + FWH + LPC
     pub const NON_SPI: Self = Self(Self::PARALLEL.0 | Self::FWH.0 | Self::LPC.0);
-    
+
     /// FWH + LPC + SPI (common for AMD chipsets)
     pub const FLS: Self = Self(Self::FWH.0 | Self::LPC.0 | Self::SPI.0);
 

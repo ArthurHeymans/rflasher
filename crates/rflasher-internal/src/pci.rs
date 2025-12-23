@@ -830,7 +830,8 @@ pub fn scan_for_amd_chipsets() -> Result<alloc::vec::Vec<DetectedAmdChipset>, In
         }
 
         // Look up in our chipset table
-        if let Some(enable) = find_amd_chipset_entry(dev.vendor_id, dev.device_id, dev.revision_id) {
+        if let Some(enable) = find_amd_chipset_entry(dev.vendor_id, dev.device_id, dev.revision_id)
+        {
             log::debug!(
                 "Found AMD chipset {} {} (rev {:02x}) at {:02x}:{:02x}.{:x}",
                 enable.vendor_name,
@@ -877,7 +878,11 @@ pub fn find_amd_chipset() -> Result<Option<DetectedAmdChipset>, InternalError> {
                     cs.function
                 );
             }
-            log::warn!("Using first chipset: {} {}", chipsets[0].vendor(), chipsets[0].name());
+            log::warn!(
+                "Using first chipset: {} {}",
+                chipsets[0].vendor(),
+                chipsets[0].name()
+            );
             Ok(Some(chipsets[0].clone()))
         }
     }

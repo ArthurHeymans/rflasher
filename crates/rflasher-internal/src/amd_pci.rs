@@ -90,7 +90,7 @@ impl AmdChipsetEnable {
         if self.vendor_id != vendor_id || self.device_id != device_id {
             return false;
         }
-        
+
         match self.revision {
             RevisionMatch::Any => true,
             RevisionMatch::Exact(rev) => rev == revision_id,
@@ -203,7 +203,11 @@ pub static AMD_CHIPSETS: &[AmdChipsetEnable] = &[
 ///
 /// - `Some(&AmdChipsetEnable)` - A matching chipset entry
 /// - `None` - No matching chipset found
-pub fn find_chipset(vendor_id: u16, device_id: u16, revision_id: u8) -> Option<&'static AmdChipsetEnable> {
+pub fn find_chipset(
+    vendor_id: u16,
+    device_id: u16,
+    revision_id: u8,
+) -> Option<&'static AmdChipsetEnable> {
     AMD_CHIPSETS
         .iter()
         .find(|entry| entry.matches(vendor_id, device_id, revision_id))
@@ -219,7 +223,7 @@ mod tests {
         let entry = &AMD_CHIPSETS[4]; // Renoir/Cezanne (rev 0x51)
         assert!(entry.matches(AMD_VID, 0x790b, 0x51));
         assert!(!entry.matches(AMD_VID, 0x790b, 0x52));
-        
+
         // Test any match
         let entry = &AMD_CHIPSETS[0]; // SB600
         assert!(entry.matches(0x1002, 0x438d, 0x00));
@@ -232,12 +236,15 @@ mod tests {
         let result = find_chipset(AMD_VID, 0x790b, 0x51);
         assert!(result.is_some());
         assert_eq!(result.unwrap().device_name, "Renoir/Cezanne");
-        
+
         // Should find Mendocino
         let result = find_chipset(AMD_VID, 0x790b, 0x71);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().device_name, "Mendocino/Van Gogh/Rembrandt/Raphael/Genoa");
-        
+        assert_eq!(
+            result.unwrap().device_name,
+            "Mendocino/Van Gogh/Rembrandt/Raphael/Genoa"
+        );
+
         // Should not find unknown revision
         let result = find_chipset(AMD_VID, 0x790b, 0x99);
         assert!(result.is_none());

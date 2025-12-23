@@ -15,17 +15,16 @@
 
 mod cli;
 mod commands;
-mod programmers;
 
 use clap::Parser;
 use cli::{Cli, Commands, LayoutArgs, LayoutCommands};
 use rflasher_core::chip::ChipDatabase;
-use rflasher_core::flash::{self, FlashDevice, OpaqueFlashDevice, SpiFlashDevice};
-use rflasher_core::layout::{parse_ifd, Layout};
-use rflasher_core::programmer::OpaqueMaster;
+use rflasher_flash::{open_flash, FlashHandle};
+
+use rflasher_core::layout::Layout;
 use std::path::{Path, PathBuf};
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -50,13 +49,30 @@ fn main() {
     log::info!("Loaded {} chip definitions", db.len());
 
     let result = match cli.command {
-        Commands::Probe { programmer } => cmd_probe(&programmer, &db),
+        Commands::Probe { programmer } => {
+            // Probe doesn't use the device, just shows info
+            let _handle = open_flash(&programmer, &db)?;
+            Ok(())
+        }
         Commands::Read {
             programmer,
             output,
             chip: _,
             layout,
-        } => cmd_read(&programmer, &output, layout, &db),
+        } => {
+            let mut handle = open_flash(&programmer, &db)?;
+            if layout.has_layout_source() || layout.has_region_filter() {
+                let mut layout_obj = load_layout(&mut handle, &layout)?;
+                apply_region_filters(&mut layout_obj, &layout)?;
+                commands::unified::run_read_with_layout(
+                    handle.as_device_mut(),
+                    &output,
+                    &layout_obj,
+                )
+            } else {
+                commands::unified::run_read(handle.as_device_mut(), &output)
+            }
+        }
         Commands::Write {
             programmer,
             input,
@@ -64,24 +80,64 @@ fn main() {
             verify,
             no_erase: _,
             layout,
-        } => cmd_write(&programmer, &input, verify, layout, &db),
+        } => {
+            let mut handle = open_flash(&programmer, &db)?;
+            if layout.has_layout_source() || layout.has_region_filter() {
+                let mut layout_obj = load_layout(&mut handle, &layout)?;
+                apply_region_filters(&mut layout_obj, &layout)?;
+                commands::unified::run_write_with_layout(
+                    handle.as_device_mut(),
+                    &input,
+                    &mut layout_obj,
+                    verify,
+                )
+            } else {
+                commands::unified::run_write(handle.as_device_mut(), &input, verify)
+            }
+        }
         Commands::Erase {
             programmer,
             chip: _,
             start,
             length,
             layout,
-        } => cmd_erase(&programmer, start, length, layout, &db),
+        } => {
+            // Layout-based erase can't be combined with start/length
+            if (layout.has_layout_source() || layout.has_region_filter())
+                && (start.is_some() || length.is_some())
+            {
+                return Err(
+                    "Cannot use --start/--length with layout options. Use --include to select regions."
+                        .into(),
+                );
+            }
+
+            let mut handle = open_flash(&programmer, &db)?;
+            if layout.has_layout_source() || layout.has_region_filter() {
+                let mut layout_obj = load_layout(&mut handle, &layout)?;
+                apply_region_filters(&mut layout_obj, &layout)?;
+                commands::unified::run_erase_with_layout(handle.as_device_mut(), &layout_obj)
+            } else {
+                commands::unified::run_erase(handle.as_device_mut(), start, length)
+            }
+        }
         Commands::Verify {
             programmer,
             input,
             chip: _,
             layout: _,
-        } => cmd_verify(&programmer, &input, &db),
+        } => {
+            let mut handle = open_flash(&programmer, &db)?;
+            commands::unified::run_verify(handle.as_device_mut(), &input)
+        }
         Commands::Info {
             programmer,
             chip: _,
-        } => cmd_info(&programmer, &db),
+        } => {
+            let mut handle = open_flash(&programmer, &db)?;
+            print_chip_info(&mut handle);
+            Ok(())
+        }
         Commands::ListProgrammers => {
             commands::list_programmers();
             Ok(())
@@ -105,10 +161,7 @@ fn main() {
         },
     };
 
-    if let Err(e) = result {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
-    }
+    result
 }
 
 /// Load the chip database from the specified path or default locations
@@ -156,273 +209,16 @@ fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::
 }
 
 // =============================================================================
-// Helper functions for creating FlashDevice from programmers
-// =============================================================================
-
-/// Get flash size from an opaque programmer by reading IFD
-fn get_flash_size_from_ifd(
-    master: &mut dyn OpaqueMaster,
-) -> Result<u32, Box<dyn std::error::Error>> {
-    let mut header = [0u8; 4096];
-    master.read(0, &mut header)?;
-
-    if let Ok(layout) = parse_ifd(&header) {
-        let size = layout.regions.iter().map(|r| r.end + 1).max().unwrap_or(0);
-        if size > 0 {
-            return Ok(size);
-        }
-    }
-
-    let size = master.size();
-    if size > 0 {
-        return Ok(size as u32);
-    }
-
-    Err("Cannot determine flash size".into())
-}
-
-/// Load layout from IFD on an opaque device
-fn load_layout_from_opaque(
-    device: &mut dyn FlashDevice,
-) -> Result<Layout, Box<dyn std::error::Error>> {
-    let mut header = [0u8; 4096];
-    device.read(0, &mut header)?;
-    let layout = parse_ifd(&header)?;
-    Ok(layout)
-}
-
-// =============================================================================
-// Command implementations using unified FlashDevice interface
-// =============================================================================
-
-fn cmd_probe(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| {
-        match prog {
-            programmers::Programmer::Spi(master) => {
-                // SPI probe - use JEDEC ID
-                commands::run_probe(master, db)
-            }
-            programmers::Programmer::Opaque(master) => {
-                // Opaque probe - show IFD info
-                commands::run_probe_opaque(master)
-            }
-        }
-    })
-}
-
-fn cmd_read(
-    programmer: &str,
-    output: &Path,
-    layout_args: LayoutArgs,
-    db: &ChipDatabase,
-) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| {
-        match prog {
-            programmers::Programmer::Spi(master) => {
-                // Probe chip to get context
-                let ctx = flash::probe(master, db)?;
-                println!(
-                    "Found: {} {} ({} bytes)",
-                    ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
-                );
-
-                // Create FlashDevice wrapper
-                let mut device = SpiFlashDevice::new(master, ctx);
-
-                if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                    // Layout-based read
-                    let mut layout = load_layout_from_device(&mut device, &layout_args)?;
-                    apply_region_filters(&mut layout, &layout_args)?;
-                    commands::unified::run_read_with_layout(&mut device, output, &layout)
-                } else {
-                    commands::unified::run_read(&mut device, output)
-                }
-            }
-            programmers::Programmer::Opaque(master) => {
-                // Get flash size from IFD
-                let flash_size = get_flash_size_from_ifd(master)?;
-                let mut device = OpaqueFlashDevice::with_size(master, flash_size);
-
-                if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                    let mut layout = load_layout_from_opaque(&mut device)?;
-                    apply_region_filters(&mut layout, &layout_args)?;
-                    commands::unified::run_read_with_layout(&mut device, output, &layout)
-                } else {
-                    commands::unified::run_read(&mut device, output)
-                }
-            }
-        }
-    })
-}
-
-fn cmd_write(
-    programmer: &str,
-    input: &Path,
-    verify: bool,
-    layout_args: LayoutArgs,
-    db: &ChipDatabase,
-) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| match prog {
-        programmers::Programmer::Spi(master) => {
-            let ctx = flash::probe(master, db)?;
-            println!(
-                "Found: {} {} ({} bytes)",
-                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
-            );
-
-            let mut device = SpiFlashDevice::new(master, ctx);
-
-            if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                let mut layout = load_layout_from_device(&mut device, &layout_args)?;
-                apply_region_filters(&mut layout, &layout_args)?;
-                commands::unified::run_write_with_layout(&mut device, input, &mut layout, verify)
-            } else {
-                commands::unified::run_write(&mut device, input, verify)
-            }
-        }
-        programmers::Programmer::Opaque(master) => {
-            let flash_size = get_flash_size_from_ifd(master)?;
-            let mut device = OpaqueFlashDevice::with_size(master, flash_size);
-
-            if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                let mut layout = load_layout_from_opaque(&mut device)?;
-                apply_region_filters(&mut layout, &layout_args)?;
-                commands::unified::run_write_with_layout(&mut device, input, &mut layout, verify)
-            } else {
-                commands::unified::run_write(&mut device, input, verify)
-            }
-        }
-    })
-}
-
-fn cmd_erase(
-    programmer: &str,
-    start: Option<u32>,
-    length: Option<u32>,
-    layout_args: LayoutArgs,
-    db: &ChipDatabase,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Layout-based erase can't be combined with start/length
-    if (layout_args.has_layout_source() || layout_args.has_region_filter())
-        && (start.is_some() || length.is_some())
-    {
-        return Err(
-            "Cannot use --start/--length with layout options. Use --include to select regions."
-                .into(),
-        );
-    }
-
-    programmers::with_programmer(programmer, |prog| match prog {
-        programmers::Programmer::Spi(master) => {
-            let ctx = flash::probe(master, db)?;
-            println!(
-                "Found: {} {} ({} bytes)",
-                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
-            );
-
-            let mut device = SpiFlashDevice::new(master, ctx);
-
-            if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                let mut layout = load_layout_from_device(&mut device, &layout_args)?;
-                apply_region_filters(&mut layout, &layout_args)?;
-                commands::unified::run_erase_with_layout(&mut device, &layout)
-            } else {
-                commands::unified::run_erase(&mut device, start, length)
-            }
-        }
-        programmers::Programmer::Opaque(master) => {
-            let flash_size = get_flash_size_from_ifd(master)?;
-            let mut device = OpaqueFlashDevice::with_size(master, flash_size);
-
-            if layout_args.has_layout_source() || layout_args.has_region_filter() {
-                let mut layout = load_layout_from_opaque(&mut device)?;
-                apply_region_filters(&mut layout, &layout_args)?;
-                commands::unified::run_erase_with_layout(&mut device, &layout)
-            } else {
-                commands::unified::run_erase(&mut device, start, length)
-            }
-        }
-    })
-}
-
-fn cmd_verify(
-    programmer: &str,
-    input: &Path,
-    db: &ChipDatabase,
-) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| match prog {
-        programmers::Programmer::Spi(master) => {
-            let ctx = flash::probe(master, db)?;
-            println!(
-                "Found: {} {} ({} bytes)",
-                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
-            );
-
-            let mut device = SpiFlashDevice::new(master, ctx);
-            commands::unified::run_verify(&mut device, input)
-        }
-        programmers::Programmer::Opaque(master) => {
-            let flash_size = get_flash_size_from_ifd(master)?;
-            let mut device = OpaqueFlashDevice::with_size(master, flash_size);
-            commands::unified::run_verify(&mut device, input)
-        }
-    })
-}
-
-fn cmd_info(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |prog| {
-        match prog {
-            programmers::Programmer::Spi(master) => {
-                let ctx = flash::probe(master, db)?;
-                print_chip_info(&ctx);
-                Ok(())
-            }
-            programmers::Programmer::Opaque(master) => {
-                // Try to get info from IFD
-                let flash_size = get_flash_size_from_ifd(master)?;
-
-                println!("Flash Information (Opaque Programmer)");
-                println!("=====================================");
-                println!();
-                println!(
-                    "Size: {} bytes ({} MiB)",
-                    flash_size,
-                    flash_size / (1024 * 1024)
-                );
-                println!();
-
-                // Try to show IFD regions
-                let mut header = [0u8; 4096];
-                master.read(0, &mut header)?;
-                if let Ok(layout) = parse_ifd(&header) {
-                    println!("Intel Flash Descriptor regions:");
-                    for region in &layout.regions {
-                        println!(
-                            "  {:12} 0x{:08X} - 0x{:08X} ({} KiB)",
-                            region.name,
-                            region.start,
-                            region.end,
-                            (region.end - region.start + 1) / 1024
-                        );
-                    }
-                } else {
-                    println!("Note: No Intel Flash Descriptor found.");
-                }
-                Ok(())
-            }
-        }
-    })
-}
-
-// =============================================================================
 // Layout loading helpers
 // =============================================================================
 
-/// Load layout from the appropriate source for a FlashDevice
-fn load_layout_from_device<D: FlashDevice>(
-    device: &mut D,
+/// Load layout from the appropriate source for a FlashHandle
+fn load_layout(
+    handle: &mut FlashHandle,
     args: &LayoutArgs,
 ) -> Result<Layout, Box<dyn std::error::Error>> {
+    use rflasher_core::layout::parse_ifd;
+
     if let Some(path) = &args.layout {
         // Load from TOML file
         let layout = Layout::from_toml_file(path)?;
@@ -431,7 +227,7 @@ fn load_layout_from_device<D: FlashDevice>(
     } else if args.ifd || args.fmap {
         // Read from flash (IFD or FMAP)
         let mut header = [0u8; 4096];
-        device.read(0, &mut header)?;
+        handle.as_device_mut().read(0, &mut header)?;
 
         if args.ifd {
             println!("Reading Intel Flash Descriptor from chip...");
@@ -442,8 +238,6 @@ fn load_layout_from_device<D: FlashDevice>(
         } else {
             // FMAP - need to search for it
             println!("Searching for FMAP in chip...");
-            // For simplicity, just try to find FMAP at common locations
-            // In a real implementation, we'd search the entire flash
             Err("FMAP search not yet implemented for unified interface".into())
         }
     } else if args.has_region_filter() {
@@ -481,43 +275,82 @@ fn apply_region_filters(
     Ok(())
 }
 
-fn print_chip_info(ctx: &flash::FlashContext) {
-    let chip = &ctx.chip;
+fn print_chip_info(handle: &mut FlashHandle) {
+    use rflasher_core::layout::parse_ifd;
 
-    println!("Flash Chip Information");
-    println!("======================");
-    println!();
-    println!("Vendor:          {}", chip.vendor);
-    println!("Name:            {}", chip.name);
-    println!(
-        "JEDEC ID:        {:02X} {:04X}",
-        chip.jedec_manufacturer, chip.jedec_device
-    );
-    println!(
-        "Size:            {} bytes ({} KiB / {} MiB)",
-        chip.total_size,
-        chip.total_size / 1024,
-        chip.total_size / (1024 * 1024)
-    );
-    println!("Page size:       {} bytes", chip.page_size);
-    println!();
-    println!(
-        "Voltage range:   {:.1}V - {:.1}V",
-        chip.voltage_min_mv as f32 / 1000.0,
-        chip.voltage_max_mv as f32 / 1000.0
-    );
-    println!();
-    println!("Erase blocks:");
-    for eb in chip.erase_blocks() {
-        let size_str = if eb.size >= 1024 * 1024 {
-            format!("{} MiB", eb.size / (1024 * 1024))
-        } else if eb.size >= 1024 {
-            format!("{} KiB", eb.size / 1024)
-        } else {
-            format!("{} bytes", eb.size)
-        };
-        println!("  Opcode 0x{:02X}: {}", eb.opcode, size_str);
+    if let Some(info) = handle.chip_info() {
+        // SPI device - we have chip information
+        println!("Flash Chip Information");
+        println!("======================");
+        println!();
+        println!("Vendor:          {}", info.vendor);
+        println!("Name:            {}", info.name);
+        println!(
+            "JEDEC ID:        {:02X} {:04X}",
+            info.jedec_manufacturer, info.jedec_device
+        );
+        println!(
+            "Size:            {} bytes ({} KiB / {} MiB)",
+            info.total_size,
+            info.total_size / 1024,
+            info.total_size / (1024 * 1024)
+        );
+        println!("Page size:       {} bytes", info.page_size);
+
+        // Show detailed chip info if available
+        if let Some(chip) = &info.chip {
+            println!();
+            println!(
+                "Voltage range:   {:.1}V - {:.1}V",
+                chip.voltage_min_mv as f32 / 1000.0,
+                chip.voltage_max_mv as f32 / 1000.0
+            );
+            println!();
+            println!("Erase blocks:");
+            for eb in chip.erase_blocks() {
+                let size_str = if eb.size >= 1024 * 1024 {
+                    format!("{} MiB", eb.size / (1024 * 1024))
+                } else if eb.size >= 1024 {
+                    format!("{} KiB", eb.size / 1024)
+                } else {
+                    format!("{} bytes", eb.size)
+                };
+                println!("  Opcode 0x{:02X}: {}", eb.opcode, size_str);
+            }
+            println!();
+            println!("Features:        {:?}", chip.features);
+        }
+    } else {
+        // Opaque device - show IFD info
+        let flash_size = handle.size();
+
+        println!("Flash Information (Opaque Programmer)");
+        println!("=====================================");
+        println!();
+        println!(
+            "Size: {} bytes ({} MiB)",
+            flash_size,
+            flash_size / (1024 * 1024)
+        );
+        println!();
+
+        // Try to show IFD regions
+        let mut header = [0u8; 4096];
+        if handle.as_device_mut().read(0, &mut header).is_ok() {
+            if let Ok(layout) = parse_ifd(&header) {
+                println!("Intel Flash Descriptor regions:");
+                for region in &layout.regions {
+                    println!(
+                        "  {:12} 0x{:08X} - 0x{:08X} ({} KiB)",
+                        region.name,
+                        region.start,
+                        region.end,
+                        (region.end - region.start + 1) / 1024
+                    );
+                }
+            } else {
+                println!("Note: No Intel Flash Descriptor found.");
+            }
+        }
     }
-    println!();
-    println!("Features:        {:?}", chip.features);
 }

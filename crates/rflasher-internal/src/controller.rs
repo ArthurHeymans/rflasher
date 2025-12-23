@@ -42,7 +42,7 @@ pub trait Controller {
     fn controller_name(&self) -> &'static str;
 
     // SpiMaster-like methods that we need for InternalProgrammer
-    
+
     /// Get the SPI features supported by this controller
     fn features(&self) -> SpiFeatures;
 

@@ -143,7 +143,10 @@ pub fn enable_amd_spi100(
     };
 
     if memory_addr.is_some() {
-        log::info!("Memory-mapped flash access enabled at {:#010x}", rom_range_start);
+        log::info!(
+            "Memory-mapped flash access enabled at {:#010x}",
+            rom_range_start
+        );
     }
 
     Ok(AmdSpi100Info {

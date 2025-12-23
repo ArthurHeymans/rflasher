@@ -610,13 +610,8 @@ dependencies = [
  "env_logger",
  "indicatif",
  "log",
- "rflasher-ch341a",
  "rflasher-core",
- "rflasher-dummy",
- "rflasher-ftdi",
- "rflasher-internal",
- "rflasher-linux-spi",
- "rflasher-serprog",
+ "rflasher-flash",
  "thiserror 2.0.17",
 ]
 
@@ -662,6 +657,20 @@ version = "0.1.0"
 dependencies = [
  "log",
  "rflasher-core",
+]
+
+[[package]]
+name = "rflasher-flash"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "rflasher-ch341a",
+ "rflasher-core",
+ "rflasher-dummy",
+ "rflasher-ftdi",
+ "rflasher-internal",
+ "rflasher-linux-spi",
+ "rflasher-serprog",
 ]
 
 [[package]]

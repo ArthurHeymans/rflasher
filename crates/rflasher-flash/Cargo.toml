@@ -1,0 +1,29 @@
+[package]
+name = "rflasher-flash"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rflasher-core = { path = "../rflasher-core" }
+log = "0.4"
+
+# Optional programmer dependencies
+rflasher-dummy = { path = "../rflasher-dummy", optional = true }
+rflasher-ch341a = { path = "../rflasher-ch341a", optional = true }
+rflasher-serprog = { path = "../rflasher-serprog", optional = true }
+rflasher-ftdi = { path = "../rflasher-ftdi", optional = true }
+rflasher-linux-spi = { path = "../rflasher-linux-spi", optional = true }
+rflasher-internal = { path = "../rflasher-internal", optional = true }
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std"]
+alloc = ["rflasher-core/alloc"]
+
+# Programmer features
+dummy = ["dep:rflasher-dummy"]
+ch341a = ["dep:rflasher-ch341a"]
+serprog = ["dep:rflasher-serprog"]
+ftdi = ["dep:rflasher-ftdi"]
+linux-spi = ["dep:rflasher-linux-spi"]
+internal = ["dep:rflasher-internal"]

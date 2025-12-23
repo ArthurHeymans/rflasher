@@ -273,7 +273,7 @@ pub fn read_with_progress<D: FlashDevice, P: WriteProgress>(
 ///
 /// # Returns
 /// Statistics about the operations performed
-pub fn smart_write<D: FlashDevice, P: WriteProgress>(
+pub fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     data: &[u8],
     progress: &mut P,
@@ -376,7 +376,7 @@ pub fn smart_write<D: FlashDevice, P: WriteProgress>(
 /// Perform a smart write operation for a specific region
 ///
 /// Similar to `smart_write` but only operates on a specific region of flash.
-pub fn smart_write_region<D: FlashDevice, P: WriteProgress>(
+pub fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     addr: u32,
     data: &[u8],
@@ -507,7 +507,7 @@ pub fn smart_write_region<D: FlashDevice, P: WriteProgress>(
 ///
 /// # Returns
 /// Combined statistics about all operations performed
-pub fn smart_write_by_layout<D: FlashDevice, P: WriteProgress>(
+pub fn smart_write_by_layout<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     layout: &Layout,
     image: &[u8],
@@ -625,7 +625,7 @@ pub fn read_by_layout<D: FlashDevice>(
 }
 
 /// Erase all included regions in a layout
-pub fn erase_by_layout<D: FlashDevice>(device: &mut D, layout: &Layout) -> Result<()> {
+pub fn erase_by_layout<D: FlashDevice + ?Sized>(device: &mut D, layout: &Layout) -> Result<()> {
     let flash_size = device.size();
 
     layout.validate(flash_size).map_err(|e| match e {
@@ -645,7 +645,7 @@ pub fn erase_by_layout<D: FlashDevice>(device: &mut D, layout: &Layout) -> Resul
 ///
 /// This handles region boundaries that don't align with erase block boundaries
 /// by preserving data outside the region.
-pub fn erase_region<D: FlashDevice>(device: &mut D, region: &Region) -> Result<()> {
+pub fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Region) -> Result<()> {
     if !device.is_valid_range(region.start, region.size() as usize) {
         return Err(Error::AddressOutOfBounds);
     }

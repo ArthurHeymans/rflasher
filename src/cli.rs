@@ -1,7 +1,7 @@
 //! CLI argument parsing
 
-use crate::programmers;
 use clap::{Parser, Subcommand};
+use rflasher_flash::programmer_names_short;
 use std::path::PathBuf;
 
 /// Parse a string as a hex or decimal u32
@@ -18,7 +18,7 @@ fn parse_hex_u32(s: &str) -> Result<u32, String> {
 fn programmer_help() -> String {
     format!(
         "Programmer to use [available: {}]",
-        programmers::programmer_names_short()
+        programmer_names_short()
     )
 }
 

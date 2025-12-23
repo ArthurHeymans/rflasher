@@ -133,7 +133,9 @@ impl WriteProgress for IndicatifProgress {
 const READ_CHUNK_SIZE: usize = 4096;
 
 /// Read entire flash contents with progress bar
-pub fn read_flash<D: FlashDevice>(device: &mut D) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+pub fn read_flash<D: FlashDevice + ?Sized>(
+    device: &mut D,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let total_size = device.size() as usize;
     let mut data = vec![0u8; total_size];
 
@@ -158,7 +160,7 @@ pub fn read_flash<D: FlashDevice>(device: &mut D) -> Result<Vec<u8>, Box<dyn std
 }
 
 /// Run the unified read command
-pub fn run_read<D: FlashDevice>(
+pub fn run_read<D: FlashDevice + ?Sized>(
     device: &mut D,
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -182,7 +184,7 @@ pub fn run_read<D: FlashDevice>(
 }
 
 /// Run the unified read command with layout
-pub fn run_read_with_layout<D: FlashDevice>(
+pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     output: &Path,
     layout: &Layout,
@@ -263,7 +265,7 @@ pub fn run_read_with_layout<D: FlashDevice>(
 // =============================================================================
 
 /// Run the unified write command
-pub fn run_write<D: FlashDevice>(
+pub fn run_write<D: FlashDevice + ?Sized>(
     device: &mut D,
     input: &Path,
     do_verify: bool,
@@ -321,7 +323,7 @@ pub fn run_write<D: FlashDevice>(
 }
 
 /// Run the unified write command with layout
-pub fn run_write_with_layout<D: FlashDevice>(
+pub fn run_write_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     input: &Path,
     layout: &mut Layout,
@@ -450,7 +452,7 @@ pub fn run_write_with_layout<D: FlashDevice>(
 // =============================================================================
 
 /// Run the unified erase command
-pub fn run_erase<D: FlashDevice>(
+pub fn run_erase<D: FlashDevice + ?Sized>(
     device: &mut D,
     start: Option<u32>,
     length: Option<u32>,
@@ -489,7 +491,7 @@ pub fn run_erase<D: FlashDevice>(
 }
 
 /// Run the unified erase command with layout
-pub fn run_erase_with_layout<D: FlashDevice>(
+pub fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -541,7 +543,7 @@ pub fn run_erase_with_layout<D: FlashDevice>(
 // =============================================================================
 
 /// Verify flash contents against expected data
-pub fn verify_flash<D: FlashDevice>(
+pub fn verify_flash<D: FlashDevice + ?Sized>(
     device: &mut D,
     expected: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -589,7 +591,7 @@ pub fn verify_flash<D: FlashDevice>(
 }
 
 /// Run the unified verify command
-pub fn run_verify<D: FlashDevice>(
+pub fn run_verify<D: FlashDevice + ?Sized>(
     device: &mut D,
     input: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -624,7 +626,7 @@ pub fn run_verify<D: FlashDevice>(
 }
 
 /// Verify included regions against expected data
-pub fn verify_by_layout<D: FlashDevice>(
+pub fn verify_by_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
     expected: &[u8],

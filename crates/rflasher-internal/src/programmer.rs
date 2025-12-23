@@ -119,7 +119,12 @@ impl InternalProgrammer {
         _options: InternalOptions,
     ) -> Result<Self, InternalError> {
         // Enable the AMD SPI100 controller
-        let info = enable_amd_spi100(chipset.enable, chipset.bus, chipset.device, chipset.revision_id)?;
+        let info = enable_amd_spi100(
+            chipset.enable,
+            chipset.bus,
+            chipset.device,
+            chipset.revision_id,
+        )?;
 
         // Create the controller
         let controller = info.create_controller()?;

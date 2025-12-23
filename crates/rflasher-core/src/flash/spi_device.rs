@@ -16,7 +16,10 @@ use crate::protocol;
 /// (chip metadata from JEDEC probing) to provide the unified `FlashDevice`
 /// interface.
 ///
-/// # Example
+/// The device can either borrow (`&mut M`) or own (`M`) the master,
+/// depending on how it's constructed.
+///
+/// # Example (borrowing)
 ///
 /// ```ignore
 /// use rflasher_core::flash::{SpiFlashDevice, probe};
@@ -30,74 +33,128 @@ use crate::protocol;
 ///     device.read(0, &mut buf).unwrap();
 /// }
 /// ```
-pub struct SpiFlashDevice<'a, M: SpiMaster + ?Sized> {
-    master: &'a mut M,
-    ctx: FlashContext,
+///
+/// # Example (owning)
+///
+/// ```ignore
+/// use rflasher_core::flash::{SpiFlashDevice, probe};
+/// use rflasher_core::chip::ChipDatabase;
+/// use rflasher_ch341a::Ch341a;
+///
+/// fn create_flash_handle(db: &ChipDatabase) -> SpiFlashDevice<Ch341a> {
+///     let mut master = Ch341a::open().unwrap();
+///     let ctx = probe(&mut master, db).unwrap();
+///     SpiFlashDevice::new_owned(master, ctx)
+/// }
+/// ```
+pub enum SpiFlashDevice<M: SpiMaster + 'static> {
+    /// Borrowed master (for backwards compatibility)
+    Borrowed {
+        /// Pointer to borrowed SPI master
+        master: *mut dyn SpiMaster,
+        /// Flash chip context
+        ctx: FlashContext,
+        /// Phantom data for lifetime safety
+        _marker: core::marker::PhantomData<&'static mut M>,
+    },
+    /// Owned master (for new code)
+    Owned {
+        /// Owned SPI master
+        master: M,
+        /// Flash chip context
+        ctx: FlashContext,
+    },
 }
 
-impl<'a, M: SpiMaster + ?Sized> SpiFlashDevice<'a, M> {
-    /// Create a new SPI flash device adapter
+impl<M: SpiMaster> SpiFlashDevice<M> {
+    /// Create a new SPI flash device adapter (borrowing the master)
     ///
     /// # Arguments
     /// * `master` - The SPI master to use for communication
     /// * `ctx` - Flash context with chip metadata (from probing)
-    pub fn new(master: &'a mut M, ctx: FlashContext) -> Self {
-        Self { master, ctx }
+    pub fn new(master: &mut M, ctx: FlashContext) -> SpiFlashDevice<M> {
+        SpiFlashDevice::Borrowed {
+            master: master as *mut M as *mut dyn SpiMaster,
+            ctx,
+            _marker: core::marker::PhantomData,
+        }
     }
 
-    /// Get a reference to the underlying SPI master
-    pub fn master(&mut self) -> &mut M {
-        self.master
+    /// Create a new SPI flash device adapter (owning the master)
+    ///
+    /// # Arguments
+    /// * `master` - The SPI master to take ownership of
+    /// * `ctx` - Flash context with chip metadata (from probing)
+    pub fn new_owned(master: M, ctx: FlashContext) -> Self {
+        SpiFlashDevice::Owned { master, ctx }
+    }
+
+    /// Get a mutable reference to the underlying SPI master
+    pub fn master(&mut self) -> &mut dyn SpiMaster {
+        match self {
+            SpiFlashDevice::Borrowed { master, .. } => unsafe { &mut **master },
+            SpiFlashDevice::Owned { master, .. } => master,
+        }
     }
 
     /// Get a reference to the flash context
     pub fn context(&self) -> &FlashContext {
-        &self.ctx
+        match self {
+            SpiFlashDevice::Borrowed { ctx, .. } => ctx,
+            SpiFlashDevice::Owned { ctx, .. } => ctx,
+        }
     }
 
     /// Get a mutable reference to the flash context
     pub fn context_mut(&mut self) -> &mut FlashContext {
-        &mut self.ctx
+        match self {
+            SpiFlashDevice::Borrowed { ctx, .. } => ctx,
+            SpiFlashDevice::Owned { ctx, .. } => ctx,
+        }
     }
 
     /// Consume the adapter and return the flash context
     pub fn into_context(self) -> FlashContext {
-        self.ctx
+        match self {
+            SpiFlashDevice::Borrowed { ctx, .. } => ctx,
+            SpiFlashDevice::Owned { ctx, .. } => ctx,
+        }
     }
 }
 
-impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
+impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     fn size(&self) -> u32 {
-        self.ctx.total_size() as u32
+        self.context().total_size() as u32
     }
 
     fn erase_granularity(&self) -> u32 {
-        self.ctx.chip.min_erase_size().unwrap_or(4096) // Default to 4KB if no erase blocks defined
+        self.context().chip.min_erase_size().unwrap_or(4096) // Default to 4KB if no erase blocks defined
     }
 
     fn write_granularity(&self) -> WriteGranularity {
-        self.ctx.chip.write_granularity
+        self.context().chip.write_granularity
     }
 
     fn erase_blocks(&self) -> &[EraseBlock] {
-        self.ctx.chip.erase_blocks()
+        self.context().chip.erase_blocks()
     }
 
     fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
-        if !self.ctx.is_valid_range(addr, buf.len()) {
+        let ctx = self.context();
+        if !ctx.is_valid_range(addr, buf.len()) {
             return Err(Error::AddressOutOfBounds);
         }
 
-        match self.ctx.address_mode {
-            AddressMode::ThreeByte => protocol::read_3b(self.master, addr, buf),
+        match ctx.address_mode {
+            AddressMode::ThreeByte => protocol::read_3b(self.master(), addr, buf),
             AddressMode::FourByte => {
-                if self.ctx.use_native_4byte {
-                    protocol::read_4b(self.master, addr, buf)
+                if ctx.use_native_4byte {
+                    protocol::read_4b(self.master(), addr, buf)
                 } else {
                     // Enter 4-byte mode, read, exit
-                    protocol::enter_4byte_mode(self.master)?;
-                    let result = protocol::read_3b(self.master, addr, buf);
-                    let _ = protocol::exit_4byte_mode(self.master);
+                    protocol::enter_4byte_mode(self.master())?;
+                    let result = protocol::read_3b(self.master(), addr, buf);
+                    let _ = protocol::exit_4byte_mode(self.master());
                     result
                 }
             }
@@ -105,21 +162,22 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
     }
 
     fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
-        if !self.ctx.is_valid_range(addr, data.len()) {
+        let ctx = self.context();
+        if !ctx.is_valid_range(addr, data.len()) {
             return Err(Error::AddressOutOfBounds);
         }
 
-        let page_size = self.ctx.page_size();
-        let use_4byte = self.ctx.address_mode == AddressMode::FourByte;
-        let use_native = self.ctx.use_native_4byte;
+        let page_size = ctx.page_size();
+        let use_4byte = ctx.address_mode == AddressMode::FourByte;
+        let use_native = ctx.use_native_4byte;
 
         // Get the master's maximum write length - some controllers have limits
         // smaller than a full page (e.g., Intel swseq is limited to 64 bytes)
-        let max_write = self.master.max_write_len();
+        let max_write = self.master().max_write_len();
 
         // Enter 4-byte mode if needed and not using native commands
         if use_4byte && !use_native {
-            protocol::enter_4byte_mode(self.master)?;
+            protocol::enter_4byte_mode(self.master())?;
         }
 
         let mut offset = 0usize;
@@ -140,15 +198,15 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
             let timeout_us = 10_000; // 10ms
 
             let result = if use_4byte && use_native {
-                protocol::program_page_4b(self.master, current_addr, chunk, timeout_us)
+                protocol::program_page_4b(self.master(), current_addr, chunk, timeout_us)
             } else {
-                protocol::program_page_3b(self.master, current_addr, chunk, timeout_us)
+                protocol::program_page_3b(self.master(), current_addr, chunk, timeout_us)
             };
 
             if result.is_err() {
                 // Try to exit 4-byte mode before returning error
                 if use_4byte && !use_native {
-                    let _ = protocol::exit_4byte_mode(self.master);
+                    let _ = protocol::exit_4byte_mode(self.master());
                 }
                 return result;
             }
@@ -159,23 +217,24 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
 
         // Exit 4-byte mode if we entered it
         if use_4byte && !use_native {
-            protocol::exit_4byte_mode(self.master)?;
+            protocol::exit_4byte_mode(self.master())?;
         }
 
         Ok(())
     }
 
     fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
-        if !self.ctx.is_valid_range(addr, len as usize) {
+        let ctx = self.context();
+        if !ctx.is_valid_range(addr, len as usize) {
             return Err(Error::AddressOutOfBounds);
         }
 
         // Find the best erase block size for this operation
-        let erase_block = select_erase_block(self.ctx.chip.erase_blocks(), addr, len)
+        let erase_block = select_erase_block(ctx.chip.erase_blocks(), addr, len)
             .ok_or(Error::InvalidAlignment)?;
 
-        let use_4byte = self.ctx.address_mode == AddressMode::FourByte;
-        let use_native = self.ctx.use_native_4byte;
+        let use_4byte = ctx.address_mode == AddressMode::FourByte;
+        let use_native = ctx.use_native_4byte;
 
         // Map 3-byte opcode to 4-byte opcode if needed
         let opcode = if use_4byte && use_native {
@@ -186,7 +245,7 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
 
         // Enter 4-byte mode if needed
         if use_4byte && !use_native {
-            protocol::enter_4byte_mode(self.master)?;
+            protocol::enter_4byte_mode(self.master())?;
         }
 
         let mut current_addr = addr;
@@ -202,7 +261,7 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
 
         while current_addr < end_addr {
             let result = protocol::erase_block(
-                self.master,
+                self.master(),
                 opcode,
                 current_addr,
                 use_4byte && use_native,
@@ -211,7 +270,7 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
 
             if result.is_err() {
                 if use_4byte && !use_native {
-                    let _ = protocol::exit_4byte_mode(self.master);
+                    let _ = protocol::exit_4byte_mode(self.master());
                 }
                 return result;
             }
@@ -219,7 +278,7 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
             // Verify the block was erased
             if let Err(e) = self.check_erased_range(current_addr, erase_block.size) {
                 if use_4byte && !use_native {
-                    let _ = protocol::exit_4byte_mode(self.master);
+                    let _ = protocol::exit_4byte_mode(self.master());
                 }
                 return Err(e);
             }
@@ -229,14 +288,14 @@ impl<M: SpiMaster + ?Sized> FlashDevice for SpiFlashDevice<'_, M> {
 
         // Exit 4-byte mode
         if use_4byte && !use_native {
-            protocol::exit_4byte_mode(self.master)?;
+            protocol::exit_4byte_mode(self.master())?;
         }
 
         Ok(())
     }
 }
 
-impl<M: SpiMaster + ?Sized> SpiFlashDevice<'_, M> {
+impl<M: SpiMaster> SpiFlashDevice<M> {
     /// Check that a range of flash has been erased (all bytes are 0xFF)
     fn check_erased_range(&mut self, addr: u32, len: u32) -> Result<()> {
         const ERASED_VALUE: u8 = 0xFF;

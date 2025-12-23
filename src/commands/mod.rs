@@ -21,4 +21,3 @@ mod probe;
 pub mod unified;
 
 pub use list::{list_chips, list_programmers};
-pub use probe::{run_probe, run_probe_opaque};

@@ -6,6 +6,7 @@ use rflasher_core::layout::parse_ifd;
 use rflasher_core::programmer::{OpaqueMaster, SpiMaster};
 
 /// Probe a SPI-based programmer using JEDEC ID
+#[allow(dead_code)]
 pub fn run_probe<M: SpiMaster + ?Sized>(
     master: &mut M,
     db: &ChipDatabase,
@@ -37,6 +38,7 @@ pub fn run_probe<M: SpiMaster + ?Sized>(
 ///
 /// For opaque programmers, we can't use JEDEC ID probing. Instead, we
 /// read the Intel Flash Descriptor to determine flash layout and size.
+#[allow(dead_code)]
 pub fn run_probe_opaque(master: &mut dyn OpaqueMaster) -> Result<(), Box<dyn std::error::Error>> {
     println!("Opaque Programmer Probe");
     println!("========================");

@@ -1,22 +1,17 @@
 //! List commands implementation
 
-use crate::programmers;
 use rflasher_core::chip::ChipDatabase;
+use rflasher_flash::available_programmers;
 
 /// List all supported programmers
 pub fn list_programmers() {
-    let progs = programmers::available_programmers();
+    let progs = available_programmers();
 
     println!("Supported programmers ({} enabled):", progs.len());
     println!();
 
     for p in &progs {
-        let status = if p.implemented {
-            ""
-        } else {
-            " [not yet implemented]"
-        };
-        print!("  {:12} - {}{}", p.name, p.description, status);
+        print!("  {:12} - {}", p.name, p.description);
         if !p.aliases.is_empty() {
             print!(" (aliases: {})", p.aliases.join(", "));
         }
