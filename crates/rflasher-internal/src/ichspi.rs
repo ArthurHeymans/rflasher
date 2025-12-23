@@ -852,6 +852,67 @@ impl IchSpiController {
         self.opcodes.as_ref().map(|ops| ops.opcode[idx].spi_type)
     }
 
+    /// Find if an opcode is in the preop table
+    ///
+    /// Returns the preop index (0 or 1) if found, None otherwise.
+    /// This is used to detect if a command is a preop like WREN or EWSR.
+    #[allow(dead_code)]
+    fn find_preop(&self, opcode: u8) -> Option<usize> {
+        self.opcodes
+            .as_ref()?
+            .preop
+            .iter()
+            .position(|&p| p == opcode)
+    }
+
+    /// Get the atomic mode for an opcode that needs a preop
+    ///
+    /// For write operations (page program, erase, status register writes),
+    /// we need to send WREN first. The Intel controller supports "atomic"
+    /// operations where it automatically sends a preop before the main command.
+    ///
+    /// Returns:
+    /// - 0 = no preop needed
+    /// - 1 = use preop[0] (typically WREN)
+    /// - 2 = use preop[1] (typically EWSR)
+    fn get_atomic_for_opcode(&self, opcode: u8) -> u8 {
+        let opcodes = match &self.opcodes {
+            Some(ops) => ops,
+            None => return 0,
+        };
+
+        // List of opcodes that require WREN (preop[0])
+        // These are write/erase operations that modify flash content or status
+        let needs_wren = matches!(
+            opcode,
+            JEDEC_BYTE_PROGRAM  // 0x02 - Page Program
+            | JEDEC_SE          // 0x20 - Sector Erase 4KB
+            | JEDEC_BE_52       // 0x52 - Block Erase 32KB
+            | JEDEC_BE_D8       // 0xD8 - Block Erase 64KB
+            | JEDEC_CE_C7       // 0xC7 - Chip Erase
+            | JEDEC_CE_60       // 0x60 - Chip Erase (alternative)
+            | JEDEC_WRSR // 0x01 - Write Status Register
+        );
+
+        if needs_wren {
+            // Check if WREN is in preop[0] position
+            if opcodes.preop[0] == JEDEC_WREN {
+                return 1; // Use preop[0]
+            }
+            // Check if WREN is in preop[1] position
+            if opcodes.preop[1] == JEDEC_WREN {
+                return 2; // Use preop[1]
+            }
+            // WREN not in preop table - this is a problem but log and continue
+            log::warn!(
+                "WREN (0x06) not in preop table, atomic mode not available for opcode {:#04x}",
+                opcode
+            );
+        }
+
+        0 // No preop needed
+    }
+
     /// Print HSFS register bits
     fn print_hsfs(&self, hsfs: u16) {
         log::debug!(
@@ -1564,6 +1625,14 @@ impl IchSpiController {
             _ => (0, &[], false),
         };
 
+        // Determine if we need atomic mode (preop + main op)
+        // Write operations typically need WREN first
+        let atomic = if is_write {
+            self.get_atomic_for_opcode(opcode)
+        } else {
+            0
+        };
+
         // For read operations, we need to use the readarr
         // For write operations, we use the data from writearr
         if is_write {
@@ -1571,7 +1640,7 @@ impl IchSpiController {
             let mut data_buf: [u8; 64] = [0; 64];
             let len = data_slice.len().min(64);
             data_buf[..len].copy_from_slice(&data_slice[..len]);
-            self.ich9_run_opcode(opcode, addr, &mut data_buf[..len], true, 0)
+            self.ich9_run_opcode(opcode, addr, &mut data_buf[..len], true, atomic)
         } else {
             // Read operation - fill readarr
             let len = readcnt.min(64);
@@ -1641,11 +1710,7 @@ impl IchSpiController {
             writearr[3] = (current_addr & 0xff) as u8;
             writearr[4..4 + block_len].copy_from_slice(&data[offset..offset + block_len]);
 
-            // Send WREN first (atomic operation)
-            let wren_arr = [JEDEC_WREN];
-            self.swseq_send_command(&wren_arr, &mut [])?;
-
-            // Then program
+            // Send program command (WREN is handled automatically via atomic mode)
             self.swseq_send_command(&writearr[..4 + block_len], &mut [])?;
 
             // Wait for programming to complete by polling status register
@@ -1680,11 +1745,8 @@ impl IchSpiController {
         let end_addr = addr + len;
 
         while current_addr < end_addr {
-            // Send WREN first
-            let wren_arr = [JEDEC_WREN];
-            self.swseq_send_command(&wren_arr, &mut [])?;
-
             // Build erase command: opcode + 3-byte address
+            // WREN is handled automatically via atomic mode in swseq_send_command
             let erase_arr = [
                 erase_opcode,
                 ((current_addr >> 16) & 0xff) as u8,
