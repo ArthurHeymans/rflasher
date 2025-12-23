@@ -143,7 +143,7 @@ fn open_dummy(db: &ChipDatabase) -> Result<FlashHandle, Box<dyn std::error::Erro
     );
 
     let chip_info = ChipInfo::from(&ctx);
-    let device = SpiFlashDevice::new_owned(master, ctx);
+    let device = SpiFlashDevice::new(master, ctx);
     Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
 }
 
@@ -170,7 +170,7 @@ fn open_ch341a(
     );
 
     let chip_info = ChipInfo::from(&ctx);
-    let device = SpiFlashDevice::new_owned(master, ctx);
+    let device = SpiFlashDevice::new(master, ctx);
     Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
 }
 
@@ -233,7 +233,7 @@ fn open_serprog(
             );
 
             let chip_info = ChipInfo::from(&ctx);
-            let device = SpiFlashDevice::new_owned(serprog, ctx);
+            let device = SpiFlashDevice::new(serprog, ctx);
             Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
         }
         SerprogConnection::Tcp { host, port } => {
@@ -262,7 +262,7 @@ fn open_serprog(
             );
 
             let chip_info = ChipInfo::from(&ctx);
-            let device = SpiFlashDevice::new_owned(serprog, ctx);
+            let device = SpiFlashDevice::new(serprog, ctx);
             Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
         }
     }
@@ -305,7 +305,7 @@ fn open_ftdi(
     );
 
     let chip_info = ChipInfo::from(&ctx);
-    let device = SpiFlashDevice::new_owned(master, ctx);
+    let device = SpiFlashDevice::new(master, ctx);
     Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
 }
 
@@ -345,7 +345,7 @@ fn open_linux_spi(
     );
 
     let chip_info = ChipInfo::from(&ctx);
-    let device = SpiFlashDevice::new_owned(master, ctx);
+    let device = SpiFlashDevice::new(master, ctx);
     Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
 }
 
@@ -394,14 +394,14 @@ fn open_internal(
         );
 
         let chip_info = ChipInfo::from(&ctx);
-        let device = SpiFlashDevice::new(&mut programmer, ctx);
+        let device = SpiFlashDevice::new(programmer, ctx);
         Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
     } else {
         log::info!("Using opaque mode (hwseq - no chip probing available)");
         let flash_size = get_flash_size_from_ifd(&mut programmer)?;
         log::info!("Flash size: {} bytes (from IFD)", flash_size);
 
-        let device = OpaqueFlashDevice::new_owned(programmer, flash_size);
+        let device = OpaqueFlashDevice::new(programmer, flash_size);
         Ok(FlashHandle::without_chip_info(Box::new(device)))
     }
 }

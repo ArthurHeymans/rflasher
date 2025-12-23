@@ -16,25 +16,7 @@ use crate::protocol;
 /// (chip metadata from JEDEC probing) to provide the unified `FlashDevice`
 /// interface.
 ///
-/// The device can either borrow (`&mut M`) or own (`M`) the master,
-/// depending on how it's constructed.
-///
-/// # Example (borrowing)
-///
-/// ```ignore
-/// use rflasher_core::flash::{SpiFlashDevice, probe};
-/// use rflasher_core::chip::ChipDatabase;
-///
-/// fn read_flash<M: SpiMaster>(master: &mut M, db: &ChipDatabase) {
-///     let ctx = probe(master, db).unwrap();
-///     let mut device = SpiFlashDevice::new(master, ctx);
-///
-///     let mut buf = [0u8; 4096];
-///     device.read(0, &mut buf).unwrap();
-/// }
-/// ```
-///
-/// # Example (owning)
+/// # Example
 ///
 /// ```ignore
 /// use rflasher_core::flash::{SpiFlashDevice, probe};
@@ -44,81 +26,44 @@ use crate::protocol;
 /// fn create_flash_handle(db: &ChipDatabase) -> SpiFlashDevice<Ch341a> {
 ///     let mut master = Ch341a::open().unwrap();
 ///     let ctx = probe(&mut master, db).unwrap();
-///     SpiFlashDevice::new_owned(master, ctx)
+///     SpiFlashDevice::new(master, ctx)
 /// }
 /// ```
-pub enum SpiFlashDevice<M: SpiMaster + 'static> {
-    /// Borrowed master (for backwards compatibility)
-    Borrowed {
-        /// Pointer to borrowed SPI master
-        master: *mut dyn SpiMaster,
-        /// Flash chip context
-        ctx: FlashContext,
-        /// Phantom data for lifetime safety
-        _marker: core::marker::PhantomData<&'static mut M>,
-    },
-    /// Owned master (for new code)
-    Owned {
-        /// Owned SPI master
-        master: M,
-        /// Flash chip context
-        ctx: FlashContext,
-    },
+pub struct SpiFlashDevice<M: SpiMaster> {
+    /// Owned SPI master
+    master: M,
+    /// Flash chip context
+    ctx: FlashContext,
 }
 
 impl<M: SpiMaster> SpiFlashDevice<M> {
-    /// Create a new SPI flash device adapter (borrowing the master)
-    ///
-    /// # Arguments
-    /// * `master` - The SPI master to use for communication
-    /// * `ctx` - Flash context with chip metadata (from probing)
-    pub fn new(master: &mut M, ctx: FlashContext) -> SpiFlashDevice<M> {
-        SpiFlashDevice::Borrowed {
-            master: master as *mut M as *mut dyn SpiMaster,
-            ctx,
-            _marker: core::marker::PhantomData,
-        }
-    }
-
-    /// Create a new SPI flash device adapter (owning the master)
+    /// Create a new SPI flash device adapter
     ///
     /// # Arguments
     /// * `master` - The SPI master to take ownership of
     /// * `ctx` - Flash context with chip metadata (from probing)
-    pub fn new_owned(master: M, ctx: FlashContext) -> Self {
-        SpiFlashDevice::Owned { master, ctx }
+    pub fn new(master: M, ctx: FlashContext) -> Self {
+        SpiFlashDevice { master, ctx }
     }
 
     /// Get a mutable reference to the underlying SPI master
-    pub fn master(&mut self) -> &mut dyn SpiMaster {
-        match self {
-            SpiFlashDevice::Borrowed { master, .. } => unsafe { &mut **master },
-            SpiFlashDevice::Owned { master, .. } => master,
-        }
+    pub fn master(&mut self) -> &mut M {
+        &mut self.master
     }
 
     /// Get a reference to the flash context
     pub fn context(&self) -> &FlashContext {
-        match self {
-            SpiFlashDevice::Borrowed { ctx, .. } => ctx,
-            SpiFlashDevice::Owned { ctx, .. } => ctx,
-        }
+        &self.ctx
     }
 
     /// Get a mutable reference to the flash context
     pub fn context_mut(&mut self) -> &mut FlashContext {
-        match self {
-            SpiFlashDevice::Borrowed { ctx, .. } => ctx,
-            SpiFlashDevice::Owned { ctx, .. } => ctx,
-        }
+        &mut self.ctx
     }
 
     /// Consume the adapter and return the flash context
     pub fn into_context(self) -> FlashContext {
-        match self {
-            SpiFlashDevice::Borrowed { ctx, .. } => ctx,
-            SpiFlashDevice::Owned { ctx, .. } => ctx,
-        }
+        self.ctx
     }
 }
 
