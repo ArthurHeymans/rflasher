@@ -188,9 +188,10 @@ where
             // Parse options
             let (_, options) = parse_programmer_string(programmer);
 
-            // Build connection string from options
+            // Build connection string from options (only dev= or ip=)
             let conn_str = options
                 .iter()
+                .filter(|(k, _)| *k == "dev" || *k == "ip")
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<_>>()
                 .join(",");
