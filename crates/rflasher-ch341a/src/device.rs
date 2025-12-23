@@ -360,10 +360,8 @@ impl SpiMaster for Ch341a {
         }
 
         // Dummy cycles (convert to bytes, assuming 8 cycles per byte)
-        let dummy_bytes = (cmd.dummy_cycles + 7) / 8;
-        for _ in 0..dummy_bytes {
-            write_data.push(0xFF);
-        }
+        let dummy_bytes = cmd.dummy_cycles.div_ceil(8);
+        write_data.extend(std::iter::repeat_n(0xFF, dummy_bytes as usize));
 
         // Write data (for write commands)
         write_data.extend_from_slice(cmd.write_data);

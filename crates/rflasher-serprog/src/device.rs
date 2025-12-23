@@ -115,10 +115,10 @@ impl<T: Transport> Serprog<T> {
         }
 
         // Enable output drivers if supported
-        if serprog.info.supports_cmd(S_CMD_S_PIN_STATE) {
-            if serprog.do_command(S_CMD_S_PIN_STATE, &[1], &mut []).is_ok() {
-                log::debug!("serprog: Output drivers enabled");
-            }
+        if serprog.info.supports_cmd(S_CMD_S_PIN_STATE)
+            && serprog.do_command(S_CMD_S_PIN_STATE, &[1], &mut []).is_ok()
+        {
+            log::debug!("serprog: Output drivers enabled");
         }
 
         // Set bus type to all supported types
@@ -351,10 +351,10 @@ impl<T: Transport> Serprog<T> {
 impl<T: Transport> Drop for Serprog<T> {
     fn drop(&mut self) {
         // Disable output drivers if supported
-        if self.info.supports_cmd(S_CMD_S_PIN_STATE) {
-            if self.do_command(S_CMD_S_PIN_STATE, &[0], &mut []).is_ok() {
-                log::debug!("serprog: Output drivers disabled");
-            }
+        if self.info.supports_cmd(S_CMD_S_PIN_STATE)
+            && self.do_command(S_CMD_S_PIN_STATE, &[0], &mut []).is_ok()
+        {
+            log::debug!("serprog: Output drivers disabled");
         }
     }
 }
@@ -399,10 +399,8 @@ impl<T: Transport> SpiMaster for Serprog<T> {
         }
 
         // Dummy cycles (convert to bytes)
-        let dummy_bytes = (cmd.dummy_cycles + 7) / 8;
-        for _ in 0..dummy_bytes {
-            write_data.push(0xFF);
-        }
+        let dummy_bytes = cmd.dummy_cycles.div_ceil(8);
+        write_data.extend(std::iter::repeat_n(0xFF, dummy_bytes as usize));
 
         // Write data
         write_data.extend_from_slice(cmd.write_data);

@@ -18,7 +18,7 @@ pub struct ProgrammerInfo {
 }
 
 /// Get information about all available programmers (enabled at compile time)
-#[allow(unused_mut)]
+#[allow(unused_mut, clippy::vec_init_then_push)]
 pub fn available_programmers() -> Vec<ProgrammerInfo> {
     let mut programmers = Vec::new();
 

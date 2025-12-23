@@ -128,7 +128,7 @@ fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
         let mut offset = rom_offset;
         while offset <= rom_offset + len - FMAP_HEADER_SIZE as u32 {
             // Skip offsets we've already checked at larger strides
-            if offset % (stride * 2) == 0 && offset != 0 {
+            if offset.is_multiple_of(stride * 2) && offset != 0 {
                 offset += stride;
                 continue;
             }
