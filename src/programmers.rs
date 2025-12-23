@@ -66,7 +66,7 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
     programmers.push(ProgrammerInfo {
         name: "internal",
         aliases: &[],
-        description: "Intel chipset internal flash (ICH/PCH) - requires root",
+        description: "Intel chipset internal flash (ICH/PCH) (ich_spi_mode=auto|hwseq|swseq)",
         implemented: true,
     });
 
@@ -359,14 +359,28 @@ where
 
         #[cfg(feature = "internal")]
         "internal" => {
-            use rflasher_internal::InternalProgrammer;
+            use rflasher_internal::{InternalOptions, InternalProgrammer};
+
+            // Parse options
+            let (_, options) = parse_programmer_string(programmer);
 
             log::info!("Opening Intel internal programmer...");
 
-            let mut programmer = InternalProgrammer::new().map_err(|e| {
+            // Parse internal-specific options
+            let internal_opts = InternalOptions::from_options(&options)
+                .map_err(|e| format!("Invalid internal programmer options: {}", e))?;
+
+            // Log the mode being used
+            if internal_opts.mode != rflasher_internal::SpiMode::Auto {
+                log::info!("Using ich_spi_mode={}", internal_opts.mode);
+            }
+
+            let mut programmer = InternalProgrammer::with_options(internal_opts).map_err(|e| {
                 format!(
                     "Failed to initialize internal programmer: {}\n\
-                     Make sure you have root privileges and an Intel chipset.",
+                     Make sure you have root privileges and an Intel chipset.\n\
+                     For ICH7, only swseq is supported.\n\
+                     For PCH100+, swseq may be locked (use ich_spi_mode=hwseq).",
                     e
                 )
             })?;

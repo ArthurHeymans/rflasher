@@ -215,6 +215,44 @@ impl IchChipset {
     pub fn has_new_access_perm(self) -> bool {
         self >= Self::HAS_NEW_ACCESS_PERM
     }
+
+    /// Returns true if this chipset supports hardware sequencing (hwseq)
+    ///
+    /// Hardware sequencing was introduced with ICH8. ICH7 only supports
+    /// software sequencing.
+    pub fn supports_hwseq(self) -> bool {
+        self >= Self::SPI_ENGINE_ICH9
+    }
+
+    /// Returns true if this chipset supports software sequencing (swseq)
+    ///
+    /// Software sequencing is supported on all chipsets, but may be locked
+    /// on some platforms (check SSEQ_LOCKDN in DLOCK register for PCH100+).
+    /// Apollo Lake and later mobile platforms often lock swseq.
+    pub fn supports_swseq(self) -> bool {
+        // All chipsets support swseq in principle, but PCH100+ can lock it
+        // via DLOCK.SSEQ_LOCKDN. This is checked at runtime.
+        true
+    }
+
+    /// Returns true if this chipset defaults to hwseq when in auto mode
+    ///
+    /// PCH100+ series defaults to hwseq because swseq is often locked
+    /// and hwseq provides better compatibility.
+    pub fn defaults_to_hwseq(self) -> bool {
+        self >= Self::SPI_ENGINE_PCH100
+    }
+
+    /// Returns true if this chipset is Apollo Lake or similar
+    ///
+    /// Apollo Lake and similar platforms (Gemini Lake, Elkhart Lake) often
+    /// have restricted software sequencing capabilities.
+    pub fn is_apollo_lake_like(self) -> bool {
+        matches!(
+            self,
+            Self::ApolloLake | Self::GeminiLake | Self::ElkhartLake
+        )
+    }
 }
 
 impl fmt::Display for IchChipset {

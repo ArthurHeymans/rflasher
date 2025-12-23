@@ -11,6 +11,49 @@ use crate::DetectedChipset;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::OpaqueMaster;
 
+/// Options for the internal programmer
+#[derive(Debug, Clone, Default)]
+pub struct InternalOptions {
+    /// SPI sequencing mode (auto, hwseq, swseq)
+    pub mode: SpiMode,
+}
+
+impl InternalOptions {
+    /// Create options with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the SPI mode
+    pub fn with_mode(mut self, mode: SpiMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Parse options from key-value pairs (from CLI)
+    ///
+    /// Supported options:
+    /// - ich_spi_mode=auto|hwseq|swseq
+    pub fn from_options(options: &[(&str, &str)]) -> Result<Self, InternalError> {
+        let mut opts = Self::default();
+
+        for (key, value) in options {
+            match *key {
+                "ich_spi_mode" | "mode" => {
+                    opts.mode = SpiMode::parse(value).ok_or(InternalError::NotSupported(
+                        "Invalid ich_spi_mode value (use: auto, hwseq, or swseq)",
+                    ))?;
+                }
+                _ => {
+                    log::warn!("Unknown internal programmer option: {}={}", key, value);
+                }
+            }
+        }
+
+        Ok(opts)
+    }
+}
+
 /// Internal programmer for Intel ICH/PCH chipsets
 #[cfg(all(feature = "std", target_os = "linux"))]
 pub struct InternalProgrammer {
@@ -24,27 +67,30 @@ pub struct InternalProgrammer {
 
 #[cfg(all(feature = "std", target_os = "linux"))]
 impl InternalProgrammer {
-    /// Create a new internal programmer
+    /// Create a new internal programmer with default options
     ///
     /// This will:
     /// 1. Detect the Intel chipset
     /// 2. Initialize the SPI controller
     /// 3. Enable BIOS writes if possible
     pub fn new() -> Result<Self, InternalError> {
-        Self::with_options(SpiMode::Auto)
+        Self::with_options(InternalOptions::default())
     }
 
-    /// Create a new internal programmer with explicit mode
-    pub fn with_options(mode: SpiMode) -> Result<Self, InternalError> {
+    /// Create a new internal programmer with explicit options
+    pub fn with_options(options: InternalOptions) -> Result<Self, InternalError> {
         // Detect chipset
         let chipset = crate::detect_chipset()?.ok_or(InternalError::NoChipset)?;
 
-        Self::from_chipset(&chipset, mode)
+        Self::from_chipset(&chipset, options)
     }
 
     /// Create from a specific detected chipset
-    pub fn from_chipset(chipset: &DetectedChipset, mode: SpiMode) -> Result<Self, InternalError> {
-        let mut controller = IchSpiController::new(chipset, mode)?;
+    pub fn from_chipset(
+        chipset: &DetectedChipset,
+        options: InternalOptions,
+    ) -> Result<Self, InternalError> {
+        let mut controller = IchSpiController::new(chipset, options.mode)?;
 
         // Try to enable BIOS writes
         let writes_enabled = match controller.enable_bios_write() {
@@ -133,14 +179,16 @@ impl OpaqueMaster for InternalProgrammer {
     }
 
     fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
-        if !self.is_hwseq() {
-            // Software sequencing mode - not implemented yet
-            return Err(CoreError::OpcodeNotSupported);
+        if self.is_hwseq() {
+            self.controller
+                .hwseq_read(addr, buf)
+                .map_err(Self::map_error)
+        } else {
+            // Software sequencing mode
+            self.controller
+                .swseq_read(addr, buf)
+                .map_err(Self::map_error)
         }
-
-        self.controller
-            .hwseq_read(addr, buf)
-            .map_err(Self::map_error)
     }
 
     fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
@@ -148,13 +196,16 @@ impl OpaqueMaster for InternalProgrammer {
             return Err(CoreError::WriteProtected);
         }
 
-        if !self.is_hwseq() {
-            return Err(CoreError::OpcodeNotSupported);
+        if self.is_hwseq() {
+            self.controller
+                .hwseq_write(addr, data)
+                .map_err(Self::map_error)
+        } else {
+            // Software sequencing mode
+            self.controller
+                .swseq_write(addr, data)
+                .map_err(Self::map_error)
         }
-
-        self.controller
-            .hwseq_write(addr, data)
-            .map_err(Self::map_error)
     }
 
     fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
@@ -162,13 +213,16 @@ impl OpaqueMaster for InternalProgrammer {
             return Err(CoreError::WriteProtected);
         }
 
-        if !self.is_hwseq() {
-            return Err(CoreError::OpcodeNotSupported);
+        if self.is_hwseq() {
+            self.controller
+                .hwseq_erase(addr, len)
+                .map_err(Self::map_error)
+        } else {
+            // Software sequencing mode
+            self.controller
+                .swseq_erase(addr, len)
+                .map_err(Self::map_error)
         }
-
-        self.controller
-            .hwseq_erase(addr, len)
-            .map_err(Self::map_error)
     }
 }
 
@@ -195,7 +249,7 @@ impl InternalProgrammer {
         ))
     }
 
-    pub fn with_options(_mode: SpiMode) -> Result<Self, InternalError> {
+    pub fn with_options(_options: InternalOptions) -> Result<Self, InternalError> {
         Err(InternalError::NotSupported(
             "Internal programmer only supported on Linux",
         ))
