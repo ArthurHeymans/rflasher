@@ -160,10 +160,10 @@ pub fn print_layout(layout: &Layout) {
 
     println!("\nRegions ({}):", layout.len());
     println!(
-        "{:<20} {:>12} {:>12} {:>10} {:>8} {:>8}",
+        "{:<20} {:>10} {:>10} {:>10} {:>8} {:>8}",
         "Name", "Start", "End", "Size", "RO", "Danger"
     );
-    println!("{:-<78}", "");
+    println!("{:-<74}", "");
 
     for region in &layout.regions {
         let size = region.size();
@@ -176,7 +176,7 @@ pub fn print_layout(layout: &Layout) {
         };
 
         println!(
-            "{:<20} 0x{:08X} 0x{:08X} {:>10} {:>8} {:>8}",
+            "{:<20} {:#010X} {:#010X} {:>10} {:>8} {:>8}",
             region.name,
             region.start,
             region.end,
