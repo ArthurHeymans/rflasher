@@ -130,6 +130,7 @@ pub fn write<M: SpiMaster + ?Sized>(
 /// Erase a region of flash
 ///
 /// The region must be aligned to erase block boundaries.
+/// After each block erase, the erased region is verified to contain 0xFF.
 pub fn erase<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -186,6 +187,14 @@ pub fn erase<M: SpiMaster + ?Sized>(
             return result;
         }
 
+        // Verify the block was erased (same as flashprog's check_erased_range)
+        if let Err(e) = check_erased_range(master, ctx, current_addr, erase_block.size) {
+            if use_4byte && !use_native {
+                let _ = protocol::exit_4byte_mode(master);
+            }
+            return Err(e);
+        }
+
         current_addr += erase_block.size;
     }
 
@@ -198,10 +207,53 @@ pub fn erase<M: SpiMaster + ?Sized>(
 }
 
 /// Erase the entire chip
-pub fn chip_erase<M: SpiMaster + ?Sized>(master: &mut M, _ctx: &FlashContext) -> Result<()> {
+///
+/// This function erases the chip and then verifies the erase by reading back
+/// the contents and checking they are all 0xFF.
+pub fn chip_erase<M: SpiMaster + ?Sized>(master: &mut M, ctx: &FlashContext) -> Result<()> {
     // Chip erase timeout: up to 2 minutes for large chips
     let timeout_us = 120_000_000;
-    protocol::chip_erase(master, timeout_us)
+    protocol::chip_erase(master, timeout_us)?;
+
+    // Verify the erase succeeded by checking the chip contents
+    check_erased_range(master, ctx, 0, ctx.total_size() as u32)
+}
+
+/// The erased value for flash memory (all bits set)
+const ERASED_VALUE: u8 = 0xFF;
+
+/// Check that a range of flash has been erased (all bytes are 0xFF)
+///
+/// This function reads the specified range and verifies that all bytes
+/// contain the erased value (0xFF). This is used to verify erase operations.
+fn check_erased_range<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    len: u32,
+) -> Result<()> {
+    // Read in chunks to avoid allocating the entire chip size at once
+    const CHUNK_SIZE: usize = 4096;
+    let mut buf = [0u8; CHUNK_SIZE];
+
+    let mut offset = 0u32;
+    while offset < len {
+        let chunk_len = core::cmp::min(CHUNK_SIZE as u32, len - offset) as usize;
+        let chunk_buf = &mut buf[..chunk_len];
+
+        read(master, ctx, addr + offset, chunk_buf)?;
+
+        // Check all bytes are erased
+        for &byte in chunk_buf.iter() {
+            if byte != ERASED_VALUE {
+                return Err(Error::EraseError);
+            }
+        }
+
+        offset += chunk_len as u32;
+    }
+
+    Ok(())
 }
 
 /// Verify flash contents match the provided data
@@ -438,6 +490,8 @@ fn erase_block_with_preserve<M: SpiMaster + ?Sized>(
 }
 
 /// Erase a single block using the specified erase block definition
+///
+/// After erasing, the block is verified to contain 0xFF.
 #[cfg(feature = "alloc")]
 fn erase_single_block<M: SpiMaster + ?Sized>(
     master: &mut M,
@@ -474,7 +528,10 @@ fn erase_single_block<M: SpiMaster + ?Sized>(
         let _ = protocol::exit_4byte_mode(master);
     }
 
-    result
+    result?;
+
+    // Verify the block was erased (same as flashprog's check_erased_range)
+    check_erased_range(master, ctx, addr, erase_block.size)
 }
 
 /// Erase a region of flash, handling erase block boundary crossing
@@ -1126,7 +1183,8 @@ mod tests {
 
     #[test]
     fn test_erase_aligned_no_preserve() {
-        // Test that aligned erases don't do unnecessary reads/writes
+        // Test that aligned erases don't do unnecessary writes (no data to preserve)
+        // Note: reads still happen for erase verification (verifying the block contains 0xFF)
 
         let mut mock = MockFlash::with_contents(65536, &[(0x1000, &[0xAA; 0x1000])]);
 
@@ -1149,11 +1207,14 @@ mod tests {
         assert_eq!(erases.len(), 1);
         assert_eq!(erases[0], (0x1000, 4096));
 
-        // Should have no reads (no data to preserve)
+        // Should have reads for erase verification (reading back to check 0xFF)
         let reads = mock.get_reads();
-        assert!(reads.is_empty(), "Aligned erase should not require reads");
+        assert!(
+            !reads.is_empty(),
+            "Erase should verify by reading back the erased block"
+        );
 
-        // Should have no writes (no data to restore)
+        // Should have no writes (no data to restore for aligned erase)
         let writes = mock.get_writes();
         assert!(writes.is_empty(), "Aligned erase should not require writes");
     }
