@@ -68,6 +68,7 @@ all-programmers = ["dummy", "ch341a", "serprog", "ftdi", "linux-spi", "internal"
 rflasher-core = { workspace = true, features = ["std"] }
 rflasher-flash = { path = "crates/rflasher-flash", features = ["std"] }
 clap.workspace = true
+clap_mangen = "0.2"
 env_logger.workspace = true
 log.workspace = true
 indicatif.workspace = true
