@@ -92,7 +92,7 @@ pub fn enable_amd_spi100(
     log::debug!(
         "SPI BAR config: AltSpiCSEnable={} SpiRomEnable={} AbortEnable={} \
          RouteTpm2Spi={} PspSpiMmioSel={}",
-        (spibar >> 0) & 1,
+        spibar & 1,
         (spibar >> 1) & 1,
         (spibar >> 2) & 1,
         (spibar >> 3) & 1,

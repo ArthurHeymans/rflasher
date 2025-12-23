@@ -400,7 +400,7 @@ impl Spi100Controller {
         let memory = self
             .memory
             .as_ref()
-            .ok_or_else(|| InternalError::Io("No memory mapping available"))?;
+            .ok_or(InternalError::Io("No memory mapping available"))?;
 
         // Use aligned 64-bit reads for efficiency
         let len = dst.len();
@@ -549,7 +549,7 @@ impl Spi100Controller {
         );
         log::debug!(
             "TpmSpeed:  {}",
-            SPI_SPEEDS[(speed_cfg >> 0 & 0xf) as usize].name
+            SPI_SPEEDS[(speed_cfg & 0xf) as usize].name
         );
     }
 
