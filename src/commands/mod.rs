@@ -17,7 +17,6 @@
 
 pub mod layout;
 mod list;
-mod probe;
 pub mod unified;
 
 pub use list::{list_chips, list_programmers};
