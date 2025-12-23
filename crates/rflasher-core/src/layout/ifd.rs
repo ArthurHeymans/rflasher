@@ -41,6 +41,25 @@ const DANGEROUS_REGIONS: [&str; 3] = ["me", "descriptor", "ptt"];
 /// Read-only regions (descriptor should never be written)
 const READONLY_REGIONS: [&str; 1] = ["descriptor"];
 
+/// Extract base address from a Flash Region register (FLREG)
+///
+/// The base address is stored in bits 14:0, representing address bits 26:12.
+/// This matches flashprog's ICH_FREG_BASE macro.
+#[inline]
+fn freg_base(flreg: u32) -> u32 {
+    (flreg << 12) & 0x07FFF000
+}
+
+/// Extract limit address from a Flash Region register (FLREG)
+///
+/// The limit address is stored in bits 30:16, representing address bits 26:12.
+/// The result is ORed with 0xFFF to get the inclusive end address.
+/// This matches flashprog's ICH_FREG_LIMIT macro.
+#[inline]
+fn freg_limit(flreg: u32) -> u32 {
+    ((flreg >> 4) & 0x07FFF000) | 0x00000FFF
+}
+
 /// Parse Intel Flash Descriptor from raw data
 ///
 /// The IFD is located at the beginning of the flash chip (first 4KB typically).
@@ -58,13 +77,15 @@ pub fn parse_ifd(data: &[u8]) -> Result<Layout, LayoutError> {
     // Read FLMAP0 at offset 0x14
     let flmap0 = u32::from_le_bytes([data[0x14], data[0x15], data[0x16], data[0x17]]);
 
-    // Get number of regions from NR field (bits 26:24)
-    let nr = ((flmap0 >> 24) & 0x07) as usize;
-    let num_regions = std::cmp::min(nr + 1, MAX_IFD_REGIONS);
-
     // Calculate Flash Region Base Address (FRBA)
     // FRBA is at bits 23:16 of FLMAP0, shifted left by 4
     let frba = ((flmap0 >> 12) & 0xFF0) as usize;
+
+    // Always scan all possible regions (up to 16).
+    // The NR field in FLMAP0 is not reliable for newer chipsets (Skylake+),
+    // where the number of regions is fixed per chipset generation.
+    // Unused regions have limit < base, which we detect below.
+    let num_regions = MAX_IFD_REGIONS;
 
     if frba + num_regions * 4 > data.len() {
         return Err(LayoutError::InvalidIfdSignature);
@@ -83,20 +104,22 @@ pub fn parse_ifd(data: &[u8]) -> Result<Layout, LayoutError> {
             data[offset + 3],
         ]);
 
-        // Region limit (bits 31:16) and base (bits 15:0)
-        // Each is in 4KB units
-        let base = (freg & 0x7FFF) << 12;
-        let limit = ((freg >> 16) & 0x7FFF) << 12;
+        // 0xFFFFFFFF indicates we've hit uninitialized flash memory beyond the
+        // actual region table. Stop scanning here.
+        if freg == 0xFFFFFFFF {
+            break;
+        }
+
+        // Extract base and limit addresses using the same encoding as flashprog
+        let base = freg_base(freg);
+        let limit = freg_limit(freg);
 
         // Region is unused if limit < base
         if limit < base {
             continue;
         }
 
-        // The actual end address is limit + 0xFFF (inclusive)
-        let end = limit | 0xFFF;
-
-        let mut region = Region::new(name, base, end);
+        let mut region = Region::new(name, base, limit);
         region.readonly = READONLY_REGIONS.contains(&name);
         region.dangerous = DANGEROUS_REGIONS.contains(&name);
 
@@ -135,8 +158,12 @@ mod tests {
     use std::vec;
     use std::vec::Vec;
 
+    /// Value for unused FLREG entries (limit < base means unused)
+    /// This sets base=0x7FFF (max), limit=0 which makes limit < base.
+    const FLREG_UNUSED: u32 = 0x00007FFF;
+
     fn make_test_ifd() -> Vec<u8> {
-        let mut data = vec![0xFF; 0x1000];
+        let mut data = vec![0x00; 0x1000];
 
         // Signature at 0x10
         data[0x10..0x14].copy_from_slice(&IFD_SIGNATURE.to_le_bytes());
@@ -146,7 +173,12 @@ mod tests {
         let flmap0: u32 = (2 << 24) | (0x04 << 16);
         data[0x14..0x18].copy_from_slice(&flmap0.to_le_bytes());
 
-        // FRBA at 0x40
+        // FRBA at 0x40 - initialize all 16 regions as unused first
+        for i in 0..MAX_IFD_REGIONS {
+            let offset = 0x40 + i * 4;
+            data[offset..offset + 4].copy_from_slice(&FLREG_UNUSED.to_le_bytes());
+        }
+
         // Region 0 (descriptor): 0x000000 - 0x000FFF
         let freg0: u32 = 0x0000_0000; // limit=0, base=0
         data[0x40..0x44].copy_from_slice(&freg0.to_le_bytes());
