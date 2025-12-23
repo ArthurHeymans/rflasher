@@ -1,0 +1,309 @@
+//! Intel chipset PCI ID table
+//!
+//! This table is ported from flashprog's chipset_enable.c
+
+use crate::chipset::{ChipsetEnable, IchChipset, TestStatus, B_FL, B_FS, B_P, B_S};
+
+/// Intel vendor ID
+pub const INTEL_VID: u16 = 0x8086;
+
+/// Intel chipset PCI ID table
+///
+/// Keep this list sorted by device ID for easier maintenance.
+/// Based on flashprog's chipset_enables[] array.
+pub static INTEL_CHIPSETS: &[ChipsetEnable] = &[
+    // Bay Trail
+    ChipsetEnable::new(INTEL_VID, 0x0f1c, B_FS, TestStatus::Ok, "Intel", "Bay Trail", IchChipset::BayTrail),
+    ChipsetEnable::new(INTEL_VID, 0x0f1d, B_FS, TestStatus::Untested, "Intel", "Bay Trail", IchChipset::BayTrail),
+    ChipsetEnable::new(INTEL_VID, 0x0f1e, B_FS, TestStatus::Untested, "Intel", "Bay Trail", IchChipset::BayTrail),
+    ChipsetEnable::new(INTEL_VID, 0x0f1f, B_FS, TestStatus::Untested, "Intel", "Bay Trail", IchChipset::BayTrail),
+    
+    // PIIX series (very old, parallel only)
+    ChipsetEnable::new(INTEL_VID, 0x122e, B_P, TestStatus::Ok, "Intel", "PIIX", IchChipset::Ich),
+    ChipsetEnable::new(INTEL_VID, 0x1234, B_P, TestStatus::Untested, "Intel", "MPIIX", IchChipset::Ich),
+    
+    // 6 Series (Cougar Point)
+    ChipsetEnable::new(INTEL_VID, 0x1c44, B_FS, TestStatus::Depends, "Intel", "Z68", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c46, B_FS, TestStatus::Depends, "Intel", "P67", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c47, B_FS, TestStatus::Untested, "Intel", "UM67", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c49, B_FS, TestStatus::Depends, "Intel", "HM65", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c4a, B_FS, TestStatus::Depends, "Intel", "H67", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c4b, B_FS, TestStatus::Untested, "Intel", "HM67", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c4c, B_FS, TestStatus::Untested, "Intel", "Q65", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c4d, B_FS, TestStatus::Depends, "Intel", "QS67", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c4e, B_FS, TestStatus::Depends, "Intel", "Q67", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c4f, B_FS, TestStatus::Depends, "Intel", "QM67", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c50, B_FS, TestStatus::Untested, "Intel", "B65", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c52, B_FS, TestStatus::Untested, "Intel", "C202", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c54, B_FS, TestStatus::Depends, "Intel", "C204", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c56, B_FS, TestStatus::Untested, "Intel", "C206", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1c5c, B_FS, TestStatus::Depends, "Intel", "H61", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1d40, B_FS, TestStatus::Depends, "Intel", "C60x/X79", IchChipset::Series6CougarPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1d41, B_FS, TestStatus::Depends, "Intel", "C60x/X79", IchChipset::Series6CougarPoint),
+    
+    // 7 Series (Panther Point)
+    ChipsetEnable::new(INTEL_VID, 0x1e41, B_FS, TestStatus::Depends, "Intel", "Desktop Sample", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e42, B_FS, TestStatus::Depends, "Intel", "Mobile Sample", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e43, B_FS, TestStatus::Depends, "Intel", "SFF Sample", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e44, B_FS, TestStatus::Depends, "Intel", "Z77", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e46, B_FS, TestStatus::Untested, "Intel", "Z75", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e47, B_FS, TestStatus::Depends, "Intel", "Q77", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e48, B_FS, TestStatus::Depends, "Intel", "Q75", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e49, B_FS, TestStatus::Depends, "Intel", "B75", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e4a, B_FS, TestStatus::Depends, "Intel", "H77", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e53, B_FS, TestStatus::Depends, "Intel", "C216", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e55, B_FS, TestStatus::Depends, "Intel", "QM77", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e56, B_FS, TestStatus::Depends, "Intel", "QS77", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e57, B_FS, TestStatus::Depends, "Intel", "HM77", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e58, B_FS, TestStatus::Untested, "Intel", "UM77", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e59, B_FS, TestStatus::Depends, "Intel", "HM76", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e5d, B_FS, TestStatus::Depends, "Intel", "HM75", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e5e, B_FS, TestStatus::Untested, "Intel", "HM70", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x1e5f, B_FS, TestStatus::Depends, "Intel", "NM70", IchChipset::Series7PantherPoint),
+    
+    // Avoton/Rangeley
+    ChipsetEnable::new(INTEL_VID, 0x1f38, B_FS, TestStatus::Depends, "Intel", "Avoton/Rangeley", IchChipset::BayTrail),
+    ChipsetEnable::new(INTEL_VID, 0x1f39, B_FS, TestStatus::Untested, "Intel", "Avoton/Rangeley", IchChipset::BayTrail),
+    ChipsetEnable::new(INTEL_VID, 0x1f3a, B_FS, TestStatus::Untested, "Intel", "Avoton/Rangeley", IchChipset::BayTrail),
+    ChipsetEnable::new(INTEL_VID, 0x1f3b, B_FS, TestStatus::Untested, "Intel", "Avoton/Rangeley", IchChipset::BayTrail),
+    
+    // Braswell
+    ChipsetEnable::new(INTEL_VID, 0x229c, B_FS, TestStatus::Ok, "Intel", "Braswell", IchChipset::BayTrail),
+    
+    // Coleto Creek / Cave Creek
+    ChipsetEnable::new(INTEL_VID, 0x2310, B_FS, TestStatus::Untested, "Intel", "DH89xxCC (Cave Creek)", IchChipset::Series7PantherPoint),
+    ChipsetEnable::new(INTEL_VID, 0x2390, B_FS, TestStatus::Untested, "Intel", "Coleto Creek", IchChipset::Series7PantherPoint),
+    
+    // ICH / ICH0
+    ChipsetEnable::new(INTEL_VID, 0x2410, B_FL, TestStatus::Ok, "Intel", "ICH", IchChipset::Ich),
+    ChipsetEnable::new(INTEL_VID, 0x2420, B_FL, TestStatus::Ok, "Intel", "ICH0", IchChipset::Ich),
+    
+    // ICH2 - ICH5
+    ChipsetEnable::new(INTEL_VID, 0x2440, B_FL, TestStatus::Ok, "Intel", "ICH2", IchChipset::Ich2345),
+    ChipsetEnable::new(INTEL_VID, 0x244c, B_FL, TestStatus::Ok, "Intel", "ICH2-M", IchChipset::Ich2345),
+    ChipsetEnable::new(INTEL_VID, 0x2450, B_FL, TestStatus::Untested, "Intel", "C-ICH", IchChipset::Ich2345),
+    ChipsetEnable::new(INTEL_VID, 0x2480, B_FL, TestStatus::Ok, "Intel", "ICH3-S", IchChipset::Ich2345),
+    ChipsetEnable::new(INTEL_VID, 0x248c, B_FL, TestStatus::Ok, "Intel", "ICH3-M", IchChipset::Ich2345),
+    ChipsetEnable::new(INTEL_VID, 0x24c0, B_FL, TestStatus::Ok, "Intel", "ICH4/ICH4-L", IchChipset::Ich2345),
+    ChipsetEnable::new(INTEL_VID, 0x24cc, B_FL, TestStatus::Ok, "Intel", "ICH4-M", IchChipset::Ich2345),
+    ChipsetEnable::new(INTEL_VID, 0x24d0, B_FL, TestStatus::Ok, "Intel", "ICH5/ICH5R", IchChipset::Ich2345),
+    ChipsetEnable::new(INTEL_VID, 0x25a1, B_FL, TestStatus::Ok, "Intel", "6300ESB", IchChipset::Ich2345),
+    
+    // ICH6
+    ChipsetEnable::new(INTEL_VID, 0x2640, B_FL, TestStatus::Ok, "Intel", "ICH6/ICH6R", IchChipset::Ich6),
+    ChipsetEnable::new(INTEL_VID, 0x2641, B_FL, TestStatus::Ok, "Intel", "ICH6-M", IchChipset::Ich6),
+    ChipsetEnable::new(INTEL_VID, 0x2642, B_FL, TestStatus::Untested, "Intel", "ICH6W/ICH6RW", IchChipset::Ich6),
+    ChipsetEnable::new(INTEL_VID, 0x2670, B_FL, TestStatus::Ok, "Intel", "631xESB/632xESB/3100", IchChipset::Ich6),
+    
+    // ICH7
+    ChipsetEnable::new(INTEL_VID, 0x27b0, B_FS, TestStatus::Ok, "Intel", "ICH7DH", IchChipset::Ich7),
+    ChipsetEnable::new(INTEL_VID, 0x27b8, B_FS, TestStatus::Ok, "Intel", "ICH7/ICH7R", IchChipset::Ich7),
+    ChipsetEnable::new(INTEL_VID, 0x27b9, B_FS, TestStatus::Ok, "Intel", "ICH7M", IchChipset::Ich7),
+    ChipsetEnable::new(INTEL_VID, 0x27bc, B_FS, TestStatus::Ok, "Intel", "NM10", IchChipset::Ich7),
+    ChipsetEnable::new(INTEL_VID, 0x27bd, B_FS, TestStatus::Ok, "Intel", "ICH7MDH", IchChipset::Ich7),
+    
+    // ICH8
+    ChipsetEnable::new(INTEL_VID, 0x2810, B_FS, TestStatus::Depends, "Intel", "ICH8/ICH8R", IchChipset::Ich8),
+    ChipsetEnable::new(INTEL_VID, 0x2811, B_FS, TestStatus::Depends, "Intel", "ICH8M-E", IchChipset::Ich8),
+    ChipsetEnable::new(INTEL_VID, 0x2812, B_FS, TestStatus::Depends, "Intel", "ICH8DH", IchChipset::Ich8),
+    ChipsetEnable::new(INTEL_VID, 0x2814, B_FS, TestStatus::Depends, "Intel", "ICH8DO", IchChipset::Ich8),
+    ChipsetEnable::new(INTEL_VID, 0x2815, B_FS, TestStatus::Depends, "Intel", "ICH8M", IchChipset::Ich8),
+    
+    // ICH9
+    ChipsetEnable::new(INTEL_VID, 0x2910, B_FS, TestStatus::Depends, "Intel", "ICH9 Eng. Sample", IchChipset::Ich9),
+    ChipsetEnable::new(INTEL_VID, 0x2912, B_FS, TestStatus::Depends, "Intel", "ICH9DH", IchChipset::Ich9),
+    ChipsetEnable::new(INTEL_VID, 0x2914, B_FS, TestStatus::Depends, "Intel", "ICH9DO", IchChipset::Ich9),
+    ChipsetEnable::new(INTEL_VID, 0x2916, B_FS, TestStatus::Depends, "Intel", "ICH9R", IchChipset::Ich9),
+    ChipsetEnable::new(INTEL_VID, 0x2917, B_FS, TestStatus::Depends, "Intel", "ICH9M-E", IchChipset::Ich9),
+    ChipsetEnable::new(INTEL_VID, 0x2918, B_FS, TestStatus::Depends, "Intel", "ICH9", IchChipset::Ich9),
+    ChipsetEnable::new(INTEL_VID, 0x2919, B_FS, TestStatus::Depends, "Intel", "ICH9M", IchChipset::Ich9),
+    
+    // ICH10
+    ChipsetEnable::new(INTEL_VID, 0x3a10, B_FS, TestStatus::Untested, "Intel", "ICH10R Eng. Sample", IchChipset::Ich10),
+    ChipsetEnable::new(INTEL_VID, 0x3a14, B_FS, TestStatus::Depends, "Intel", "ICH10DO", IchChipset::Ich10),
+    ChipsetEnable::new(INTEL_VID, 0x3a16, B_FS, TestStatus::Depends, "Intel", "ICH10R", IchChipset::Ich10),
+    ChipsetEnable::new(INTEL_VID, 0x3a18, B_FS, TestStatus::Depends, "Intel", "ICH10", IchChipset::Ich10),
+    ChipsetEnable::new(INTEL_VID, 0x3a1a, B_FS, TestStatus::Depends, "Intel", "ICH10D", IchChipset::Ich10),
+    ChipsetEnable::new(INTEL_VID, 0x3a1e, B_FS, TestStatus::Untested, "Intel", "ICH10 Eng. Sample", IchChipset::Ich10),
+    
+    // 5 Series (Ibex Peak)
+    ChipsetEnable::new(INTEL_VID, 0x3b00, B_FS, TestStatus::Untested, "Intel", "3400 Desktop", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b01, B_FS, TestStatus::Untested, "Intel", "3400 Mobile", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b02, B_FS, TestStatus::Untested, "Intel", "P55", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b03, B_FS, TestStatus::Depends, "Intel", "PM55", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b06, B_FS, TestStatus::Depends, "Intel", "H55", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b07, B_FS, TestStatus::Depends, "Intel", "QM57", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b08, B_FS, TestStatus::Untested, "Intel", "H57", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b09, B_FS, TestStatus::Depends, "Intel", "HM55", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b0a, B_FS, TestStatus::Untested, "Intel", "Q57", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b0b, B_FS, TestStatus::Untested, "Intel", "HM57", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b0d, B_FS, TestStatus::Untested, "Intel", "3400 Mobile SFF", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b0e, B_FS, TestStatus::Untested, "Intel", "B55", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b0f, B_FS, TestStatus::Depends, "Intel", "QS57", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b12, B_FS, TestStatus::Untested, "Intel", "3400", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b14, B_FS, TestStatus::Depends, "Intel", "3420", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b16, B_FS, TestStatus::Untested, "Intel", "3450", IchChipset::Series5IbexPeak),
+    ChipsetEnable::new(INTEL_VID, 0x3b1e, B_FS, TestStatus::Untested, "Intel", "B55", IchChipset::Series5IbexPeak),
+    
+    // EP80579
+    ChipsetEnable::new(INTEL_VID, 0x5031, B_FS, TestStatus::Ok, "Intel", "EP80579", IchChipset::Ich7),
+    
+    // PIIX3/PIIX4
+    ChipsetEnable::new(INTEL_VID, 0x7000, B_P, TestStatus::Ok, "Intel", "PIIX3", IchChipset::Ich),
+    ChipsetEnable::new(INTEL_VID, 0x7110, B_P, TestStatus::Ok, "Intel", "PIIX4/4E/4M", IchChipset::Ich),
+    ChipsetEnable::new(INTEL_VID, 0x7198, B_P, TestStatus::Ok, "Intel", "440MX", IchChipset::Ich),
+    
+    // SCH Poulsbo / Tunnel Creek
+    ChipsetEnable::new(INTEL_VID, 0x8119, B_FL, TestStatus::Ok, "Intel", "SCH Poulsbo", IchChipset::Poulsbo),
+    ChipsetEnable::new(INTEL_VID, 0x8186, B_FS, TestStatus::Ok, "Intel", "Atom E6xx(T) (Tunnel Creek)", IchChipset::TunnelCreek),
+    
+    // 8 Series (Lynx Point)
+    ChipsetEnable::new(INTEL_VID, 0x8c40, B_FS, TestStatus::Untested, "Intel", "Lynx Point", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c41, B_FS, TestStatus::Untested, "Intel", "Lynx Point Mobile ES", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c42, B_FS, TestStatus::Untested, "Intel", "Lynx Point Desktop ES", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c43, B_FS, TestStatus::Untested, "Intel", "Lynx Point", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c44, B_FS, TestStatus::Depends, "Intel", "Z87", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c46, B_FS, TestStatus::Untested, "Intel", "Z85", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c49, B_FS, TestStatus::Untested, "Intel", "HM86", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c4a, B_FS, TestStatus::Depends, "Intel", "H87", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c4b, B_FS, TestStatus::Depends, "Intel", "HM87", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c4c, B_FS, TestStatus::Untested, "Intel", "Q85", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c4e, B_FS, TestStatus::Untested, "Intel", "Q87", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c4f, B_FS, TestStatus::Depends, "Intel", "QM87", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c50, B_FS, TestStatus::Depends, "Intel", "B85", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c52, B_FS, TestStatus::Untested, "Intel", "C222", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c54, B_FS, TestStatus::Depends, "Intel", "C224", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c56, B_FS, TestStatus::Untested, "Intel", "C226", IchChipset::Series8LynxPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8c5c, B_FS, TestStatus::Depends, "Intel", "H81", IchChipset::Series8LynxPoint),
+    
+    // 9 Series
+    ChipsetEnable::new(INTEL_VID, 0x8cc1, B_FS, TestStatus::Untested, "Intel", "9 Series", IchChipset::Series9WildcatPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8cc2, B_FS, TestStatus::Untested, "Intel", "9 Series Engineering Sample", IchChipset::Series9WildcatPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8cc3, B_FS, TestStatus::Untested, "Intel", "9 Series", IchChipset::Series9WildcatPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8cc4, B_FS, TestStatus::Depends, "Intel", "Z97", IchChipset::Series9WildcatPoint),
+    ChipsetEnable::new(INTEL_VID, 0x8cc6, B_FS, TestStatus::Untested, "Intel", "H97", IchChipset::Series9WildcatPoint),
+    
+    // 8 Series LP (Lynx Point LP)
+    ChipsetEnable::new(INTEL_VID, 0x9c41, B_FS, TestStatus::Untested, "Intel", "Lynx Point LP Eng. Sample", IchChipset::Series8LynxPointLp),
+    ChipsetEnable::new(INTEL_VID, 0x9c43, B_FS, TestStatus::Untested, "Intel", "Lynx Point LP Premium", IchChipset::Series8LynxPointLp),
+    ChipsetEnable::new(INTEL_VID, 0x9c45, B_FS, TestStatus::Untested, "Intel", "Lynx Point LP Mainstream", IchChipset::Series8LynxPointLp),
+    ChipsetEnable::new(INTEL_VID, 0x9c47, B_FS, TestStatus::Untested, "Intel", "Lynx Point LP Value", IchChipset::Series8LynxPointLp),
+    
+    // 9 Series LP
+    ChipsetEnable::new(INTEL_VID, 0x9cc1, B_FS, TestStatus::Untested, "Intel", "Haswell U Sample", IchChipset::Series9WildcatPointLp),
+    ChipsetEnable::new(INTEL_VID, 0x9cc2, B_FS, TestStatus::Untested, "Intel", "Broadwell U Sample", IchChipset::Series9WildcatPointLp),
+    ChipsetEnable::new(INTEL_VID, 0x9cc3, B_FS, TestStatus::Depends, "Intel", "Broadwell U Premium", IchChipset::Series9WildcatPointLp),
+    ChipsetEnable::new(INTEL_VID, 0x9cc5, B_FS, TestStatus::Depends, "Intel", "Broadwell U Base", IchChipset::Series9WildcatPointLp),
+    ChipsetEnable::new(INTEL_VID, 0x9cc6, B_FS, TestStatus::Untested, "Intel", "Broadwell Y Sample", IchChipset::Series9WildcatPointLp),
+    ChipsetEnable::new(INTEL_VID, 0x9cc7, B_FS, TestStatus::Untested, "Intel", "Broadwell Y Premium", IchChipset::Series9WildcatPointLp),
+    ChipsetEnable::new(INTEL_VID, 0x9cc9, B_FS, TestStatus::Untested, "Intel", "Broadwell Y Base", IchChipset::Series9WildcatPointLp),
+    ChipsetEnable::new(INTEL_VID, 0x9ccb, B_FS, TestStatus::Untested, "Intel", "Broadwell H", IchChipset::Series9WildcatPoint),
+    
+    // 100 Series (Skylake/Kaby Lake - Sunrise Point)
+    ChipsetEnable::new(INTEL_VID, 0x9d41, B_S, TestStatus::Untested, "Intel", "Skylake / Kaby Lake Sample", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0x9d43, B_S, TestStatus::Untested, "Intel", "Skylake U Base", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0x9d46, B_S, TestStatus::Untested, "Intel", "Skylake Y Premium", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0x9d48, B_S, TestStatus::Depends, "Intel", "Skylake U Premium", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0x9d4b, B_S, TestStatus::Untested, "Intel", "Kaby Lake Y w/ iHDCP2.2 Prem.", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0x9d4e, B_S, TestStatus::Depends, "Intel", "Kaby Lake U w/ iHDCP2.2 Prem.", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0x9d50, B_S, TestStatus::Untested, "Intel", "Kaby Lake U w/ iHDCP2.2 Base", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0x9d51, B_S, TestStatus::Untested, "Intel", "Kaby Lake w/ iHDCP2.2 Sample", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0x9d53, B_S, TestStatus::Untested, "Intel", "Kaby Lake U Base", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0x9d56, B_S, TestStatus::Untested, "Intel", "Kaby Lake Y Premium", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0x9d58, B_S, TestStatus::Untested, "Intel", "Kaby Lake U Premium", IchChipset::Series100SunrisePoint),
+    
+    // 100 Series Desktop (Sunrise Point)
+    ChipsetEnable::new(INTEL_VID, 0xa141, B_S, TestStatus::Untested, "Intel", "Sunrise Point Desktop Sample", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa142, B_S, TestStatus::Untested, "Intel", "Sunrise Point Unknown Sample", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa143, B_S, TestStatus::Depends, "Intel", "H110", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa144, B_S, TestStatus::Untested, "Intel", "H170", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa145, B_S, TestStatus::Untested, "Intel", "Z170", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa146, B_S, TestStatus::Untested, "Intel", "Q170", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa147, B_S, TestStatus::Untested, "Intel", "Q150", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa148, B_S, TestStatus::Untested, "Intel", "B150", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa149, B_S, TestStatus::Depends, "Intel", "C236", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa14a, B_S, TestStatus::Untested, "Intel", "C232", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa14d, B_S, TestStatus::Untested, "Intel", "QM170", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa14e, B_S, TestStatus::Untested, "Intel", "HM170", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa150, B_S, TestStatus::Depends, "Intel", "CM236", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa152, B_S, TestStatus::Untested, "Intel", "HM175", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa153, B_S, TestStatus::Untested, "Intel", "QM175", IchChipset::Series100SunrisePoint),
+    ChipsetEnable::new(INTEL_VID, 0xa154, B_S, TestStatus::Untested, "Intel", "CM238", IchChipset::Series100SunrisePoint),
+    
+    // C620 Series (Lewisburg)
+    ChipsetEnable::new(INTEL_VID, 0xa1a4, B_S, TestStatus::Depends, "Intel", "C620 Series (QS/PRQ)", IchChipset::C620Lewisburg),
+    ChipsetEnable::new(INTEL_VID, 0xa1c0, B_S, TestStatus::Untested, "Intel", "C620 Series (QS/PRQ)", IchChipset::C620Lewisburg),
+    ChipsetEnable::new(INTEL_VID, 0xa1c1, B_S, TestStatus::Untested, "Intel", "C621 Series (QS/PRQ)", IchChipset::C620Lewisburg),
+    ChipsetEnable::new(INTEL_VID, 0xa1c2, B_S, TestStatus::Untested, "Intel", "C622 Series (QS/PRQ)", IchChipset::C620Lewisburg),
+    ChipsetEnable::new(INTEL_VID, 0xa1c3, B_S, TestStatus::Untested, "Intel", "C624 Series (QS/PRQ)", IchChipset::C620Lewisburg),
+    ChipsetEnable::new(INTEL_VID, 0xa1c4, B_S, TestStatus::Untested, "Intel", "C625 Series (QS/PRQ)", IchChipset::C620Lewisburg),
+    ChipsetEnable::new(INTEL_VID, 0xa1c5, B_S, TestStatus::Untested, "Intel", "C626 Series (QS/PRQ)", IchChipset::C620Lewisburg),
+    ChipsetEnable::new(INTEL_VID, 0xa1c6, B_S, TestStatus::Untested, "Intel", "C627 Series (QS/PRQ)", IchChipset::C620Lewisburg),
+    ChipsetEnable::new(INTEL_VID, 0xa1c7, B_S, TestStatus::Untested, "Intel", "C628 Series (QS/PRQ)", IchChipset::C620Lewisburg),
+    
+    // 300 Series (Cannon Point)
+    ChipsetEnable::new(INTEL_VID, 0xa303, B_S, TestStatus::Untested, "Intel", "H310", IchChipset::Series300CannonPoint),
+    ChipsetEnable::new(INTEL_VID, 0xa304, B_S, TestStatus::Untested, "Intel", "H370", IchChipset::Series300CannonPoint),
+    ChipsetEnable::new(INTEL_VID, 0xa305, B_S, TestStatus::Untested, "Intel", "Z390", IchChipset::Series300CannonPoint),
+    ChipsetEnable::new(INTEL_VID, 0xa306, B_S, TestStatus::Untested, "Intel", "Q370", IchChipset::Series300CannonPoint),
+    ChipsetEnable::new(INTEL_VID, 0xa308, B_S, TestStatus::Untested, "Intel", "B360", IchChipset::Series300CannonPoint),
+    ChipsetEnable::new(INTEL_VID, 0xa309, B_S, TestStatus::Untested, "Intel", "C246", IchChipset::Series300CannonPoint),
+    ChipsetEnable::new(INTEL_VID, 0xa30c, B_S, TestStatus::Untested, "Intel", "QM370", IchChipset::Series300CannonPoint),
+    ChipsetEnable::new(INTEL_VID, 0xa30d, B_S, TestStatus::Depends, "Intel", "HM370", IchChipset::Series300CannonPoint),
+    ChipsetEnable::new(INTEL_VID, 0xa30e, B_S, TestStatus::Untested, "Intel", "CM246", IchChipset::Series300CannonPoint),
+    ChipsetEnable::new(INTEL_VID, 0xa323, B_S, TestStatus::Untested, "Intel", "Cannon Point LP Sample", IchChipset::Series300CannonPoint),
+    ChipsetEnable::new(INTEL_VID, 0xa324, B_S, TestStatus::Depends, "Intel", "Cannon Point LP", IchChipset::Series300CannonPoint),
+    
+    // 400 Series (Comet Lake)
+    ChipsetEnable::new(INTEL_VID, 0xa3c8, B_S, TestStatus::Untested, "Intel", "B460", IchChipset::Series300CannonPoint),
+    ChipsetEnable::new(INTEL_VID, 0xa3da, B_S, TestStatus::Depends, "Intel", "H410", IchChipset::Series300CannonPoint),
+    
+    // 500 Series (Tiger Point)
+    ChipsetEnable::new(INTEL_VID, 0x4380, B_S, TestStatus::Depends, "Intel", "Z590/H570/W580/Q570", IchChipset::Series500TigerPoint),
+    ChipsetEnable::new(INTEL_VID, 0x4381, B_S, TestStatus::Depends, "Intel", "H510/B560", IchChipset::Series500TigerPoint),
+    ChipsetEnable::new(INTEL_VID, 0x4387, B_S, TestStatus::Depends, "Intel", "HM570", IchChipset::Series500TigerPoint),
+    ChipsetEnable::new(INTEL_VID, 0x4388, B_S, TestStatus::Depends, "Intel", "QM580/WM590", IchChipset::Series500TigerPoint),
+    ChipsetEnable::new(INTEL_VID, 0x438f, B_S, TestStatus::Untested, "Intel", "W580", IchChipset::Series500TigerPoint),
+    
+    // Apollo Lake
+    ChipsetEnable::new(INTEL_VID, 0x5ae8, B_S, TestStatus::Ok, "Intel", "Apollo Lake", IchChipset::ApolloLake),
+    
+    // Gemini Lake
+    ChipsetEnable::new(INTEL_VID, 0x31e8, B_S, TestStatus::Depends, "Intel", "Gemini Lake", IchChipset::GeminiLake),
+    
+    // Elkhart Lake
+    ChipsetEnable::new(INTEL_VID, 0x4b23, B_S, TestStatus::Depends, "Intel", "Elkhart Lake", IchChipset::ElkhartLake),
+    
+    // Meteor Lake
+    ChipsetEnable::new(INTEL_VID, 0x7e23, B_S, TestStatus::Untested, "Intel", "Meteor Lake", IchChipset::MeteorLake),
+    
+    // Lunar Lake
+    ChipsetEnable::new(INTEL_VID, 0xa823, B_S, TestStatus::Untested, "Intel", "Lunar Lake", IchChipset::LunarLake),
+    
+    // Arrow Lake
+    ChipsetEnable::new(INTEL_VID, 0xae23, B_S, TestStatus::Untested, "Intel", "Arrow Lake", IchChipset::ArrowLake),
+];
+
+/// Find a chipset enable entry by PCI vendor/device ID
+pub fn find_chipset(vendor_id: u16, device_id: u16, revision_id: Option<u8>) -> Option<&'static ChipsetEnable> {
+    for enable in INTEL_CHIPSETS {
+        if enable.vendor_id != vendor_id || enable.device_id != device_id {
+            continue;
+        }
+        
+        // Check revision if required
+        if let Some(required_rev) = enable.revision {
+            if let Some(actual_rev) = revision_id {
+                if required_rev != actual_rev {
+                    continue;
+                }
+            } else {
+                // Revision required but not provided
+                continue;
+            }
+        }
+        
+        return Some(enable);
+    }
+    None
+}

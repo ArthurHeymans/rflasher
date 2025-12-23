@@ -3,7 +3,7 @@
 //! This module provides a centralized registry for all programmers, with support
 //! for feature-gated inclusion and dynamic help text generation.
 
-use rflasher_core::programmer::SpiMaster;
+use rflasher_core::programmer::{OpaqueMaster, SpiMaster};
 
 /// Information about a programmer
 pub struct ProgrammerInfo {
@@ -66,8 +66,8 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
     programmers.push(ProgrammerInfo {
         name: "internal",
         aliases: &[],
-        description: "Intel chipset internal flash (ICH/PCH)",
-        implemented: false,
+        description: "Intel chipset internal flash (ICH/PCH) - requires root",
+        implemented: true,
     });
 
     programmers
@@ -141,6 +141,45 @@ pub fn find_programmer(name: &str) -> Option<&'static str> {
     None
 }
 
+/// Unified programmer wrapper that abstracts over SpiMaster and OpaqueMaster
+///
+/// Some programmers (like external USB adapters) provide raw SPI access,
+/// while others (like Intel internal) only provide opaque read/write/erase.
+pub enum Programmer<'a> {
+    /// SPI-based programmer with raw command access
+    Spi(&'a mut dyn SpiMaster),
+    /// Opaque programmer with address-based access only
+    Opaque(&'a mut dyn OpaqueMaster),
+}
+
+impl Programmer<'_> {
+    /// Returns true if this is an opaque (non-SPI) programmer
+    pub fn is_opaque(&self) -> bool {
+        matches!(self, Programmer::Opaque(_))
+    }
+
+    /// Returns true if this is a SPI programmer
+    pub fn is_spi(&self) -> bool {
+        matches!(self, Programmer::Spi(_))
+    }
+
+    /// Get a reference to the SPI master, if available
+    pub fn as_spi(&mut self) -> Option<&mut dyn SpiMaster> {
+        match self {
+            Programmer::Spi(m) => Some(*m),
+            Programmer::Opaque(_) => None,
+        }
+    }
+
+    /// Get a reference to the opaque master, if available
+    pub fn as_opaque(&mut self) -> Option<&mut dyn OpaqueMaster> {
+        match self {
+            Programmer::Spi(_) => None,
+            Programmer::Opaque(m) => Some(*m),
+        }
+    }
+}
+
 /// Execute a function with the specified programmer
 ///
 /// The programmer string can be just the name (e.g., "ch341a") or include
@@ -148,7 +187,7 @@ pub fn find_programmer(name: &str) -> Option<&'static str> {
 #[allow(unused_variables)]
 pub fn with_programmer<F>(programmer: &str, f: F) -> Result<(), Box<dyn std::error::Error>>
 where
-    F: FnOnce(&mut dyn SpiMaster) -> Result<(), Box<dyn std::error::Error>>,
+    F: FnOnce(Programmer<'_>) -> Result<(), Box<dyn std::error::Error>>,
 {
     // Parse programmer name and options
     let (name, _options) = parse_programmer_string(programmer);
@@ -166,7 +205,7 @@ where
         #[cfg(feature = "dummy")]
         "dummy" => {
             let mut master = rflasher_dummy::DummyFlash::new_default();
-            f(&mut master)
+            f(Programmer::Spi(&mut master))
         }
 
         #[cfg(feature = "ch341a")]
@@ -178,7 +217,7 @@ where
                     e
                 )
             })?;
-            f(&mut master)
+            f(Programmer::Spi(&mut master))
         }
 
         #[cfg(feature = "serprog")]
@@ -238,7 +277,7 @@ where
                             .map_err(|e| format!("Failed to set chip select: {}", e))?;
                     }
 
-                    f(&mut serprog)
+                    f(Programmer::Spi(&mut serprog))
                 }
                 SerprogConnection::Tcp { host, port } => {
                     let transport = rflasher_serprog::TcpTransport::connect(&host, port)
@@ -258,7 +297,7 @@ where
                             .map_err(|e| format!("Failed to set chip select: {}", e))?;
                     }
 
-                    f(&mut serprog)
+                    f(Programmer::Spi(&mut serprog))
                 }
             }
         }
@@ -286,7 +325,7 @@ where
                 )
             })?;
 
-            f(&mut master)
+            f(Programmer::Spi(&mut master))
         }
 
         #[cfg(feature = "linux-spi")]
@@ -311,11 +350,25 @@ where
                 )
             })?;
 
-            f(&mut master)
+            f(Programmer::Spi(&mut master))
         }
 
         #[cfg(feature = "internal")]
-        "internal" => Err("internal programmer is not yet implemented".into()),
+        "internal" => {
+            use rflasher_internal::InternalProgrammer;
+
+            log::info!("Opening Intel internal programmer...");
+
+            let mut programmer = InternalProgrammer::new().map_err(|e| {
+                format!(
+                    "Failed to initialize internal programmer: {}\n\
+                     Make sure you have root privileges and an Intel chipset.",
+                    e
+                )
+            })?;
+
+            f(Programmer::Opaque(&mut programmer))
+        }
 
         _ => Err(unknown_programmer_error(name)),
     }

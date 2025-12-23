@@ -7,8 +7,12 @@ description = "Intel chipset internal flash programmer support for rflasher"
 
 [features]
 default = ["std"]
-std = ["rflasher-core/std"]
+std = ["rflasher-core/std", "dep:thiserror"]
 
 [dependencies]
 rflasher-core.workspace = true
 log.workspace = true
+thiserror = { workspace = true, optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+libc = "0.2"

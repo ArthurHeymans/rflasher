@@ -8,6 +8,7 @@ mod programmers;
 
 use clap::Parser;
 use cli::{Cli, Commands, LayoutArgs, LayoutCommands};
+use programmers::Programmer;
 use rflasher_core::chip::ChipDatabase;
 use rflasher_core::flash::{self, FlashContext};
 use rflasher_core::layout::{read_fmap_from_flash, read_ifd_from_flash, Layout};
@@ -145,7 +146,10 @@ fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::
 }
 
 fn cmd_probe(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |master| commands::run_probe(master, db))
+    programmers::with_programmer(programmer, |prog| match prog {
+        Programmer::Spi(master) => commands::run_probe(master, db),
+        Programmer::Opaque(master) => commands::run_probe_opaque(master),
+    })
 }
 
 fn cmd_read(
@@ -154,30 +158,36 @@ fn cmd_read(
     layout_args: LayoutArgs,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Check if we need layout-based read
-    if layout_args.has_layout_source() || layout_args.has_region_filter() {
-        programmers::with_programmer(programmer, |master| {
-            // Probe the chip first
-            let ctx = flash::probe(master, db)?;
+    programmers::with_programmer(programmer, |prog| match prog {
+        Programmer::Spi(master) => {
+            // Check if we need layout-based read
+            if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                // Probe the chip first
+                let ctx = flash::probe(master, db)?;
 
-            println!(
-                "Found: {} {} ({} bytes)",
-                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
-            );
+                println!(
+                    "Found: {} {} ({} bytes)",
+                    ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
+                );
 
-            // Load layout from the appropriate source
-            let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
+                // Load layout from the appropriate source
+                let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
 
-            // Apply region filters
-            apply_region_filters(&mut layout, &layout_args)?;
+                // Apply region filters
+                apply_region_filters(&mut layout, &layout_args)?;
 
-            // Now run the read with layout
-            commands::run_read_with_layout(master, &ctx, output, &layout)
-        })
-    } else {
-        // No layout - use standard read
-        programmers::with_programmer(programmer, |master| commands::run_read(master, db, output))
-    }
+                // Now run the read with layout
+                commands::run_read_with_layout(master, &ctx, output, &layout)
+            } else {
+                // No layout - use standard read
+                commands::run_read(master, db, output)
+            }
+        }
+        Programmer::Opaque(master) => {
+            // Opaque programmer (e.g., Intel internal) - use IFD-based read
+            commands::run_read_opaque(master, output, &layout_args)
+        }
+    })
 }
 
 fn cmd_write(
@@ -188,32 +198,36 @@ fn cmd_write(
     layout_args: LayoutArgs,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Check if we need layout-based write
-    if layout_args.has_layout_source() || layout_args.has_region_filter() {
-        programmers::with_programmer(programmer, |master| {
-            // Probe the chip first
-            let ctx = flash::probe(master, db)?;
+    programmers::with_programmer(programmer, |prog| match prog {
+        Programmer::Spi(master) => {
+            // Check if we need layout-based write
+            if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                // Probe the chip first
+                let ctx = flash::probe(master, db)?;
 
-            println!(
-                "Found: {} {} ({} bytes)",
-                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
-            );
+                println!(
+                    "Found: {} {} ({} bytes)",
+                    ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
+                );
 
-            // Load layout from the appropriate source
-            let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
+                // Load layout from the appropriate source
+                let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
 
-            // Apply region filters
-            apply_region_filters(&mut layout, &layout_args)?;
+                // Apply region filters
+                apply_region_filters(&mut layout, &layout_args)?;
 
-            // Now run the write with layout
-            commands::run_write_with_layout(master, db, input, &mut layout, verify)
-        })
-    } else {
-        // No layout - use standard write
-        programmers::with_programmer(programmer, |master| {
-            commands::run_write(master, db, input, verify, no_erase)
-        })
-    }
+                // Now run the write with layout
+                commands::run_write_with_layout(master, db, input, &mut layout, verify)
+            } else {
+                // No layout - use standard write
+                commands::run_write(master, db, input, verify, no_erase)
+            }
+        }
+        Programmer::Opaque(master) => {
+            // Opaque programmer (e.g., Intel internal)
+            commands::run_write_opaque(master, input, verify, &layout_args)
+        }
+    })
 }
 
 fn cmd_erase(
@@ -223,40 +237,46 @@ fn cmd_erase(
     layout_args: LayoutArgs,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Check if we need layout-based erase
-    if layout_args.has_layout_source() || layout_args.has_region_filter() {
-        // Layout-based erase - can't combine with start/length
-        if start.is_some() || length.is_some() {
-            return Err(
-                "Cannot use --start/--length with layout options. Use --include to select regions."
-                    .into(),
-            );
-        }
-
-        programmers::with_programmer(programmer, |master| {
-            // Probe the chip first
-            let ctx = flash::probe(master, db)?;
-
-            println!(
-                "Found: {} {} ({} bytes)",
-                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
-            );
-
-            // Load layout from the appropriate source
-            let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
-
-            // Apply region filters
-            apply_region_filters(&mut layout, &layout_args)?;
-
-            // Now run the erase with layout
-            commands::run_erase_with_layout(master, db, &layout)
-        })
-    } else {
-        // No layout - use standard erase
-        programmers::with_programmer(programmer, |master| {
-            commands::run_erase(master, db, start, length)
-        })
+    // Layout-based erase - can't combine with start/length
+    if (layout_args.has_layout_source() || layout_args.has_region_filter())
+        && (start.is_some() || length.is_some())
+    {
+        return Err(
+            "Cannot use --start/--length with layout options. Use --include to select regions."
+                .into(),
+        );
     }
+
+    programmers::with_programmer(programmer, |prog| match prog {
+        Programmer::Spi(master) => {
+            // Check if we need layout-based erase
+            if layout_args.has_layout_source() || layout_args.has_region_filter() {
+                // Probe the chip first
+                let ctx = flash::probe(master, db)?;
+
+                println!(
+                    "Found: {} {} ({} bytes)",
+                    ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
+                );
+
+                // Load layout from the appropriate source
+                let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
+
+                // Apply region filters
+                apply_region_filters(&mut layout, &layout_args)?;
+
+                // Now run the erase with layout
+                commands::run_erase_with_layout(master, db, &layout)
+            } else {
+                // No layout - use standard erase
+                commands::run_erase(master, db, start, length)
+            }
+        }
+        Programmer::Opaque(master) => {
+            // Opaque programmer (e.g., Intel internal)
+            commands::run_erase_opaque(master, start, length, &layout_args)
+        }
+    })
 }
 
 fn cmd_verify(
@@ -264,14 +284,31 @@ fn cmd_verify(
     input: &Path,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |master| commands::run_verify(master, db, input))
+    programmers::with_programmer(programmer, |prog| match prog {
+        Programmer::Spi(master) => commands::run_verify(master, db, input),
+        Programmer::Opaque(master) => commands::run_verify_opaque(master, input),
+    })
 }
 
 fn cmd_info(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |master| {
-        let ctx = flash::probe(master, db)?;
-        print_chip_info(&ctx);
-        Ok(())
+    programmers::with_programmer(programmer, |prog| match prog {
+        Programmer::Spi(master) => {
+            let ctx = flash::probe(master, db)?;
+            print_chip_info(&ctx);
+            Ok(())
+        }
+        Programmer::Opaque(master) => {
+            // For opaque programmers, we can't probe JEDEC ID
+            // Instead, show what information we have
+            println!("Flash Information (Opaque Programmer)");
+            println!("=====================================");
+            println!();
+            println!("Size: {} bytes", master.size());
+            println!();
+            println!("Note: Opaque programmers don't support JEDEC ID probing.");
+            println!("Use --ifd to read flash layout from Intel Flash Descriptor.");
+            Ok(())
+        }
     })
 }
 

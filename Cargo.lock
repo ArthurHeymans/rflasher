@@ -679,8 +679,10 @@ dependencies = [
 name = "rflasher-internal"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "log",
  "rflasher-core",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
