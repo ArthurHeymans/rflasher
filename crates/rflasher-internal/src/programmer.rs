@@ -9,7 +9,8 @@ use crate::ichspi::{IchSpiController, SpiMode};
 use crate::DetectedChipset;
 
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
-use rflasher_core::programmer::OpaqueMaster;
+use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
+use rflasher_core::spi::{AddressWidth, SpiCommand};
 
 /// Options for the internal programmer
 #[derive(Debug, Clone, Default)]
@@ -226,6 +227,121 @@ impl OpaqueMaster for InternalProgrammer {
     }
 }
 
+/// SpiMaster implementation for raw SPI command execution
+///
+/// This is only available in software sequencing mode. Hardware sequencing
+/// mode does not allow arbitrary SPI commands - use OpaqueMaster instead.
+///
+/// # Limitations
+///
+/// - Only opcodes in the OPMENU table can be executed
+/// - Maximum 64 bytes per transfer
+/// - Only single I/O mode (no dual/quad)
+/// - No 4-byte addressing support (24-bit address max)
+/// - Dummy cycles are not supported by the Intel controller
+#[cfg(all(feature = "std", target_os = "linux"))]
+impl SpiMaster for InternalProgrammer {
+    fn features(&self) -> SpiFeatures {
+        // Intel ICH/PCH SPI controller only supports single I/O mode
+        // No 4-byte addressing, dual, or quad support
+        SpiFeatures::empty()
+    }
+
+    fn max_read_len(&self) -> usize {
+        // Maximum data bytes per software sequencing transaction
+        IchSpiController::SWSEQ_MAX_DATA
+    }
+
+    fn max_write_len(&self) -> usize {
+        // Maximum data bytes per software sequencing transaction
+        IchSpiController::SWSEQ_MAX_DATA
+    }
+
+    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        // SpiMaster requires software sequencing mode
+        if self.is_hwseq() {
+            log::warn!(
+                "SpiMaster::execute() called in hwseq mode - this mode doesn't support raw SPI commands"
+            );
+            return Err(CoreError::OpcodeNotSupported);
+        }
+
+        // Intel controller doesn't support dummy cycles in swseq
+        if cmd.dummy_cycles > 0 {
+            log::debug!(
+                "Dummy cycles ({}) not supported by Intel swseq",
+                cmd.dummy_cycles
+            );
+            return Err(CoreError::OpcodeNotSupported);
+        }
+
+        // Only single I/O mode supported
+        if cmd.io_mode != rflasher_core::spi::IoMode::Single {
+            log::debug!("Only single I/O mode supported by Intel swseq");
+            return Err(CoreError::OpcodeNotSupported);
+        }
+
+        // Build the write array for swseq_send_command
+        // Format: opcode + [address bytes] + [write data]
+        let mut writearr = [0u8; 68]; // 1 opcode + 3 addr + 64 data max
+        let mut write_len = 0;
+
+        // Opcode is always first
+        writearr[0] = cmd.opcode;
+        write_len += 1;
+
+        // Add address if present
+        if let Some(addr) = cmd.address {
+            match cmd.address_width {
+                AddressWidth::ThreeByte => {
+                    writearr[1] = ((addr >> 16) & 0xff) as u8;
+                    writearr[2] = ((addr >> 8) & 0xff) as u8;
+                    writearr[3] = (addr & 0xff) as u8;
+                    write_len += 3;
+                }
+                AddressWidth::FourByte => {
+                    // Intel swseq doesn't support 4-byte addresses
+                    log::debug!("4-byte addressing not supported by Intel swseq");
+                    return Err(CoreError::OpcodeNotSupported);
+                }
+                AddressWidth::None => {
+                    // Address provided but width is None - shouldn't happen but handle it
+                }
+            }
+        }
+
+        // Add write data if present
+        if !cmd.write_data.is_empty() {
+            let data_len = cmd.write_data.len();
+            if write_len + data_len > 68 {
+                log::debug!("Write data too long for Intel swseq");
+                return Err(CoreError::IoError);
+            }
+            writearr[write_len..write_len + data_len].copy_from_slice(cmd.write_data);
+            write_len += data_len;
+        }
+
+        // Execute the command
+        self.controller
+            .swseq_send_command(&writearr[..write_len], cmd.read_buf)
+            .map_err(Self::map_error)
+    }
+
+    fn probe_opcode(&self, opcode: u8) -> bool {
+        // In hwseq mode, no raw opcodes are available
+        if self.is_hwseq() {
+            return false;
+        }
+
+        // Check if the opcode is in the OPMENU table
+        self.controller.has_opcode(opcode)
+    }
+
+    fn delay_us(&mut self, us: u32) {
+        std::thread::sleep(std::time::Duration::from_micros(us as u64));
+    }
+}
+
 /// Programmer information
 pub fn programmer_info() -> rflasher_core::programmer::ProgrammerInfo {
     rflasher_core::programmer::ProgrammerInfo {
@@ -273,6 +389,31 @@ impl OpaqueMaster for InternalProgrammer {
     fn erase(&mut self, _addr: u32, _len: u32) -> CoreResult<()> {
         Err(CoreError::ProgrammerNotReady)
     }
+}
+
+#[cfg(not(all(feature = "std", target_os = "linux")))]
+impl SpiMaster for InternalProgrammer {
+    fn features(&self) -> SpiFeatures {
+        SpiFeatures::empty()
+    }
+
+    fn max_read_len(&self) -> usize {
+        0
+    }
+
+    fn max_write_len(&self) -> usize {
+        0
+    }
+
+    fn execute(&mut self, _cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        Err(CoreError::ProgrammerNotReady)
+    }
+
+    fn probe_opcode(&self, _opcode: u8) -> bool {
+        false
+    }
+
+    fn delay_us(&mut self, _us: u32) {}
 }
 
 #[cfg(test)]

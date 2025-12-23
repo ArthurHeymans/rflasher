@@ -359,7 +359,7 @@ where
 
         #[cfg(feature = "internal")]
         "internal" => {
-            use rflasher_internal::{InternalOptions, InternalProgrammer};
+            use rflasher_internal::{InternalOptions, InternalProgrammer, SpiMode};
 
             // Parse options
             let (_, options) = parse_programmer_string(programmer);
@@ -371,7 +371,7 @@ where
                 .map_err(|e| format!("Invalid internal programmer options: {}", e))?;
 
             // Log the mode being used
-            if internal_opts.mode != rflasher_internal::SpiMode::Auto {
+            if internal_opts.mode != SpiMode::Auto {
                 log::info!("Using ich_spi_mode={}", internal_opts.mode);
             }
 
@@ -385,7 +385,16 @@ where
                 )
             })?;
 
-            f(Programmer::Opaque(&mut programmer))
+            // Use SpiMaster for swseq mode, OpaqueMaster for hwseq
+            // SpiMaster allows raw SPI commands (useful for JEDEC ID probing),
+            // while OpaqueMaster only provides read/write/erase operations.
+            if programmer.mode() == SpiMode::SoftwareSequencing {
+                log::info!("Using SpiMaster interface (swseq mode allows raw SPI commands)");
+                f(Programmer::Spi(&mut programmer))
+            } else {
+                log::info!("Using OpaqueMaster interface (hwseq mode - no raw SPI access)");
+                f(Programmer::Opaque(&mut programmer))
+            }
         }
 
         _ => Err(unknown_programmer_error(name)),

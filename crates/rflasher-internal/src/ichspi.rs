@@ -837,6 +837,21 @@ impl IchSpiController {
             .position(|op| op.opcode == opcode)
     }
 
+    /// Check if an opcode is available in the OPMENU table
+    ///
+    /// This is useful for the SpiMaster trait's `probe_opcode` method.
+    pub fn has_opcode(&self, opcode: u8) -> bool {
+        self.find_opcode_index(opcode).is_some()
+    }
+
+    /// Get the opcode type for an opcode in the table
+    ///
+    /// Returns the SPI opcode type (read/write, with/without address) if found.
+    pub fn get_opcode_type(&self, opcode: u8) -> Option<u8> {
+        let idx = self.find_opcode_index(opcode)?;
+        self.opcodes.as_ref().map(|ops| ops.opcode[idx].spi_type)
+    }
+
     /// Print HSFS register bits
     fn print_hsfs(&self, hsfs: u16) {
         log::debug!(
