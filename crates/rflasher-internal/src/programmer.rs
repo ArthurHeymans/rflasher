@@ -266,6 +266,19 @@ impl SpiMaster for InternalProgrammer {
             return Err(CoreError::OpcodeNotSupported);
         }
 
+        // WREN (0x06) and EWSR (0x50) are preops on Intel, not regular opcodes.
+        // They're handled automatically via atomic mode when a write/erase command
+        // is executed. The higher-level protocol sends these separately, so we
+        // silently succeed here - the actual WREN will be sent atomically with
+        // the next write/erase command.
+        if cmd.opcode == 0x06 || cmd.opcode == 0x50 {
+            log::trace!(
+                "Ignoring preop {:#04x} - will be sent atomically with next command",
+                cmd.opcode
+            );
+            return Ok(());
+        }
+
         // Intel controller doesn't support dummy cycles in swseq
         if cmd.dummy_cycles > 0 {
             log::debug!(
