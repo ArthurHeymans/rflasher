@@ -188,6 +188,21 @@ pub fn run_write<M: SpiMaster + ?Sized>(
 }
 
 /// Run the write command with layout support
+///
+/// # Input File Size Rules
+///
+/// When writing with a layout (regions), the input file is interpreted as follows:
+///
+/// - **Multiple regions selected**: File must be exactly chip size (full flash image).
+///   Region data is extracted from `file[region.start..=region.end]` for each region.
+///
+/// - **Single region selected**:
+///   - File size == Chip size: Full flash image, region data extracted from file offset
+///   - File size <= Region size: Region file, written starting at region.start
+///   - File size > Region size but < Chip size: **Error** (ambiguous interpretation)
+///
+/// When the file is smaller than the region, only the file's worth of data is written
+/// starting at the region's base address. The rest of the region is left unchanged.
 pub fn run_write_with_layout<M: SpiMaster + ?Sized>(
     master: &mut M,
     db: &ChipDatabase,
@@ -205,21 +220,11 @@ pub fn run_write_with_layout<M: SpiMaster + ?Sized>(
 
     // Read input file
     let mut file = File::open(input)?;
-    let mut data = Vec::new();
-    file.read_to_end(&mut data)?;
+    let mut file_data = Vec::new();
+    file.read_to_end(&mut file_data)?;
 
-    println!("Read {} bytes from {:?}", data.len(), input);
-
-    // Validate size - input file must be at least as large as the chip
-    if data.len() < ctx.total_size() {
-        // Pad to chip size if needed (with 0xFF)
-        println!(
-            "Padding file from {} to {} bytes with 0xFF",
-            data.len(),
-            ctx.total_size()
-        );
-        data.resize(ctx.total_size(), 0xFF);
-    }
+    let file_size = file_data.len();
+    println!("Read {} bytes from {:?}", file_size, input);
 
     // Display included regions
     let included: Vec<_> = layout.included_regions().collect();
@@ -245,20 +250,110 @@ pub fn run_write_with_layout<M: SpiMaster + ?Sized>(
         return Err(format!("Cannot write to readonly region(s): {}", names.join(", ")).into());
     }
 
+    let chip_size = ctx.total_size();
+
+    // Validate file size and determine interpretation
+    //
+    // Rules:
+    // 1. Multiple regions → require full chip image
+    // 2. Single region:
+    //    - file == chip size → full image
+    //    - file <= region size → region file
+    //    - file > region size && file < chip size → error (ambiguous)
+    // 3. file > chip size → error
+
+    if file_size > chip_size {
+        return Err(format!(
+            "File size ({} bytes) exceeds chip size ({} bytes)",
+            file_size, chip_size
+        )
+        .into());
+    }
+
+    if included.len() > 1 {
+        // Multiple regions: require full chip image
+        if file_size != chip_size {
+            return Err(format!(
+                "Multiple regions selected: file must be exactly chip size ({} bytes), got {} bytes",
+                chip_size, file_size
+            )
+            .into());
+        }
+    } else {
+        // Single region
+        let region_size = included[0].size() as usize;
+        if file_size > region_size && file_size < chip_size {
+            return Err(format!(
+                "Ambiguous file size: {} bytes is larger than region '{}' ({} bytes) \
+                but smaller than chip size ({} bytes). \
+                Use either a region-sized file (<= {} bytes) or a full chip image ({} bytes).",
+                file_size, included[0].name, region_size, chip_size, region_size, chip_size
+            )
+            .into());
+        }
+    }
+
+    // Build the chip image based on file interpretation
+    let (image, effective_write_size) = if file_size == chip_size {
+        // Full chip image - use as-is
+        (file_data, included.iter().map(|r| r.size() as usize).sum())
+    } else {
+        // Single region, file <= region size: place file data at region start
+        let region = &included[0];
+        let mut chip_image = vec![0xFFu8; chip_size];
+
+        let dest_start = region.start as usize;
+        let dest_end = dest_start + file_size;
+        chip_image[dest_start..dest_end].copy_from_slice(&file_data);
+
+        if file_size < region.size() as usize {
+            println!(
+                "Note: File ({} bytes) is smaller than region ({} bytes), \
+                writing {} bytes starting at 0x{:08X}",
+                file_size,
+                region.size(),
+                file_size,
+                region.start
+            );
+        }
+
+        (chip_image, file_size)
+    };
+
+    // For single region with file smaller than region, adjust the layout
+    // to only operate on the portion covered by the file
+    let effective_layout = if included.len() == 1 && file_size < included[0].size() as usize {
+        let region = &included[0];
+        let mut modified_layout = layout.clone();
+
+        // Calculate the actual end address based on file size
+        let actual_end = region.start + file_size as u32 - 1;
+
+        // Update the region in the modified layout to only cover the file size
+        modified_layout.update_region_end(&region.name, actual_end)?;
+        modified_layout
+    } else {
+        layout.clone()
+    };
+
     // Smart write using layout
     let mut progress = IndicatifProgress::new();
-    let stats = flash::smart_write_by_layout(master, &ctx, layout, &data, &mut progress)?;
+    let stats =
+        flash::smart_write_by_layout(master, &ctx, &effective_layout, &image, &mut progress)?;
 
     // Verify if requested (but skip if no changes were made)
     if do_verify {
         if stats.flash_modified {
-            verify_regions_with_progress(master, &ctx, layout, &data)?;
+            verify_regions_with_progress(master, &ctx, &effective_layout, &image)?;
         } else {
             println!("Skipping verification - no changes were made");
         }
     }
 
-    println!("Write complete!");
+    println!(
+        "Write complete! ({} bytes written to flash)",
+        effective_write_size
+    );
 
     Ok(())
 }

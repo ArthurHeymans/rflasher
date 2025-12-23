@@ -245,6 +245,20 @@ impl Layout {
             .filter(|r| r.included && r.readonly)
             .collect()
     }
+
+    /// Update a region's end address
+    pub fn update_region_end(&mut self, name: &str, new_end: u32) -> Result<(), LayoutError> {
+        match self.find_region_mut(name) {
+            Some(region) => {
+                if new_end < region.start {
+                    return Err(LayoutError::InvalidRegion);
+                }
+                region.end = new_end;
+                Ok(())
+            }
+            None => Err(LayoutError::RegionNotFound),
+        }
+    }
 }
 
 #[cfg(feature = "alloc")]

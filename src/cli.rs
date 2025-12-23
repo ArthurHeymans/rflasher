@@ -43,20 +43,40 @@ pub struct Cli {
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct LayoutArgs {
     /// Layout file (TOML format)
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["ifd", "fmap"])]
     pub layout: Option<PathBuf>,
 
-    /// Include only these regions (comma-separated, requires --layout)
+    /// Read layout from Intel Flash Descriptor (IFD) in flash
+    #[arg(long, conflicts_with_all = ["layout", "fmap"])]
+    pub ifd: bool,
+
+    /// Read layout from FMAP structure in flash
+    #[arg(long, conflicts_with_all = ["layout", "ifd"])]
+    pub fmap: bool,
+
+    /// Include only these regions (comma-separated, requires layout)
     #[arg(long, value_delimiter = ',')]
     pub include: Vec<String>,
 
-    /// Exclude these regions (comma-separated, requires --layout)
+    /// Exclude these regions (comma-separated, requires layout)
     #[arg(long, value_delimiter = ',')]
     pub exclude: Vec<String>,
 
     /// Operate on a single region (shorthand for --include with one region)
     #[arg(long)]
     pub region: Option<String>,
+}
+
+impl LayoutArgs {
+    /// Check if any layout source is specified
+    pub fn has_layout_source(&self) -> bool {
+        self.layout.is_some() || self.ifd || self.fmap
+    }
+
+    /// Check if region filtering is requested
+    pub fn has_region_filter(&self) -> bool {
+        !self.include.is_empty() || !self.exclude.is_empty() || self.region.is_some()
+    }
 }
 
 #[derive(Subcommand)]
@@ -87,12 +107,27 @@ pub enum Commands {
     },
 
     /// Write file to flash
+    ///
+    /// When writing with a layout (--ifd, --fmap, or --layout), the input file
+    /// is interpreted based on its size:
+    ///
+    /// - Multiple regions: File must be full chip size. Data is extracted from
+    ///   the file at each region's offset.
+    ///
+    /// - Single region with file == chip size: Full chip image, region data
+    ///   extracted from file at region offset.
+    ///
+    /// - Single region with file <= region size: Region file, written starting
+    ///   at the region's base address. If smaller than the region, only that
+    ///   portion is written.
+    ///
+    /// - Single region with region size < file < chip size: Error (ambiguous).
     Write {
         /// Programmer to use
         #[arg(short, long, help = programmer_help())]
         programmer: String,
 
-        /// Input file path
+        /// Input file path (see command help for size requirements with layouts)
         #[arg(short, long)]
         input: PathBuf,
 

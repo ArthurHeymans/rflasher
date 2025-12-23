@@ -172,11 +172,14 @@ pub struct EraseBlockPlan {
 ///
 /// # Arguments
 /// * `erase_blocks` - Available erase block definitions for the chip
-/// * `have` - Current flash contents
-/// * `want` - Desired flash contents
-/// * `region_start` - Start address of the region being written
-/// * `region_end` - End address of the region being written (inclusive)
+/// * `have` - Current flash contents (can be full chip or region-sized buffer)
+/// * `want` - Desired flash contents (same size as `have`)
+/// * `region_start` - Start address of the region being written (absolute chip address)
+/// * `region_end` - End address of the region being written (inclusive, absolute chip address)
 /// * `granularity` - Write granularity of the chip
+///
+/// Note: If `have` and `want` are region-sized buffers (not full chip), their
+/// index 0 corresponds to `region_start` on the chip.
 #[cfg(feature = "alloc")]
 pub fn plan_smart_erase(
     erase_blocks: &[EraseBlock],
@@ -197,6 +200,16 @@ pub fn plan_smart_erase(
         .map(|eb| eb.size)
         .min()
         .ok_or(Error::InvalidAlignment)?;
+
+    // Determine if buffers are region-sized or full-chip sized
+    // If buffers are smaller than region_end, they're region-sized (offset by region_start)
+    let buffer_offset = if (have.len() as u32) < region_end {
+        // Buffers are region-sized, index 0 = region_start
+        region_start
+    } else {
+        // Buffers are full-chip sized, index 0 = address 0
+        0
+    };
 
     // Start from the first erase block boundary at or before region_start
     let first_block_start = (region_start / min_erase_size) * min_erase_size;
@@ -229,28 +242,19 @@ pub fn plan_smart_erase(
         let overlap_start = erase_start.max(region_start);
         let overlap_end = erase_end.min(region_end);
 
-        // Check if we need to erase this block
-        // We look at the overlap between the erase block and the region
-        // Note: have and want are full chip buffers, so we use absolute addresses
-        let have_slice_start = overlap_start as usize;
-        let have_slice_end = (overlap_end + 1) as usize;
+        // Convert absolute addresses to buffer indices
+        let buf_start = (overlap_start - buffer_offset) as usize;
+        let buf_end = (overlap_end - buffer_offset + 1) as usize;
 
-        // Also need to consider data outside the region but inside the erase block
-        // For now, check just the region overlap - unaligned blocks need special handling
-        let needs_erase = if have_slice_end <= have.len() && have_slice_start < have_slice_end {
-            let have_slice = &have[have_slice_start..have_slice_end];
-            let want_slice = &want[have_slice_start..have_slice_end];
+        // Check if we need to erase this block
+        let needs_erase = if buf_end <= have.len() && buf_start < buf_end {
+            let have_slice = &have[buf_start..buf_end];
+            let want_slice = &want[buf_start..buf_end];
 
             // Check if we need erase for the region portion
             if !need_write(have_slice, want_slice) {
-                // No changes in this portion, check if we need to consider unaligned parts
-                if region_unaligned {
-                    // For unaligned blocks, we'll preserve data but might still need erase
-                    // if other parts of the region in this block need it
-                    false
-                } else {
-                    false
-                }
+                // No changes in this portion
+                false
             } else {
                 need_erase(have_slice, want_slice, granularity)
             }

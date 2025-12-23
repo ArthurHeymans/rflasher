@@ -9,8 +9,9 @@ mod programmers;
 use clap::Parser;
 use cli::{Cli, Commands, LayoutArgs, LayoutCommands};
 use rflasher_core::chip::ChipDatabase;
-use rflasher_core::flash;
-use rflasher_core::layout::Layout;
+use rflasher_core::flash::{self, FlashContext};
+use rflasher_core::layout::{read_fmap_from_flash, read_ifd_from_flash, Layout};
+use rflasher_core::programmer::SpiMaster;
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -43,8 +44,8 @@ fn main() {
             programmer,
             output,
             chip: _,
-            layout: _,
-        } => cmd_read(&programmer, &output, &db),
+            layout,
+        } => cmd_read(&programmer, &output, layout, &db),
         Commands::Write {
             programmer,
             input,
@@ -150,9 +151,33 @@ fn cmd_probe(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::err
 fn cmd_read(
     programmer: &str,
     output: &Path,
+    layout_args: LayoutArgs,
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    programmers::with_programmer(programmer, |master| commands::run_read(master, db, output))
+    // Check if we need layout-based read
+    if layout_args.has_layout_source() || layout_args.has_region_filter() {
+        programmers::with_programmer(programmer, |master| {
+            // Probe the chip first
+            let ctx = flash::probe(master, db)?;
+
+            println!(
+                "Found: {} {} ({} bytes)",
+                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
+            );
+
+            // Load layout from the appropriate source
+            let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
+
+            // Apply region filters
+            apply_region_filters(&mut layout, &layout_args)?;
+
+            // Now run the read with layout
+            commands::run_read_with_layout(master, &ctx, output, &layout)
+        })
+    } else {
+        // No layout - use standard read
+        programmers::with_programmer(programmer, |master| commands::run_read(master, db, output))
+    }
 }
 
 fn cmd_write(
@@ -164,42 +189,23 @@ fn cmd_write(
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Check if we need layout-based write
-    if layout_args.layout.is_some()
-        || !layout_args.include.is_empty()
-        || !layout_args.exclude.is_empty()
-        || layout_args.region.is_some()
-    {
-        // Load and configure layout
-        let mut layout = match &layout_args.layout {
-            Some(path) => Layout::from_toml_file(path)?,
-            None => {
-                return Err(
-                    "Layout file required when using --include, --exclude, or --region".into(),
-                )
-            }
-        };
-
-        // Handle --region shorthand (equivalent to --include with one region)
-        if let Some(region_name) = &layout_args.region {
-            layout.include_region(region_name)?;
-        }
-
-        // Handle --include
-        for name in &layout_args.include {
-            layout.include_region(name)?;
-        }
-
-        // Handle --exclude (only applies if some regions are already included)
-        for name in &layout_args.exclude {
-            layout.exclude_region(name)?;
-        }
-
-        // If no regions specified, include all
-        if !layout.has_included_regions() {
-            layout.include_all();
-        }
-
+    if layout_args.has_layout_source() || layout_args.has_region_filter() {
         programmers::with_programmer(programmer, |master| {
+            // Probe the chip first
+            let ctx = flash::probe(master, db)?;
+
+            println!(
+                "Found: {} {} ({} bytes)",
+                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
+            );
+
+            // Load layout from the appropriate source
+            let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
+
+            // Apply region filters
+            apply_region_filters(&mut layout, &layout_args)?;
+
+            // Now run the write with layout
             commands::run_write_with_layout(master, db, input, &mut layout, verify)
         })
     } else {
@@ -218,11 +224,7 @@ fn cmd_erase(
     db: &ChipDatabase,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Check if we need layout-based erase
-    if layout_args.layout.is_some()
-        || !layout_args.include.is_empty()
-        || !layout_args.exclude.is_empty()
-        || layout_args.region.is_some()
-    {
+    if layout_args.has_layout_source() || layout_args.has_region_filter() {
         // Layout-based erase - can't combine with start/length
         if start.is_some() || length.is_some() {
             return Err(
@@ -231,37 +233,22 @@ fn cmd_erase(
             );
         }
 
-        // Load and configure layout
-        let mut layout = match &layout_args.layout {
-            Some(path) => Layout::from_toml_file(path)?,
-            None => {
-                return Err(
-                    "Layout file required when using --include, --exclude, or --region".into(),
-                )
-            }
-        };
-
-        // Handle --region shorthand
-        if let Some(region_name) = &layout_args.region {
-            layout.include_region(region_name)?;
-        }
-
-        // Handle --include
-        for name in &layout_args.include {
-            layout.include_region(name)?;
-        }
-
-        // Handle --exclude
-        for name in &layout_args.exclude {
-            layout.exclude_region(name)?;
-        }
-
-        // If no regions specified, include all
-        if !layout.has_included_regions() {
-            layout.include_all();
-        }
-
         programmers::with_programmer(programmer, |master| {
+            // Probe the chip first
+            let ctx = flash::probe(master, db)?;
+
+            println!(
+                "Found: {} {} ({} bytes)",
+                ctx.chip.vendor, ctx.chip.name, ctx.chip.total_size
+            );
+
+            // Load layout from the appropriate source
+            let mut layout = load_layout_from_args(&layout_args, master, &ctx)?;
+
+            // Apply region filters
+            apply_region_filters(&mut layout, &layout_args)?;
+
+            // Now run the erase with layout
             commands::run_erase_with_layout(master, db, &layout)
         })
     } else {
@@ -286,6 +273,68 @@ fn cmd_info(programmer: &str, db: &ChipDatabase) -> Result<(), Box<dyn std::erro
         print_chip_info(&ctx);
         Ok(())
     })
+}
+
+/// Load layout from LayoutArgs (file, IFD from chip, or FMAP from chip)
+fn load_layout_from_args<M: SpiMaster + ?Sized>(
+    args: &LayoutArgs,
+    master: &mut M,
+    ctx: &FlashContext,
+) -> Result<Layout, Box<dyn std::error::Error>> {
+    if let Some(path) = &args.layout {
+        // Load from TOML file
+        let layout = Layout::from_toml_file(path)?;
+        println!("Loaded layout from {:?}", path);
+        Ok(layout)
+    } else if args.ifd {
+        // Read IFD from flash chip
+        println!("Reading Intel Flash Descriptor from chip...");
+        let layout = read_ifd_from_flash(master, ctx)?;
+        println!("Found IFD with {} regions", layout.len());
+        commands::layout::print_layout(&layout);
+        Ok(layout)
+    } else if args.fmap {
+        // Read FMAP from flash chip
+        println!("Searching for FMAP in chip...");
+        let layout = read_fmap_from_flash(master, ctx)?;
+        println!("Found FMAP with {} regions", layout.len());
+        commands::layout::print_layout(&layout);
+        Ok(layout)
+    } else if args.has_region_filter() {
+        // Region filter specified but no layout source
+        Err("Layout source required (--layout, --ifd, or --fmap) when using --include, --exclude, or --region".into())
+    } else {
+        // No layout specified - this shouldn't happen if called correctly
+        Err("No layout source specified".into())
+    }
+}
+
+/// Apply region filters (--include, --exclude, --region) to a layout
+fn apply_region_filters(
+    layout: &mut Layout,
+    args: &LayoutArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Handle --region shorthand (equivalent to --include with one region)
+    if let Some(region_name) = &args.region {
+        layout.include_region(region_name)?;
+    }
+
+    // Handle --include
+    for name in &args.include {
+        layout.include_region(name)?;
+    }
+
+    // Handle --exclude (only applies if some regions are already included)
+    for name in &args.exclude {
+        layout.exclude_region(name)?;
+    }
+
+    // If no regions specified, include all
+    if !layout.has_included_regions() {
+        layout.include_all();
+    }
+
+    Ok(())
 }
 
 fn print_chip_info(ctx: &flash::FlashContext) {
