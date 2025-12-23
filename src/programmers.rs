@@ -50,8 +50,8 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
     programmers.push(ProgrammerInfo {
         name: "ftdi",
         aliases: &["ft2232_spi", "ft4232_spi"],
-        description: "FTDI MPSSE programmer (FT2232H/FT4232H/FT232H)",
-        implemented: false,
+        description: "FTDI MPSSE programmer (FT2232H/FT4232H/FT232H) (type=<dev>,port=<A-D>)",
+        implemented: true,
     });
 
     #[cfg(feature = "linux-spi")]
@@ -264,7 +264,30 @@ where
         }
 
         #[cfg(feature = "ftdi")]
-        "ftdi" => Err("ftdi programmer is not yet implemented".into()),
+        "ftdi" => {
+            use rflasher_ftdi::{parse_options, Ftdi};
+
+            // Parse options
+            let (_, options) = parse_programmer_string(programmer);
+
+            log::info!("Opening FTDI programmer...");
+
+            // Parse configuration from options
+            let config =
+                parse_options(&options).map_err(|e| format!("Invalid FTDI parameters: {}", e))?;
+
+            let mut master = Ftdi::open(&config).map_err(|e| {
+                format!(
+                    "Failed to open FTDI device: {}\n\
+                     Make sure the device is connected and you have permissions.\n\
+                     You may need to unbind the kernel ftdi_sio driver:\n\
+                     echo -n '<bus>-<port>' | sudo tee /sys/bus/usb/drivers/ftdi_sio/unbind",
+                    e
+                )
+            })?;
+
+            f(&mut master)
+        }
 
         #[cfg(feature = "linux-spi")]
         "linux_spi" => Err("linux_spi programmer is not yet implemented".into()),

@@ -283,19 +283,60 @@ rflasher read -p serprog:dev=/dev/ttyUSB0,spispeed=2000000 -o flash.bin
 rflasher write -p serprog:dev=/dev/ttyUSB0,cs=1 -i flash.bin
 ```
 
-### Phase 6: FTDI Programmer
+### Phase 6: FTDI Programmer - COMPLETE
 
 **Goal**: FTDI MPSSE programmer support
 
-**Tasks**:
-1. Use `libftd2xx` or `ftdi-rs` crate
-2. Implement MPSSE mode for SPI
-3. Support multiple device types:
+**Implemented**:
+1. Full MPSSE protocol implementation using `ftdi` crate (libftdi1 bindings):
+   - MPSSE command building and execution
+   - Clock divisor configuration (60 MHz base clock)
+   - Pin direction and state control
+2. Support for multiple device types:
    - FT2232H (dual channel)
    - FT4232H (quad channel)
    - FT232H (single channel)
-4. GPIO control for chip select
-5. Port from `flashprog/ft2232_spi.c`
+   - FT4233H (quad channel)
+   - TIAO TUMPA / TUMPA Lite
+   - Amontec JTAGkey
+   - GOEPEL PicoTAP
+   - Olimex ARM-USB-OCD(-H) / ARM-USB-TINY(-H)
+   - Google Servo / Servo V2
+   - Bus Blaster / Flyswatter
+3. GPIO control for chip select (CS) and auxiliary pins (GPIOL0-3)
+4. `SpiMaster` trait implementation with 64KB read/256B write support
+5. Configurable options: device type, channel, divisor, serial filter, GPIOL modes
+
+**Crate Structure** (`rflasher-ftdi`):
+```
+src/
+├── lib.rs       # Public exports
+├── device.rs    # Ftdi struct, FtdiConfig, and SpiMaster impl
+├── protocol.rs  # MPSSE constants, device types, VID/PID tables
+└── error.rs     # Error types
+```
+
+**Usage Examples**:
+```bash
+# Probe using default FT4232H channel A
+rflasher probe -p ftdi
+
+# Probe with specific device type
+rflasher probe -p ftdi:type=2232h
+
+# Use channel B with slower clock
+rflasher probe -p ftdi:type=2232h,port=B,divisor=10
+
+# Use JTAGkey with GPIOL0 as additional CS
+rflasher probe -p ftdi:type=jtagkey,gpiol0=C
+
+# Read flash
+rflasher read -p ftdi:type=232h -o flash.bin
+```
+
+**System Requirements**:
+- libftdi1 development headers (e.g., `libftdi1-dev` on Debian/Ubuntu)
+- May need to unbind ftdi_sio kernel driver
 
 ### Phase 7: Linux SPI
 
