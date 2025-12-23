@@ -150,7 +150,7 @@ pub struct FeaturesDef {
 
 impl FeaturesDef {
     /// Generate token stream for Features bitflags
-    fn to_tokens(&self) -> TokenStream {
+    fn to_tokens(self) -> TokenStream {
         let mut flags = Vec::new();
 
         if self.wrsr_wren {
@@ -266,7 +266,7 @@ pub enum TestStatus {
 }
 
 impl TestStatus {
-    fn to_tokens(&self) -> TokenStream {
+    fn to_tokens(self) -> TokenStream {
         match self {
             TestStatus::Untested => quote!(TestStatus::Untested),
             TestStatus::Ok => quote!(TestStatus::Ok),
@@ -317,7 +317,7 @@ pub enum WriteGranularity {
 }
 
 impl WriteGranularity {
-    fn to_tokens(&self) -> TokenStream {
+    fn to_tokens(self) -> TokenStream {
         match self {
             WriteGranularity::Bit => quote!(WriteGranularity::Bit),
             WriteGranularity::Byte => quote!(WriteGranularity::Byte),
@@ -400,7 +400,7 @@ impl ChipDatabase {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map_or(false, |ext| ext == "ron") {
+            if path.extension().is_some_and(|ext| ext == "ron") {
                 let content = fs::read_to_string(&path)?;
                 let vendor: VendorDef = ron::from_str(&content)?;
                 vendors.push(vendor);

@@ -154,9 +154,7 @@ impl DummyFlash {
         }
 
         // Erase sets all bytes to 0xFF
-        for byte in &mut self.data[aligned_addr..aligned_addr + erase_size] {
-            *byte = 0xFF;
-        }
+        self.data[aligned_addr..aligned_addr + erase_size].fill(0xFF);
 
         self.write_enabled = false;
         Ok(())
@@ -167,9 +165,7 @@ impl DummyFlash {
             return Err(Error::WriteProtected);
         }
 
-        for byte in &mut self.data {
-            *byte = 0xFF;
-        }
+        self.data.fill(0xFF);
 
         self.write_enabled = false;
         Ok(())

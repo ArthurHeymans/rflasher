@@ -177,8 +177,6 @@ pub fn enable_amd_spi100(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_rom_range_calculation() {
         // ROM Range 2 = 0xff000000

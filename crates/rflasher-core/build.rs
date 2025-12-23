@@ -26,7 +26,7 @@ fn main() {
         println!("cargo::rerun-if-changed={}", chips_dir.display());
         for entry in std::fs::read_dir(&chips_dir).unwrap() {
             let entry = entry.unwrap();
-            if entry.path().extension().map_or(false, |ext| ext == "ron") {
+            if entry.path().extension().is_some_and(|ext| ext == "ron") {
                 println!("cargo::rerun-if-changed={}", entry.path().display());
             }
         }

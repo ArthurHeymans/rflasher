@@ -519,10 +519,8 @@ fn check_erased_range<M: SpiMaster + ?Sized>(
         read(master, ctx, addr + offset, chunk_buf)?;
 
         // Check all bytes are erased
-        for &byte in chunk_buf.iter() {
-            if byte != ERASED_VALUE {
-                return Err(Error::EraseError);
-            }
+        if !chunk_buf.iter().all(|&b| b == ERASED_VALUE) {
+            return Err(Error::EraseError);
         }
 
         offset += chunk_len as u32;
@@ -1361,9 +1359,7 @@ pub fn smart_write_region<M: SpiMaster + ?Sized, P: WriteProgress>(
                 let rel_start = block.start.saturating_sub(addr) as usize;
                 let rel_end =
                     ((block.start + block.size).saturating_sub(addr) as usize).min(current.len());
-                for byte in &mut current[rel_start..rel_end] {
-                    *byte = ERASED_VALUE;
-                }
+                current[rel_start..rel_end].fill(ERASED_VALUE);
             }
         }
     }
@@ -1653,9 +1649,7 @@ mod tests {
                         self.erases.borrow_mut().push((addr as u32, size as u32));
                         let mut mem = self.memory.borrow_mut();
                         if addr + size <= mem.len() {
-                            for byte in &mut mem[addr..addr + size] {
-                                *byte = 0xFF;
-                            }
+                            mem[addr..addr + size].fill(0xFF);
                         }
                     }
                     Ok(())
@@ -1669,9 +1663,7 @@ mod tests {
                         self.erases.borrow_mut().push((addr as u32, size as u32));
                         let mut mem = self.memory.borrow_mut();
                         if addr + size <= mem.len() {
-                            for byte in &mut mem[addr..addr + size] {
-                                *byte = 0xFF;
-                            }
+                            mem[addr..addr + size].fill(0xFF);
                         }
                     }
                     Ok(())
@@ -1685,9 +1677,7 @@ mod tests {
                         self.erases.borrow_mut().push((addr as u32, size as u32));
                         let mut mem = self.memory.borrow_mut();
                         if addr + size <= mem.len() {
-                            for byte in &mut mem[addr..addr + size] {
-                                *byte = 0xFF;
-                            }
+                            mem[addr..addr + size].fill(0xFF);
                         }
                     }
                     Ok(())
@@ -2185,9 +2175,7 @@ mod tests {
         // Create a full chip image
         let mut image = vec![0x00; 65536];
         // Put specific data in the region
-        for i in 0x1000..0x2000 {
-            image[i] = 0xAB;
-        }
+        image[0x1000..0x2000].fill(0xAB);
 
         write_by_layout(&mut mock, &ctx, &layout, &image).unwrap();
 
@@ -2274,9 +2262,7 @@ mod tests {
 
         // Expected data matches
         let mut expected = vec![0xFF; 65536];
-        for i in 0x1000..0x2000 {
-            expected[i] = 0xAA;
-        }
+        expected[0x1000..0x2000].fill(0xAA);
 
         let result = verify_by_layout(&mut mock, &ctx, &layout, &expected);
         assert!(result.is_ok());
@@ -2298,9 +2284,7 @@ mod tests {
 
         // Expected data does NOT match
         let mut expected = vec![0xFF; 65536];
-        for i in 0x1000..0x2000 {
-            expected[i] = 0xBB; // Different from 0xAA in flash
-        }
+        expected[0x1000..0x2000].fill(0xBB); // Different from 0xAA in flash
 
         let result = verify_by_layout(&mut mock, &ctx, &layout, &expected);
         assert!(matches!(result, Err(Error::VerifyError)));
@@ -2486,9 +2470,7 @@ mod tests {
         // Change one byte at offset 0x1000
         let mut want = vec![0xFF; 65536];
         // Keep existing data but change one byte
-        for i in 0x1000..0x2000 {
-            want[i] = 0xBB;
-        }
+        want[0x1000..0x2000].fill(0xBB);
         want[0x1500] = 0xAA;
 
         let stats = smart_write(&mut mock, &ctx, &want, &mut NoProgress).unwrap();
@@ -2522,12 +2504,8 @@ mod tests {
 
         // Create want buffer - keep first region, change second
         let mut want = vec![0xFF; 65536];
-        for i in 0x0000..0x1000 {
-            want[i] = 0xAA; // Keep this the same
-        }
-        for i in 0x2000..0x3000 {
-            want[i] = 0xCC; // Change this
-        }
+        want[0x0000..0x1000].fill(0xAA); // Keep this the same
+        want[0x2000..0x3000].fill(0xCC); // Change this
 
         let _stats = smart_write(&mut mock, &ctx, &want, &mut NoProgress).unwrap();
 

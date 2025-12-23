@@ -334,9 +334,7 @@ pub fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
             let buf_start = block.start as usize;
             let buf_end = (block.start + block.size) as usize;
             if buf_end <= current.len() {
-                for byte in &mut current[buf_start..buf_end] {
-                    *byte = ERASED_VALUE;
-                }
+                current[buf_start..buf_end].fill(ERASED_VALUE);
             }
 
             stats.erases_performed += 1;
@@ -460,9 +458,7 @@ pub fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
             let rel_start = block.start.saturating_sub(addr) as usize;
             let rel_end =
                 ((block.start + block.size).saturating_sub(addr) as usize).min(current.len());
-            for byte in &mut current[rel_start..rel_end] {
-                *byte = ERASED_VALUE;
-            }
+            current[rel_start..rel_end].fill(ERASED_VALUE);
 
             stats.erases_performed += 1;
             stats.bytes_erased += block.size as usize;

@@ -375,35 +375,14 @@ impl<T: Transport> SpiMaster for Serprog<T> {
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         // Build the write data: opcode + address + dummy + write_data
-        let mut write_data = Vec::new();
+        let header_len = cmd.header_len();
+        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
 
-        // Opcode
-        write_data.push(cmd.opcode);
+        // Encode opcode + address + dummy bytes
+        cmd.encode_header(&mut write_data);
 
-        // Address
-        if let Some(addr) = cmd.address {
-            match cmd.address_width {
-                rflasher_core::spi::AddressWidth::None => {}
-                rflasher_core::spi::AddressWidth::ThreeByte => {
-                    write_data.push((addr >> 16) as u8);
-                    write_data.push((addr >> 8) as u8);
-                    write_data.push(addr as u8);
-                }
-                rflasher_core::spi::AddressWidth::FourByte => {
-                    write_data.push((addr >> 24) as u8);
-                    write_data.push((addr >> 16) as u8);
-                    write_data.push((addr >> 8) as u8);
-                    write_data.push(addr as u8);
-                }
-            }
-        }
-
-        // Dummy cycles (convert to bytes)
-        let dummy_bytes = cmd.dummy_cycles.div_ceil(8);
-        write_data.extend(std::iter::repeat_n(0xFF, dummy_bytes as usize));
-
-        // Write data
-        write_data.extend_from_slice(cmd.write_data);
+        // Append write data
+        write_data[header_len..].copy_from_slice(cmd.write_data);
 
         // Perform SPI operation
         self.spi_op(&write_data, cmd.read_buf)

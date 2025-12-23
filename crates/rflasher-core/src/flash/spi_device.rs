@@ -254,10 +254,8 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
 
             self.read(addr + offset, chunk_buf)?;
 
-            for &byte in chunk_buf.iter() {
-                if byte != ERASED_VALUE {
-                    return Err(Error::EraseError);
-                }
+            if !chunk_buf.iter().all(|&b| b == ERASED_VALUE) {
+                return Err(Error::EraseError);
             }
 
             offset += chunk_len as u32;

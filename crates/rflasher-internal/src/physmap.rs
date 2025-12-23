@@ -237,8 +237,6 @@ impl PhysMap {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     #[ignore] // Requires root and /dev/mem access
     fn test_physmap_create() {

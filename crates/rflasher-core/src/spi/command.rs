@@ -184,4 +184,53 @@ impl<'a> SpiCommand<'a> {
         total += self.read_buf.len();
         total
     }
+
+    /// Calculate the header length (opcode + address + dummy bytes)
+    ///
+    /// This is useful for pre-allocating buffers in programmer implementations.
+    pub fn header_len(&self) -> usize {
+        1 + self.address_width.bytes() as usize + self.dummy_cycles.div_ceil(8) as usize
+    }
+
+    /// Encode the command header (opcode + address + dummy bytes) into a buffer
+    ///
+    /// This is a convenience method for programmer implementations to avoid
+    /// duplicating the address encoding logic.
+    ///
+    /// # Arguments
+    /// * `buf` - Buffer to write the header into. Must be at least `header_len()` bytes.
+    ///
+    /// # Returns
+    /// The number of bytes written to the buffer.
+    ///
+    /// # Panics
+    /// Panics if the buffer is too small.
+    pub fn encode_header(&self, buf: &mut [u8]) -> usize {
+        let header_len = self.header_len();
+        assert!(
+            buf.len() >= header_len,
+            "buffer too small: need {} bytes, got {}",
+            header_len,
+            buf.len()
+        );
+
+        let mut offset = 0;
+
+        // Opcode
+        buf[offset] = self.opcode;
+        offset += 1;
+
+        // Address (if present)
+        if let Some(addr) = self.address {
+            self.address_width.encode(addr, &mut buf[offset..]);
+            offset += self.address_width.bytes() as usize;
+        }
+
+        // Dummy bytes (cycles / 8, rounded up, filled with 0xFF)
+        let dummy_bytes = self.dummy_cycles.div_ceil(8) as usize;
+        buf[offset..offset + dummy_bytes].fill(0xFF);
+        offset += dummy_bytes;
+
+        offset
+    }
 }
