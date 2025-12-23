@@ -58,7 +58,7 @@ struct HwseqData {
     addr_mask: u32,
     /// Whether only 4KB erase is supported
     only_4k: bool,
-    /// HSFC FCYCLE field mask
+    /// HSFC FCYCLE field mask (differs between ICH9 and PCH100+)
     hsfc_fcycle: u16,
     /// Size of flash component 0
     #[allow(dead_code)]
@@ -852,20 +852,40 @@ impl IchSpiController {
     // ========================================================================
 
     /// Set the flash address for hardware sequencing
+    #[inline(always)]
     fn hwseq_set_addr(&self, addr: u32) {
         self.spibar
             .write32(ICH9_REG_FADDR, addr & self.hwseq.addr_mask);
     }
 
     /// Wait for hardware sequencing cycle to complete
+    ///
+    /// Polls for FDONE or FCERR in HSFS register.
+    /// Uses a busy-loop with clock_gettime for precise sub-microsecond timing,
+    /// matching flashprog's approach for maximum throughput.
+    #[inline(always)]
     fn hwseq_wait_for_cycle(&self, timeout_us: u32) -> Result<(), InternalError> {
-        let mut remaining = timeout_us;
+        let done_or_err = HSFS_FDONE | HSFS_FCERR;
+
+        // Get start time
+        let mut start = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        unsafe {
+            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut start);
+        }
+
+        let timeout_ns = (timeout_us as i64) * 1000;
+        let end_nsec = start.tv_nsec + timeout_ns;
+        let end_sec = start.tv_sec + (end_nsec / 1_000_000_000);
+        let end_nsec = end_nsec % 1_000_000_000;
 
         loop {
             let hsfs = self.spibar.read16(ICH9_REG_HSFS);
 
-            if hsfs & (HSFS_FDONE | HSFS_FCERR) != 0 {
-                // Clear status bits
+            if hsfs & done_or_err != 0 {
+                // Clear status bits by writing 1s to them (W1C)
                 self.spibar.write16(ICH9_REG_HSFS, hsfs);
 
                 if hsfs & HSFS_FCERR != 0 {
@@ -875,37 +895,53 @@ impl IchSpiController {
                 return Ok(());
             }
 
-            if remaining == 0 {
+            // Check timeout using clock_gettime (busy loop for precision)
+            let mut now = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            unsafe {
+                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
+            }
+
+            if now.tv_sec > end_sec || (now.tv_sec == end_sec && now.tv_nsec >= end_nsec) {
                 return Err(InternalError::Io("Hardware sequencing timeout"));
             }
 
-            std::thread::sleep(std::time::Duration::from_micros(8));
-            remaining = remaining.saturating_sub(8);
+            // Hint to CPU that we're spinning (reduces power, improves perf on hyperthreaded cores)
+            std::hint::spin_loop();
         }
     }
 
     /// Read data using hardware sequencing
+    ///
+    /// This is the main read path - optimized for throughput.
     pub fn hwseq_read(&self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+        let len = buf.len();
+        if len == 0 {
+            return Ok(());
+        }
+
         let mut offset = 0;
-        let mut remaining = buf.len();
         let mut current_addr = addr;
 
-        while remaining > 0 {
-            // Calculate block size (max 64 bytes, respect page boundaries)
-            let block_len = remaining
-                .min(HWSEQ_MAX_DATA)
-                .min(256 - (current_addr as usize & 0xFF));
+        // Clear FDONE, FCERR, AEL by writing 1s to them (do once at start)
+        self.spibar
+            .write16(ICH9_REG_HSFS, self.spibar.read16(ICH9_REG_HSFS));
+
+        while offset < len {
+            // Calculate block size (max 64 bytes, respect 256-byte page boundaries)
+            let remaining = len - offset;
+            let page_remaining = 256 - (current_addr as usize & 0xFF);
+            let block_len = remaining.min(HWSEQ_MAX_DATA).min(page_remaining);
 
             self.hwseq_set_addr(current_addr);
 
-            // Clear status and set up read
-            self.spibar
-                .write16(ICH9_REG_HSFS, self.spibar.read16(ICH9_REG_HSFS));
-
+            // Set up read cycle using read-modify-write to preserve reserved bits
             let mut hsfc = self.spibar.read16(ICH9_REG_HSFC);
-            hsfc &= !self.hwseq.hsfc_fcycle; // Clear cycle type (0 = read)
+            hsfc &= !self.hwseq.hsfc_fcycle; // Clear FCYCLE (0 = read)
             hsfc &= !HSFC_FDBC; // Clear byte count
-            hsfc |= (((block_len - 1) as u16) << HSFC_FDBC_OFF) & HSFC_FDBC;
+            hsfc |= ((block_len - 1) as u16) << HSFC_FDBC_OFF; // Set byte count
             hsfc |= HSFC_FGO; // Start
             self.spibar.write16(ICH9_REG_HSFC, hsfc);
 
@@ -917,47 +953,52 @@ impl IchSpiController {
 
             offset += block_len;
             current_addr += block_len as u32;
-            remaining -= block_len;
         }
 
         Ok(())
     }
 
     /// Write data using hardware sequencing
+    ///
+    /// This is the main write path - optimized for throughput.
     pub fn hwseq_write(&self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+        let len = data.len();
+        if len == 0 {
+            return Ok(());
+        }
+
         let mut offset = 0;
-        let mut remaining = data.len();
         let mut current_addr = addr;
 
-        while remaining > 0 {
-            // Calculate block size
-            let block_len = remaining
-                .min(HWSEQ_MAX_DATA)
-                .min(256 - (current_addr as usize & 0xFF));
+        // Clear FDONE, FCERR, AEL by writing 1s to them (do once at start)
+        self.spibar
+            .write16(ICH9_REG_HSFS, self.spibar.read16(ICH9_REG_HSFS));
+
+        while offset < len {
+            // Calculate block size (max 64 bytes, respect 256-byte page boundaries)
+            let remaining = len - offset;
+            let page_remaining = 256 - (current_addr as usize & 0xFF);
+            let block_len = remaining.min(HWSEQ_MAX_DATA).min(page_remaining);
 
             self.hwseq_set_addr(current_addr);
 
-            // Fill data registers
+            // Fill data registers first (before starting cycle)
             self.fill_data(&data[offset..offset + block_len]);
 
-            // Clear status and set up write
-            self.spibar
-                .write16(ICH9_REG_HSFS, self.spibar.read16(ICH9_REG_HSFS));
-
+            // Set up write cycle using read-modify-write to preserve reserved bits
             let mut hsfc = self.spibar.read16(ICH9_REG_HSFC);
-            hsfc &= !self.hwseq.hsfc_fcycle;
-            hsfc |= 0x2 << HSFC_FCYCLE_OFF; // Write cycle
-            hsfc &= !HSFC_FDBC;
-            hsfc |= (((block_len - 1) as u16) << HSFC_FDBC_OFF) & HSFC_FDBC;
-            hsfc |= HSFC_FGO;
+            hsfc &= !self.hwseq.hsfc_fcycle; // Clear FCYCLE
+            hsfc |= 0x2 << HSFC_FCYCLE_OFF; // Set write cycle
+            hsfc &= !HSFC_FDBC; // Clear byte count
+            hsfc |= ((block_len - 1) as u16) << HSFC_FDBC_OFF; // Set byte count
+            hsfc |= HSFC_FGO; // Start
             self.spibar.write16(ICH9_REG_HSFC, hsfc);
 
-            // Wait for completion
+            // Wait for completion (30 second timeout)
             self.hwseq_wait_for_cycle(30_000_000)?;
 
             offset += block_len;
             current_addr += block_len as u32;
-            remaining -= block_len;
         }
 
         Ok(())
@@ -966,14 +1007,14 @@ impl IchSpiController {
     /// Erase a block using hardware sequencing
     pub fn hwseq_erase(&self, addr: u32, len: u32) -> Result<(), InternalError> {
         // Verify alignment (hwseq always uses 4KB blocks on PCH100+)
-        let erase_size = if self.hwseq.only_4k {
+        let erase_size: u32 = if self.hwseq.only_4k {
             4096
         } else {
             // TODO: Read actual erase size from BERASE bits
             4096
         };
 
-        if !addr.is_multiple_of(erase_size) || !len.is_multiple_of(erase_size) {
+        if addr & (erase_size - 1) != 0 || len & (erase_size - 1) != 0 {
             return Err(InternalError::Io(
                 "Erase address/length not aligned to erase block size",
             ));
@@ -982,17 +1023,18 @@ impl IchSpiController {
         let mut current_addr = addr;
         let end_addr = addr + len;
 
+        // Clear FDONE, FCERR, AEL by writing 1s to them (do once at start)
+        self.spibar
+            .write16(ICH9_REG_HSFS, self.spibar.read16(ICH9_REG_HSFS));
+
         while current_addr < end_addr {
             self.hwseq_set_addr(current_addr);
 
-            // Clear status and set up erase
-            self.spibar
-                .write16(ICH9_REG_HSFS, self.spibar.read16(ICH9_REG_HSFS));
-
+            // Set up erase cycle using read-modify-write to preserve reserved bits
             let mut hsfc = self.spibar.read16(ICH9_REG_HSFC);
-            hsfc &= !self.hwseq.hsfc_fcycle;
-            hsfc |= 0x3 << HSFC_FCYCLE_OFF; // Erase cycle
-            hsfc |= HSFC_FGO;
+            hsfc &= !self.hwseq.hsfc_fcycle; // Clear FCYCLE
+            hsfc |= 0x3 << HSFC_FCYCLE_OFF; // Set erase cycle
+            hsfc |= HSFC_FGO; // Start
             self.spibar.write16(ICH9_REG_HSFC, hsfc);
 
             // Wait for completion (60 second timeout for erase)
@@ -1005,31 +1047,78 @@ impl IchSpiController {
     }
 
     /// Read data from FDATA registers
+    ///
+    /// Optimized to read full 32-bit words and extract bytes.
+    /// This is performance-critical for flash read operations.
+    #[inline(always)]
     fn read_data(&self, buf: &mut [u8]) {
-        let mut temp: u32 = 0;
+        let len = buf.len();
+        let mut offset = 0;
 
-        for (i, byte) in buf.iter_mut().enumerate() {
-            if i % 4 == 0 {
-                temp = self.spibar.read32(ICH9_REG_FDATA0 + (i & !3));
+        // Process full 32-bit words
+        while offset + 4 <= len {
+            let temp = self.spibar.read32(ICH9_REG_FDATA0 + offset);
+            // Use native endianness (x86 is little-endian, matching flash byte order)
+            buf[offset] = temp as u8;
+            buf[offset + 1] = (temp >> 8) as u8;
+            buf[offset + 2] = (temp >> 16) as u8;
+            buf[offset + 3] = (temp >> 24) as u8;
+            offset += 4;
+        }
+
+        // Handle remaining bytes (0-3)
+        if offset < len {
+            let temp = self.spibar.read32(ICH9_REG_FDATA0 + offset);
+            let remaining = len - offset;
+            if remaining > 0 {
+                buf[offset] = temp as u8;
             }
-            *byte = (temp >> ((i % 4) * 8)) as u8;
+            if remaining > 1 {
+                buf[offset + 1] = (temp >> 8) as u8;
+            }
+            if remaining > 2 {
+                buf[offset + 2] = (temp >> 16) as u8;
+            }
         }
     }
 
     /// Fill FDATA registers with data
+    ///
+    /// Optimized to write full 32-bit words.
+    /// This is performance-critical for flash write operations.
+    #[inline(always)]
     fn fill_data(&self, data: &[u8]) {
-        let mut temp: u32 = 0;
+        let len = data.len();
+        if len == 0 {
+            return;
+        }
 
-        for (i, &byte) in data.iter().enumerate() {
-            if i % 4 == 0 {
-                temp = 0;
+        let mut offset = 0;
+
+        // Process full 32-bit words
+        while offset + 4 <= len {
+            let temp = (data[offset] as u32)
+                | ((data[offset + 1] as u32) << 8)
+                | ((data[offset + 2] as u32) << 16)
+                | ((data[offset + 3] as u32) << 24);
+            self.spibar.write32(ICH9_REG_FDATA0 + offset, temp);
+            offset += 4;
+        }
+
+        // Handle remaining bytes (0-3)
+        if offset < len {
+            let mut temp: u32 = 0;
+            let remaining = len - offset;
+            if remaining > 0 {
+                temp |= data[offset] as u32;
             }
-
-            temp |= (byte as u32) << ((i % 4) * 8);
-
-            if i % 4 == 3 || i == data.len() - 1 {
-                self.spibar.write32(ICH9_REG_FDATA0 + (i & !3), temp);
+            if remaining > 1 {
+                temp |= (data[offset + 1] as u32) << 8;
             }
+            if remaining > 2 {
+                temp |= (data[offset + 2] as u32) << 16;
+            }
+            self.spibar.write32(ICH9_REG_FDATA0 + offset, temp);
         }
     }
 }

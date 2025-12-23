@@ -78,3 +78,8 @@ rflasher-serprog = { path = "crates/rflasher-serprog", optional = true }
 rflasher-ftdi = { path = "crates/rflasher-ftdi", optional = true }
 rflasher-linux-spi = { path = "crates/rflasher-linux-spi", optional = true }
 rflasher-internal = { path = "crates/rflasher-internal", optional = true }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"

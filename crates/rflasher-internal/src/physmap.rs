@@ -97,7 +97,7 @@ impl PhysMap {
     /// # Safety
     ///
     /// The offset must be within the mapped region.
-    #[inline]
+    #[inline(always)]
     pub fn read8(&self, offset: usize) -> u8 {
         debug_assert!(offset < self.size);
         unsafe { core::ptr::read_volatile(self.ptr.add(offset)) }
@@ -108,7 +108,7 @@ impl PhysMap {
     /// # Safety
     ///
     /// The offset must be within the mapped region and properly aligned.
-    #[inline]
+    #[inline(always)]
     pub fn read16(&self, offset: usize) -> u16 {
         debug_assert!(offset + 2 <= self.size);
         debug_assert!(offset & 1 == 0, "unaligned 16-bit read");
@@ -120,7 +120,7 @@ impl PhysMap {
     /// # Safety
     ///
     /// The offset must be within the mapped region and properly aligned.
-    #[inline]
+    #[inline(always)]
     pub fn read32(&self, offset: usize) -> u32 {
         debug_assert!(offset + 4 <= self.size);
         debug_assert!(offset & 3 == 0, "unaligned 32-bit read");
@@ -132,7 +132,7 @@ impl PhysMap {
     /// # Safety
     ///
     /// The offset must be within the mapped region.
-    #[inline]
+    #[inline(always)]
     pub fn write8(&self, offset: usize, value: u8) {
         debug_assert!(offset < self.size);
         unsafe {
@@ -145,7 +145,7 @@ impl PhysMap {
     /// # Safety
     ///
     /// The offset must be within the mapped region and properly aligned.
-    #[inline]
+    #[inline(always)]
     pub fn write16(&self, offset: usize, value: u16) {
         debug_assert!(offset + 2 <= self.size);
         debug_assert!(offset & 1 == 0, "unaligned 16-bit write");
@@ -159,7 +159,7 @@ impl PhysMap {
     /// # Safety
     ///
     /// The offset must be within the mapped region and properly aligned.
-    #[inline]
+    #[inline(always)]
     pub fn write32(&self, offset: usize, value: u32) {
         debug_assert!(offset + 4 <= self.size);
         debug_assert!(offset & 3 == 0, "unaligned 32-bit write");
