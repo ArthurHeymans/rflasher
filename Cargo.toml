@@ -50,7 +50,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["dummy", "ch341a", "serprog", "linux-spi"]
+default = ["dummy", "ch341a", "serprog", "linux-spi", "internal"]
 
 # Programmer features
 dummy = ["dep:rflasher-dummy"]

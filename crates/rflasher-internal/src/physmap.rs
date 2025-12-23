@@ -100,9 +100,7 @@ impl PhysMap {
     #[inline]
     pub fn read8(&self, offset: usize) -> u8 {
         debug_assert!(offset < self.size);
-        unsafe {
-            core::ptr::read_volatile(self.ptr.add(offset))
-        }
+        unsafe { core::ptr::read_volatile(self.ptr.add(offset)) }
     }
 
     /// Read a 16-bit value from the mapped region
@@ -114,9 +112,7 @@ impl PhysMap {
     pub fn read16(&self, offset: usize) -> u16 {
         debug_assert!(offset + 2 <= self.size);
         debug_assert!(offset & 1 == 0, "unaligned 16-bit read");
-        unsafe {
-            core::ptr::read_volatile(self.ptr.add(offset) as *const u16)
-        }
+        unsafe { core::ptr::read_volatile(self.ptr.add(offset) as *const u16) }
     }
 
     /// Read a 32-bit value from the mapped region
@@ -128,9 +124,7 @@ impl PhysMap {
     pub fn read32(&self, offset: usize) -> u32 {
         debug_assert!(offset + 4 <= self.size);
         debug_assert!(offset & 3 == 0, "unaligned 32-bit read");
-        unsafe {
-            core::ptr::read_volatile(self.ptr.add(offset) as *const u32)
-        }
+        unsafe { core::ptr::read_volatile(self.ptr.add(offset) as *const u32) }
     }
 
     /// Write an 8-bit value to the mapped region
@@ -216,17 +210,29 @@ pub struct PhysMap {
 #[cfg(not(all(feature = "std", target_os = "linux")))]
 impl PhysMap {
     pub fn new(phys_addr: u64, size: usize) -> Result<Self, InternalError> {
-        Err(InternalError::NotSupported("Physical memory mapping only supported on Linux"))
+        Err(InternalError::NotSupported(
+            "Physical memory mapping only supported on Linux",
+        ))
     }
 
-    pub fn read8(&self, _offset: usize) -> u8 { 0 }
-    pub fn read16(&self, _offset: usize) -> u16 { 0 }
-    pub fn read32(&self, _offset: usize) -> u32 { 0 }
+    pub fn read8(&self, _offset: usize) -> u8 {
+        0
+    }
+    pub fn read16(&self, _offset: usize) -> u16 {
+        0
+    }
+    pub fn read32(&self, _offset: usize) -> u32 {
+        0
+    }
     pub fn write8(&self, _offset: usize, _value: u8) {}
     pub fn write16(&self, _offset: usize, _value: u16) {}
     pub fn write32(&self, _offset: usize, _value: u32) {}
-    pub fn phys_addr(&self) -> u64 { 0 }
-    pub fn size(&self) -> usize { 0 }
+    pub fn phys_addr(&self) -> u64 {
+        0
+    }
+    pub fn size(&self) -> usize {
+        0
+    }
 }
 
 #[cfg(test)]

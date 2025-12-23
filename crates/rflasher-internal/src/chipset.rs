@@ -303,6 +303,7 @@ impl ChipsetEnable {
     }
 
     /// Create a new chipset enable entry with revision matching
+    #[allow(clippy::too_many_arguments)]
     pub const fn with_revision(
         vendor_id: u16,
         device_id: u16,
@@ -332,7 +333,8 @@ pub const B_P: BusType = BusType::PARALLEL;
 /// Parallel + FWH + LPC
 pub const B_PFL: BusType = BusType(BusType::PARALLEL.0 | BusType::FWH.0 | BusType::LPC.0);
 /// Parallel + FWH + LPC + SPI
-pub const B_PFLS: BusType = BusType(BusType::PARALLEL.0 | BusType::FWH.0 | BusType::LPC.0 | BusType::SPI.0);
+pub const B_PFLS: BusType =
+    BusType(BusType::PARALLEL.0 | BusType::FWH.0 | BusType::LPC.0 | BusType::SPI.0);
 /// FWH + LPC
 pub const B_FL: BusType = BusType(BusType::FWH.0 | BusType::LPC.0);
 /// FWH + LPC + SPI

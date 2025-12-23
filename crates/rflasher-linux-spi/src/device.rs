@@ -99,7 +99,7 @@ mod ioctl {
         // _IOW = _IOC(_IOC_WRITE, type, nr, size)
         // _IOC_WRITE = 1
         // _IOC(dir, type, nr, size) = ((dir)<<30)|((size)<<16)|((type)<<8)|(nr)
-        ((1u32 << 30) | ((size as u32) << 16) | ((SPI_IOC_MAGIC as u32) << 8) | 0) as libc::c_ulong
+        ((1u32 << 30) | ((size as u32) << 16) | ((SPI_IOC_MAGIC as u32) << 8)) as libc::c_ulong
     }
 }
 
@@ -403,10 +403,8 @@ impl SpiMaster for LinuxSpi {
         }
 
         // Dummy cycles (convert to bytes)
-        let dummy_bytes = (cmd.dummy_cycles + 7) / 8;
-        for _ in 0..dummy_bytes {
-            write_data.push(0xFF);
-        }
+        let dummy_bytes = cmd.dummy_cycles.div_ceil(8);
+        write_data.extend(std::iter::repeat_n(0xFF, dummy_bytes as usize));
 
         // Write data
         write_data.extend_from_slice(cmd.write_data);

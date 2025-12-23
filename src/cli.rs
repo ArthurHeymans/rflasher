@@ -211,7 +211,6 @@ pub enum Commands {
     /// Layout operations
     #[command(subcommand)]
     Layout(LayoutCommands),
-
 }
 
 /// Layout-related subcommands

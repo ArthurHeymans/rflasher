@@ -28,12 +28,7 @@ fn get_flash_size(master: &mut dyn OpaqueMaster) -> Result<u32, Box<dyn std::err
     // Try to parse IFD - it returns a Layout directly
     if let Ok(layout) = parse_ifd(&header) {
         // Get the highest region end address
-        let size = layout
-            .regions
-            .iter()
-            .map(|r| r.end + 1)
-            .max()
-            .unwrap_or(0);
+        let size = layout.regions.iter().map(|r| r.end + 1).max().unwrap_or(0);
 
         if size > 0 {
             return Ok(size);
@@ -53,9 +48,7 @@ fn get_flash_size(master: &mut dyn OpaqueMaster) -> Result<u32, Box<dyn std::err
 ///
 /// For opaque programmers, we show what information is available without
 /// JEDEC ID probing.
-pub fn run_probe_opaque(
-    master: &mut dyn OpaqueMaster,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_probe_opaque(master: &mut dyn OpaqueMaster) -> Result<(), Box<dyn std::error::Error>> {
     println!("Opaque Programmer Probe");
     println!("========================");
     println!();
@@ -70,12 +63,7 @@ pub fn run_probe_opaque(
             println!();
 
             // Calculate flash size from regions
-            let flash_size: u32 = layout
-                .regions
-                .iter()
-                .map(|r| r.end + 1)
-                .max()
-                .unwrap_or(0);
+            let flash_size: u32 = layout.regions.iter().map(|r| r.end + 1).max().unwrap_or(0);
 
             println!(
                 "Flash size: {} bytes ({} MiB)",
@@ -174,7 +162,10 @@ pub fn run_read_opaque(
             let mut offset = region.start;
             while offset <= region.end {
                 let chunk_len = std::cmp::min(CHUNK_SIZE, (region.end - offset + 1) as usize);
-                master.read(offset, &mut data[offset as usize..offset as usize + chunk_len])?;
+                master.read(
+                    offset,
+                    &mut data[offset as usize..offset as usize + chunk_len],
+                )?;
                 offset += chunk_len as u32;
                 bytes_read += chunk_len;
                 pb.set_position(bytes_read as u64);
@@ -185,7 +176,10 @@ pub fn run_read_opaque(
         let mut offset = start;
         while offset < start + length {
             let chunk_len = std::cmp::min(CHUNK_SIZE, (start + length - offset) as usize);
-            master.read(offset, &mut data[offset as usize..offset as usize + chunk_len])?;
+            master.read(
+                offset,
+                &mut data[offset as usize..offset as usize + chunk_len],
+            )?;
             offset += chunk_len as u32;
             pb.set_position((offset - start) as u64);
         }
@@ -420,7 +414,11 @@ pub fn run_erase_opaque(
         let included: Vec<_> = layout.included_regions().collect();
         let total_bytes: usize = included.iter().map(|r| r.size() as usize).sum();
 
-        println!("Erasing {} region(s) ({} bytes):", included.len(), total_bytes);
+        println!(
+            "Erasing {} region(s) ({} bytes):",
+            included.len(),
+            total_bytes
+        );
         for region in &included {
             println!(
                 "  {} (0x{:08X} - 0x{:08X}, {} bytes)",

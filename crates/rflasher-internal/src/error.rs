@@ -18,18 +18,13 @@ pub enum InternalError {
     /// Failed to access PCI device
     PciAccess(PciAccessError),
     /// Failed to map memory
-    MemoryMap {
-        address: u64,
-        size: usize,
-    },
+    MemoryMap { address: u64, size: usize },
     /// Chipset enable failed
     ChipsetEnable(&'static str),
     /// SPI controller initialization failed
     SpiInit(&'static str),
     /// Flash access denied by hardware
-    AccessDenied {
-        region: &'static str,
-    },
+    AccessDenied { region: &'static str },
     /// Intel Flash Descriptor (IFD) not found or invalid
     InvalidDescriptor,
     /// Operation not supported by this chipset

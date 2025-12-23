@@ -154,16 +154,19 @@ pub enum Programmer<'a> {
 
 impl Programmer<'_> {
     /// Returns true if this is an opaque (non-SPI) programmer
+    #[allow(dead_code)]
     pub fn is_opaque(&self) -> bool {
         matches!(self, Programmer::Opaque(_))
     }
 
     /// Returns true if this is a SPI programmer
+    #[allow(dead_code)]
     pub fn is_spi(&self) -> bool {
         matches!(self, Programmer::Spi(_))
     }
 
     /// Get a reference to the SPI master, if available
+    #[allow(dead_code)]
     pub fn as_spi(&mut self) -> Option<&mut dyn SpiMaster> {
         match self {
             Programmer::Spi(m) => Some(*m),
@@ -172,6 +175,7 @@ impl Programmer<'_> {
     }
 
     /// Get a reference to the opaque master, if available
+    #[allow(dead_code)]
     pub fn as_opaque(&mut self) -> Option<&mut dyn OpaqueMaster> {
         match self {
             Programmer::Spi(_) => None,

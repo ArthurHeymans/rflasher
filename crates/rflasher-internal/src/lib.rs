@@ -45,11 +45,11 @@ pub mod programmer;
 
 pub use chipset::{BusType, ChipsetEnable, IchChipset, TestStatus};
 pub use error::{InternalError, PciAccessError};
-pub use intel_pci::{find_chipset, INTEL_CHIPSETS, INTEL_VID};
 pub use ichspi::{IchSpiController, SpiMode};
+pub use intel_pci::{find_chipset, INTEL_CHIPSETS, INTEL_VID};
 pub use pci::{find_intel_chipset, scan_for_intel_chipsets, scan_pci_bus, PciDevice};
 pub use physmap::PhysMap;
-pub use programmer::{InternalProgrammer, programmer_info};
+pub use programmer::{programmer_info, InternalProgrammer};
 
 /// Result type for internal programmer operations
 pub type Result<T> = core::result::Result<T, InternalError>;

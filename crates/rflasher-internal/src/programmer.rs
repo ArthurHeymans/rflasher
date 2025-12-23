@@ -37,8 +37,7 @@ impl InternalProgrammer {
     /// Create a new internal programmer with explicit mode
     pub fn with_options(mode: SpiMode) -> Result<Self, InternalError> {
         // Detect chipset
-        let chipset = crate::detect_chipset()?
-            .ok_or(InternalError::NoChipset)?;
+        let chipset = crate::detect_chipset()?.ok_or(InternalError::NoChipset)?;
 
         Self::from_chipset(&chipset, mode)
     }
