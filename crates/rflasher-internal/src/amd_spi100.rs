@@ -547,10 +547,7 @@ impl Spi100Controller {
             "AltSpeed:  {}",
             SPI_SPEEDS[(speed_cfg >> 4 & 0xf) as usize].name
         );
-        log::debug!(
-            "TpmSpeed:  {}",
-            SPI_SPEEDS[(speed_cfg & 0xf) as usize].name
-        );
+        log::debug!("TpmSpeed:  {}", SPI_SPEEDS[(speed_cfg & 0xf) as usize].name);
     }
 
     /// Check 4-byte addressing configuration

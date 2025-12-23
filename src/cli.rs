@@ -69,11 +69,13 @@ pub struct LayoutArgs {
 
 impl LayoutArgs {
     /// Check if any layout source is specified
+    #[allow(dead_code)]
     pub fn has_layout_source(&self) -> bool {
         self.layout.is_some() || self.ifd || self.fmap
     }
 
     /// Check if region filtering is requested
+    #[allow(dead_code)]
     pub fn has_region_filter(&self) -> bool {
         !self.include.is_empty() || !self.exclude.is_empty() || self.region.is_some()
     }

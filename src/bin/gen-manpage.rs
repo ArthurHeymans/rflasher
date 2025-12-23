@@ -11,7 +11,7 @@ mod cli;
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    
+
     // Default to ./man directory
     let output_dir = if args.len() > 1 {
         PathBuf::from(&args[1])
@@ -33,7 +33,10 @@ fn main() -> std::io::Result<()> {
     println!("\nTo view the man page:");
     println!("  man -l {}", output_path.display());
     println!("\nTo install system-wide (requires sudo):");
-    println!("  sudo cp {} /usr/local/share/man/man1/", output_path.display());
+    println!(
+        "  sudo cp {} /usr/local/share/man/man1/",
+        output_path.display()
+    );
     println!("  sudo mandb");
 
     Ok(())
