@@ -222,7 +222,7 @@ fn load_layout(
     if let Some(path) = &args.layout {
         // Load from TOML file
         let layout = Layout::from_toml_file(path)?;
-        println!("Loaded layout from {:?}", path);
+        log::info!("Loaded layout from {:?}", path);
         Ok(layout)
     } else if args.ifd || args.fmap {
         // Read from flash (IFD or FMAP)
@@ -230,14 +230,14 @@ fn load_layout(
         handle.as_device_mut().read(0, &mut header)?;
 
         if args.ifd {
-            println!("Reading Intel Flash Descriptor from chip...");
+            log::info!("Reading Intel Flash Descriptor from chip...");
             let layout = parse_ifd(&header)?;
-            println!("Found IFD with {} regions", layout.len());
+            log::info!("Found IFD with {} regions", layout.len());
             commands::layout::print_layout(&layout);
             Ok(layout)
         } else {
             // FMAP - need to search for it
-            println!("Searching for FMAP in chip...");
+            log::info!("Searching for FMAP in chip...");
             Err("FMAP search not yet implemented for unified interface".into())
         }
     } else if args.has_region_filter() {
