@@ -225,20 +225,22 @@ fn load_layout(
         log::info!("Loaded layout from {:?}", path);
         Ok(layout)
     } else if args.ifd || args.fmap {
-        // Read from flash (IFD or FMAP)
-        let mut header = [0u8; 4096];
-        handle.as_device_mut().read(0, &mut header)?;
-
         if args.ifd {
+            // IFD is always at the beginning, so we only need to read the header
             log::info!("Reading Intel Flash Descriptor from chip...");
+            let mut header = [0u8; 4096];
+            handle.as_device_mut().read(0, &mut header)?;
             let layout = parse_ifd(&header)?;
             log::info!("Found IFD with {} regions", layout.len());
             commands::layout::print_layout(&layout);
             Ok(layout)
         } else {
-            // FMAP - need to search for it
+            // FMAP can be anywhere in the flash, so we need to search for it
             log::info!("Searching for FMAP in chip...");
-            Err("FMAP search not yet implemented for unified interface".into())
+            let layout = handle.read_fmap()?;
+            log::info!("Found FMAP with {} regions", layout.len());
+            commands::layout::print_layout(&layout);
+            Ok(layout)
         }
     } else if args.has_region_filter() {
         Err("Layout source required (--layout, --ifd, or --fmap) when using --include, --exclude, or --region".into())

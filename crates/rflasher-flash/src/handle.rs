@@ -121,4 +121,52 @@ impl FlashHandle {
     pub fn as_device_mut(&mut self) -> &mut dyn FlashDevice {
         self.device.as_mut()
     }
+
+    /// Search for and read FMAP layout from flash
+    ///
+    /// This uses a binary search strategy (checking power-of-2 aligned offsets)
+    /// followed by a linear search fallback if needed. This matches flashprog's
+    /// approach for finding FMAP structures in flash chips.
+    ///
+    /// # Returns
+    /// The parsed Layout from FMAP, or an error if no FMAP is found.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let layout = handle.read_fmap()?;
+    /// println!("Found {} regions", layout.len());
+    /// ```
+    pub fn read_fmap(
+        &mut self,
+    ) -> Result<rflasher_core::layout::Layout, Box<dyn std::error::Error>> {
+        use rflasher_core::layout::search_fmap;
+
+        log::debug!(
+            "Chip size: {} bytes ({} MiB)",
+            self.size(),
+            self.size() / (1024 * 1024)
+        );
+        log::debug!("Searching for FMAP in flash chip...");
+
+        let layout = search_fmap(self)?;
+        log::debug!("Found FMAP with {} regions", layout.len());
+
+        Ok(layout)
+    }
+}
+
+/// Implement FmapSearchable for FlashHandle to enable generic FMAP search
+impl rflasher_core::layout::FmapSearchable for FlashHandle {
+    fn size(&self) -> u32 {
+        self.device.size()
+    }
+
+    fn read_at(
+        &mut self,
+        offset: u32,
+        buf: &mut [u8],
+    ) -> Result<(), rflasher_core::layout::LayoutError> {
+        self.read(offset, buf)
+            .map_err(|_| rflasher_core::layout::LayoutError::IoError)
+    }
 }

@@ -57,13 +57,12 @@ pub fn cmd_ifd(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::e
 
 /// Extract FMAP layout from image
 pub fn cmd_fmap(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
+    use rflasher_core::layout::search_fmap;
+
     let data = fs::read(input)?;
 
-    if !has_fmap(&data) {
-        return Err("No FMAP found in image".into());
-    }
-
-    let layout = Layout::from_fmap(&data)?;
+    // Use the generic search algorithm on the file buffer
+    let layout = search_fmap(&mut data.as_slice())?;
     print_layout(&layout);
 
     if let Some(out) = output {

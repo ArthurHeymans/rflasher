@@ -8,6 +8,7 @@
 
 use std::format;
 use std::string::{String, ToString};
+use std::vec;
 
 use super::{Layout, LayoutError, LayoutSource, Region};
 
@@ -54,7 +55,10 @@ fn find_fmap(data: &[u8]) -> Option<usize> {
 }
 
 /// Validate an FMAP structure
-fn validate_fmap(data: &[u8]) -> Result<(), LayoutError> {
+///
+/// Checks signature, version, and structure validity.
+/// This is the canonical validation function used by all FMAP implementations.
+pub fn validate_fmap(data: &[u8]) -> Result<(), LayoutError> {
     if data.len() < FMAP_HEADER_SIZE {
         return Err(LayoutError::InvalidFmapSignature);
     }
@@ -72,12 +76,165 @@ fn validate_fmap(data: &[u8]) -> Result<(), LayoutError> {
 
     // Check that nareas is reasonable
     let nareas = u16::from_le_bytes([data[54], data[55]]) as usize;
+    if nareas > 256 {
+        // Sanity check - more than 256 areas is unreasonable
+        return Err(LayoutError::InvalidFmapSignature);
+    }
+
     let required_size = FMAP_HEADER_SIZE + nareas * FMAP_AREA_SIZE;
     if data.len() < required_size {
         return Err(LayoutError::InvalidFmapSignature);
     }
 
     Ok(())
+}
+
+/// Check if a buffer contains a valid FMAP header (convenience wrapper)
+pub fn is_valid_fmap_header(data: &[u8]) -> bool {
+    validate_fmap(data).is_ok()
+}
+
+/// Trait for searchable storage (file buffer or flash chip)
+///
+/// This abstraction allows FMAP search algorithms to work on both
+/// in-memory buffers and physical flash chips.
+pub trait FmapSearchable {
+    /// Get the total size of the searchable storage
+    fn size(&self) -> u32;
+
+    /// Read data from an offset
+    fn read_at(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), LayoutError>;
+}
+
+/// Implement FmapSearchable for byte slices (file buffers)
+impl FmapSearchable for &[u8] {
+    fn size(&self) -> u32 {
+        self.len() as u32
+    }
+
+    fn read_at(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), LayoutError> {
+        let offset = offset as usize;
+        let end = offset + buf.len();
+
+        if end > self.len() {
+            return Err(LayoutError::IoError);
+        }
+
+        buf.copy_from_slice(&self[offset..end]);
+        Ok(())
+    }
+}
+
+/// Search for FMAP using binary search followed by linear search
+///
+/// This follows flashprog's strategy:
+/// 1. Binary search at power-of-2 aligned offsets (fast, checks common locations)
+/// 2. Linear search as fallback (slow but comprehensive)
+///
+/// Works on both file buffers and flash chips through the FmapSearchable trait.
+pub fn search_fmap<S: FmapSearchable>(storage: &mut S) -> Result<Layout, LayoutError> {
+    const MIN_STRIDE: u32 = 256;
+
+    let size = storage.size();
+
+    // Try binary search first (check power-of-2 aligned offsets)
+    if let Some(offset) = binary_search_fmap(storage, 0, size, MIN_STRIDE)? {
+        // Read enough to parse the FMAP
+        let mut header = vec![0u8; 4096]; // Generous size for header + areas
+        storage.read_at(offset, &mut header)?;
+        return parse_fmap_at(&header, 0);
+    }
+
+    // Fallback to linear search - read entire storage and search
+    let mut buffer = vec![0u8; size as usize];
+    storage.read_at(0, &mut buffer)?;
+
+    if let Some(offset) = find_fmap(&buffer) {
+        parse_fmap_at(&buffer, offset)
+    } else {
+        Err(LayoutError::InvalidFmapSignature)
+    }
+}
+
+/// Binary search for FMAP at power-of-2 aligned offsets
+///
+/// Follows flashprog's algorithm: start with largest stride (size/2) and
+/// halve on each iteration. Skip offsets already checked by larger strides.
+fn binary_search_fmap<S: FmapSearchable>(
+    storage: &mut S,
+    rom_offset: u32,
+    len: u32,
+    min_stride: u32,
+) -> Result<Option<u32>, LayoutError> {
+    let size = storage.size();
+
+    if rom_offset + len > size {
+        return Ok(None);
+    }
+
+    if (len as usize) < FMAP_HEADER_SIZE {
+        return Ok(None);
+    }
+
+    // Buffer for reading signature and header
+    let mut sig_buf = [0u8; 8];
+    let mut header_buf = vec![0u8; FMAP_HEADER_SIZE];
+
+    let mut check_offset_0 = true;
+    let mut stride = size / 2;
+
+    // Start with largest stride and halve each iteration
+    while stride >= min_stride {
+        if stride > len {
+            stride /= 2;
+            continue;
+        }
+
+        let mut offset = rom_offset;
+        while offset <= rom_offset + len - FMAP_HEADER_SIZE as u32 {
+            // Skip offsets already checked by larger strides
+            // (offset % (stride * 2) == 0) means this was checked in previous iteration
+            if offset.is_multiple_of(stride * 2) && (offset != 0) {
+                offset += stride;
+                continue;
+            }
+
+            // Special handling for offset 0
+            if offset == 0 && !check_offset_0 {
+                offset += stride;
+                continue;
+            }
+            check_offset_0 = false;
+
+            // Read signature first (8 bytes) - cheap check
+            if storage.read_at(offset, &mut sig_buf).is_err() {
+                offset += stride;
+                continue;
+            }
+
+            // Check for FMAP signature
+            if &sig_buf != FMAP_SIGNATURE {
+                offset += stride;
+                continue;
+            }
+
+            // Found potential FMAP - read and validate the header
+            if storage.read_at(offset, &mut header_buf).is_err() {
+                offset += stride;
+                continue;
+            }
+
+            if is_valid_fmap_header(&header_buf) {
+                return Ok(Some(offset));
+            }
+
+            offset += stride;
+        }
+
+        stride /= 2;
+    }
+
+    Ok(None)
 }
 
 /// Parse FMAP from raw data

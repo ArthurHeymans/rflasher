@@ -8,7 +8,7 @@ use std::vec;
 use crate::flash::{self, FlashContext};
 use crate::programmer::SpiMaster;
 
-use super::{fmap, has_fmap, has_ifd, ifd, Layout, LayoutError};
+use super::{fmap, has_fmap, has_ifd, ifd, is_valid_fmap_header, Layout, LayoutError};
 
 /// Size of the IFD region (first 4KB of flash)
 const IFD_SIZE: usize = 0x1000;
@@ -196,33 +196,6 @@ fn fmap_lsearch_rom<M: SpiMaster + ?Sized>(
     }
 
     fmap::parse_fmap(&buf)
-}
-
-/// Check if a buffer contains a valid FMAP header
-fn is_valid_fmap_header(data: &[u8]) -> bool {
-    if data.len() < FMAP_HEADER_SIZE {
-        return false;
-    }
-
-    // Check signature
-    if &data[0..8] != FMAP_SIGNATURE {
-        return false;
-    }
-
-    // Check version
-    let ver_major = data[8];
-    if ver_major > 1 {
-        return false;
-    }
-
-    // Check that nareas is reasonable (not too large)
-    let nareas = u16::from_le_bytes([data[54], data[55]]) as usize;
-    if nareas > 1000 {
-        // Sanity check
-        return false;
-    }
-
-    true
 }
 
 /// Read FMAP from a specific offset in flash
