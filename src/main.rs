@@ -98,27 +98,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Erase {
             programmer,
             chip: _,
-            start,
-            length,
             layout,
         } => {
-            // Layout-based erase can't be combined with start/length
-            if (layout.has_layout_source() || layout.has_region_filter())
-                && (start.is_some() || length.is_some())
-            {
-                return Err(
-                    "Cannot use --start/--length with layout options. Use --include to select regions."
-                        .into(),
-                );
-            }
-
             let mut handle = open_flash(&programmer, &db)?;
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout)?;
                 apply_region_filters(&mut layout_obj, &layout)?;
                 commands::unified::run_erase_with_layout(handle.as_device_mut(), &layout_obj)
             } else {
-                commands::unified::run_erase(handle.as_device_mut(), start, length)
+                commands::unified::run_erase(handle.as_device_mut())
             }
         }
         Commands::Verify {

@@ -4,16 +4,6 @@ use clap::{Parser, Subcommand};
 use rflasher_flash::programmer_names_short;
 use std::path::PathBuf;
 
-/// Parse a string as a hex or decimal u32
-fn parse_hex_u32(s: &str) -> Result<u32, String> {
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        u32::from_str_radix(hex, 16).map_err(|e| format!("Invalid hex value: {}", e))
-    } else {
-        s.parse::<u32>()
-            .map_err(|e| format!("Invalid number: {}", e))
-    }
-}
-
 /// Generate dynamic help text for the programmer argument
 fn programmer_help() -> String {
     format!(
@@ -158,14 +148,6 @@ pub enum Commands {
         /// Chip name (optional, auto-detected if not specified)
         #[arg(short, long)]
         chip: Option<String>,
-
-        /// Start address for partial erase (hex, e.g., 0x10000)
-        #[arg(long, value_parser = parse_hex_u32)]
-        start: Option<u32>,
-
-        /// Length of region to erase (hex or decimal)
-        #[arg(long, value_parser = parse_hex_u32)]
-        length: Option<u32>,
 
         #[command(flatten)]
         layout: LayoutArgs,

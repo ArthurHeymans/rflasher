@@ -77,6 +77,17 @@ fn display_included_regions(included: &[&rflasher_core::layout::Region], action:
     }
 }
 
+/// Create a layout covering the entire flash
+fn full_flash_layout(flash_size: u32) -> Layout {
+    use rflasher_core::layout::{LayoutSource, Region};
+
+    let mut layout = Layout::with_source(LayoutSource::Manual);
+    let mut region = Region::new("full", 0, flash_size - 1);
+    region.included = true;
+    layout.add_region(region);
+    layout
+}
+
 // =============================================================================
 // Progress reporting
 // =============================================================================
@@ -187,46 +198,13 @@ impl WriteProgress for IndicatifProgress {
 /// Default chunk size for reading (4 KiB)
 const READ_CHUNK_SIZE: usize = 4096;
 
-/// Read entire flash contents with progress bar
-pub fn read_flash<D: FlashDevice + ?Sized>(
-    device: &mut D,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let total_size = device.size() as usize;
-    let mut data = vec![0u8; total_size];
-
-    let pb = ProgressBar::new(total_size as u64);
-    pb.set_style(create_progress_bar_style()?);
-
-    let mut offset = 0usize;
-    while offset < total_size {
-        let chunk_size = std::cmp::min(READ_CHUNK_SIZE, total_size - offset);
-        device.read(offset as u32, &mut data[offset..offset + chunk_size])?;
-
-        offset += chunk_size;
-        pb.set_position(offset as u64);
-    }
-
-    pb.finish_with_message("Read complete");
-    Ok(data)
-}
-
 /// Run the unified read command
 pub fn run_read<D: FlashDevice + ?Sized>(
     device: &mut D,
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    print_flash_size(device.size());
-
-    // Read the chip
-    let data = read_flash(device)?;
-
-    // Write to file
-    let mut file = File::create(output)?;
-    file.write_all(&data)?;
-
-    println!("Wrote {} bytes to {:?}", data.len(), output);
-
-    Ok(())
+    let layout = full_flash_layout(device.size());
+    run_read_with_layout(device, output, &layout)
 }
 
 /// Run the unified read command with layout
@@ -299,48 +277,8 @@ pub fn run_write<D: FlashDevice + ?Sized>(
     input: &Path,
     do_verify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let flash_size = device.size();
-    print_flash_size(flash_size);
-
-    // Read input file
-    let mut data = read_file(input)?;
-
-    // Validate size
-    if data.len() > flash_size as usize {
-        return Err(format!(
-            "File size ({} bytes) exceeds flash size ({} bytes)",
-            data.len(),
-            flash_size
-        )
-        .into());
-    }
-
-    // Pad to flash size if needed (with 0xFF)
-    if data.len() < flash_size as usize {
-        println!(
-            "Padding file from {} to {} bytes with 0xFF",
-            data.len(),
-            flash_size
-        );
-        data.resize(flash_size as usize, 0xFF);
-    }
-
-    // Smart write
-    let mut progress = IndicatifProgress::new();
-    let stats = unified::smart_write(device, &data, &mut progress)?;
-
-    // Verify if requested (but skip if no changes were made)
-    if do_verify {
-        if stats.flash_modified {
-            verify_flash(device, &data)?;
-        } else {
-            println!("Skipping verification - no changes were made");
-        }
-    }
-
-    println!("Write complete!");
-
-    Ok(())
+    let mut layout = full_flash_layout(device.size());
+    run_write_with_layout(device, input, &mut layout, do_verify)
 }
 
 /// Run the unified write command with layout
@@ -458,36 +396,9 @@ pub fn run_write_with_layout<D: FlashDevice + ?Sized>(
 /// Run the unified erase command
 pub fn run_erase<D: FlashDevice + ?Sized>(
     device: &mut D,
-    start: Option<u32>,
-    length: Option<u32>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let flash_size = device.size();
-    print_flash_size(flash_size);
-
-    let (start_addr, len) = match (start, length) {
-        (Some(s), Some(l)) => (s, l),
-        (Some(_), None) | (None, Some(_)) => {
-            return Err("Both --start and --length must be specified for partial erase".into());
-        }
-        (None, None) => (0, flash_size),
-    };
-
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(create_spinner_style()?);
-    pb.enable_steady_tick(Duration::from_millis(100));
-
-    if start_addr == 0 && len == flash_size {
-        pb.set_message(format!("Erasing {} bytes (full chip)...", flash_size));
-    } else {
-        pb.set_message(format!("Erasing {} bytes at 0x{:08X}...", len, start_addr));
-    }
-
-    device.erase(start_addr, len)?;
-
-    pb.finish_with_message("Erase complete");
-    println!("Erased {} bytes at 0x{:08X}", len, start_addr);
-
-    Ok(())
+    let layout = full_flash_layout(device.size());
+    run_erase_with_layout(device, &layout)
 }
 
 /// Run the unified erase command with layout
