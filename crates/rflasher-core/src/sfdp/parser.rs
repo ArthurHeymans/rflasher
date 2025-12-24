@@ -18,18 +18,41 @@ pub fn read_sfdp<M: SpiMaster + ?Sized>(master: &mut M, addr: u32, buf: &mut [u8
 /// Parse the SFDP header and verify signature
 fn parse_header<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpHeader> {
     let mut buf = [0u8; 8];
+
+    log::debug!("Reading SFDP header (8 bytes at address 0x00)...");
+
     read_sfdp(master, 0x00, &mut buf)?;
+
+    log::debug!(
+        "SFDP header bytes: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
+        buf[0],
+        buf[1],
+        buf[2],
+        buf[3],
+        buf[4],
+        buf[5],
+        buf[6],
+        buf[7]
+    );
 
     let header = SfdpHeader::parse(&buf);
 
     if !header.is_valid() {
+        log::debug!("SFDP signature invalid (expected 'SFDP')");
         return Err(Error::ChipNotSupported);
     }
 
     // Check for supported SFDP major version
     if header.revision.major != 1 {
+        log::debug!("SFDP major version {} not supported", header.revision.major);
         return Err(Error::ChipNotSupported);
     }
+
+    log::debug!(
+        "SFDP header valid: revision {}.{}",
+        header.revision.major,
+        header.revision.minor
+    );
 
     Ok(header)
 }
@@ -608,7 +631,7 @@ pub fn compare_with_chip(info: &SfdpInfo, chip: &FlashChip) -> Vec<SfdpMismatch>
 }
 
 /// Result of probing SFDP and optionally matching with database
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 #[derive(Debug)]
 pub struct SfdpProbeResult {
     /// The SFDP information read from the chip
@@ -623,6 +646,7 @@ pub struct SfdpProbeResult {
     pub mismatches: Vec<SfdpMismatch>,
 }
 
+#[cfg(feature = "std")]
 impl SfdpProbeResult {
     /// Get a FlashChip to use for operations
     ///
@@ -666,7 +690,7 @@ impl SfdpProbeResult {
 /// 4. Compares SFDP data with database entry (if found)
 ///
 /// Returns a result containing all discovered information.
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 pub fn probe_with_database<M: SpiMaster + ?Sized>(
     master: &mut M,
     db: &crate::chip::ChipDatabase,

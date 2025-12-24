@@ -5,7 +5,7 @@ use alloc::vec;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 use crate::chip::ChipDatabase;
 use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{Error, Result};
@@ -302,7 +302,7 @@ pub struct WriteStats {
 ///
 /// If the chip is NOT in the database but supports SFDP, a FlashChip is
 /// constructed from the SFDP data and can be used for operations.
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 pub fn probe<M: SpiMaster + ?Sized>(master: &mut M, db: &ChipDatabase) -> Result<FlashContext> {
     let (manufacturer, device) = protocol::read_jedec_id(master)?;
 
@@ -337,7 +337,7 @@ pub fn probe<M: SpiMaster + ?Sized>(master: &mut M, db: &ChipDatabase) -> Result
 ///
 /// This structure contains all information gathered during probing,
 /// including SFDP data and any mismatches with the database.
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 #[derive(Debug)]
 pub struct ProbeResult {
     /// JEDEC manufacturer ID
@@ -354,6 +354,7 @@ pub struct ProbeResult {
     pub mismatches: Vec<crate::sfdp::SfdpMismatch>,
 }
 
+#[cfg(feature = "std")]
 impl ProbeResult {
     /// Check if there are any mismatches between SFDP and database
     pub fn has_mismatches(&self) -> bool {
@@ -377,17 +378,6 @@ impl ProbeResult {
     }
 }
 
-// Logging macros - no-op when log feature is disabled
-#[cfg(feature = "log")]
-macro_rules! log_debug {
-    ($($arg:tt)*) => { log::debug!($($arg)*) }
-}
-
-#[cfg(not(feature = "log"))]
-macro_rules! log_debug {
-    ($($arg:tt)*) => {};
-}
-
 /// Probe for a flash chip with detailed results
 ///
 /// This function performs comprehensive probing:
@@ -398,23 +388,25 @@ macro_rules! log_debug {
 ///
 /// Returns detailed information about what was found, allowing the caller
 /// to decide how to handle mismatches or unknown chips.
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 pub fn probe_detailed<M: SpiMaster + ?Sized>(
     master: &mut M,
     db: &ChipDatabase,
 ) -> Result<ProbeResult> {
     let (jedec_manufacturer, jedec_device) = protocol::read_jedec_id(master)?;
 
-    log_debug!(
+    log::info!(
         "JEDEC ID: manufacturer=0x{:02X}, device=0x{:04X}",
         jedec_manufacturer,
         jedec_device
     );
 
     // Try SFDP probing
+    log::debug!("Attempting SFDP probe...");
+
     let sfdp = match crate::sfdp::probe(master) {
         Ok(info) => {
-            log_debug!(
+            log::info!(
                 "SFDP probe successful: {} bytes, page size {} bytes",
                 info.total_size(),
                 info.page_size()
@@ -422,7 +414,7 @@ pub fn probe_detailed<M: SpiMaster + ?Sized>(
             Some(info)
         }
         Err(e) => {
-            log_debug!("SFDP probe failed: {:?}", e);
+            log::debug!("SFDP probe failed: {:?}", e);
             None
         }
     };
@@ -430,9 +422,9 @@ pub fn probe_detailed<M: SpiMaster + ?Sized>(
     // Look up in database
     let db_chip = db.find_by_jedec_id(jedec_manufacturer, jedec_device);
     if db_chip.is_some() {
-        log_debug!("Chip found in database");
+        log::debug!("Chip found in database");
     } else {
-        log_debug!(
+        log::info!(
             "Chip not in database (JEDEC {:02X}:{:04X})",
             jedec_manufacturer,
             jedec_device

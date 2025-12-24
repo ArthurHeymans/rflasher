@@ -45,16 +45,20 @@ mod spi_device;
 pub mod unified;
 
 pub use context::FlashContext;
-pub use device::{FlashDevice, FlashDeviceExt};
+pub use device::FlashDevice;
+#[cfg(feature = "alloc")]
+pub use device::FlashDeviceExt;
 pub use opaque_device::OpaqueFlashDevice;
 pub use spi_device::SpiFlashDevice;
 
 // Re-export SPI-specific operations (these work with SpiMaster directly)
 // For unified operations that work with any FlashDevice, use the `unified` module
-pub use operations::{chip_erase, erase, probe, read, read_jedec_id, verify, write};
+#[cfg(feature = "std")]
+pub use operations::probe;
+pub use operations::{chip_erase, erase, read, read_jedec_id, verify, write};
 
 // Re-export detailed probe result
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 pub use operations::{probe_detailed, ProbeResult};
 
 // Re-export types from operations
