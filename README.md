@@ -208,6 +208,33 @@ rflasher write -p ch341a --layout layout.toml --region bios -i bios_update.bin
 rflasher erase -p ch341a --ifd --include bios,descriptor
 ```
 
+### Write Protection Operations
+
+rflasher supports reading and modifying flash chip write protection settings:
+
+```bash
+# Show current write protection status
+rflasher wp status -p ch341a
+
+# List all available protection ranges for the chip
+rflasher wp list -p ch341a
+
+# Enable hardware write protection (WP# pin controlled)
+rflasher wp enable -p ch341a
+
+# Disable write protection
+rflasher wp disable -p ch341a
+
+# Set protection for a specific address range (start,length)
+rflasher wp range -p ch341a 0,0x100000
+
+# Set protection for a named region (requires layout)
+rflasher wp region -p ch341a --ifd bios
+
+# Make changes temporary (volatile, lost on power cycle)
+rflasher wp enable -p ch341a --temporary
+```
+
 ### Verbosity and Debugging
 
 ```bash
@@ -303,8 +330,6 @@ The following features are planned for future development:
 - [ ] **Add more SPI programmers** - Port remaining SPI programmers from flashprog
 - [ ] **Intel Internal Programmer** - Support for reading/writing via Intel chipset (OpaqueMaster)
 - [ ] **Optimal erase algorithm** - Minimize erase operations by using largest possible erase blocks
-- [ ] **SFDP parsing** - Auto-detection of chip parameters via Serial Flash Discoverable Parameters
-- [ ] **Write protection management** - Full write protection range management and status reporting
 
 ## License
 
