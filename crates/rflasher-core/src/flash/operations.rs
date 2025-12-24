@@ -276,6 +276,355 @@ pub fn plan_smart_erase(
     Ok(result)
 }
 
+// =============================================================================
+// Optimal erase algorithm
+// =============================================================================
+//
+// This implements a hierarchical erase block selection algorithm similar to
+// flashprog. The key insight is that flash chips typically support multiple
+// erase block sizes (e.g., 4KB, 32KB, 64KB), and using larger blocks is more
+// efficient (fewer operations, faster overall).
+//
+// The algorithm:
+// 1. Build a hierarchical layout where each eraser level knows which sub-blocks
+//    (from the next smaller eraser) it contains.
+// 2. Recursively select blocks that need erasing, starting from the smallest
+//    blocks (which gives maximum granularity).
+// 3. When more than 50% of a larger block's sub-blocks need erasing, "promote"
+//    to using the larger block instead (fewer operations).
+//
+// This trades slightly more erased data for significantly fewer erase operations,
+// which is typically faster due to erase command overhead.
+
+/// Per-erase-block metadata for optimal erase planning
+#[cfg(feature = "alloc")]
+#[derive(Debug, Clone)]
+struct EraseBlockData {
+    /// Start address of this erase block
+    start_addr: u32,
+    /// End address of this erase block (inclusive)
+    end_addr: u32,
+    /// Whether this block is selected for erasure
+    selected: bool,
+    /// Index of the first sub-block (in the next-smaller eraser layout)
+    first_sub_block_idx: usize,
+    /// Index of the last sub-block (in the next-smaller eraser layout)
+    last_sub_block_idx: usize,
+}
+
+/// Layout for one eraser type (all blocks of one size)
+#[cfg(feature = "alloc")]
+#[derive(Debug)]
+struct EraserLayout {
+    /// All blocks for this eraser
+    blocks: Vec<EraseBlockData>,
+    /// The erase block definition (opcode and size)
+    erase_block: EraseBlock,
+}
+
+/// Selected erase operation in the optimal erase plan
+#[cfg(feature = "alloc")]
+#[derive(Debug, Clone)]
+pub struct OptimalEraseOp {
+    /// Start address of the erase block
+    pub start: u32,
+    /// Size of the erase block
+    pub size: u32,
+    /// The erase block definition (opcode and size)
+    pub erase_block: EraseBlock,
+}
+
+/// Create the hierarchical erase layout for a flash chip
+///
+/// This creates a hierarchy of eraser layouts, sorted from smallest to largest
+/// erase block size. Each block in a larger eraser knows which sub-blocks from
+/// the next-smaller eraser it contains.
+#[cfg(feature = "alloc")]
+fn create_erase_layout(erase_blocks: &[EraseBlock], flash_size: u32) -> Vec<EraserLayout> {
+    // Filter out chip erase (size >= flash_size) and sort by size (smallest first)
+    let mut sorted_erasers: Vec<EraseBlock> = erase_blocks
+        .iter()
+        .filter(|eb| eb.size < flash_size)
+        .copied()
+        .collect();
+    sorted_erasers.sort_by_key(|eb| eb.size);
+
+    // Remove duplicates (same size, different opcode)
+    sorted_erasers.dedup_by_key(|eb| eb.size);
+
+    if sorted_erasers.is_empty() {
+        return Vec::new();
+    }
+
+    let mut layouts = Vec::with_capacity(sorted_erasers.len());
+
+    for (layout_idx, &erase_block) in sorted_erasers.iter().enumerate() {
+        let block_count = (flash_size / erase_block.size) as usize;
+        let mut blocks = Vec::with_capacity(block_count);
+
+        let mut sub_block_index = 0usize;
+
+        for block_num in 0..block_count {
+            let start_addr = block_num as u32 * erase_block.size;
+            let end_addr = start_addr + erase_block.size - 1;
+
+            let (first_sub_block_idx, last_sub_block_idx) = if layout_idx == 0 {
+                // Base case: smallest blocks have no sub-blocks
+                (0, 0)
+            } else {
+                // Calculate which sub-blocks from the previous (smaller) layout this block contains
+                let sub_layout: &EraserLayout = &layouts[layout_idx - 1];
+                let first = sub_block_index;
+
+                // Find sub-blocks until we pass our end address
+                while sub_block_index < sub_layout.blocks.len()
+                    && sub_layout.blocks[sub_block_index].end_addr <= end_addr
+                {
+                    sub_block_index += 1;
+                }
+                let last = if sub_block_index > first {
+                    sub_block_index - 1
+                } else {
+                    first
+                };
+
+                (first, last)
+            };
+
+            blocks.push(EraseBlockData {
+                start_addr,
+                end_addr,
+                selected: false,
+                first_sub_block_idx,
+                last_sub_block_idx,
+            });
+        }
+
+        layouts.push(EraserLayout {
+            blocks,
+            erase_block,
+        });
+    }
+
+    layouts
+}
+
+/// Recursively deselect all sub-blocks when promoting to a larger block
+#[cfg(feature = "alloc")]
+fn deselect_erase_block_rec(layouts: &mut [EraserLayout], layout_idx: usize, block_num: usize) {
+    let block = &layouts[layout_idx].blocks[block_num];
+
+    if block.selected {
+        layouts[layout_idx].blocks[block_num].selected = false;
+    } else if layout_idx > 0 {
+        let first = block.first_sub_block_idx;
+        let last = block.last_sub_block_idx;
+        for i in first..=last {
+            deselect_erase_block_rec(layouts, layout_idx - 1, i);
+        }
+    }
+}
+
+/// Information needed for erase selection
+#[cfg(feature = "alloc")]
+struct SelectionInfo<'a> {
+    /// Current flash contents (optional - for smart erase)
+    have: Option<&'a [u8]>,
+    /// Desired flash contents (optional - for smart erase)
+    want: Option<&'a [u8]>,
+    /// Start address of the region being erased
+    region_start: u32,
+    /// End address of the region being erased (inclusive)
+    region_end: u32,
+    /// Write granularity for need_erase checks
+    granularity: WriteGranularity,
+    /// Base address of the have/want buffers (usually 0 or region_start)
+    buffer_offset: u32,
+}
+
+/// Recursively select erase functions with the >50% promotion heuristic
+///
+/// Returns the number of bytes selected for erasure.
+#[cfg(feature = "alloc")]
+fn select_erase_functions_rec(
+    layouts: &mut [EraserLayout],
+    layout_idx: usize,
+    block_num: usize,
+    info: &SelectionInfo<'_>,
+) -> u32 {
+    let block = &layouts[layout_idx].blocks[block_num];
+    let block_start = block.start_addr;
+    let block_end = block.end_addr;
+    let block_size = block_end - block_start + 1;
+
+    // Check if this block overlaps with our region
+    if block_start > info.region_end || block_end < info.region_start {
+        return 0;
+    }
+
+    if layout_idx == 0 {
+        // Base case: smallest blocks - determine if erase is needed
+        let needs_erase = match (info.have, info.want) {
+            (Some(have), Some(want)) => {
+                // Smart erase: check if we actually need to erase
+                let overlap_start = block_start.max(info.region_start);
+                let overlap_end = block_end.min(info.region_end);
+
+                // Convert to buffer indices
+                let buf_start = (overlap_start - info.buffer_offset) as usize;
+                let buf_end = (overlap_end - info.buffer_offset + 1) as usize;
+
+                if buf_end <= have.len() && buf_start < buf_end {
+                    let have_slice = &have[buf_start..buf_end];
+                    let want_slice = &want[buf_start..buf_end];
+
+                    need_write(have_slice, want_slice)
+                        && need_erase(have_slice, want_slice, info.granularity)
+                } else {
+                    false
+                }
+            }
+            _ => {
+                // Explicit erase: erase everything in the region
+                true
+            }
+        };
+
+        if needs_erase {
+            layouts[layout_idx].blocks[block_num].selected = true;
+            return block_size;
+        }
+        return 0;
+    }
+
+    // Recursive case: larger blocks
+    let first_sub = layouts[layout_idx].blocks[block_num].first_sub_block_idx;
+    let last_sub = layouts[layout_idx].blocks[block_num].last_sub_block_idx;
+
+    let mut bytes = 0u32;
+    for i in first_sub..=last_sub {
+        bytes += select_erase_functions_rec(layouts, layout_idx - 1, i, info);
+    }
+
+    // The >50% heuristic: if more than half of this block needs erasing,
+    // promote to using this larger block instead
+    if bytes > block_size / 2 {
+        // Only promote if the entire block is within the region
+        // (we don't want to erase outside the region)
+        if block_start >= info.region_start && block_end <= info.region_end {
+            // Deselect all sub-blocks and select this block instead
+            deselect_erase_block_rec(layouts, layout_idx, block_num);
+            layouts[layout_idx].blocks[block_num].selected = true;
+            return block_size;
+        }
+    }
+
+    bytes
+}
+
+/// Plan optimal erase operations for a region
+///
+/// This analyzes the region and returns an optimal sequence of erase operations
+/// that minimizes the number of erase commands while covering all necessary areas.
+///
+/// # Arguments
+/// * `erase_blocks` - Available erase block definitions for the chip
+/// * `flash_size` - Total flash size in bytes
+/// * `have` - Optional current flash contents (for smart erase)
+/// * `want` - Optional desired flash contents (for smart erase)
+/// * `region_start` - Start address of the region to erase
+/// * `region_end` - End address of the region to erase (inclusive)
+/// * `granularity` - Write granularity for need_erase decisions
+///
+/// # Returns
+/// A vector of `OptimalEraseOp` describing the erase operations to perform,
+/// sorted by address.
+///
+/// # Example
+/// ```ignore
+/// // For a 40KB erase starting at offset 0 on a chip with 4KB/32KB/64KB erasers:
+/// // Result might be: [32KB @ 0x0000, 4KB @ 0x8000, 4KB @ 0x9000]
+/// // (3 operations instead of 10 x 4KB)
+/// ```
+#[cfg(feature = "alloc")]
+pub fn plan_optimal_erase(
+    erase_blocks: &[EraseBlock],
+    flash_size: u32,
+    have: Option<&[u8]>,
+    want: Option<&[u8]>,
+    region_start: u32,
+    region_end: u32,
+    granularity: WriteGranularity,
+) -> Vec<OptimalEraseOp> {
+    let mut layouts = create_erase_layout(erase_blocks, flash_size);
+
+    if layouts.is_empty() {
+        return Vec::new();
+    }
+
+    // Determine buffer offset (if buffers are region-sized vs full-chip)
+    let buffer_offset = match have {
+        Some(h) if (h.len() as u32) < region_end => region_start,
+        _ => 0,
+    };
+
+    let info = SelectionInfo {
+        have,
+        want,
+        region_start,
+        region_end,
+        granularity,
+        buffer_offset,
+    };
+
+    // Start selection from the largest eraser (top-down)
+    let top_layout_idx = layouts.len() - 1;
+    for block_num in 0..layouts[top_layout_idx].blocks.len() {
+        select_erase_functions_rec(&mut layouts, top_layout_idx, block_num, &info);
+    }
+
+    // Collect all selected blocks across all layouts
+    let mut result = Vec::new();
+    for layout in &layouts {
+        for block in &layout.blocks {
+            if block.selected && block.start_addr <= region_end && block.end_addr >= region_start {
+                result.push(OptimalEraseOp {
+                    start: block.start_addr,
+                    size: layout.erase_block.size,
+                    erase_block: layout.erase_block,
+                });
+            }
+        }
+    }
+
+    // Sort by address
+    result.sort_by_key(|op| op.start);
+
+    result
+}
+
+/// Plan optimal erase operations for a region with explicit erase (no content comparison)
+///
+/// This is a convenience wrapper for `plan_optimal_erase` when you want to erase
+/// a region without comparing contents.
+#[cfg(feature = "alloc")]
+pub fn plan_optimal_erase_region(
+    erase_blocks: &[EraseBlock],
+    flash_size: u32,
+    region_start: u32,
+    region_end: u32,
+) -> Vec<OptimalEraseOp> {
+    plan_optimal_erase(
+        erase_blocks,
+        flash_size,
+        None,
+        None,
+        region_start,
+        region_end,
+        WriteGranularity::Byte,
+    )
+}
+
 /// Statistics from a smart write operation
 #[cfg(feature = "alloc")]
 #[derive(Debug, Clone, Default)]
@@ -2712,5 +3061,233 @@ mod tests {
             plan.iter().any(|b| b.needs_erase),
             "Should need erase when overwriting non-erased data"
         );
+    }
+
+    // =========================================================================
+    // Tests for optimal erase algorithm
+    // =========================================================================
+
+    #[test]
+    fn test_optimal_erase_single_small_block() {
+        // Erasing exactly one 4KB block should use the 4KB eraser
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),  // 4KB
+            EraseBlock::new(opcodes::BE_D8, 65536), // 64KB
+        ];
+
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 4095);
+
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].start, 0);
+        assert_eq!(ops[0].size, 4096);
+        assert_eq!(ops[0].erase_block.opcode, opcodes::SE_20);
+    }
+
+    #[test]
+    fn test_optimal_erase_promotes_to_larger_block() {
+        // Erasing 40KB starting at 0 should use: 1x32KB + 2x4KB (if 32KB available)
+        // or with just 4KB/64KB: all 4KB blocks (no promotion since <50% of 64KB)
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),  // 4KB
+            EraseBlock::new(opcodes::BE_D8, 65536), // 64KB
+        ];
+
+        // 40KB = 10 x 4KB blocks, but that's <50% of 64KB, so no promotion
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 40959);
+
+        // Should be 10 x 4KB blocks
+        assert_eq!(ops.len(), 10);
+        assert!(ops.iter().all(|op| op.size == 4096));
+    }
+
+    #[test]
+    fn test_optimal_erase_full_64kb_block() {
+        // Erasing exactly 64KB should use a single 64KB eraser
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),  // 4KB
+            EraseBlock::new(opcodes::BE_D8, 65536), // 64KB
+        ];
+
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 65535);
+
+        // >50% of 64KB needs erasing (100%), so should promote to 64KB
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].start, 0);
+        assert_eq!(ops[0].size, 65536);
+        assert_eq!(ops[0].erase_block.opcode, opcodes::BE_D8);
+    }
+
+    #[test]
+    fn test_optimal_erase_more_than_half_promotes() {
+        // Erasing 36KB (>50% of 64KB = 32KB) should promote to 64KB
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),  // 4KB
+            EraseBlock::new(opcodes::BE_D8, 65536), // 64KB
+        ];
+
+        // 36KB = 9 x 4KB, which is >50% of 64KB (32KB = 8 blocks)
+        // But it starts at 0 and ends at 36KB-1, which is <64KB
+        // The 64KB block at 0 covers 0-64KB, but we only need 0-36KB
+        // Since 36KB < 64KB (end of region), the 64KB block extends past our region
+        // The algorithm should NOT promote because the block would erase outside region
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 36863);
+
+        // Should be 9 x 4KB blocks (no promotion because 64KB extends past 36KB)
+        assert_eq!(ops.len(), 9);
+        assert!(ops.iter().all(|op| op.size == 4096));
+    }
+
+    #[test]
+    fn test_optimal_erase_aligned_larger_block() {
+        // Erasing 64KB exactly should promote
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),  // 4KB
+            EraseBlock::new(opcodes::BE_52, 32768), // 32KB
+            EraseBlock::new(opcodes::BE_D8, 65536), // 64KB
+        ];
+
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 65535);
+
+        // Should use a single 64KB erase
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].size, 65536);
+    }
+
+    #[test]
+    fn test_optimal_erase_with_32kb_blocks() {
+        // Erasing 48KB should use: 1x32KB + 4x4KB
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),  // 4KB
+            EraseBlock::new(opcodes::BE_52, 32768), // 32KB
+            EraseBlock::new(opcodes::BE_D8, 65536), // 64KB
+        ];
+
+        // 48KB at offset 0: should promote first 32KB (8x4KB) to 32KB block
+        // remaining 16KB (4x4KB) can be promoted to 32KB? No, 16KB < 16KB (50% of 32KB)
+        // Wait, 16KB = 50%, so it's exactly at the boundary. Let's test >50%:
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 49151); // 48KB
+
+        // 48KB < 50% of 64KB? 48KB > 32KB (50% of 64KB), but ends before 64KB
+        // First 32KB: 8x4KB, but >50% of 32KB (16KB), and block is within region
+        // So first 32KB should be promoted
+        // Second 16KB: 4x4KB, exactly 50% of 32KB... depends on strict >
+        // With >, 16KB is not >16KB, so no promotion, should be 4x4KB
+
+        // Expected: 1x32KB + 4x4KB = 5 ops
+        let total_erased: u32 = ops.iter().map(|op| op.size).sum();
+        assert_eq!(total_erased, 49152, "Should erase exactly 48KB");
+
+        // Should have a 32KB block at the start
+        assert!(
+            ops.iter().any(|op| op.size == 32768),
+            "Should have a 32KB erase"
+        );
+    }
+
+    #[test]
+    fn test_optimal_erase_smart_no_erase_needed() {
+        // When flash already matches, no erase should be planned
+        let have = vec![0xAA; 65536];
+        let want = vec![0xAA; 65536];
+
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),
+            EraseBlock::new(opcodes::BE_D8, 65536),
+        ];
+
+        let ops = plan_optimal_erase(
+            &erase_blocks,
+            65536,
+            Some(&have),
+            Some(&want),
+            0,
+            65535,
+            WriteGranularity::Byte,
+        );
+
+        assert!(ops.is_empty(), "No erase needed when contents match");
+    }
+
+    #[test]
+    fn test_optimal_erase_smart_erased_flash() {
+        // Writing to erased flash shouldn't need erase
+        let have = vec![0xFF; 65536];
+        let want = vec![0xAA; 65536];
+
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),
+            EraseBlock::new(opcodes::BE_D8, 65536),
+        ];
+
+        let ops = plan_optimal_erase(
+            &erase_blocks,
+            65536,
+            Some(&have),
+            Some(&want),
+            0,
+            65535,
+            WriteGranularity::Byte,
+        );
+
+        assert!(
+            ops.is_empty(),
+            "No erase needed when flash is already erased"
+        );
+    }
+
+    #[test]
+    fn test_optimal_erase_smart_partial_erase() {
+        // Only erase the blocks that need it
+        let mut have = vec![0xFF; 65536];
+        have[0..4096].fill(0xAA); // First 4KB has data
+
+        let mut want = vec![0xFF; 65536];
+        want[0..4096].fill(0xBB); // Want to change first 4KB
+
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),
+            EraseBlock::new(opcodes::BE_D8, 65536),
+        ];
+
+        let ops = plan_optimal_erase(
+            &erase_blocks,
+            65536,
+            Some(&have),
+            Some(&want),
+            0,
+            65535,
+            WriteGranularity::Byte,
+        );
+
+        // Only the first 4KB block should need erasing
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].start, 0);
+        assert_eq!(ops[0].size, 4096);
+    }
+
+    #[test]
+    fn test_optimal_erase_offset_region() {
+        // Test erasing a region that doesn't start at 0
+        let erase_blocks = vec![
+            EraseBlock::new(opcodes::SE_20, 4096),
+            EraseBlock::new(opcodes::BE_D8, 65536),
+        ];
+
+        // Erase 8KB starting at 64KB offset
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 65536, 73727);
+
+        // Should be 2 x 4KB blocks
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0].start, 65536);
+        assert_eq!(ops[0].size, 4096);
+        assert_eq!(ops[1].start, 69632);
+        assert_eq!(ops[1].size, 4096);
+    }
+
+    #[test]
+    fn test_optimal_erase_empty_blocks() {
+        // Empty erase blocks should return empty result
+        let ops = plan_optimal_erase_region(&[], 65536, 0, 4095);
+        assert!(ops.is_empty());
     }
 }

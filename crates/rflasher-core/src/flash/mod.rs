@@ -71,6 +71,9 @@ pub use operations::{
     get_next_write_range,
     need_erase,
     need_write,
+    // Optimal erase algorithm
+    plan_optimal_erase,
+    plan_optimal_erase_region,
     plan_smart_erase,
     read_by_layout,
     // Smart write operations (SPI-specific)
@@ -82,6 +85,7 @@ pub use operations::{
     write_region,
     EraseBlockPlan,
     NoProgress,
+    OptimalEraseOp,
     // Progress reporting
     WriteProgress,
     WriteRange,

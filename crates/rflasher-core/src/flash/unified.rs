@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use crate::chip::WriteGranularity;
 use crate::error::{Error, Result};
 use crate::flash::device::FlashDevice;
+use crate::flash::operations::{plan_optimal_erase, plan_optimal_erase_region};
 use crate::layout::{Layout, LayoutError, Region};
 
 // =============================================================================
@@ -155,77 +156,6 @@ impl WriteProgress for NoProgress {
 }
 
 // =============================================================================
-// Block planning
-// =============================================================================
-
-/// Information about a block that may need to be erased
-#[derive(Debug, Clone)]
-struct BlockPlan {
-    /// Start address of the block
-    start: u32,
-    /// Size of the block
-    size: u32,
-    /// Whether this block needs to be erased
-    needs_erase: bool,
-    /// Whether this block needs to be written
-    needs_write: bool,
-}
-
-/// Plan erase and write operations for a data range
-fn plan_blocks(
-    have: &[u8],
-    want: &[u8],
-    base_addr: u32,
-    block_size: u32,
-    granularity: WriteGranularity,
-) -> Vec<BlockPlan> {
-    assert_eq!(have.len(), want.len());
-
-    let total_len = have.len() as u32;
-    let mut plans = Vec::new();
-
-    // Calculate the first block boundary at or before base_addr
-    let first_block_start = (base_addr / block_size) * block_size;
-    let mut current_addr = first_block_start;
-
-    while current_addr < base_addr + total_len {
-        let block_end = current_addr + block_size;
-
-        // Calculate the overlap between this block and our data
-        let overlap_start = current_addr.max(base_addr);
-        let overlap_end = block_end.min(base_addr + total_len);
-
-        if overlap_start >= overlap_end {
-            current_addr = block_end;
-            continue;
-        }
-
-        // Convert to buffer indices
-        let buf_start = (overlap_start - base_addr) as usize;
-        let buf_end = (overlap_end - base_addr) as usize;
-
-        let have_slice = &have[buf_start..buf_end];
-        let want_slice = &want[buf_start..buf_end];
-
-        let needs_write = need_write(have_slice, want_slice);
-        let needs_erase = needs_write && need_erase(have_slice, want_slice, granularity);
-
-        if needs_write {
-            plans.push(BlockPlan {
-                start: current_addr,
-                size: block_size,
-                needs_erase,
-                needs_write,
-            });
-        }
-
-        current_addr = block_end;
-    }
-
-    plans
-}
-
-// =============================================================================
 // Unified operations
 // =============================================================================
 
@@ -261,10 +191,10 @@ pub fn read_with_progress<D: FlashDevice, P: WriteProgress>(
 ///
 /// # Algorithm
 /// 1. Read current flash contents
-/// 2. Compare with desired contents to find changed blocks
-/// 3. For each changed block, determine if erase is needed
-/// 4. Erase only the blocks that need erasing
-/// 5. Write only the bytes that are different
+/// 2. Use optimal erase algorithm to plan erase operations (minimizes operations
+///    by using larger erase blocks when >50% of sub-blocks need erasing)
+/// 3. Erase only the blocks that need erasing
+/// 4. Write only the bytes that are different
 ///
 /// # Arguments
 /// * `device` - Flash device to write to
@@ -278,24 +208,25 @@ pub fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
     data: &[u8],
     progress: &mut P,
 ) -> Result<WriteStats> {
-    let flash_size = device.size() as usize;
+    let flash_size = device.size();
 
-    if data.len() != flash_size {
+    if data.len() != flash_size as usize {
         return Err(Error::BufferTooSmall);
     }
 
-    let block_size = device.erase_granularity();
+    // Clone erase blocks to avoid borrow checker issues
+    let erase_blocks: Vec<_> = device.erase_blocks().to_vec();
     let granularity = device.write_granularity();
 
     let mut stats = WriteStats::default();
 
     // Step 1: Read current flash contents
-    progress.reading(flash_size);
-    let mut current = vec![0u8; flash_size];
+    progress.reading(flash_size as usize);
+    let mut current = vec![0u8; flash_size as usize];
 
     let mut bytes_read = 0;
-    while bytes_read < flash_size {
-        let chunk_size = core::cmp::min(READ_CHUNK_SIZE, flash_size - bytes_read);
+    while bytes_read < flash_size as usize {
+        let chunk_size = core::cmp::min(READ_CHUNK_SIZE, flash_size as usize - bytes_read);
         device.read(
             bytes_read as u32,
             &mut current[bytes_read..bytes_read + chunk_size],
@@ -304,10 +235,8 @@ pub fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
         progress.read_progress(bytes_read);
     }
 
-    // Step 2: Plan block operations
-    let plans = plan_blocks(&current, data, 0, block_size, granularity);
-
-    if plans.is_empty() {
+    // Check if any changes are needed
+    if !need_write(&current, data) {
         // Nothing to do - flash already matches
         progress.complete(&stats);
         return Ok(stats);
@@ -319,32 +248,42 @@ pub fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
         .map(|r| r.len as usize)
         .sum();
 
-    let blocks_to_erase: Vec<_> = plans.iter().filter(|p| p.needs_erase).collect();
-    let _blocks_to_write: Vec<_> = plans.iter().filter(|p| p.needs_write).collect();
+    // Step 2: Plan optimal erase operations
+    // This uses the hierarchical algorithm that minimizes erase operations
+    // by promoting to larger blocks when >50% of sub-blocks need erasing
+    let erase_ops = plan_optimal_erase(
+        &erase_blocks,
+        flash_size,
+        Some(&current),
+        Some(data),
+        0,
+        flash_size - 1,
+        granularity,
+    );
 
     // Step 3: Erase blocks that need it
-    if !blocks_to_erase.is_empty() {
-        let bytes_to_erase: usize = blocks_to_erase.iter().map(|b| b.size as usize).sum();
-        progress.erasing(blocks_to_erase.len(), bytes_to_erase);
+    if !erase_ops.is_empty() {
+        let bytes_to_erase: usize = erase_ops.iter().map(|op| op.size as usize).sum();
+        progress.erasing(erase_ops.len(), bytes_to_erase);
 
-        for (i, block) in blocks_to_erase.iter().enumerate() {
-            device.erase(block.start, block.size)?;
+        for (i, op) in erase_ops.iter().enumerate() {
+            device.erase(op.start, op.size)?;
 
             // Update our view of current contents
-            let buf_start = block.start as usize;
-            let buf_end = (block.start + block.size) as usize;
+            let buf_start = op.start as usize;
+            let buf_end = (op.start + op.size) as usize;
             if buf_end <= current.len() {
                 current[buf_start..buf_end].fill(ERASED_VALUE);
             }
 
             stats.erases_performed += 1;
-            stats.bytes_erased += block.size as usize;
+            stats.bytes_erased += op.size as usize;
             progress.erase_progress(i + 1, stats.bytes_erased);
         }
         stats.flash_modified = true;
     }
 
-    // Step 4: Write blocks that differ
+    // Step 4: Write bytes that differ
     // Re-calculate write ranges after erasing
     let write_ranges = get_all_write_ranges(&current, data);
 
@@ -374,6 +313,7 @@ pub fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
 /// Perform a smart write operation for a specific region
 ///
 /// Similar to `smart_write` but only operates on a specific region of flash.
+/// Uses the optimal erase algorithm to minimize erase operations.
 pub fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     addr: u32,
@@ -384,8 +324,11 @@ pub fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
         return Err(Error::AddressOutOfBounds);
     }
 
-    let block_size = device.erase_granularity();
+    let flash_size = device.size();
+    // Clone erase blocks to avoid borrow checker issues
+    let erase_blocks: Vec<_> = device.erase_blocks().to_vec();
     let granularity = device.write_granularity();
+    let region_end = addr + data.len() as u32 - 1;
 
     let mut stats = WriteStats::default();
 
@@ -404,10 +347,8 @@ pub fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
         progress.read_progress(bytes_read);
     }
 
-    // Step 2: Plan block operations
-    let plans = plan_blocks(&current, data, addr, block_size, granularity);
-
-    if plans.is_empty() {
+    // Check if any changes are needed
+    if !need_write(&current, data) {
         progress.complete(&stats);
         return Ok(stats);
     }
@@ -417,51 +358,61 @@ pub fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
         .map(|r| r.len as usize)
         .sum();
 
-    let blocks_to_erase: Vec<_> = plans.iter().filter(|p| p.needs_erase).collect();
+    // Step 2: Plan optimal erase operations for this region
+    // The optimal erase algorithm will only select blocks fully within the region
+    // for promotion (the >50% heuristic checks block boundaries)
+    let erase_ops = plan_optimal_erase(
+        &erase_blocks,
+        flash_size,
+        Some(&current),
+        Some(data),
+        addr,
+        region_end,
+        granularity,
+    );
 
     // Step 3: Erase blocks that need it
-    if !blocks_to_erase.is_empty() {
-        let bytes_to_erase: usize = blocks_to_erase.iter().map(|b| b.size as usize).sum();
-        progress.erasing(blocks_to_erase.len(), bytes_to_erase);
+    if !erase_ops.is_empty() {
+        let bytes_to_erase: usize = erase_ops.iter().map(|op| op.size as usize).sum();
+        progress.erasing(erase_ops.len(), bytes_to_erase);
 
-        for (i, block) in blocks_to_erase.iter().enumerate() {
+        for (i, op) in erase_ops.iter().enumerate() {
             // Handle data outside our region but inside the erase block
-            let block_end = block.start + block.size;
+            let block_end = op.start + op.size;
 
             // Read data before our region (if block extends before)
-            if block.start < addr {
-                let preserve_len = (addr - block.start) as usize;
+            if op.start < addr {
+                let preserve_len = (addr - op.start) as usize;
                 let mut preserve_data = vec![0u8; preserve_len];
-                device.read(block.start, &mut preserve_data)?;
+                device.read(op.start, &mut preserve_data)?;
 
                 // Erase and restore
-                device.erase(block.start, block.size)?;
-                device.write(block.start, &preserve_data)?;
+                device.erase(op.start, op.size)?;
+                device.write(op.start, &preserve_data)?;
             }
             // Handle data after our region (if block extends after)
             else if block_end > addr + data.len() as u32 {
-                let region_end = addr + data.len() as u32;
-                let preserve_start = region_end;
-                let preserve_len = (block_end - region_end) as usize;
+                let region_end_addr = addr + data.len() as u32;
+                let preserve_start = region_end_addr;
+                let preserve_len = (block_end - region_end_addr) as usize;
 
                 let mut preserve_data = vec![0u8; preserve_len];
                 device.read(preserve_start, &mut preserve_data)?;
 
-                device.erase(block.start, block.size)?;
+                device.erase(op.start, op.size)?;
                 device.write(preserve_start, &preserve_data)?;
             } else {
                 // Block is entirely within our region
-                device.erase(block.start, block.size)?;
+                device.erase(op.start, op.size)?;
             }
 
             // Update our view of current contents
-            let rel_start = block.start.saturating_sub(addr) as usize;
-            let rel_end =
-                ((block.start + block.size).saturating_sub(addr) as usize).min(current.len());
+            let rel_start = op.start.saturating_sub(addr) as usize;
+            let rel_end = ((op.start + op.size).saturating_sub(addr) as usize).min(current.len());
             current[rel_start..rel_end].fill(ERASED_VALUE);
 
             stats.erases_performed += 1;
-            stats.bytes_erased += block.size as usize;
+            stats.bytes_erased += op.size as usize;
             progress.erase_progress(i + 1, stats.bytes_erased);
         }
         stats.flash_modified = true;
@@ -639,61 +590,61 @@ pub fn erase_by_layout<D: FlashDevice + ?Sized>(device: &mut D, layout: &Layout)
 
 /// Erase a single region
 ///
-/// This handles region boundaries that don't align with erase block boundaries
+/// This uses the optimal erase algorithm to minimize the number of erase operations.
+/// It handles region boundaries that don't align with erase block boundaries
 /// by preserving data outside the region.
 pub fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Region) -> Result<()> {
     if !device.is_valid_range(region.start, region.size() as usize) {
         return Err(Error::AddressOutOfBounds);
     }
 
-    let block_size = device.erase_granularity();
+    let flash_size = device.size();
+    // Clone erase blocks to avoid borrow checker issues
+    let erase_blocks: Vec<_> = device.erase_blocks().to_vec();
 
-    // Calculate first and last blocks
-    let first_block_start = (region.start / block_size) * block_size;
-    let mut current_addr = first_block_start;
+    // Plan optimal erase operations for this region
+    let erase_ops = plan_optimal_erase_region(&erase_blocks, flash_size, region.start, region.end);
 
-    while current_addr <= region.end {
-        let block_end = current_addr + block_size - 1;
-        let is_unaligned = current_addr < region.start || block_end > region.end;
+    for op in &erase_ops {
+        let block_end = op.start + op.size - 1;
+        let is_unaligned = op.start < region.start || block_end > region.end;
 
         if is_unaligned {
             // Need to preserve data outside the region
-            let mut backup = vec![ERASED_VALUE; block_size as usize];
+            let mut backup = vec![ERASED_VALUE; op.size as usize];
 
             // Read data before region (to preserve)
-            if region.start > current_addr {
-                let len = (region.start - current_addr) as usize;
-                device.read(current_addr, &mut backup[..len])?;
+            if region.start > op.start {
+                let len = (region.start - op.start) as usize;
+                device.read(op.start, &mut backup[..len])?;
             }
 
             // Read data after region (to preserve)
             if block_end > region.end {
                 let start = region.end + 1;
-                let rel_start = (start - current_addr) as usize;
+                let rel_start = (start - op.start) as usize;
                 let len = (block_end - region.end) as usize;
                 device.read(start, &mut backup[rel_start..rel_start + len])?;
             }
 
             // Erase the block
-            device.erase(current_addr, block_size)?;
+            device.erase(op.start, op.size)?;
 
             // Write back preserved data
-            if region.start > current_addr {
-                let len = (region.start - current_addr) as usize;
-                device.write(current_addr, &backup[..len])?;
+            if region.start > op.start {
+                let len = (region.start - op.start) as usize;
+                device.write(op.start, &backup[..len])?;
             }
             if block_end > region.end {
                 let start = region.end + 1;
-                let rel_start = (start - current_addr) as usize;
+                let rel_start = (start - op.start) as usize;
                 let len = (block_end - region.end) as usize;
                 device.write(start, &backup[rel_start..rel_start + len])?;
             }
         } else {
             // Block is aligned with region, just erase it
-            device.erase(current_addr, block_size)?;
+            device.erase(op.start, op.size)?;
         }
-
-        current_addr += block_size;
     }
 
     Ok(())

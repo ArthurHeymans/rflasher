@@ -329,7 +329,7 @@ The following features are planned for future development:
 - [ ] **Port more flash chips** - The original flashprog has ~600 chip definitions; we currently have 57
 - [ ] **Add more SPI programmers** - Port remaining SPI programmers from flashprog
 - [ ] **Intel Internal Programmer** - Support for reading/writing via Intel chipset (OpaqueMaster)
-- [ ] **Optimal erase algorithm** - Minimize erase operations by using largest possible erase blocks
+- [x] **Optimal erase algorithm** - Minimize erase operations by using largest possible erase blocks
 
 ## License
 
