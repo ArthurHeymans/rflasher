@@ -13,6 +13,71 @@ use std::path::Path;
 use std::time::Duration;
 
 // =============================================================================
+// Helper functions
+// =============================================================================
+
+/// Print flash size information
+fn print_flash_size(flash_size: u32) {
+    println!(
+        "Flash size: {} bytes ({} KiB)",
+        flash_size,
+        flash_size / 1024
+    );
+}
+
+/// Read file contents into a Vec
+fn read_file(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut file = File::open(path)?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)?;
+    println!("Read {} bytes from {:?}", data.len(), path);
+    Ok(data)
+}
+
+/// Create a standard progress bar style
+fn create_progress_bar_style() -> Result<ProgressStyle, Box<dyn std::error::Error>> {
+    Ok(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")?
+        .progress_chars("#>-"))
+}
+
+/// Create a progress bar with custom phase message
+fn create_progress_bar_with_phase(
+    total: u64,
+    phase: &str,
+) -> Result<ProgressBar, Box<dyn std::error::Error>> {
+    let pb = ProgressBar::new(total);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template(&format!(
+                "{{spinner:.green}} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{bytes}}/{{total_bytes}} ({{bytes_per_sec}}, {{eta}}) {}",
+                phase
+            ))?
+            .progress_chars("#>-"),
+    );
+    Ok(pb)
+}
+
+/// Create a standard spinner style
+fn create_spinner_style() -> Result<ProgressStyle, Box<dyn std::error::Error>> {
+    Ok(ProgressStyle::default_spinner().template("{spinner:.green} {msg}")?)
+}
+
+/// Display included regions
+fn display_included_regions(included: &[&rflasher_core::layout::Region], action: &str) {
+    println!("{} {} region(s):", action, included.len());
+    for region in included {
+        println!(
+            "  {} (0x{:08X} - 0x{:08X}, {} bytes)",
+            region.name,
+            region.start,
+            region.end,
+            region.size()
+        );
+    }
+}
+
+// =============================================================================
 // Progress reporting
 // =============================================================================
 
@@ -34,26 +99,16 @@ impl IndicatifProgress {
 
     fn create_bar(&mut self, total: u64, phase: &'static str) {
         self.phase = phase;
-        let pb = self.multi.add(ProgressBar::new(total));
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(&format!(
-                    "{{spinner:.green}} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{bytes}}/{{total_bytes}} ({{bytes_per_sec}}, {{eta}}) {}",
-                    phase
-                ))
-                .unwrap_or_else(|_| ProgressStyle::default_bar())
-                .progress_chars("#>-"),
+        let pb = self.multi.add(
+            create_progress_bar_with_phase(total, phase)
+                .unwrap_or_else(|_| ProgressBar::new(total)),
         );
         self.current_bar = Some(pb);
     }
 
     fn create_spinner(&mut self, message: String) {
         let pb = self.multi.add(ProgressBar::new_spinner());
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} {msg}")
-                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
-        );
+        pb.set_style(create_spinner_style().unwrap_or_else(|_| ProgressStyle::default_spinner()));
         pb.set_message(message);
         pb.enable_steady_tick(Duration::from_millis(100));
         self.current_bar = Some(pb);
@@ -140,11 +195,7 @@ pub fn read_flash<D: FlashDevice + ?Sized>(
     let mut data = vec![0u8; total_size];
 
     let pb = ProgressBar::new(total_size as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")?
-            .progress_chars("#>-"),
-    );
+    pb.set_style(create_progress_bar_style()?);
 
     let mut offset = 0usize;
     while offset < total_size {
@@ -164,12 +215,7 @@ pub fn run_read<D: FlashDevice + ?Sized>(
     device: &mut D,
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let flash_size = device.size();
-    println!(
-        "Flash size: {} bytes ({} KiB)",
-        flash_size,
-        flash_size / 1024
-    );
+    print_flash_size(device.size());
 
     // Read the chip
     let data = read_flash(device)?;
@@ -190,11 +236,7 @@ pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
     layout: &Layout,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!(
-        "Flash size: {} bytes ({} KiB)",
-        flash_size,
-        flash_size / 1024
-    );
+    print_flash_size(flash_size);
 
     // Display included regions
     let included: Vec<_> = layout.included_regions().collect();
@@ -202,16 +244,7 @@ pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
         return Err("No regions selected for reading. Use --include to select regions.".into());
     }
 
-    println!("Reading {} region(s):", included.len());
-    for region in &included {
-        println!(
-            "  {} (0x{:08X} - 0x{:08X}, {} bytes)",
-            region.name,
-            region.start,
-            region.end,
-            region.size()
-        );
-    }
+    display_included_regions(&included, "Reading");
 
     // Calculate total bytes to read
     let total_bytes: usize = included.iter().map(|r| r.size() as usize).sum();
@@ -221,11 +254,7 @@ pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
 
     // Create progress bar
     let pb = ProgressBar::new(total_bytes as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")?
-            .progress_chars("#>-"),
-    );
+    pb.set_style(create_progress_bar_style()?);
 
     let mut bytes_read = 0usize;
 
@@ -271,18 +300,10 @@ pub fn run_write<D: FlashDevice + ?Sized>(
     do_verify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!(
-        "Flash size: {} bytes ({} KiB)",
-        flash_size,
-        flash_size / 1024
-    );
+    print_flash_size(flash_size);
 
     // Read input file
-    let mut file = File::open(input)?;
-    let mut data = Vec::new();
-    file.read_to_end(&mut data)?;
-
-    println!("Read {} bytes from {:?}", data.len(), input);
+    let mut data = read_file(input)?;
 
     // Validate size
     if data.len() > flash_size as usize {
@@ -330,19 +351,11 @@ pub fn run_write_with_layout<D: FlashDevice + ?Sized>(
     do_verify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!(
-        "Flash size: {} bytes ({} KiB)",
-        flash_size,
-        flash_size / 1024
-    );
+    print_flash_size(flash_size);
 
     // Read input file
-    let mut file = File::open(input)?;
-    let mut file_data = Vec::new();
-    file.read_to_end(&mut file_data)?;
-
+    let file_data = read_file(input)?;
     let file_size = file_data.len();
-    println!("Read {} bytes from {:?}", file_size, input);
 
     // Display included regions
     let included: Vec<_> = layout.included_regions().collect();
@@ -350,16 +363,7 @@ pub fn run_write_with_layout<D: FlashDevice + ?Sized>(
         return Err("No regions selected for writing. Use --include to select regions.".into());
     }
 
-    println!("Writing {} region(s):", included.len());
-    for region in &included {
-        println!(
-            "  {} (0x{:08X} - 0x{:08X}, {} bytes)",
-            region.name,
-            region.start,
-            region.end,
-            region.size()
-        );
-    }
+    display_included_regions(&included, "Writing");
 
     // Check for readonly regions
     let readonly = layout.readonly_included();
@@ -458,11 +462,7 @@ pub fn run_erase<D: FlashDevice + ?Sized>(
     length: Option<u32>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!(
-        "Flash size: {} bytes ({} KiB)",
-        flash_size,
-        flash_size / 1024
-    );
+    print_flash_size(flash_size);
 
     let (start_addr, len) = match (start, length) {
         (Some(s), Some(l)) => (s, l),
@@ -473,7 +473,7 @@ pub fn run_erase<D: FlashDevice + ?Sized>(
     };
 
     let pb = ProgressBar::new_spinner();
-    pb.set_style(ProgressStyle::default_spinner().template("{spinner:.green} {msg}")?);
+    pb.set_style(create_spinner_style()?);
     pb.enable_steady_tick(Duration::from_millis(100));
 
     if start_addr == 0 && len == flash_size {
@@ -495,12 +495,7 @@ pub fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let flash_size = device.size();
-    println!(
-        "Flash size: {} bytes ({} KiB)",
-        flash_size,
-        flash_size / 1024
-    );
+    print_flash_size(device.size());
 
     let included: Vec<_> = layout.included_regions().collect();
     if included.is_empty() {
@@ -508,12 +503,12 @@ pub fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     }
 
     let total_bytes: usize = included.iter().map(|r| r.size() as usize).sum();
-
     println!(
         "Erasing {} region(s) ({} bytes):",
         included.len(),
         total_bytes
     );
+
     for region in &included {
         println!(
             "  {} (0x{:08X} - 0x{:08X}, {} bytes)",
@@ -525,7 +520,7 @@ pub fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     }
 
     let pb = ProgressBar::new_spinner();
-    pb.set_style(ProgressStyle::default_spinner().template("{spinner:.green} {msg}")?);
+    pb.set_style(create_spinner_style()?);
     pb.enable_steady_tick(Duration::from_millis(100));
 
     for region in included {
@@ -542,6 +537,40 @@ pub fn run_erase_with_layout<D: FlashDevice + ?Sized>(
 // Verify operations
 // =============================================================================
 
+/// Compare a chunk with expected data and return detailed error on mismatch
+fn verify_chunk(
+    chunk: &[u8],
+    expected_chunk: &[u8],
+    base_offset: usize,
+    region_name: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if chunk != expected_chunk {
+        // Find first difference
+        for (i, (a, b)) in chunk.iter().zip(expected_chunk.iter()).enumerate() {
+            if a != b {
+                let error_msg = if let Some(name) = region_name {
+                    format!(
+                        "Verification failed in region '{}' at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
+                        name,
+                        base_offset + i,
+                        b,
+                        a
+                    )
+                } else {
+                    format!(
+                        "Verification failed at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
+                        base_offset + i,
+                        b,
+                        a
+                    )
+                };
+                return Err(error_msg.into());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Verify flash contents against expected data
 pub fn verify_flash<D: FlashDevice + ?Sized>(
     device: &mut D,
@@ -550,12 +579,7 @@ pub fn verify_flash<D: FlashDevice + ?Sized>(
     let total_size = expected.len();
     let mut buf = vec![0u8; READ_CHUNK_SIZE];
 
-    let pb = ProgressBar::new(total_size as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta}) Verifying")?
-            .progress_chars("#>-"),
-    );
+    let pb = create_progress_bar_with_phase(total_size as u64, "Verifying")?;
 
     let mut offset = 0usize;
     while offset < total_size {
@@ -566,20 +590,9 @@ pub fn verify_flash<D: FlashDevice + ?Sized>(
 
         // Compare
         let expected_chunk = &expected[offset..offset + chunk_size];
-        if chunk != expected_chunk {
+        if let Err(e) = verify_chunk(chunk, expected_chunk, offset, None) {
             pb.abandon_with_message("Verification failed!");
-            // Find first difference
-            for (i, (a, b)) in chunk.iter().zip(expected_chunk.iter()).enumerate() {
-                if a != b {
-                    return Err(format!(
-                        "Verification failed at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
-                        offset + i,
-                        b,
-                        a
-                    )
-                    .into());
-                }
-            }
+            return Err(e);
         }
 
         offset += chunk_size;
@@ -596,18 +609,10 @@ pub fn run_verify<D: FlashDevice + ?Sized>(
     input: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
-    println!(
-        "Flash size: {} bytes ({} KiB)",
-        flash_size,
-        flash_size / 1024
-    );
+    print_flash_size(flash_size);
 
     // Read input file
-    let mut file = File::open(input)?;
-    let mut expected = Vec::new();
-    file.read_to_end(&mut expected)?;
-
-    println!("Read {} bytes from {:?}", expected.len(), input);
+    let expected = read_file(input)?;
 
     // Validate size
     if expected.len() > flash_size as usize {
@@ -634,12 +639,7 @@ pub fn verify_by_layout<D: FlashDevice + ?Sized>(
     let included: Vec<_> = layout.included_regions().collect();
     let total_bytes: usize = included.iter().map(|r| r.size() as usize).sum();
 
-    let pb = ProgressBar::new(total_bytes as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta}) Verifying")?
-            .progress_chars("#>-"),
-    );
+    let pb = create_progress_bar_with_phase(total_bytes as u64, "Verifying")?;
 
     let mut bytes_verified = 0usize;
     let mut buf = vec![0u8; READ_CHUNK_SIZE];
@@ -654,20 +654,10 @@ pub fn verify_by_layout<D: FlashDevice + ?Sized>(
 
             // Compare
             let expected_chunk = &expected[offset as usize..offset as usize + chunk_size];
-            if chunk != expected_chunk {
+            if let Err(e) = verify_chunk(chunk, expected_chunk, offset as usize, Some(&region.name))
+            {
                 pb.abandon_with_message("Verification failed!");
-                for (i, (a, b)) in chunk.iter().zip(expected_chunk.iter()).enumerate() {
-                    if a != b {
-                        return Err(format!(
-                            "Verification failed in region '{}' at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
-                            region.name,
-                            offset as usize + i,
-                            b,
-                            a
-                        )
-                        .into());
-                    }
-                }
+                return Err(e);
             }
 
             offset += chunk_size as u32;
