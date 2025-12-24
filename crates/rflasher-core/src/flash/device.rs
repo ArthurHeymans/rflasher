@@ -10,6 +10,8 @@
 
 use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::Result;
+#[cfg(feature = "alloc")]
+use crate::wp::{WpConfig, WpError, WpMode, WpRange, WpResult, WriteOptions};
 
 /// Unified trait for flash devices
 ///
@@ -20,6 +22,12 @@ use crate::error::Result;
 /// # Operations
 ///
 /// All operations use 32-bit addresses, which supports flash sizes up to 4GB.
+///
+/// # Write Protection
+///
+/// Write protection operations are optional. The default implementations return
+/// `WpError::ChipUnsupported`. SPI-based devices override these to provide
+/// actual WP functionality.
 ///
 /// # Example
 ///
@@ -101,6 +109,52 @@ pub trait FlashDevice {
     fn is_valid_range(&self, addr: u32, len: usize) -> bool {
         let end = addr.saturating_add(len as u32);
         end <= self.size() && end >= addr // Check for overflow
+    }
+
+    // =========================================================================
+    // Write Protection (optional, default implementations return unsupported)
+    // =========================================================================
+
+    /// Check if write protection operations are supported
+    #[cfg(feature = "alloc")]
+    fn wp_supported(&self) -> bool {
+        false
+    }
+
+    /// Read current write protection configuration
+    #[cfg(feature = "alloc")]
+    fn read_wp_config(&mut self) -> WpResult<WpConfig> {
+        Err(WpError::ChipUnsupported)
+    }
+
+    /// Write write protection configuration
+    #[cfg(feature = "alloc")]
+    fn write_wp_config(&mut self, _config: &WpConfig, _options: WriteOptions) -> WpResult<()> {
+        Err(WpError::ChipUnsupported)
+    }
+
+    /// Set write protection mode only
+    #[cfg(feature = "alloc")]
+    fn set_wp_mode(&mut self, _mode: WpMode, _options: WriteOptions) -> WpResult<()> {
+        Err(WpError::ChipUnsupported)
+    }
+
+    /// Set protected range only
+    #[cfg(feature = "alloc")]
+    fn set_wp_range(&mut self, _range: &WpRange, _options: WriteOptions) -> WpResult<()> {
+        Err(WpError::ChipUnsupported)
+    }
+
+    /// Disable all write protection
+    #[cfg(feature = "alloc")]
+    fn disable_wp(&mut self, _options: WriteOptions) -> WpResult<()> {
+        Err(WpError::ChipUnsupported)
+    }
+
+    /// Get all available protection ranges
+    #[cfg(feature = "alloc")]
+    fn get_available_wp_ranges(&self) -> alloc::vec::Vec<WpRange> {
+        alloc::vec::Vec::new()
     }
 }
 

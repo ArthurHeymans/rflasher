@@ -215,9 +215,30 @@ pub const SR1_SEC: u8 = 0x40;
 /// Status Register 1: Status Register Protect 0
 pub const SR1_SRP0: u8 = 0x80;
 
-/// Status Register 2: Status Register Protect 1
+/// Status Register 2: Status Register Protect 1 (SRL)
 pub const SR2_SRP1: u8 = 0x01;
 /// Status Register 2: Quad Enable
 pub const SR2_QE: u8 = 0x02;
+/// Status Register 2: Block Protect bit 3 (some chips)
+pub const SR2_BP3: u8 = 0x04;
+/// Status Register 2: Lock bit 1
+pub const SR2_LB1: u8 = 0x08;
+/// Status Register 2: Lock bit 2
+pub const SR2_LB2: u8 = 0x10;
+/// Status Register 2: Lock bit 3
+pub const SR2_LB3: u8 = 0x20;
+/// Status Register 2: Complement (CMP) bit
+pub const SR2_CMP: u8 = 0x40;
 /// Status Register 2: Suspend Status
 pub const SR2_SUS: u8 = 0x80;
+
+// ============================================================================
+// Status Register 3 bit definitions
+// ============================================================================
+
+/// Status Register 3: Write Protect Selection (WPS)
+pub const SR3_WPS: u8 = 0x04;
+/// Status Register 3: Address Mode (ADP) - 4-byte mode indicator
+pub const SR3_ADP: u8 = 0x02;
+/// Status Register 3: Power Up Address Mode (ADS)
+pub const SR3_ADS: u8 = 0x01;

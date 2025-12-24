@@ -195,6 +195,105 @@ pub enum Commands {
     /// Layout operations
     #[command(subcommand)]
     Layout(LayoutCommands),
+
+    /// Write protection operations
+    #[command(subcommand, name = "wp", alias = "write-protect")]
+    Wp(WpCommands),
+}
+
+/// Write protection subcommands
+#[derive(Subcommand)]
+pub enum WpCommands {
+    /// Show current write protection status (default if no subcommand specified)
+    Status {
+        /// Programmer to use
+        #[arg(short, long, help = programmer_help())]
+        programmer: String,
+
+        /// Chip name (optional, auto-detected if not specified)
+        #[arg(short, long)]
+        chip: Option<String>,
+    },
+
+    /// List available protection ranges
+    List {
+        /// Programmer to use
+        #[arg(short, long, help = programmer_help())]
+        programmer: String,
+
+        /// Chip name (optional, auto-detected if not specified)
+        #[arg(short, long)]
+        chip: Option<String>,
+    },
+
+    /// Enable hardware write protection
+    Enable {
+        /// Programmer to use
+        #[arg(short, long, help = programmer_help())]
+        programmer: String,
+
+        /// Chip name (optional, auto-detected if not specified)
+        #[arg(short, long)]
+        chip: Option<String>,
+
+        /// Make changes volatile (lost on power cycle)
+        #[arg(long)]
+        temporary: bool,
+    },
+
+    /// Disable hardware write protection
+    Disable {
+        /// Programmer to use
+        #[arg(short, long, help = programmer_help())]
+        programmer: String,
+
+        /// Chip name (optional, auto-detected if not specified)
+        #[arg(short, long)]
+        chip: Option<String>,
+
+        /// Make changes volatile (lost on power cycle)
+        #[arg(long)]
+        temporary: bool,
+    },
+
+    /// Set protection range by address
+    Range {
+        /// Programmer to use
+        #[arg(short, long, help = programmer_help())]
+        programmer: String,
+
+        /// Chip name (optional, auto-detected if not specified)
+        #[arg(short, long)]
+        chip: Option<String>,
+
+        /// Make changes volatile (lost on power cycle)
+        #[arg(long)]
+        temporary: bool,
+
+        /// Protection range as "start,length" (e.g., "0,0x100000" or "0x10000,65536")
+        range: String,
+    },
+
+    /// Set protection range by region name (requires layout)
+    Region {
+        /// Programmer to use
+        #[arg(short, long, help = programmer_help())]
+        programmer: String,
+
+        /// Chip name (optional, auto-detected if not specified)
+        #[arg(short, long)]
+        chip: Option<String>,
+
+        /// Make changes volatile (lost on power cycle)
+        #[arg(long)]
+        temporary: bool,
+
+        #[command(flatten)]
+        layout: LayoutArgs,
+
+        /// Region name to protect
+        region_name: String,
+    },
 }
 
 /// Layout-related subcommands

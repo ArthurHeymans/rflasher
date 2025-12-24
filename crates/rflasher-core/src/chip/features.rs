@@ -79,6 +79,14 @@ bitflags! {
         const WP_SEC          = 1 << 24;
         /// Complement (CMP) bit available
         const WP_CMP          = 1 << 25;
+        /// Has Status Register Lock (SRL) bit
+        const WP_SRL          = 1 << 26;
+        /// Supports volatile status register writes (EWSR)
+        const WP_VOLATILE     = 1 << 27;
+        /// Has BP3 (4th block protect bit)
+        const WP_BP3          = 1 << 28;
+        /// Has Write Protect Selection (WPS) for per-sector mode
+        const WP_WPS          = 1 << 29;
     }
 }
 

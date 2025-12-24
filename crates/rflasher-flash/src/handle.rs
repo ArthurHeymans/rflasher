@@ -6,6 +6,7 @@
 use rflasher_core::chip::FlashChip;
 use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult};
 use rflasher_core::sfdp::{SfdpInfo, SfdpMismatch};
+use rflasher_core::wp::{WpConfig, WpMode, WpRange, WpResult, WriteOptions};
 
 /// Chip information available from a FlashHandle
 #[derive(Debug, Clone)]
@@ -179,6 +180,47 @@ impl FlashHandle {
         log::debug!("Found FMAP with {} regions", layout.len());
 
         Ok(layout)
+    }
+}
+
+// =============================================================================
+// Write Protection Support
+// =============================================================================
+
+impl FlashHandle {
+    /// Check if write protection is supported
+    pub fn wp_supported(&self) -> bool {
+        self.device.wp_supported()
+    }
+
+    /// Read current write protection configuration
+    pub fn read_wp_config(&mut self) -> WpResult<WpConfig> {
+        self.device.read_wp_config()
+    }
+
+    /// Write write protection configuration
+    pub fn write_wp_config(&mut self, config: &WpConfig, options: WriteOptions) -> WpResult<()> {
+        self.device.write_wp_config(config, options)
+    }
+
+    /// Set write protection mode only
+    pub fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
+        self.device.set_wp_mode(mode, options)
+    }
+
+    /// Set protected range only
+    pub fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
+        self.device.set_wp_range(range, options)
+    }
+
+    /// Disable all write protection
+    pub fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
+        self.device.disable_wp(options)
+    }
+
+    /// Get all available protection ranges
+    pub fn get_available_wp_ranges(&self) -> Vec<WpRange> {
+        self.device.get_available_wp_ranges()
     }
 }
 

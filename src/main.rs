@@ -17,7 +17,7 @@ mod cli;
 mod commands;
 
 use clap::Parser;
-use cli::{Cli, Commands, LayoutArgs, LayoutCommands};
+use cli::{Cli, Commands, LayoutArgs, LayoutCommands, WpCommands};
 use rflasher_core::chip::ChipDatabase;
 use rflasher_flash::{open_flash, FlashHandle};
 
@@ -146,6 +146,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 commands::layout::cmd_fmap(&input, output.as_deref())
             }
             LayoutCommands::Create { output, size } => commands::layout::cmd_create(&output, &size),
+        },
+        Commands::Wp(subcmd) => match subcmd {
+            WpCommands::Status {
+                programmer,
+                chip: _,
+            } => {
+                let mut handle = open_flash(&programmer, &db)?;
+                commands::wp::cmd_status(&mut handle)
+            }
+            WpCommands::List {
+                programmer,
+                chip: _,
+            } => {
+                let mut handle = open_flash(&programmer, &db)?;
+                commands::wp::cmd_list(&mut handle)
+            }
+            WpCommands::Enable {
+                programmer,
+                chip: _,
+                temporary,
+            } => {
+                let mut handle = open_flash(&programmer, &db)?;
+                commands::wp::cmd_enable(&mut handle, temporary)
+            }
+            WpCommands::Disable {
+                programmer,
+                chip: _,
+                temporary,
+            } => {
+                let mut handle = open_flash(&programmer, &db)?;
+                commands::wp::cmd_disable(&mut handle, temporary)
+            }
+            WpCommands::Range {
+                programmer,
+                chip: _,
+                temporary,
+                range,
+            } => {
+                let mut handle = open_flash(&programmer, &db)?;
+                commands::wp::cmd_range(&mut handle, &range, temporary)
+            }
+            WpCommands::Region {
+                programmer,
+                chip: _,
+                temporary,
+                layout,
+                region_name,
+            } => {
+                let mut handle = open_flash(&programmer, &db)?;
+                let layout_obj = load_layout(&mut handle, &layout)?;
+                commands::wp::cmd_region(&mut handle, &layout_obj, &region_name, temporary)
+            }
         },
     };
 

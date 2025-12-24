@@ -9,6 +9,9 @@ use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
 use crate::programmer::SpiMaster;
 use crate::protocol;
+use crate::wp::{
+    self, RangeDecoder, WpBits, WpConfig, WpMode, WpRange, WpRegBitMap, WpResult, WriteOptions,
+};
 
 /// Flash device adapter for SPI-based programmers
 ///
@@ -82,6 +85,42 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
     fn erase_blocks(&self) -> &[EraseBlock] {
         self.context().chip.erase_blocks()
+    }
+
+    // Write protection support
+    #[cfg(feature = "alloc")]
+    fn wp_supported(&self) -> bool {
+        true
+    }
+
+    #[cfg(feature = "alloc")]
+    fn read_wp_config(&mut self) -> WpResult<WpConfig> {
+        SpiFlashDevice::read_wp_config(self)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn write_wp_config(&mut self, config: &WpConfig, options: WriteOptions) -> WpResult<()> {
+        SpiFlashDevice::write_wp_config(self, config, options)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
+        SpiFlashDevice::set_wp_mode(self, mode, options)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
+        SpiFlashDevice::set_wp_range(self, range, options)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
+        SpiFlashDevice::disable_wp(self, options)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn get_available_wp_ranges(&self) -> alloc::vec::Vec<WpRange> {
+        SpiFlashDevice::get_available_wp_ranges(self)
     }
 
     fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
@@ -283,5 +322,103 @@ fn map_to_4byte_erase_opcode(opcode: u8) -> u8 {
         opcodes::BE_52 => opcodes::BE_5C,
         opcodes::BE_D8 => opcodes::BE_DC,
         _ => opcode, // Chip erase doesn't need address
+    }
+}
+
+// =============================================================================
+// Write Protection Support
+// =============================================================================
+
+impl<M: SpiMaster> SpiFlashDevice<M> {
+    /// Get the WP register bit map for this chip
+    ///
+    /// Returns a standard Winbond-style bit map. In the future, this could
+    /// be made chip-specific based on the chip database.
+    fn wp_bit_map(&self) -> WpRegBitMap {
+        // Check if chip has BP3 (4 BP bits)
+        let features = self.ctx.chip.features;
+        if features.contains(crate::chip::Features::WP_BP3) {
+            WpRegBitMap::winbond_with_bp3()
+        } else {
+            WpRegBitMap::winbond_standard()
+        }
+    }
+
+    /// Get the range decoder for this chip
+    fn wp_decoder(&self) -> RangeDecoder {
+        // Default to standard SPI25 decoding
+        // In the future, this could be made chip-specific
+        RangeDecoder::Spi25
+    }
+
+    /// Read current write protection bits
+    pub fn read_wp_bits(&mut self) -> WpResult<WpBits> {
+        let bit_map = self.wp_bit_map();
+        wp::read_wp_bits(&mut self.master, &bit_map)
+    }
+
+    /// Read current write protection configuration
+    pub fn read_wp_config(&mut self) -> WpResult<WpConfig> {
+        let bit_map = self.wp_bit_map();
+        let decoder = self.wp_decoder();
+        let total_size = self.ctx.chip.total_size;
+        wp::read_wp_config(&mut self.master, &bit_map, total_size, decoder)
+    }
+
+    /// Write write protection bits
+    pub fn write_wp_bits(&mut self, bits: &WpBits, options: WriteOptions) -> WpResult<()> {
+        let bit_map = self.wp_bit_map();
+        wp::write_wp_bits(&mut self.master, bits, &bit_map, options)
+    }
+
+    /// Write write protection configuration
+    pub fn write_wp_config(&mut self, config: &WpConfig, options: WriteOptions) -> WpResult<()> {
+        let bit_map = self.wp_bit_map();
+        let decoder = self.wp_decoder();
+        let total_size = self.ctx.chip.total_size;
+        wp::write_wp_config(
+            &mut self.master,
+            config,
+            &bit_map,
+            total_size,
+            decoder,
+            options,
+        )
+    }
+
+    /// Set write protection mode
+    pub fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
+        let bit_map = self.wp_bit_map();
+        wp::set_wp_mode(&mut self.master, mode, &bit_map, options)
+    }
+
+    /// Set protected range
+    pub fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
+        let bit_map = self.wp_bit_map();
+        let decoder = self.wp_decoder();
+        let total_size = self.ctx.chip.total_size;
+        wp::set_wp_range(
+            &mut self.master,
+            range,
+            &bit_map,
+            total_size,
+            decoder,
+            options,
+        )
+    }
+
+    /// Disable write protection
+    pub fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
+        let bit_map = self.wp_bit_map();
+        wp::disable_wp(&mut self.master, &bit_map, options)
+    }
+
+    /// Get all available protection ranges
+    #[cfg(feature = "alloc")]
+    pub fn get_available_wp_ranges(&self) -> alloc::vec::Vec<WpRange> {
+        let bit_map = self.wp_bit_map();
+        let decoder = self.wp_decoder();
+        let total_size = self.ctx.chip.total_size;
+        wp::get_available_ranges(&bit_map, total_size, decoder)
     }
 }

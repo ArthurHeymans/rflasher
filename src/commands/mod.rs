@@ -18,5 +18,6 @@
 pub mod layout;
 mod list;
 pub mod unified;
+pub mod wp;
 
 pub use list::{list_chips, list_programmers};
