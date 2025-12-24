@@ -168,11 +168,7 @@ fn binary_search_fmap<S: FmapSearchable>(
 ) -> Result<Option<u32>, LayoutError> {
     let size = storage.size();
 
-    if rom_offset + len > size {
-        return Ok(None);
-    }
-
-    if (len as usize) < FMAP_HEADER_SIZE {
+    if rom_offset + len > size || (len as usize) < FMAP_HEADER_SIZE {
         return Ok(None);
     }
 
@@ -180,58 +176,56 @@ fn binary_search_fmap<S: FmapSearchable>(
     let mut sig_buf = [0u8; 8];
     let mut header_buf = vec![0u8; FMAP_HEADER_SIZE];
 
-    let mut check_offset_0 = true;
-    let mut stride = size / 2;
+    // Generate strides: size/2, size/4, size/8, ... down to min_stride
+    // Using successors to generate the halving sequence
+    let strides = std::iter::successors(Some(size / 2), |&stride| {
+        let next = stride / 2;
+        (next >= min_stride).then_some(next)
+    });
 
-    // Start with largest stride and halve each iteration
-    while stride >= min_stride {
-        if stride > len {
-            stride /= 2;
-            continue;
-        }
+    let mut offset_0_checked = false;
 
-        let mut offset = rom_offset;
-        while offset <= rom_offset + len - FMAP_HEADER_SIZE as u32 {
-            // Skip offsets already checked by larger strides
-            // (offset % (stride * 2) == 0) means this was checked in previous iteration
-            if offset.is_multiple_of(stride * 2) && (offset != 0) {
-                offset += stride;
-                continue;
-            }
+    for stride in strides.filter(|&s| s <= len) {
+        // Generate offsets at this stride level
+        let offsets = (rom_offset..=rom_offset + len - FMAP_HEADER_SIZE as u32)
+            .step_by(stride as usize)
+            .filter(|&offset| {
+                // Skip offsets already checked by larger strides
+                if offset.is_multiple_of(stride * 2) && offset != 0 {
+                    return false;
+                }
 
-            // Special handling for offset 0
-            if offset == 0 && !check_offset_0 {
-                offset += stride;
-                continue;
-            }
-            check_offset_0 = false;
+                // Special handling for offset 0 - only check once
+                if offset == 0 {
+                    if offset_0_checked {
+                        return false;
+                    }
+                    offset_0_checked = true;
+                }
 
+                true
+            });
+
+        for offset in offsets {
             // Read signature first (8 bytes) - cheap check
             if storage.read_at(offset, &mut sig_buf).is_err() {
-                offset += stride;
                 continue;
             }
 
             // Check for FMAP signature
             if &sig_buf != FMAP_SIGNATURE {
-                offset += stride;
                 continue;
             }
 
             // Found potential FMAP - read and validate the header
             if storage.read_at(offset, &mut header_buf).is_err() {
-                offset += stride;
                 continue;
             }
 
             if is_valid_fmap_header(&header_buf) {
                 return Ok(Some(offset));
             }
-
-            offset += stride;
         }
-
-        stride /= 2;
     }
 
     Ok(None)
