@@ -66,7 +66,7 @@ fn create_spinner_style() -> Result<ProgressStyle, Box<dyn std::error::Error>> {
 /// Display included regions
 fn display_included_regions(included: &[&rflasher_core::layout::Region], action: &str) {
     println!("{} {} region(s):", action, included.len());
-    for region in included {
+    included.iter().for_each(|region| {
         println!(
             "  {} (0x{:08X} - 0x{:08X}, {} bytes)",
             region.name,
@@ -74,7 +74,7 @@ fn display_included_regions(included: &[&rflasher_core::layout::Region], action:
             region.end,
             region.size()
         );
-    }
+    });
 }
 
 /// Create a layout covering the entire flash
@@ -234,23 +234,25 @@ pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
     let pb = ProgressBar::new(total_bytes as u64);
     pb.set_style(create_progress_bar_style()?);
 
-    let mut bytes_read = 0usize;
-
     // Read each included region
-    for region in included {
-        let mut offset = region.start;
-        while offset <= region.end {
+    let bytes_read = included
+        .iter()
+        .flat_map(|region| {
+            (region.start..=region.end)
+                .step_by(READ_CHUNK_SIZE)
+                .map(move |offset| (region, offset))
+        })
+        .try_fold(0usize, |bytes_read, (region, offset)| {
             let remaining = (region.end - offset + 1) as usize;
             let chunk_size = std::cmp::min(READ_CHUNK_SIZE, remaining);
             let chunk = &mut data[offset as usize..offset as usize + chunk_size];
 
             device.read(offset, chunk)?;
 
-            offset += chunk_size as u32;
-            bytes_read += chunk_size;
-            pb.set_position(bytes_read as u64);
-        }
-    }
+            let new_bytes_read = bytes_read + chunk_size;
+            pb.set_position(new_bytes_read as u64);
+            Ok::<_, Box<dyn std::error::Error>>(new_bytes_read)
+        })?;
 
     pb.finish_with_message("Read complete");
 
@@ -420,7 +422,7 @@ pub fn run_erase_with_layout<D: FlashDevice + ?Sized>(
         total_bytes
     );
 
-    for region in &included {
+    included.iter().for_each(|region| {
         println!(
             "  {} (0x{:08X} - 0x{:08X}, {} bytes)",
             region.name,
@@ -428,16 +430,16 @@ pub fn run_erase_with_layout<D: FlashDevice + ?Sized>(
             region.end,
             region.size()
         );
-    }
+    });
 
     let pb = ProgressBar::new_spinner();
     pb.set_style(create_spinner_style()?);
     pb.enable_steady_tick(Duration::from_millis(100));
 
-    for region in included {
+    included.iter().try_for_each(|region| {
         pb.set_message(format!("Erasing {}...", region.name));
-        unified::erase_region(device, region)?;
-    }
+        unified::erase_region(device, region)
+    })?;
 
     pb.finish_with_message("Erase complete");
 
@@ -455,31 +457,29 @@ fn verify_chunk(
     base_offset: usize,
     region_name: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if chunk != expected_chunk {
-        // Find first difference
-        for (i, (a, b)) in chunk.iter().zip(expected_chunk.iter()).enumerate() {
-            if a != b {
-                let error_msg = if let Some(name) = region_name {
-                    format!(
-                        "Verification failed in region '{}' at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
-                        name,
-                        base_offset + i,
-                        b,
-                        a
-                    )
-                } else {
-                    format!(
-                        "Verification failed at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
-                        base_offset + i,
-                        b,
-                        a
-                    )
-                };
-                return Err(error_msg.into());
-            }
-        }
-    }
-    Ok(())
+    chunk
+        .iter()
+        .zip(expected_chunk.iter())
+        .enumerate()
+        .find(|(_, (a, b))| a != b)
+        .map_or(Ok(()), |(i, (a, b))| {
+            let error_msg = match region_name {
+                Some(name) => format!(
+                    "Verification failed in region '{}' at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
+                    name,
+                    base_offset + i,
+                    b,
+                    a
+                ),
+                None => format!(
+                    "Verification failed at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
+                    base_offset + i,
+                    b,
+                    a
+                ),
+            };
+            Err(error_msg.into())
+        })
 }
 
 /// Verify flash contents against expected data
@@ -492,26 +492,32 @@ pub fn verify_flash<D: FlashDevice + ?Sized>(
 
     let pb = create_progress_bar_with_phase(total_size as u64, "Verifying")?;
 
-    let mut offset = 0usize;
-    while offset < total_size {
-        let chunk_size = std::cmp::min(READ_CHUNK_SIZE, total_size - offset);
-        let chunk = &mut buf[..chunk_size];
+    let result = (0..total_size)
+        .step_by(READ_CHUNK_SIZE)
+        .try_for_each(|offset| {
+            let chunk_size = std::cmp::min(READ_CHUNK_SIZE, total_size - offset);
+            let chunk = &mut buf[..chunk_size];
 
-        device.read(offset as u32, chunk)?;
+            device.read(offset as u32, chunk)?;
 
-        // Compare
-        let expected_chunk = &expected[offset..offset + chunk_size];
-        if let Err(e) = verify_chunk(chunk, expected_chunk, offset, None) {
-            pb.abandon_with_message("Verification failed!");
-            return Err(e);
+            // Compare
+            let expected_chunk = &expected[offset..offset + chunk_size];
+            verify_chunk(chunk, expected_chunk, offset, None)?;
+
+            pb.set_position((offset + chunk_size) as u64);
+            Ok::<_, Box<dyn std::error::Error>>(())
+        });
+
+    match result {
+        Ok(()) => {
+            pb.finish_with_message("Verification passed");
+            Ok(())
         }
-
-        offset += chunk_size;
-        pb.set_position(offset as u64);
+        Err(e) => {
+            pb.abandon_with_message("Verification failed!");
+            Err(e)
+        }
     }
-
-    pb.finish_with_message("Verification passed");
-    Ok(())
 }
 
 /// Run the unified verify command
@@ -552,12 +558,16 @@ pub fn verify_by_layout<D: FlashDevice + ?Sized>(
 
     let pb = create_progress_bar_with_phase(total_bytes as u64, "Verifying")?;
 
-    let mut bytes_verified = 0usize;
     let mut buf = vec![0u8; READ_CHUNK_SIZE];
 
-    for region in included {
-        let mut offset = region.start;
-        while offset <= region.end {
+    let result = included
+        .iter()
+        .flat_map(|region| {
+            (region.start..=region.end)
+                .step_by(READ_CHUNK_SIZE)
+                .map(move |offset| (region, offset))
+        })
+        .try_fold(0usize, |bytes_verified, (region, offset)| {
             let chunk_size = std::cmp::min(READ_CHUNK_SIZE, (region.end - offset + 1) as usize);
             let chunk = &mut buf[..chunk_size];
 
@@ -565,18 +575,21 @@ pub fn verify_by_layout<D: FlashDevice + ?Sized>(
 
             // Compare
             let expected_chunk = &expected[offset as usize..offset as usize + chunk_size];
-            if let Err(e) = verify_chunk(chunk, expected_chunk, offset as usize, Some(&region.name))
-            {
-                pb.abandon_with_message("Verification failed!");
-                return Err(e);
-            }
+            verify_chunk(chunk, expected_chunk, offset as usize, Some(&region.name))?;
 
-            offset += chunk_size as u32;
-            bytes_verified += chunk_size;
-            pb.set_position(bytes_verified as u64);
+            let new_bytes_verified = bytes_verified + chunk_size;
+            pb.set_position(new_bytes_verified as u64);
+            Ok::<_, Box<dyn std::error::Error>>(new_bytes_verified)
+        });
+
+    match result {
+        Ok(_) => {
+            pb.finish_with_message("Verification passed");
+            Ok(())
+        }
+        Err(e) => {
+            pb.abandon_with_message("Verification failed!");
+            Err(e)
         }
     }
-
-    pb.finish_with_message("Verification passed");
-    Ok(())
 }
