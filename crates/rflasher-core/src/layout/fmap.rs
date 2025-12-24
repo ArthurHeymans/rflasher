@@ -24,6 +24,12 @@ const FMAP_HEADER_SIZE: usize = 56;
 /// Size of FMAP area
 const FMAP_AREA_SIZE: usize = 42;
 
+/// Minimum stride for binary search
+///
+/// This is the smallest alignment boundary we check during binary search.
+/// Smaller values = more thorough search but more flash reads.
+const MIN_STRIDE: u32 = 256;
+
 /// FMAP area flags
 pub mod flags {
     /// Area is static (read-only)
@@ -133,12 +139,10 @@ impl FmapSearchable for &[u8] {
 ///
 /// Works on both file buffers and flash chips through the FmapSearchable trait.
 pub fn search_fmap<S: FmapSearchable>(storage: &mut S) -> Result<Layout, LayoutError> {
-    const MIN_STRIDE: u32 = 256;
-
     let size = storage.size();
 
     // Try binary search first (check power-of-2 aligned offsets)
-    if let Some(offset) = binary_search_fmap(storage, 0, size, MIN_STRIDE)? {
+    if let Some(offset) = binary_search_fmap(storage, 0, size)? {
         // Read enough to parse the FMAP
         let mut header = vec![0u8; 4096]; // Generous size for header + areas
         storage.read_at(offset, &mut header)?;
@@ -164,7 +168,6 @@ fn binary_search_fmap<S: FmapSearchable>(
     storage: &mut S,
     rom_offset: u32,
     len: u32,
-    min_stride: u32,
 ) -> Result<Option<u32>, LayoutError> {
     let size = storage.size();
 
@@ -176,11 +179,11 @@ fn binary_search_fmap<S: FmapSearchable>(
     let mut sig_buf = [0u8; 8];
     let mut header_buf = vec![0u8; FMAP_HEADER_SIZE];
 
-    // Generate strides: size/2, size/4, size/8, ... down to min_stride
+    // Generate strides: size/2, size/4, size/8, ... down to MIN_STRIDE
     // Using successors to generate the halving sequence
     let strides = std::iter::successors(Some(size / 2), |&stride| {
         let next = stride / 2;
-        (next >= min_stride).then_some(next)
+        (next >= MIN_STRIDE).then_some(next)
     });
 
     let mut offset_0_checked = false;
