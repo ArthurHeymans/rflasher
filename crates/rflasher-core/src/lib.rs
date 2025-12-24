@@ -42,6 +42,7 @@ pub mod flash;
 pub mod layout;
 pub mod programmer;
 pub mod protocol;
+pub mod sfdp;
 pub mod spi;
 pub mod wp;
 

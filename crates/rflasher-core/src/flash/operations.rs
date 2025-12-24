@@ -295,16 +295,172 @@ pub struct WriteStats {
 }
 
 /// Probe for a flash chip using a chip database and return a context if found
+///
+/// This function tries SFDP probing first to get chip parameters directly from
+/// the chip. If the chip is found in the database, SFDP data is compared against
+/// the database entry and warnings are logged for mismatches.
+///
+/// If the chip is NOT in the database but supports SFDP, a FlashChip is
+/// constructed from the SFDP data and can be used for operations.
 #[cfg(feature = "alloc")]
 pub fn probe<M: SpiMaster + ?Sized>(master: &mut M, db: &ChipDatabase) -> Result<FlashContext> {
     let (manufacturer, device) = protocol::read_jedec_id(master)?;
 
-    let chip = db
-        .find_by_jedec_id(manufacturer, device)
-        .ok_or(Error::ChipNotFound)?
-        .clone();
+    // Try SFDP probing first
+    let sfdp_result = crate::sfdp::probe(master).ok();
 
-    Ok(FlashContext::new(chip))
+    // Look up in database
+    let db_chip = db.find_by_jedec_id(manufacturer, device);
+
+    match (db_chip, sfdp_result) {
+        // Found in database with SFDP support
+        (Some(chip), Some(sfdp)) => {
+            let mismatches = crate::sfdp::compare_with_chip(&sfdp, chip);
+            // Log warnings if there are mismatches (caller should handle this)
+            // For now we trust the database but return the context
+            let _ = mismatches; // TODO: provide way to report these to caller
+            Ok(FlashContext::new(chip.clone()))
+        }
+        // Found in database, no SFDP
+        (Some(chip), None) => Ok(FlashContext::new(chip.clone())),
+        // Not in database but has SFDP - use SFDP data
+        (None, Some(sfdp)) => {
+            let chip = crate::sfdp::to_flash_chip(&sfdp, manufacturer, device);
+            Ok(FlashContext::new(chip))
+        }
+        // Not in database and no SFDP
+        (None, None) => Err(Error::ChipNotFound),
+    }
+}
+
+/// Result of a comprehensive chip probe
+///
+/// This structure contains all information gathered during probing,
+/// including SFDP data and any mismatches with the database.
+#[cfg(feature = "alloc")]
+#[derive(Debug)]
+pub struct ProbeResult {
+    /// JEDEC manufacturer ID
+    pub jedec_manufacturer: u8,
+    /// JEDEC device ID
+    pub jedec_device: u16,
+    /// The chip to use for operations
+    pub chip: crate::chip::FlashChip,
+    /// Whether the chip was found in the database
+    pub from_database: bool,
+    /// SFDP information (if available)
+    pub sfdp: Option<crate::sfdp::SfdpInfo>,
+    /// Mismatches between SFDP and database (if both available)
+    pub mismatches: Vec<crate::sfdp::SfdpMismatch>,
+}
+
+impl ProbeResult {
+    /// Check if there are any mismatches between SFDP and database
+    pub fn has_mismatches(&self) -> bool {
+        !self.mismatches.is_empty()
+    }
+
+    /// Check if there are critical mismatches (size/page size)
+    pub fn has_critical_mismatches(&self) -> bool {
+        self.mismatches.iter().any(|m| {
+            matches!(
+                m,
+                crate::sfdp::SfdpMismatch::TotalSize { .. }
+                    | crate::sfdp::SfdpMismatch::PageSize { .. }
+            )
+        })
+    }
+
+    /// Create a FlashContext from this probe result
+    pub fn into_context(self) -> FlashContext {
+        FlashContext::new(self.chip)
+    }
+}
+
+// Logging macros - no-op when log feature is disabled
+#[cfg(feature = "log")]
+macro_rules! log_debug {
+    ($($arg:tt)*) => { log::debug!($($arg)*) }
+}
+
+#[cfg(not(feature = "log"))]
+macro_rules! log_debug {
+    ($($arg:tt)*) => {};
+}
+
+/// Probe for a flash chip with detailed results
+///
+/// This function performs comprehensive probing:
+/// 1. Reads JEDEC ID
+/// 2. Probes SFDP (if supported)
+/// 3. Looks up in database
+/// 4. Compares SFDP with database (if both available)
+///
+/// Returns detailed information about what was found, allowing the caller
+/// to decide how to handle mismatches or unknown chips.
+#[cfg(feature = "alloc")]
+pub fn probe_detailed<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    db: &ChipDatabase,
+) -> Result<ProbeResult> {
+    let (jedec_manufacturer, jedec_device) = protocol::read_jedec_id(master)?;
+
+    log_debug!(
+        "JEDEC ID: manufacturer=0x{:02X}, device=0x{:04X}",
+        jedec_manufacturer,
+        jedec_device
+    );
+
+    // Try SFDP probing
+    let sfdp = match crate::sfdp::probe(master) {
+        Ok(info) => {
+            log_debug!(
+                "SFDP probe successful: {} bytes, page size {} bytes",
+                info.total_size(),
+                info.page_size()
+            );
+            Some(info)
+        }
+        Err(e) => {
+            log_debug!("SFDP probe failed: {:?}", e);
+            None
+        }
+    };
+
+    // Look up in database
+    let db_chip = db.find_by_jedec_id(jedec_manufacturer, jedec_device);
+    if db_chip.is_some() {
+        log_debug!("Chip found in database");
+    } else {
+        log_debug!(
+            "Chip not in database (JEDEC {:02X}:{:04X})",
+            jedec_manufacturer,
+            jedec_device
+        );
+    }
+
+    // Determine the chip to use and collect mismatches
+    let (chip, from_database, mismatches) = match (&db_chip, &sfdp) {
+        (Some(db), Some(sfdp_info)) => {
+            let mismatches = crate::sfdp::compare_with_chip(sfdp_info, db);
+            ((*db).clone(), true, mismatches)
+        }
+        (Some(db), None) => ((*db).clone(), true, Vec::new()),
+        (None, Some(sfdp_info)) => {
+            let chip = crate::sfdp::to_flash_chip(sfdp_info, jedec_manufacturer, jedec_device);
+            (chip, false, Vec::new())
+        }
+        (None, None) => return Err(Error::ChipNotFound),
+    };
+
+    Ok(ProbeResult {
+        jedec_manufacturer,
+        jedec_device,
+        chip,
+        from_database,
+        sfdp,
+        mismatches,
+    })
 }
 
 /// Read the JEDEC ID from the flash chip

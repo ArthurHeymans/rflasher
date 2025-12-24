@@ -7,10 +7,96 @@ use crate::handle::{ChipInfo, FlashHandle};
 use rflasher_core::chip::ChipDatabase;
 #[allow(unused_imports)] // Used in feature-gated code
 use rflasher_core::flash::FlashDevice;
-use rflasher_core::flash::{OpaqueFlashDevice, SpiFlashDevice};
+use rflasher_core::flash::{probe_detailed, OpaqueFlashDevice, ProbeResult, SpiFlashDevice};
 use rflasher_core::layout::parse_ifd;
 use rflasher_core::programmer::OpaqueMaster;
+use rflasher_core::sfdp::SfdpMismatch;
 use std::collections::HashMap;
+
+/// Log any SFDP mismatches as warnings
+fn log_sfdp_mismatches(mismatches: &[SfdpMismatch], chip_name: &str) {
+    if mismatches.is_empty() {
+        return;
+    }
+
+    log::warn!(
+        "SFDP data for {} differs from database ({} mismatch{}):",
+        chip_name,
+        mismatches.len(),
+        if mismatches.len() == 1 { "" } else { "es" }
+    );
+
+    for mismatch in mismatches {
+        // Critical mismatches (size, page size) get ERROR level
+        match mismatch {
+            SfdpMismatch::TotalSize { sfdp, database } => {
+                log::error!("  CRITICAL: {}", mismatch);
+                log::error!(
+                    "    This may cause data corruption! SFDP says {} bytes, DB says {} bytes",
+                    sfdp,
+                    database
+                );
+            }
+            SfdpMismatch::PageSize { sfdp, database } => {
+                log::error!("  CRITICAL: {}", mismatch);
+                log::error!(
+                    "    This may cause write failures! SFDP says {} bytes, DB says {} bytes",
+                    sfdp,
+                    database
+                );
+            }
+            _ => {
+                log::warn!("  {}", mismatch);
+            }
+        }
+    }
+}
+
+/// Log info about chip detection source
+fn log_probe_result(result: &ProbeResult) {
+    if result.from_database {
+        log::info!(
+            "Found: {} {} ({} bytes) [from database]",
+            result.chip.vendor,
+            result.chip.name,
+            result.chip.total_size
+        );
+        if result.sfdp.is_some() {
+            log::debug!("SFDP data also available for verification");
+        }
+    } else {
+        log::info!(
+            "Found: JEDEC {:02X}:{:04X} ({} bytes) [from SFDP - not in database]",
+            result.jedec_manufacturer,
+            result.jedec_device,
+            result.chip.total_size
+        );
+        log::warn!(
+            "Chip not in database, using SFDP parameters. Consider adding to chip database."
+        );
+    }
+
+    log_sfdp_mismatches(&result.mismatches, &result.chip.name);
+}
+
+/// Common probe and create handle logic for SPI programmers
+fn probe_and_create_handle<M>(
+    master: M,
+    db: &ChipDatabase,
+) -> Result<FlashHandle, Box<dyn std::error::Error>>
+where
+    M: rflasher_core::programmer::SpiMaster + 'static,
+{
+    let mut master = master;
+    let result = probe_detailed(&mut master, db)?;
+
+    log_probe_result(&result);
+
+    let chip_info = ChipInfo::from(result);
+    let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone().unwrap());
+    let device = SpiFlashDevice::new(master, ctx);
+    Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
+}
 
 /// Parsed programmer parameters
 pub struct ProgrammerParams {
@@ -132,19 +218,8 @@ fn get_flash_size_from_ifd(
 
 #[cfg(feature = "dummy")]
 fn open_dummy(db: &ChipDatabase) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    let mut master = rflasher_dummy::DummyFlash::new_default();
-    let ctx = rflasher_core::flash::probe(&mut master, db)?;
-
-    log::info!(
-        "Found: {} {} ({} bytes)",
-        ctx.chip.vendor,
-        ctx.chip.name,
-        ctx.chip.total_size
-    );
-
-    let chip_info = ChipInfo::from(&ctx);
-    let device = SpiFlashDevice::new(master, ctx);
-    Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
+    let master = rflasher_dummy::DummyFlash::new_default();
+    probe_and_create_handle(master, db)
 }
 
 #[cfg(feature = "ch341a")]
@@ -154,24 +229,14 @@ fn open_ch341a(
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     log::info!("Opening CH341A programmer...");
 
-    let mut master = rflasher_ch341a::Ch341a::open().map_err(|e| {
+    let master = rflasher_ch341a::Ch341a::open().map_err(|e| {
         format!(
             "Failed to open CH341A: {}\nMake sure the device is connected and you have permissions.",
             e
         )
     })?;
 
-    let ctx = rflasher_core::flash::probe(&mut master, db)?;
-    log::info!(
-        "Found: {} {} ({} bytes)",
-        ctx.chip.vendor,
-        ctx.chip.name,
-        ctx.chip.total_size
-    );
-
-    let chip_info = ChipInfo::from(&ctx);
-    let device = SpiFlashDevice::new(master, ctx);
-    Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
+    probe_and_create_handle(master, db)
 }
 
 #[cfg(feature = "serprog")]
@@ -224,17 +289,7 @@ fn open_serprog(
                     .map_err(|e| format!("Failed to set chip select: {}", e))?;
             }
 
-            let ctx = rflasher_core::flash::probe(&mut serprog, db)?;
-            log::info!(
-                "Found: {} {} ({} bytes)",
-                ctx.chip.vendor,
-                ctx.chip.name,
-                ctx.chip.total_size
-            );
-
-            let chip_info = ChipInfo::from(&ctx);
-            let device = SpiFlashDevice::new(serprog, ctx);
-            Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
+            probe_and_create_handle(serprog, db)
         }
         SerprogConnection::Tcp { host, port } => {
             let transport = rflasher_serprog::TcpTransport::connect(&host, port)
@@ -253,17 +308,7 @@ fn open_serprog(
                     .map_err(|e| format!("Failed to set chip select: {}", e))?;
             }
 
-            let ctx = rflasher_core::flash::probe(&mut serprog, db)?;
-            log::info!(
-                "Found: {} {} ({} bytes)",
-                ctx.chip.vendor,
-                ctx.chip.name,
-                ctx.chip.total_size
-            );
-
-            let chip_info = ChipInfo::from(&ctx);
-            let device = SpiFlashDevice::new(serprog, ctx);
-            Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
+            probe_and_create_handle(serprog, db)
         }
     }
 }
@@ -286,7 +331,7 @@ fn open_ftdi(
 
     let config = parse_options(&options).map_err(|e| format!("Invalid FTDI parameters: {}", e))?;
 
-    let mut master = Ftdi::open(&config).map_err(|e| {
+    let master = Ftdi::open(&config).map_err(|e| {
         format!(
             "Failed to open FTDI device: {}\n\
              Make sure the device is connected and you have permissions.\n\
@@ -296,17 +341,7 @@ fn open_ftdi(
         )
     })?;
 
-    let ctx = rflasher_core::flash::probe(&mut master, db)?;
-    log::info!(
-        "Found: {} {} ({} bytes)",
-        ctx.chip.vendor,
-        ctx.chip.name,
-        ctx.chip.total_size
-    );
-
-    let chip_info = ChipInfo::from(&ctx);
-    let device = SpiFlashDevice::new(master, ctx);
-    Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
+    probe_and_create_handle(master, db)
 }
 
 #[cfg(feature = "linux-spi")]
@@ -327,7 +362,7 @@ fn open_linux_spi(
     let config =
         parse_options(&options).map_err(|e| format!("Invalid linux_spi parameters: {}", e))?;
 
-    let mut master = LinuxSpi::open(&config).map_err(|e| {
+    let master = LinuxSpi::open(&config).map_err(|e| {
         format!(
             "Failed to open Linux SPI device: {}\n\
              Make sure the device exists and you have read/write permissions.\n\
@@ -336,17 +371,7 @@ fn open_linux_spi(
         )
     })?;
 
-    let ctx = rflasher_core::flash::probe(&mut master, db)?;
-    log::info!(
-        "Found: {} {} ({} bytes)",
-        ctx.chip.vendor,
-        ctx.chip.name,
-        ctx.chip.total_size
-    );
-
-    let chip_info = ChipInfo::from(&ctx);
-    let device = SpiFlashDevice::new(master, ctx);
-    Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
+    probe_and_create_handle(master, db)
 }
 
 #[cfg(feature = "internal")]
@@ -385,17 +410,7 @@ fn open_internal(
     // Hardware sequencing: opaque operations only
     if programmer.mode() == SpiMode::SoftwareSequencing {
         log::info!("Using SPI mode (swseq allows chip probing)");
-        let ctx = rflasher_core::flash::probe(&mut programmer, db)?;
-        log::info!(
-            "Found: {} {} ({} bytes)",
-            ctx.chip.vendor,
-            ctx.chip.name,
-            ctx.chip.total_size
-        );
-
-        let chip_info = ChipInfo::from(&ctx);
-        let device = SpiFlashDevice::new(programmer, ctx);
-        Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
+        probe_and_create_handle(programmer, db)
     } else {
         log::info!("Using opaque mode (hwseq - no chip probing available)");
         let flash_size = get_flash_size_from_ifd(&mut programmer)?;

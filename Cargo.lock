@@ -655,6 +655,7 @@ dependencies = [
  "bitflags 2.10.0",
  "embedded-io",
  "embedded-io-async",
+ "log",
  "rflasher-chips-codegen",
  "ron",
  "serde",

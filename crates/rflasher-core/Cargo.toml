@@ -7,7 +7,7 @@ description = "Core library for flash chip programming (no_std compatible)"
 
 [features]
 default = []
-std = ["alloc", "thiserror", "serde", "ron", "toml"]
+std = ["alloc", "thiserror", "serde", "ron", "toml", "log"]
 alloc = []
 # Static chip database compiled at build time (optional, for no_std or embedded)
 static-chips = ["dep:rflasher-chips-codegen"]
@@ -21,6 +21,7 @@ serde = { workspace = true, optional = true, features = ["derive"] }
 ron = { workspace = true, optional = true }
 toml = { version = "0.8", optional = true }
 zerocopy = { version = "0.8", features = ["derive"] }
+log = { workspace = true, optional = true }
 
 [build-dependencies]
 rflasher-chips-codegen = { path = "../rflasher-chips-codegen", optional = true }

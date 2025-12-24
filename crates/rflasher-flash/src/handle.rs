@@ -4,7 +4,8 @@
 //! chip information and programmer access into a single handle.
 
 use rflasher_core::chip::FlashChip;
-use rflasher_core::flash::{FlashContext, FlashDevice};
+use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult};
+use rflasher_core::sfdp::{SfdpInfo, SfdpMismatch};
 
 /// Chip information available from a FlashHandle
 #[derive(Debug, Clone)]
@@ -23,6 +24,12 @@ pub struct ChipInfo {
     pub page_size: u16,
     /// Full chip details (optional, for advanced use)
     pub chip: Option<FlashChip>,
+    /// Whether chip was found in database (vs SFDP-only)
+    pub from_database: bool,
+    /// SFDP information if available
+    pub sfdp: Option<SfdpInfo>,
+    /// Mismatches between SFDP and database
+    pub mismatches: Vec<SfdpMismatch>,
 }
 
 impl From<&FlashContext> for ChipInfo {
@@ -35,6 +42,26 @@ impl From<&FlashContext> for ChipInfo {
             total_size: ctx.chip.total_size,
             page_size: ctx.chip.page_size,
             chip: Some(ctx.chip.clone()),
+            from_database: true,
+            sfdp: None,
+            mismatches: Vec::new(),
+        }
+    }
+}
+
+impl From<ProbeResult> for ChipInfo {
+    fn from(result: ProbeResult) -> Self {
+        Self {
+            vendor: result.chip.vendor.clone(),
+            name: result.chip.name.clone(),
+            jedec_manufacturer: result.jedec_manufacturer,
+            jedec_device: result.jedec_device,
+            total_size: result.chip.total_size,
+            page_size: result.chip.page_size,
+            chip: Some(result.chip),
+            from_database: result.from_database,
+            sfdp: result.sfdp,
+            mismatches: result.mismatches,
         }
     }
 }

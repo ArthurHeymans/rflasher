@@ -273,6 +273,14 @@ fn print_chip_info(handle: &mut FlashHandle) {
         println!("Flash Chip Information");
         println!("======================");
         println!();
+
+        // Show source of chip info
+        if info.from_database {
+            println!("Source:          Database");
+        } else {
+            println!("Source:          SFDP (chip not in database)");
+        }
+
         println!("Vendor:          {}", info.vendor);
         println!("Name:            {}", info.name);
         println!(
@@ -286,6 +294,13 @@ fn print_chip_info(handle: &mut FlashHandle) {
             info.total_size / (1024 * 1024)
         );
         println!("Page size:       {} bytes", info.page_size);
+
+        // Show SFDP status
+        if info.sfdp.is_some() {
+            println!("SFDP:            Supported");
+        } else {
+            println!("SFDP:            Not detected");
+        }
 
         // Show detailed chip info if available
         if let Some(chip) = &info.chip {
@@ -309,6 +324,16 @@ fn print_chip_info(handle: &mut FlashHandle) {
             }
             println!();
             println!("Features:        {:?}", chip.features);
+        }
+
+        // Show SFDP mismatches if any
+        if !info.mismatches.is_empty() {
+            println!();
+            println!("SFDP Mismatches:");
+            println!("----------------");
+            for mismatch in &info.mismatches {
+                println!("  {}", mismatch);
+            }
         }
     } else {
         // Opaque device - show IFD info

@@ -53,6 +53,10 @@ pub use spi_device::SpiFlashDevice;
 // For unified operations that work with any FlashDevice, use the `unified` module
 pub use operations::{chip_erase, erase, probe, read, read_jedec_id, verify, write};
 
+// Re-export detailed probe result
+#[cfg(feature = "alloc")]
+pub use operations::{probe_detailed, ProbeResult};
+
 // Re-export types from operations
 #[cfg(feature = "alloc")]
 pub use operations::{
