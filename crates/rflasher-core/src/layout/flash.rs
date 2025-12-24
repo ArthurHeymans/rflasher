@@ -253,8 +253,8 @@ mod tests {
 
     #[test]
     fn test_is_valid_fmap_header() {
-        // Valid header
-        let mut header = vec![0u8; FMAP_HEADER_SIZE];
+        // Valid header with space for 5 areas
+        let mut header = vec![0u8; FMAP_HEADER_SIZE + 5 * FMAP_AREA_SIZE];
         header[0..8].copy_from_slice(FMAP_SIGNATURE);
         header[8] = 1; // ver_major
         header[9] = 0; // ver_minor

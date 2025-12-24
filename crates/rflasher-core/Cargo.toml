@@ -20,6 +20,7 @@ thiserror = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 ron = { workspace = true, optional = true }
 toml = { version = "0.8", optional = true }
+zerocopy = { version = "0.8", features = ["derive"] }
 
 [build-dependencies]
 rflasher-chips-codegen = { path = "../rflasher-chips-codegen", optional = true }

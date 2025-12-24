@@ -10,6 +10,9 @@ use std::format;
 use std::string::{String, ToString};
 use std::vec;
 
+use zerocopy::byteorder::little_endian::{U16 as U16LE, U32 as U32LE, U64 as U64LE};
+use zerocopy::{FromBytes, Immutable, KnownLayout, Unaligned};
+
 use super::{Layout, LayoutError, LayoutSource, Region};
 
 /// FMAP signature: "__FMAP__"
@@ -22,6 +25,7 @@ const FMAP_VER_MAJOR: u8 = 1;
 const FMAP_HEADER_SIZE: usize = 56;
 
 /// Size of FMAP area
+#[allow(dead_code)]
 const FMAP_AREA_SIZE: usize = 42;
 
 /// Minimum stride for binary search
@@ -39,6 +43,33 @@ pub mod flags {
     pub const COMPRESSED: u16 = 1 << 1;
     /// Area is read-only
     pub const RO: u16 = 1 << 2;
+}
+
+/// FMAP header structure (56 bytes)
+///
+/// All multi-byte fields are little-endian.
+#[repr(C)]
+#[derive(FromBytes, KnownLayout, Immutable, Unaligned)]
+struct FmapHeader {
+    signature: [u8; 8],
+    ver_major: u8,
+    ver_minor: u8,
+    base: U64LE,
+    size: U32LE,
+    name: [u8; 32],
+    nareas: U16LE,
+}
+
+/// FMAP area structure (42 bytes)
+///
+/// All multi-byte fields are little-endian.
+#[repr(C)]
+#[derive(FromBytes, KnownLayout, Immutable, Unaligned)]
+struct FmapArea {
+    offset: U32LE,
+    size: U32LE,
+    name: [u8; 32],
+    flags: U16LE,
 }
 
 /// Search for FMAP signature in data
@@ -65,32 +96,30 @@ fn find_fmap(data: &[u8]) -> Option<usize> {
 /// Checks signature, version, and structure validity.
 /// This is the canonical validation function used by all FMAP implementations.
 pub fn validate_fmap(data: &[u8]) -> Result<(), LayoutError> {
-    if data.len() < FMAP_HEADER_SIZE {
-        return Err(LayoutError::InvalidFmapSignature);
-    }
+    // Parse header using zerocopy - this also validates minimum size
+    let (header, remaining) =
+        FmapHeader::ref_from_prefix(data).map_err(|_| LayoutError::InvalidFmapSignature)?;
 
     // Check signature
-    if &data[0..8] != FMAP_SIGNATURE {
+    if &header.signature != FMAP_SIGNATURE {
         return Err(LayoutError::InvalidFmapSignature);
     }
 
     // Check version
-    let ver_major = data[8];
-    if ver_major > FMAP_VER_MAJOR {
+    if header.ver_major > FMAP_VER_MAJOR {
         return Err(LayoutError::UnsupportedFmapVersion);
     }
 
     // Check that nareas is reasonable
-    let nareas = u16::from_le_bytes([data[54], data[55]]) as usize;
+    let nareas = header.nareas.get() as usize;
     if nareas > 256 {
         // Sanity check - more than 256 areas is unreasonable
         return Err(LayoutError::InvalidFmapSignature);
     }
 
-    let required_size = FMAP_HEADER_SIZE + nareas * FMAP_AREA_SIZE;
-    if data.len() < required_size {
-        return Err(LayoutError::InvalidFmapSignature);
-    }
+    // Verify there's enough data for all areas using zerocopy
+    <[FmapArea]>::ref_from_prefix_with_elems(remaining, nareas)
+        .map_err(|_| LayoutError::InvalidFmapSignature)?;
 
     Ok(())
 }
@@ -245,45 +274,48 @@ pub fn parse_fmap_at(data: &[u8], offset: usize) -> Result<Layout, LayoutError> 
     let fmap_data = &data[offset..];
     validate_fmap(fmap_data)?;
 
-    // Parse header
-    let ver_major = fmap_data[8];
-    let ver_minor = fmap_data[9];
-    let _base = u64::from_le_bytes(fmap_data[10..18].try_into().unwrap());
-    let _size = u32::from_le_bytes(fmap_data[18..22].try_into().unwrap());
-    let name_bytes = &fmap_data[22..54];
-    let nareas = u16::from_le_bytes([fmap_data[54], fmap_data[55]]) as usize;
+    // Parse header using zerocopy - ref_from_prefix returns (reference, remaining_bytes)
+    let (header, remaining) =
+        FmapHeader::ref_from_prefix(fmap_data).map_err(|_| LayoutError::InvalidFmapSignature)?;
+
+    let ver_major = header.ver_major;
+    let ver_minor = header.ver_minor;
+    let nareas = header.nareas.get() as usize;
 
     // Parse name (null-terminated)
-    let name = parse_fmap_string(name_bytes);
+    let name = parse_fmap_string(&header.name);
 
     let mut layout = Layout::with_source(LayoutSource::Fmap);
     layout.name = Some(format!("FMAP: {} (v{}.{})", name, ver_major, ver_minor));
 
-    // Parse areas
-    for i in 0..nareas {
-        let area_offset = FMAP_HEADER_SIZE + i * FMAP_AREA_SIZE;
-        let area_data = &fmap_data[area_offset..area_offset + FMAP_AREA_SIZE];
+    // Parse all areas as a slice in one go
+    let areas = <[FmapArea]>::ref_from_prefix_with_elems(remaining, nareas)
+        .map_err(|_| LayoutError::InvalidFmapSignature)?
+        .0;
 
-        let area_start = u32::from_le_bytes(area_data[0..4].try_into().unwrap());
-        let area_size = u32::from_le_bytes(area_data[4..8].try_into().unwrap());
-        let area_name_bytes = &area_data[8..40];
-        let area_flags = u16::from_le_bytes([area_data[40], area_data[41]]);
+    let mut layout =
+        areas
+            .iter()
+            .filter(|area| area.size.get() != 0)
+            .fold(layout, |mut layout, area| {
+                let area_start = area.offset.get();
+                let area_size = area.size.get();
+                let area_flags = area.flags.get();
+                let area_name = parse_fmap_string(&area.name);
+                let end = area_start + area_size - 1;
 
-        // Skip zero-size areas
-        if area_size == 0 {
-            continue;
-        }
+                let region = Region {
+                    name: area_name,
+                    start: area_start,
+                    end,
+                    readonly: (area_flags & flags::STATIC) != 0 || (area_flags & flags::RO) != 0,
+                    dangerous: false,
+                    included: false,
+                };
 
-        let area_name = parse_fmap_string(area_name_bytes);
-        let end = area_start + area_size - 1;
-
-        let mut region = Region::new(area_name, area_start, end);
-
-        // Set readonly flag based on FMAP flags
-        region.readonly = (area_flags & flags::STATIC) != 0 || (area_flags & flags::RO) != 0;
-
-        layout.add_region(region);
-    }
+                layout.add_region(region);
+                layout
+            });
 
     layout.sort_by_address();
     Ok(layout)
