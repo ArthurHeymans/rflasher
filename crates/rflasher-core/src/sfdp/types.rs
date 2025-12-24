@@ -30,6 +30,70 @@ pub const PARAM_ID_XSPI_1_0: u16 = 0xFF05;
 pub const PARAM_ID_SCCR_MAP: u16 = 0xFF87;
 
 // ============================================================================
+// Fast Read Parameters
+// ============================================================================
+
+/// Parameters for a fast read command
+///
+/// Contains the opcode, number of mode clocks, and number of dummy/wait cycles
+/// needed for a specific fast read mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FastReadParams {
+    /// Instruction opcode (0x00 if not supported)
+    pub opcode: u8,
+    /// Number of mode clock cycles
+    pub mode_clocks: u8,
+    /// Number of dummy/wait clock cycles before valid output
+    pub dummy_clocks: u8,
+}
+
+impl FastReadParams {
+    /// Create new fast read parameters
+    pub const fn new(opcode: u8, mode_clocks: u8, dummy_clocks: u8) -> Self {
+        Self {
+            opcode,
+            mode_clocks,
+            dummy_clocks,
+        }
+    }
+
+    /// Check if this fast read mode is supported
+    pub fn is_supported(&self) -> bool {
+        self.opcode != 0x00
+    }
+
+    /// Parse from DWORD half (instruction in high byte, mode/dummy in lower bits)
+    ///
+    /// Layout: [31:24] instruction, [23:21] mode clocks, [20:16] dummy clocks
+    pub fn from_high_half(dword: u32) -> Self {
+        let opcode = ((dword >> 24) & 0xFF) as u8;
+        let mode_clocks = ((dword >> 21) & 0x07) as u8;
+        let dummy_clocks = ((dword >> 16) & 0x1F) as u8;
+
+        if opcode == 0x00 {
+            Self::default()
+        } else {
+            Self::new(opcode, mode_clocks, dummy_clocks)
+        }
+    }
+
+    /// Parse from DWORD low half
+    ///
+    /// Layout: [15:8] instruction, [7:5] mode clocks, [4:0] dummy clocks
+    pub fn from_low_half(dword: u32) -> Self {
+        let opcode = ((dword >> 8) & 0xFF) as u8;
+        let mode_clocks = ((dword >> 5) & 0x07) as u8;
+        let dummy_clocks = (dword & 0x1F) as u8;
+
+        if opcode == 0x00 {
+            Self::default()
+        } else {
+            Self::new(opcode, mode_clocks, dummy_clocks)
+        }
+    }
+}
+
+// ============================================================================
 // SFDP Revision
 // ============================================================================
 
@@ -418,6 +482,20 @@ pub struct BasicFlashParams {
 
     /// 4KB erase opcode (0xFF if not supported)
     pub erase_4k_opcode: u8,
+
+    // Fast read instruction parameters (JESD216, DWORDs 3, 4, 6, 7)
+    /// 1S-1S-4S fast read parameters (DWORD 3 high)
+    pub fast_read_114_params: FastReadParams,
+    /// 1S-4S-4S fast read parameters (DWORD 3 low)
+    pub fast_read_144_params: FastReadParams,
+    /// 1S-2S-2S fast read parameters (DWORD 4 high)
+    pub fast_read_122_params: FastReadParams,
+    /// 1S-1S-2S fast read parameters (DWORD 4 low)
+    pub fast_read_112_params: FastReadParams,
+    /// 2S-2S-2S fast read parameters (DWORD 6 high)
+    pub fast_read_222_params: FastReadParams,
+    /// 4S-4S-4S fast read parameters (DWORD 7 high)
+    pub fast_read_444_params: FastReadParams,
 }
 
 impl BasicFlashParams {
@@ -466,6 +544,199 @@ impl BasicFlashParams {
 }
 
 // ============================================================================
+// 4-Byte Address Instruction Table
+// ============================================================================
+
+/// 4-Byte Address Instruction Table support flags (DWORD 1)
+///
+/// Indicates which commands are supported using native 4-byte addressing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FourByteAddrInstructions {
+    /// Bit field of supported instructions
+    pub flags: u32,
+}
+
+impl FourByteAddrInstructions {
+    // Read instructions
+    /// Support for 1S-1S-1S READ command (0x13)
+    pub const READ_1S_1S_1S: u32 = 1 << 0;
+    /// Support for 1S-1S-1S FAST_READ command (0x0C)
+    pub const FAST_READ_1S_1S_1S: u32 = 1 << 1;
+    /// Support for 1S-1S-2S FAST_READ command (0x3C)
+    pub const FAST_READ_1S_1S_2S: u32 = 1 << 2;
+    /// Support for 1S-2S-2S FAST_READ command (0xBC)
+    pub const FAST_READ_1S_2S_2S: u32 = 1 << 3;
+    /// Support for 1S-1S-4S FAST_READ command (0x6C)
+    pub const FAST_READ_1S_1S_4S: u32 = 1 << 4;
+    /// Support for 1S-4S-4S FAST_READ command (0xEC)
+    pub const FAST_READ_1S_4S_4S: u32 = 1 << 5;
+    /// Support for 1S-1S-1S PAGE_PROGRAM command (0x12)
+    pub const PAGE_PROGRAM_1S_1S_1S: u32 = 1 << 6;
+    /// Support for 1S-1S-4S PAGE_PROGRAM command (0x34)
+    pub const PAGE_PROGRAM_1S_1S_4S: u32 = 1 << 7;
+    /// Support for 1S-4S-4S PAGE_PROGRAM command (0x3E)
+    pub const PAGE_PROGRAM_1S_4S_4S: u32 = 1 << 8;
+    /// Support for Erase Type 1 with 4-byte address
+    pub const ERASE_TYPE_1: u32 = 1 << 9;
+    /// Support for Erase Type 2 with 4-byte address
+    pub const ERASE_TYPE_2: u32 = 1 << 10;
+    /// Support for Erase Type 3 with 4-byte address
+    pub const ERASE_TYPE_3: u32 = 1 << 11;
+    /// Support for Erase Type 4 with 4-byte address
+    pub const ERASE_TYPE_4: u32 = 1 << 12;
+    /// Support for 1S-1D-1D DTR_Read command (0x0E)
+    pub const DTR_READ_1S_1D_1D: u32 = 1 << 13;
+    /// Support for 1S-2D-2D DTR_Read command (0xBE)
+    pub const DTR_READ_1S_2D_2D: u32 = 1 << 14;
+    /// Support for 1S-4D-4D DTR_Read command (0xEE)
+    pub const DTR_READ_1S_4D_4D: u32 = 1 << 15;
+    /// Support for volatile individual sector lock read command (0xE0)
+    pub const VOLATILE_SECTOR_LOCK_READ: u32 = 1 << 16;
+    /// Support for volatile individual sector lock write command (0xE1)
+    pub const VOLATILE_SECTOR_LOCK_WRITE: u32 = 1 << 17;
+    /// Support for non-volatile individual sector lock read command (0xE2)
+    pub const NONVOLATILE_SECTOR_LOCK_READ: u32 = 1 << 18;
+    /// Support for non-volatile individual sector lock write command (0xE3)
+    pub const NONVOLATILE_SECTOR_LOCK_WRITE: u32 = 1 << 19;
+    /// Support for 1S-1S-8S FAST_READ command (0x7C)
+    pub const FAST_READ_1S_1S_8S: u32 = 1 << 20;
+    /// Support for 1S-8S-8S FAST_READ command (0xCC)
+    pub const FAST_READ_1S_8S_8S: u32 = 1 << 21;
+    /// Support for 1S-8D-8D DTR_READ command (0xFD)
+    pub const DTR_READ_1S_8D_8D: u32 = 1 << 22;
+    /// Support for 1S-1S-8S PAGE_PROGRAM command (0x84)
+    pub const PAGE_PROGRAM_1S_1S_8S: u32 = 1 << 23;
+    /// Support for 1S-8S-8S PAGE_PROGRAM command (0x8E)
+    pub const PAGE_PROGRAM_1S_8S_8S: u32 = 1 << 24;
+
+    /// Parse from DWORD 1 of 4-byte address instruction table
+    pub fn from_dword1(dword: u32) -> Self {
+        Self { flags: dword }
+    }
+
+    /// Check if a specific instruction is supported
+    pub fn supports(&self, flag: u32) -> bool {
+        (self.flags & flag) != 0
+    }
+
+    /// Check if native 4-byte read is supported
+    pub fn supports_4ba_read(&self) -> bool {
+        self.supports(Self::READ_1S_1S_1S)
+    }
+
+    /// Check if native 4-byte fast read is supported
+    pub fn supports_4ba_fast_read(&self) -> bool {
+        self.supports(Self::FAST_READ_1S_1S_1S)
+    }
+
+    /// Check if native 4-byte page program is supported
+    pub fn supports_4ba_page_program(&self) -> bool {
+        self.supports(Self::PAGE_PROGRAM_1S_1S_1S)
+    }
+
+    /// Check if any 4-byte erase is supported
+    pub fn supports_any_4ba_erase(&self) -> bool {
+        self.supports(Self::ERASE_TYPE_1)
+            || self.supports(Self::ERASE_TYPE_2)
+            || self.supports(Self::ERASE_TYPE_3)
+            || self.supports(Self::ERASE_TYPE_4)
+    }
+}
+
+/// 4-Byte Address Erase Instructions (DWORD 2)
+///
+/// Contains the 4-byte address erase opcodes for each erase type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FourByteAddrEraseOpcodes {
+    /// Erase opcode for type 1 (0x00 if not supported)
+    pub erase_type_1: u8,
+    /// Erase opcode for type 2 (0x00 if not supported)
+    pub erase_type_2: u8,
+    /// Erase opcode for type 3 (0x00 if not supported)
+    pub erase_type_3: u8,
+    /// Erase opcode for type 4 (0x00 if not supported)
+    pub erase_type_4: u8,
+}
+
+impl FourByteAddrEraseOpcodes {
+    /// Parse from DWORD 2 of 4-byte address instruction table
+    pub fn from_dword2(dword: u32) -> Self {
+        Self {
+            erase_type_1: (dword & 0xFF) as u8,
+            erase_type_2: ((dword >> 8) & 0xFF) as u8,
+            erase_type_3: ((dword >> 16) & 0xFF) as u8,
+            erase_type_4: ((dword >> 24) & 0xFF) as u8,
+        }
+    }
+
+    /// Get the 4-byte erase opcode for a given erase type index (0-3)
+    pub fn opcode_for_type(&self, type_index: usize) -> Option<u8> {
+        match type_index {
+            0 => Some(self.erase_type_1).filter(|&o| o != 0),
+            1 => Some(self.erase_type_2).filter(|&o| o != 0),
+            2 => Some(self.erase_type_3).filter(|&o| o != 0),
+            3 => Some(self.erase_type_4).filter(|&o| o != 0),
+            _ => None,
+        }
+    }
+}
+
+/// Complete 4-Byte Address Instruction Table
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FourByteAddrTable {
+    /// Table revision
+    pub revision: SfdpRevision,
+    /// Supported 4-byte address instructions
+    pub instructions: FourByteAddrInstructions,
+    /// 4-byte address erase opcodes
+    pub erase_opcodes: FourByteAddrEraseOpcodes,
+}
+
+impl FourByteAddrTable {
+    /// Standard 4-byte address read opcode
+    pub const READ_4B_OPCODE: u8 = 0x13;
+    /// Standard 4-byte address fast read opcode
+    pub const FAST_READ_4B_OPCODE: u8 = 0x0C;
+    /// Standard 4-byte address page program opcode
+    pub const PAGE_PROGRAM_4B_OPCODE: u8 = 0x12;
+    /// Standard 4-byte address dual output fast read opcode
+    pub const FAST_READ_DUAL_OUT_4B_OPCODE: u8 = 0x3C;
+    /// Standard 4-byte address dual I/O fast read opcode
+    pub const FAST_READ_DUAL_IO_4B_OPCODE: u8 = 0xBC;
+    /// Standard 4-byte address quad output fast read opcode
+    pub const FAST_READ_QUAD_OUT_4B_OPCODE: u8 = 0x6C;
+    /// Standard 4-byte address quad I/O fast read opcode
+    pub const FAST_READ_QUAD_IO_4B_OPCODE: u8 = 0xEC;
+
+    /// Get the 4-byte read opcode if supported
+    pub fn read_opcode(&self) -> Option<u8> {
+        if self.instructions.supports_4ba_read() {
+            Some(Self::READ_4B_OPCODE)
+        } else {
+            None
+        }
+    }
+
+    /// Get the 4-byte fast read opcode if supported
+    pub fn fast_read_opcode(&self) -> Option<u8> {
+        if self.instructions.supports_4ba_fast_read() {
+            Some(Self::FAST_READ_4B_OPCODE)
+        } else {
+            None
+        }
+    }
+
+    /// Get the 4-byte page program opcode if supported
+    pub fn page_program_opcode(&self) -> Option<u8> {
+        if self.instructions.supports_4ba_page_program() {
+            Some(Self::PAGE_PROGRAM_4B_OPCODE)
+        } else {
+            None
+        }
+    }
+}
+
+// ============================================================================
 // Complete SFDP Info
 // ============================================================================
 
@@ -478,6 +749,8 @@ pub struct SfdpInfo {
     pub basic_params: BasicFlashParams,
     /// Number of parameter headers found
     pub num_param_headers: usize,
+    /// 4-Byte Address Instruction Table (if present)
+    pub four_byte_addr_table: Option<FourByteAddrTable>,
 }
 
 impl SfdpInfo {

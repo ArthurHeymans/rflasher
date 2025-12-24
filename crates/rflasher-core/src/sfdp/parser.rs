@@ -136,6 +136,30 @@ fn parse_bfpt_dword2(dword: u32, params: &mut BasicFlashParams) {
     }
 }
 
+/// Parse Basic Flash Parameter Table DWORD 3
+///
+/// Contains 1-1-4 and 1-4-4 fast read instruction parameters.
+fn parse_bfpt_dword3(dword: u32, params: &mut BasicFlashParams) {
+    // High half [31:16]: 1S-1S-4S (1-1-4) fast read
+    // [31:24] instruction, [23:21] mode clocks, [20:16] dummy clocks
+    params.fast_read_114_params = FastReadParams::from_high_half(dword);
+
+    // Low half [15:0]: 1S-4S-4S (1-4-4) fast read
+    // [15:8] instruction, [7:5] mode clocks, [4:0] dummy clocks
+    params.fast_read_144_params = FastReadParams::from_low_half(dword);
+}
+
+/// Parse Basic Flash Parameter Table DWORD 4
+///
+/// Contains 1-2-2 and 1-1-2 fast read instruction parameters.
+fn parse_bfpt_dword4(dword: u32, params: &mut BasicFlashParams) {
+    // High half [31:16]: 1S-2S-2S (1-2-2) fast read
+    params.fast_read_122_params = FastReadParams::from_high_half(dword);
+
+    // Low half [15:0]: 1S-1S-2S (1-1-2) fast read
+    params.fast_read_112_params = FastReadParams::from_low_half(dword);
+}
+
 /// Parse Basic Flash Parameter Table DWORD 5
 ///
 /// Contains 2-2-2 and 4-4-4 fast read support.
@@ -145,6 +169,24 @@ fn parse_bfpt_dword5(dword: u32, params: &mut BasicFlashParams) {
 
     // Bit 4 - Supports 4-4-4 fast read
     params.fast_read_444 = (dword & (1 << 4)) != 0;
+}
+
+/// Parse Basic Flash Parameter Table DWORD 6
+///
+/// Contains 2-2-2 fast read instruction parameters.
+fn parse_bfpt_dword6(dword: u32, params: &mut BasicFlashParams) {
+    // High half [31:16]: 2S-2S-2S (2-2-2) fast read
+    params.fast_read_222_params = FastReadParams::from_high_half(dword);
+    // Low half [15:0]: Reserved (all 1s)
+}
+
+/// Parse Basic Flash Parameter Table DWORD 7
+///
+/// Contains 4-4-4 fast read instruction parameters.
+fn parse_bfpt_dword7(dword: u32, params: &mut BasicFlashParams) {
+    // High half [31:16]: 4S-4S-4S (4-4-4) fast read
+    params.fast_read_444_params = FastReadParams::from_high_half(dword);
+    // Low half [15:0]: Reserved (all 1s)
 }
 
 /// Parse Basic Flash Parameter Table DWORDs 8-9
@@ -254,7 +296,11 @@ fn parse_bfpt<M: SpiMaster + ?Sized>(
     // Parse mandatory DWORDs (JESD216, 9 DWORDs minimum)
     parse_bfpt_dword1(get_dword(0), &mut params); // DWORD 1
     parse_bfpt_dword2(get_dword(4), &mut params); // DWORD 2
+    parse_bfpt_dword3(get_dword(8), &mut params); // DWORD 3 - 1-1-4 and 1-4-4 fast read
+    parse_bfpt_dword4(get_dword(12), &mut params); // DWORD 4 - 1-2-2 and 1-1-2 fast read
     parse_bfpt_dword5(get_dword(16), &mut params); // DWORD 5
+    parse_bfpt_dword6(get_dword(20), &mut params); // DWORD 6 - 2-2-2 fast read
+    parse_bfpt_dword7(get_dword(24), &mut params); // DWORD 7 - 4-4-4 fast read
     parse_bfpt_erase_types(get_dword(28), get_dword(32), &mut params); // DWORD 8-9
 
     // Parse extended DWORDs if available (JESD216A+, 16+ DWORDs)
@@ -280,6 +326,44 @@ fn parse_bfpt<M: SpiMaster + ?Sized>(
     }
 
     Ok(params)
+}
+
+/// Parse the 4-Byte Address Instruction Table
+fn parse_4byte_addr_table<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    header: &ParameterHeader,
+) -> Result<FourByteAddrTable> {
+    let len = header.length_bytes();
+    if len < 8 {
+        // Minimum is 2 DWORDs
+        return Err(Error::ChipNotSupported);
+    }
+
+    // Read the parameter table (2 DWORDs)
+    let mut buf = [0u8; 8];
+    let read_len = core::cmp::min(len, buf.len());
+    read_sfdp(master, header.table_pointer, &mut buf[..read_len])?;
+
+    let get_dword = |offset: usize| -> u32 {
+        if offset + 4 <= read_len {
+            u32::from_le_bytes([
+                buf[offset],
+                buf[offset + 1],
+                buf[offset + 2],
+                buf[offset + 3],
+            ])
+        } else {
+            0
+        }
+    };
+
+    let table = FourByteAddrTable {
+        revision: header.revision,
+        instructions: FourByteAddrInstructions::from_dword1(get_dword(0)),
+        erase_opcodes: FourByteAddrEraseOpcodes::from_dword2(get_dword(4)),
+    };
+
+    Ok(table)
 }
 
 /// Probe for SFDP support and parse parameters
@@ -308,7 +392,10 @@ pub fn probe<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpInfo> {
         ..Default::default()
     };
 
-    // Find and parse the Basic Flash Parameter Table
+    // Track if we've found the mandatory BFPT
+    let mut found_bfpt = false;
+
+    // Parse all parameter tables we understand
     for i in 0..num_headers {
         if i >= MAX_PARAMETER_HEADERS {
             break;
@@ -316,15 +403,37 @@ pub fn probe<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpInfo> {
 
         let param_header = read_param_header(master, i)?;
 
-        // Look for the mandatory Basic Flash Parameter Table
-        if param_header.is_basic() {
-            info.basic_params = parse_bfpt(master, &param_header)?;
-            break;
+        match param_header.id {
+            // Basic Flash Parameter Table (mandatory)
+            PARAM_ID_BASIC => {
+                info.basic_params = parse_bfpt(master, &param_header)?;
+                found_bfpt = true;
+            }
+            // 4-Byte Address Instruction Table
+            PARAM_ID_4BYTE_ADDR => {
+                if let Ok(table) = parse_4byte_addr_table(master, &param_header) {
+                    log::debug!(
+                        "Found 4-byte address instruction table: rev {}.{}",
+                        table.revision.major,
+                        table.revision.minor
+                    );
+                    info.four_byte_addr_table = Some(table);
+                }
+            }
+            // Other tables we might support in the future
+            _ => {
+                log::trace!(
+                    "Skipping parameter table ID 0x{:04X} (rev {}.{})",
+                    param_header.id,
+                    param_header.revision.major,
+                    param_header.revision.minor
+                );
+            }
         }
     }
 
     // Validate that we found a valid BFPT
-    if info.basic_params.density_bytes == 0 {
+    if !found_bfpt || info.basic_params.density_bytes == 0 {
         return Err(Error::ChipNotSupported);
     }
 
@@ -1000,5 +1109,143 @@ mod tests {
 
         // Should have SFDP feature flag
         assert!(chip.features.contains(crate::chip::Features::SFDP));
+    }
+
+    #[test]
+    fn test_fast_read_params_parsing() {
+        // Test DWORD 3 parsing (1-1-4 and 1-4-4 fast read)
+        // High half: [31:24]=0x6B opcode, [23:21]=0 mode, [20:16]=8 dummy
+        // Low half: [15:8]=0xEB opcode, [7:5]=2 mode, [4:0]=4 dummy
+        //
+        // DWORD 3 from MX25L6436E: 0x6B_08_FF_00 (bytes: 00, FF, 08, 6B)
+        // Wait, the data is: 0x00, 0xFF, 0x08, 0x6B at offset 0x24
+        // Little endian: 0x6B08FF00
+        let dword3: u32 = 0x6B08FF00;
+
+        let mut params = BasicFlashParams::default();
+        parse_bfpt_dword3(dword3, &mut params);
+
+        // High half: 1S-1S-4S
+        // [31:24] = 0x6B (opcode)
+        // [23:21] = 0b000 = 0 mode clocks
+        // [20:16] = 0b01000 = 8 dummy clocks
+        assert!(params.fast_read_114_params.is_supported());
+        assert_eq!(params.fast_read_114_params.opcode, 0x6B);
+        assert_eq!(params.fast_read_114_params.mode_clocks, 0);
+        assert_eq!(params.fast_read_114_params.dummy_clocks, 8);
+
+        // Low half: 1S-4S-4S
+        // [15:8] = 0xFF (not supported indicator for this chip)
+        // When opcode is 0x00, the mode is not supported
+        // But 0xFF is also commonly used for "not supported"
+        // Actually, looking at the data: 0xFF00 -> opcode=0xFF
+        // Let's look at other test data
+
+        // Test DWORD 4 parsing (1-2-2 and 1-1-2 fast read)
+        // From MX25L6436E: bytes 0x08, 0x3B, 0x00, 0xFF at offset 0x28
+        // Little endian: 0xFF003B08
+        let dword4: u32 = 0xFF003B08;
+
+        let mut params = BasicFlashParams::default();
+        parse_bfpt_dword4(dword4, &mut params);
+
+        // Low half: 1S-1S-2S
+        // [15:8] = 0x3B (opcode)
+        // [7:5] = 0b000 = 0 mode clocks
+        // [4:0] = 0b01000 = 8 dummy clocks
+        assert!(params.fast_read_112_params.is_supported());
+        assert_eq!(params.fast_read_112_params.opcode, 0x3B);
+        assert_eq!(params.fast_read_112_params.mode_clocks, 0);
+        assert_eq!(params.fast_read_112_params.dummy_clocks, 8);
+    }
+
+    #[test]
+    fn test_fast_read_params_from_halves() {
+        // Test FastReadParams::from_high_half
+        // [31:24]=0xEB, [23:21]=2 mode, [20:16]=4 dummy
+        // 0xEB_4_4_xxxx = 0xEB4_40000
+        let dword = 0xEB_44_0000u32;
+        let params = FastReadParams::from_high_half(dword);
+        assert!(params.is_supported());
+        assert_eq!(params.opcode, 0xEB);
+        assert_eq!(params.mode_clocks, 2);
+        assert_eq!(params.dummy_clocks, 4);
+
+        // Test FastReadParams::from_low_half
+        // [15:8]=0xBB, [7:5]=1 mode, [4:0]=4 dummy
+        let dword = 0x0000_BB24u32; // 0xBB in [15:8], 1 in [7:5], 4 in [4:0]
+        let params = FastReadParams::from_low_half(dword);
+        assert!(params.is_supported());
+        assert_eq!(params.opcode, 0xBB);
+        assert_eq!(params.mode_clocks, 1);
+        assert_eq!(params.dummy_clocks, 4);
+
+        // Test unsupported (opcode 0x00)
+        let dword = 0x00_00_0000u32;
+        let params = FastReadParams::from_high_half(dword);
+        assert!(!params.is_supported());
+    }
+
+    #[test]
+    fn test_4byte_addr_instructions_parsing() {
+        // Test DWORD 1 parsing
+        // Bits set: READ (0), FAST_READ (1), PAGE_PROGRAM (6), ERASE_TYPE_1 (9)
+        let dword1: u32 = (1 << 0) | (1 << 1) | (1 << 6) | (1 << 9);
+        let instr = FourByteAddrInstructions::from_dword1(dword1);
+
+        assert!(instr.supports_4ba_read());
+        assert!(instr.supports_4ba_fast_read());
+        assert!(instr.supports_4ba_page_program());
+        assert!(instr.supports_any_4ba_erase());
+        assert!(instr.supports(FourByteAddrInstructions::ERASE_TYPE_1));
+        assert!(!instr.supports(FourByteAddrInstructions::ERASE_TYPE_2));
+    }
+
+    #[test]
+    fn test_4byte_addr_erase_opcodes_parsing() {
+        // Test DWORD 2 parsing
+        // Type 1: 0x21, Type 2: 0x5C, Type 3: 0xDC, Type 4: 0xDC
+        let dword2: u32 = 0xDC_DC_5C_21;
+        let opcodes = FourByteAddrEraseOpcodes::from_dword2(dword2);
+
+        assert_eq!(opcodes.erase_type_1, 0x21);
+        assert_eq!(opcodes.erase_type_2, 0x5C);
+        assert_eq!(opcodes.erase_type_3, 0xDC);
+        assert_eq!(opcodes.erase_type_4, 0xDC);
+
+        assert_eq!(opcodes.opcode_for_type(0), Some(0x21));
+        assert_eq!(opcodes.opcode_for_type(1), Some(0x5C));
+        assert_eq!(opcodes.opcode_for_type(2), Some(0xDC));
+        assert_eq!(opcodes.opcode_for_type(3), Some(0xDC));
+        assert_eq!(opcodes.opcode_for_type(4), None);
+
+        // Test with some unsupported (0x00)
+        let dword2: u32 = 0x00_DC_00_21;
+        let opcodes = FourByteAddrEraseOpcodes::from_dword2(dword2);
+        assert_eq!(opcodes.opcode_for_type(0), Some(0x21));
+        assert_eq!(opcodes.opcode_for_type(1), None); // 0x00 means not supported
+        assert_eq!(opcodes.opcode_for_type(2), Some(0xDC));
+        assert_eq!(opcodes.opcode_for_type(3), None); // 0x00 means not supported
+    }
+
+    #[test]
+    fn test_mx25l6436e_fast_read_params() {
+        let mut mock = MockSfdpFlash::new();
+        let info = probe(&mut mock).expect("SFDP probe should succeed");
+
+        let params = &info.basic_params;
+
+        // Check that we parsed the fast read parameters from the SFDP data
+        // DWORD 3: 0x6B08FF00 (at offset 0x24 relative to table start)
+        //   1S-1S-4S: opcode=0x6B, mode=0, dummy=8
+        assert!(params.fast_read_114_params.is_supported());
+        assert_eq!(params.fast_read_114_params.opcode, 0x6B);
+        assert_eq!(params.fast_read_114_params.dummy_clocks, 8);
+
+        // DWORD 4: 0xFF003B08 (at offset 0x28)
+        //   1S-1S-2S: opcode=0x3B, mode=0, dummy=8
+        assert!(params.fast_read_112_params.is_supported());
+        assert_eq!(params.fast_read_112_params.opcode, 0x3B);
+        assert_eq!(params.fast_read_112_params.dummy_clocks, 8);
     }
 }
