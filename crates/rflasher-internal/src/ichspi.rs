@@ -1050,6 +1050,7 @@ impl IchSpiController {
     /// Uses a busy-loop with clock_gettime for precise sub-microsecond timing,
     /// matching flashprog's approach for maximum throughput.
     #[inline(always)]
+    #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
     fn hwseq_wait_for_cycle(&self, timeout_us: u32) -> Result<(), InternalError> {
         let done_or_err = HSFS_FDONE | HSFS_FCERR;
 
@@ -1063,8 +1064,8 @@ impl IchSpiController {
         }
 
         let timeout_ns = (timeout_us as i64) * 1000;
-        let end_nsec = start.tv_nsec + timeout_ns;
-        let end_sec = start.tv_sec + (end_nsec / 1_000_000_000);
+        let end_nsec = start.tv_nsec as i64 + timeout_ns;
+        let end_sec = start.tv_sec as i64 + (end_nsec / 1_000_000_000);
         let end_nsec = end_nsec % 1_000_000_000;
 
         loop {
@@ -1090,7 +1091,9 @@ impl IchSpiController {
                 libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
             }
 
-            if now.tv_sec > end_sec || (now.tv_sec == end_sec && now.tv_nsec >= end_nsec) {
+            if now.tv_sec as i64 > end_sec
+                || (now.tv_sec as i64 == end_sec && now.tv_nsec as i64 >= end_nsec)
+            {
                 return Err(InternalError::Io("Hardware sequencing timeout"));
             }
 
@@ -1319,6 +1322,7 @@ impl IchSpiController {
     ///
     /// This should be called before starting a new cycle to ensure the
     /// previous one has completed.
+    #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
     fn swseq_wait_idle(&self, timeout_us: u32) -> Result<(), InternalError> {
         let mut start = libc::timespec {
             tv_sec: 0,
@@ -1329,8 +1333,8 @@ impl IchSpiController {
         }
 
         let timeout_ns = (timeout_us as i64) * 1000;
-        let end_nsec = start.tv_nsec + timeout_ns;
-        let end_sec = start.tv_sec + (end_nsec / 1_000_000_000);
+        let end_nsec = start.tv_nsec as i64 + timeout_ns;
+        let end_sec = start.tv_sec as i64 + (end_nsec / 1_000_000_000);
         let end_nsec = end_nsec % 1_000_000_000;
 
         loop {
@@ -1348,7 +1352,9 @@ impl IchSpiController {
                 libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
             }
 
-            if now.tv_sec > end_sec || (now.tv_sec == end_sec && now.tv_nsec >= end_nsec) {
+            if now.tv_sec as i64 > end_sec
+                || (now.tv_sec as i64 == end_sec && now.tv_nsec as i64 >= end_nsec)
+            {
                 return Err(InternalError::Io("SCIP never cleared (swseq busy timeout)"));
             }
 
@@ -1357,6 +1363,7 @@ impl IchSpiController {
     }
 
     /// Wait for software sequencing cycle to complete
+    #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
     fn swseq_wait_complete(&self, timeout_us: u32) -> Result<(), InternalError> {
         let done_or_err = SSFS_FDONE | SSFS_FCERR;
 
@@ -1369,8 +1376,8 @@ impl IchSpiController {
         }
 
         let timeout_ns = (timeout_us as i64) * 1000;
-        let end_nsec = start.tv_nsec + timeout_ns;
-        let end_sec = start.tv_sec + (end_nsec / 1_000_000_000);
+        let end_nsec = start.tv_nsec as i64 + timeout_ns;
+        let end_sec = start.tv_sec as i64 + (end_nsec / 1_000_000_000);
         let end_nsec = end_nsec % 1_000_000_000;
 
         loop {
@@ -1398,7 +1405,9 @@ impl IchSpiController {
                 libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
             }
 
-            if now.tv_sec > end_sec || (now.tv_sec == end_sec && now.tv_nsec >= end_nsec) {
+            if now.tv_sec as i64 > end_sec
+                || (now.tv_sec as i64 == end_sec && now.tv_nsec as i64 >= end_nsec)
+            {
                 return Err(InternalError::Io("Software sequencing timeout"));
             }
 
