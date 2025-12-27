@@ -19,8 +19,10 @@ Currently, rflasher supports the following programmers:
 ### SPI-based Programmers
 
 - **CH341A** - USB SPI programmer (VID: 0x1A86, PID: 0x5512)
+- **CH347** - USB SPI programmer (VID: 0x1A86, PID: 0x55DB/0x55DE)
 - **Serprog** - Serial Flasher Protocol (serial port and TCP/IP)
 - **FTDI** - MPSSE-based programmers (FT2232H, FT4232H, FT232H, and compatible devices)
+- **FT4222H** - FTDI FT4222H USB to SPI bridge (VID: 0x0403, PID: 0x601C)
 - **Linux SPI** - Native Linux spidev interface (`/dev/spidevX.Y`)
 - **Linux GPIO** - GPIO bitbang SPI via Linux character device (`/dev/gpiochipN`)
 - **Dummy** - In-memory flash emulator for testing
@@ -184,6 +186,9 @@ rflasher probe -p ftdi:type=2232h
 # FTDI on channel B with slower clock
 rflasher probe -p ftdi:type=2232h,port=B,divisor=10
 
+# FT4222H with custom speed and chip select
+rflasher probe -p ft4222:spispeed=20000,cs=0
+
 # Linux SPI with custom speed
 rflasher probe -p linux_spi:dev=/dev/spidev0.0,spispeed=4000
 
@@ -272,8 +277,10 @@ rflasher uses a workspace structure with clear separation of concerns:
 - **`rflasher-flash`** - Unified flash device abstraction (works with both SPI and opaque programmers)
 - **`rflasher-chips-codegen`** - Build-time code generator for chip database
 - **`rflasher-ch341a`** - CH341A USB programmer support
+- **`rflasher-ch347`** - CH347 USB programmer support
 - **`rflasher-serprog`** - Serial Flasher Protocol implementation
 - **`rflasher-ftdi`** - FTDI MPSSE programmer support
+- **`rflasher-ft4222`** - FTDI FT4222H USB to SPI bridge support
 - **`rflasher-linux-spi`** - Linux spidev interface
 - **`rflasher-linux-gpio`** - Linux GPIO bitbang SPI via character device
 - **`rflasher-linux-mtd`** - Linux MTD (Memory Technology Device) interface
