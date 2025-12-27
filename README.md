@@ -14,13 +14,19 @@ A modern Rust implementation for reading, writing, and erasing SPI flash chips. 
 
 ## Supported Programmers
 
-Currently, rflasher supports **SPI-based programmers only**:
+Currently, rflasher supports the following programmers:
+
+### SPI-based Programmers
 
 - **CH341A** - USB SPI programmer (VID: 0x1A86, PID: 0x5512)
 - **Serprog** - Serial Flasher Protocol (serial port and TCP/IP)
 - **FTDI** - MPSSE-based programmers (FT2232H, FT4232H, FT232H, and compatible devices)
-- **Linux SPI** - Native Linux spidev interface
+- **Linux SPI** - Native Linux spidev interface (`/dev/spidevX.Y`)
 - **Dummy** - In-memory flash emulator for testing
+
+### Opaque Programmers
+
+- **Linux MTD** - Linux Memory Technology Device interface (`/dev/mtdN`) for NOR flash
 
 ## Supported Flash Chips
 
@@ -179,6 +185,12 @@ rflasher probe -p ftdi:type=2232h,port=B,divisor=10
 
 # Linux SPI with custom speed
 rflasher probe -p linux_spi:dev=/dev/spidev0.0,spispeed=4000
+
+# Linux MTD device
+rflasher probe -p linux_mtd:dev=0
+
+# Linux MTD - read from device 0
+rflasher read -p linux_mtd:dev=0 -o flash_backup.bin
 ```
 
 ### Layout Operations
@@ -256,6 +268,7 @@ rflasher uses a workspace structure with clear separation of concerns:
 - **`rflasher-serprog`** - Serial Flasher Protocol implementation
 - **`rflasher-ftdi`** - FTDI MPSSE programmer support
 - **`rflasher-linux-spi`** - Linux spidev interface
+- **`rflasher-linux-mtd`** - Linux MTD (Memory Technology Device) interface
 - **`rflasher-dummy`** - In-memory flash emulator for testing
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed implementation information.

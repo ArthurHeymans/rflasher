@@ -682,6 +682,7 @@ dependencies = [
  "rflasher-dummy",
  "rflasher-ftdi",
  "rflasher-internal",
+ "rflasher-linux-mtd",
  "rflasher-linux-spi",
  "rflasher-serprog",
 ]
@@ -703,6 +704,17 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "log",
+ "rflasher-core",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "rflasher-linux-mtd"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "log",
+ "nix 0.29.0",
  "rflasher-core",
  "thiserror 2.0.17",
 ]

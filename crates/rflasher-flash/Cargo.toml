@@ -13,6 +13,7 @@ rflasher-ch341a = { path = "../rflasher-ch341a", optional = true }
 rflasher-serprog = { path = "../rflasher-serprog", optional = true }
 rflasher-ftdi = { path = "../rflasher-ftdi", optional = true }
 rflasher-linux-spi = { path = "../rflasher-linux-spi", optional = true }
+rflasher-linux-mtd = { path = "../rflasher-linux-mtd", optional = true }
 rflasher-internal = { path = "../rflasher-internal", optional = true }
 
 [features]
@@ -26,4 +27,5 @@ ch341a = ["dep:rflasher-ch341a"]
 serprog = ["dep:rflasher-serprog"]
 ftdi = ["dep:rflasher-ftdi"]
 linux-spi = ["dep:rflasher-linux-spi"]
+linux-mtd = ["dep:rflasher-linux-mtd"]
 internal = ["dep:rflasher-internal"]

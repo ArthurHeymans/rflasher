@@ -184,6 +184,9 @@ pub fn open_flash(
         #[cfg(feature = "linux-spi")]
         "linux_spi" | "linux-spi" | "spidev" => open_linux_spi(&params, db),
 
+        #[cfg(feature = "linux-mtd")]
+        "linux_mtd" | "linux-mtd" | "mtd" => open_linux_mtd(&params),
+
         #[cfg(feature = "internal")]
         "internal" => open_internal(&params, db),
 
@@ -374,6 +377,45 @@ fn open_linux_spi(
     probe_and_create_handle(master, db)
 }
 
+#[cfg(feature = "linux-mtd")]
+fn open_linux_mtd(params: &ProgrammerParams) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    use rflasher_linux_mtd::{parse_options, LinuxMtd};
+
+    log::info!("Opening Linux MTD programmer...");
+
+    let options: Vec<(&str, &str)> = params
+        .params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let config =
+        parse_options(&options).map_err(|e| format!("Invalid linux_mtd parameters: {}", e))?;
+
+    let mtd = LinuxMtd::open(&config).map_err(|e| {
+        format!(
+            "Failed to open Linux MTD device: {}\n\
+             Make sure the device exists and you have read/write permissions.\n\
+             List available MTD devices with: cat /proc/mtd",
+            e
+        )
+    })?;
+
+    let flash_size = mtd.size() as u32;
+    let erase_size = mtd.erase_size() as u32;
+
+    log::info!(
+        "MTD device: {} ({} bytes, erase size {} bytes)",
+        mtd.info().name,
+        flash_size,
+        erase_size
+    );
+
+    let mut device = OpaqueFlashDevice::new(mtd, flash_size);
+    device.set_erase_block_size(erase_size);
+    Ok(FlashHandle::without_chip_info(Box::new(device)))
+}
+
 #[cfg(feature = "internal")]
 fn open_internal(
     params: &ProgrammerParams,
@@ -470,6 +512,13 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "linux_spi",
         aliases: &["linux-spi", "spidev"],
         description: "Linux SPI device via spidev interface (dev=/dev/spidevX.Y)",
+    });
+
+    #[cfg(feature = "linux-mtd")]
+    programmers.push(ProgrammerInfo {
+        name: "linux_mtd",
+        aliases: &["linux-mtd", "mtd"],
+        description: "Linux MTD (Memory Technology Device) for NOR flash (dev=N)",
     });
 
     #[cfg(feature = "internal")]

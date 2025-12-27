@@ -1,0 +1,17 @@
+[package]
+name = "rflasher-linux-mtd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Linux MTD (Memory Technology Device) support for rflasher"
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std"]
+
+[dependencies]
+rflasher-core.workspace = true
+log.workspace = true
+thiserror.workspace = true
+libc = "0.2"
+nix = { version = "0.29", features = ["ioctl", "fs"] }
