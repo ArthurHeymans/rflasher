@@ -1,0 +1,275 @@
+// Micron/Numonyx SPI Flash Chips
+// Ported from flashprog/flashchips.c
+
+(
+    vendor: "Micron",
+    manufacturer_id: 0x20,
+    chips: [
+        // M25P series - Standard SPI flash
+        (
+            name: "M25P05",
+            device_id: 0x2010,
+            total_size: KiB(64),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0xD8, size: KiB(32)),
+                (opcode: 0xC7, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "M25P10",
+            device_id: 0x2011,
+            total_size: KiB(128),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0xD8, size: KiB(32)),
+                (opcode: 0xC7, size: KiB(128)),
+            ],
+        ),
+        (
+            name: "M25P20",
+            device_id: 0x2012,
+            total_size: KiB(256),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: KiB(256)),
+            ],
+        ),
+        (
+            name: "M25P40",
+            device_id: 0x2013,
+            total_size: KiB(512),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: KiB(512)),
+            ],
+        ),
+        (
+            name: "M25P80",
+            device_id: 0x2014,
+            total_size: MiB(1),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(1)),
+            ],
+        ),
+        (
+            name: "M25P16",
+            device_id: 0x2015,
+            total_size: MiB(2),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(2)),
+            ],
+        ),
+        (
+            name: "M25P32",
+            device_id: 0x2016,
+            total_size: MiB(4),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(4)),
+            ],
+        ),
+        (
+            name: "M25P64",
+            device_id: 0x2017,
+            total_size: MiB(8),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(8)),
+            ],
+        ),
+        (
+            name: "M25P128",
+            device_id: 0x2018,
+            total_size: MiB(16),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0xD8, size: KiB(256)),
+                (opcode: 0xC7, size: MiB(16)),
+            ],
+        ),
+        // M25PE series - Page erasable
+        (
+            name: "M25PE10",
+            device_id: 0x8011,
+            total_size: KiB(128),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "M25PE20",
+            device_id: 0x8012,
+            total_size: KiB(256),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "M25PE40",
+            device_id: 0x8013,
+            total_size: KiB(512),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "M25PE80",
+            device_id: 0x8014,
+            total_size: MiB(1),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "M25PE16",
+            device_id: 0x8015,
+            total_size: MiB(2),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        // N25Q series - High performance Quad SPI
+        (
+            name: "N25Q016",
+            device_id: 0xBB15,
+            total_size: MiB(2),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "N25Q032",
+            device_id: 0xBA16,
+            total_size: MiB(4),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "N25Q064",
+            device_id: 0xBA17,
+            total_size: MiB(8),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "N25Q128",
+            device_id: 0xBA18,
+            total_size: MiB(16),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "N25Q256",
+            device_id: 0xBA19,
+            total_size: MiB(32),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true, addr_4byte: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "N25Q512",
+            device_id: 0xBA20,
+            total_size: MiB(64),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true, addr_4byte: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        // MT25Q series - Newer Quad SPI
+        (
+            name: "MT25QL128",
+            device_id: 0xBA18,
+            total_size: MiB(16),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 1700, max: 2000),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "MT25QL256",
+            device_id: 0xBA19,
+            total_size: MiB(32),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true, addr_4byte: true),
+            voltage: (min: 1700, max: 2000),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "MT25QL512",
+            device_id: 0xBA20,
+            total_size: MiB(64),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true, addr_4byte: true),
+            voltage: (min: 1700, max: 2000),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+    ],
+)

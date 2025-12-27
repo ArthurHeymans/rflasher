@@ -1,0 +1,131 @@
+// ISSI (Integrated Silicon Solution Inc.) SPI Flash Chips
+// Ported from flashprog/flashchips.c
+
+(
+    vendor: "ISSI",
+    manufacturer_id: 0x9D,
+    chips: [
+        // IS25 series - Standard SPI flash
+        (
+            name: "IS25LP016D",
+            device_id: 0x6015,
+            total_size: MiB(2),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "IS25LP032",
+            device_id: 0x6016,
+            total_size: MiB(4),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "IS25LP064",
+            device_id: 0x6017,
+            total_size: MiB(8),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "IS25LP128",
+            device_id: 0x6018,
+            total_size: MiB(16),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "IS25LP256",
+            device_id: 0x6019,
+            total_size: MiB(32),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, addr_4byte: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        // IS25WP series - Wide voltage range
+        (
+            name: "IS25WP016D",
+            device_id: 0x7015,
+            total_size: MiB(2),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 1650, max: 1950),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "IS25WP032",
+            device_id: 0x7016,
+            total_size: MiB(4),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 1650, max: 1950),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "IS25WP064",
+            device_id: 0x7017,
+            total_size: MiB(8),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 1650, max: 1950),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "IS25WP128",
+            device_id: 0x7018,
+            total_size: MiB(16),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 1650, max: 1950),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "IS25WP256",
+            device_id: 0x7019,
+            total_size: MiB(32),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true, addr_4byte: true),
+            voltage: (min: 1650, max: 1950),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+    ],
+)

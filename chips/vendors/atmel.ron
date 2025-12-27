@@ -1,0 +1,311 @@
+// Atmel/Adesto SPI Flash Chips
+// Ported from flashprog/flashchips.c
+
+(
+    vendor: "Atmel",
+    manufacturer_id: 0x1F,
+    chips: [
+        // AT25 series - Standard SPI flash
+        (
+            name: "AT25DF021",
+            device_id: 0x4300,
+            total_size: KiB(256),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25DF021A",
+            device_id: 0x4301,
+            total_size: KiB(256),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25DF041A",
+            device_id: 0x4401,
+            total_size: KiB(512),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25DF081",
+            device_id: 0x4502,
+            total_size: MiB(1),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25DF081A",
+            device_id: 0x4501,
+            total_size: MiB(1),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 1650, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25DF161",
+            device_id: 0x4602,
+            total_size: MiB(2),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25DF321",
+            device_id: 0x4700,
+            total_size: MiB(4),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25DF321A",
+            device_id: 0x4701,
+            total_size: MiB(4),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 1650, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25DF641(A)",
+            device_id: 0x4800,
+            total_size: MiB(8),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25DL081",
+            device_id: 0x4503,
+            total_size: MiB(1),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 1650, max: 1950),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25DL161",
+            device_id: 0x4603,
+            total_size: MiB(2),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 1650, max: 1950),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        // AT25F series
+        (
+            name: "AT25F512",
+            device_id: 0x6500,
+            total_size: KiB(64),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0x62, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25F512A",
+            device_id: 0x6501,
+            total_size: KiB(64),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0x62, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25F512B",
+            device_id: 0x6500,
+            total_size: KiB(64),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25F1024(A)",
+            device_id: 0x6600,
+            total_size: KiB(128),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0x62, size: KiB(128)),
+            ],
+        ),
+        (
+            name: "AT25F2048",
+            device_id: 0x6700,
+            total_size: KiB(256),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x52, size: KiB(64)),
+                (opcode: 0x62, size: KiB(256)),
+            ],
+        ),
+        (
+            name: "AT25F4096",
+            device_id: 0x6800,
+            total_size: KiB(512),
+            features: (wrsr_wren: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x52, size: KiB(64)),
+                (opcode: 0x62, size: KiB(512)),
+            ],
+        ),
+        // AT25FS series
+        (
+            name: "AT25FS010",
+            device_id: 0x6601,
+            total_size: KiB(128),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD7, size: KiB(32)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(128)),
+            ],
+        ),
+        (
+            name: "AT25FS040",
+            device_id: 0x6604,
+            total_size: KiB(512),
+            features: (wrsr_wren: true, erase_4k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD7, size: KiB(64)),
+                (opcode: 0x52, size: KiB(64)),
+                (opcode: 0xD8, size: KiB(512)),
+            ],
+        ),
+        // AT25SF series
+        (
+            name: "AT25SF041",
+            device_id: 0x8401,
+            total_size: KiB(512),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            voltage: (min: 2300, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25SF081",
+            device_id: 0x8501,
+            total_size: MiB(1),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            voltage: (min: 1650, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25SF128A",
+            device_id: 0x8901,
+            total_size: MiB(16),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 2500, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25SF161",
+            device_id: 0x8601,
+            total_size: MiB(2),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            voltage: (min: 2500, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        (
+            name: "AT25SF321",
+            device_id: 0x8701,
+            total_size: MiB(4),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 2500, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+        // AT25SL series
+        (
+            name: "AT25SL128A",
+            device_id: 0x4218,
+            total_size: MiB(16),
+            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            voltage: (min: 1650, max: 2000),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+            ],
+        ),
+    ],
+)

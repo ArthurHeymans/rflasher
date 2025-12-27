@@ -1,0 +1,153 @@
+// Eon Silicon Devices SPI Flash Chips
+// Ported from flashprog/flashchips.c
+
+(
+    vendor: "Eon",
+    manufacturer_id: 0x1C,
+    chips: [
+        // EN25Q series - Standard 3.3V SPI flash
+        (
+            name: "EN25Q40",
+            device_id: 0x3013,
+            total_size: KiB(512),
+            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0x60, size: KiB(512)),
+                (opcode: 0xC7, size: KiB(512)),
+            ],
+        ),
+        (
+            name: "EN25Q80",
+            device_id: 0x3014,
+            total_size: MiB(1),
+            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0x60, size: MiB(1)),
+                (opcode: 0xC7, size: MiB(1)),
+            ],
+        ),
+        (
+            name: "EN25Q16",
+            device_id: 0x3015,
+            total_size: MiB(2),
+            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(64)),
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0x60, size: MiB(2)),
+                (opcode: 0xC7, size: MiB(2)),
+            ],
+        ),
+        (
+            name: "EN25Q32",
+            device_id: 0x3016,
+            total_size: MiB(4),
+            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0x60, size: MiB(4)),
+                (opcode: 0xC7, size: MiB(4)),
+            ],
+            tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
+        ),
+        (
+            name: "EN25Q64",
+            device_id: 0x3017,
+            total_size: MiB(8),
+            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0x60, size: MiB(8)),
+                (opcode: 0xC7, size: MiB(8)),
+            ],
+            tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
+        ),
+        (
+            name: "EN25Q128",
+            device_id: 0x3018,
+            total_size: MiB(16),
+            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0x60, size: MiB(16)),
+                (opcode: 0xC7, size: MiB(16)),
+            ],
+            tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
+        ),
+
+        // EN25QH series - High performance with QPI support
+        (
+            name: "EN25QH16",
+            device_id: 0x7015,
+            total_size: MiB(2),
+            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_64k: true, status_reg_2: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0x60, size: MiB(2)),
+                (opcode: 0xC7, size: MiB(2)),
+            ],
+            tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
+        ),
+        (
+            name: "EN25QH32",
+            device_id: 0x7016,
+            total_size: MiB(4),
+            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0x60, size: MiB(4)),
+                (opcode: 0xC7, size: MiB(4)),
+            ],
+            tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
+        ),
+        (
+            name: "EN25QH64",
+            device_id: 0x7017,
+            total_size: MiB(8),
+            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0x60, size: MiB(8)),
+                (opcode: 0xC7, size: MiB(8)),
+            ],
+            tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
+        ),
+        (
+            name: "EN25QH128",
+            device_id: 0x7018,
+            total_size: MiB(16),
+            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, size: KiB(4)),
+                (opcode: 0x52, size: KiB(32)),
+                (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0x60, size: MiB(16)),
+                (opcode: 0xC7, size: MiB(16)),
+            ],
+            tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
+        ),
+    ],
+)
