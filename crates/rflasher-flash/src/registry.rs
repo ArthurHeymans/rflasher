@@ -195,6 +195,9 @@ pub fn open_flash(
         #[cfg(feature = "internal")]
         "internal" => open_internal(&params, db),
 
+        #[cfg(feature = "raiden")]
+        "raiden_debug_spi" | "raiden" | "raiden_spi" => open_raiden(&params, db),
+
         _ => Err(format!("Unknown programmer: {}", params.name).into()),
     }
 }
@@ -498,6 +501,36 @@ fn open_internal(
     }
 }
 
+#[cfg(feature = "raiden")]
+fn open_raiden(
+    params: &ProgrammerParams,
+    db: &ChipDatabase,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    use rflasher_raiden::{parse_options, RaidenDebugSpi};
+
+    log::info!("Opening Raiden Debug SPI programmer...");
+
+    let options: Vec<(&str, &str)> = params
+        .params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let config =
+        parse_options(&options).map_err(|e| format!("Invalid raiden parameters: {}", e))?;
+
+    let master = RaidenDebugSpi::open_with_config(&config).map_err(|e| {
+        format!(
+            "Failed to open Raiden Debug SPI device: {}\n\
+             Make sure a Chrome OS debug device (SuzyQable, Servo, C2D2) is connected\n\
+             and you have USB permissions.",
+            e
+        )
+    })?;
+
+    probe_and_create_handle(master, db)
+}
+
 // Programmer information and listing
 /// Information about a programmer
 pub struct ProgrammerInfo {
@@ -568,6 +601,13 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "internal",
         aliases: &[],
         description: "Intel PCH internal SPI/FWH controller (ich_spi_mode=<auto|swseq|hwseq>)",
+    });
+
+    #[cfg(feature = "raiden")]
+    programmers.push(ProgrammerInfo {
+        name: "raiden_debug_spi",
+        aliases: &["raiden", "raiden_spi"],
+        description: "Chrome OS EC USB SPI (serial=<sn>,target=<ap|ec|h1>)",
     });
 
     programmers

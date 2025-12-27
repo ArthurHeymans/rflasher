@@ -12,6 +12,7 @@ members = [
     "crates/rflasher-linux-mtd",
     "crates/rflasher-linux-gpio",
     "crates/rflasher-dummy",
+    "crates/rflasher-raiden",
 ]
 
 [workspace.package]
@@ -53,7 +54,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["dummy", "ch341a", "serprog", "linux-spi", "linux-mtd", "internal"]
+default = ["dummy", "ch341a", "serprog", "linux-spi", "linux-mtd", "internal", "raiden"]
 
 # Programmer features (passed through to rflasher-flash)
 dummy = ["rflasher-flash/dummy"]
@@ -64,9 +65,10 @@ linux-spi = ["rflasher-flash/linux-spi"]
 linux-mtd = ["rflasher-flash/linux-mtd"]
 linux-gpio = ["rflasher-flash/linux-gpio"]
 internal = ["rflasher-flash/internal"]
+raiden = ["rflasher-flash/raiden"]
 
 # Enable all programmers
-all-programmers = ["dummy", "ch341a", "serprog", "ftdi", "linux-spi", "linux-mtd", "linux-gpio", "internal"]
+all-programmers = ["dummy", "ch341a", "serprog", "ftdi", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden"]
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std"] }
@@ -77,6 +79,9 @@ env_logger.workspace = true
 log.workspace = true
 indicatif.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+nusb = { workspace = true }
 
 [profile.release]
 lto = true

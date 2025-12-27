@@ -179,7 +179,7 @@ impl LinuxGpioSpi {
             .on_chip(&config.device)
             .with_consumer("rflasher")
             .request()
-            .map_err(|e| LinuxGpioError::LineRequestFailed(e))?;
+            .map_err(LinuxGpioError::LineRequestFailed)?;
 
         log::info!(
             "linux_gpio_spi: Opened {} (cs={}, sck={}, mosi={}, miso={}{})",

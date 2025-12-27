@@ -649,6 +649,7 @@ dependencies = [
  "env_logger",
  "indicatif",
  "log",
+ "nusb",
  "rflasher-core",
  "rflasher-flash",
  "thiserror 2.0.17",
@@ -713,6 +714,7 @@ dependencies = [
  "rflasher-linux-gpio",
  "rflasher-linux-mtd",
  "rflasher-linux-spi",
+ "rflasher-raiden",
  "rflasher-serprog",
 ]
 
@@ -767,6 +769,16 @@ dependencies = [
  "nix 0.29.0",
  "rflasher-core",
  "thiserror 2.0.17",
+]
+
+[[package]]
+name = "rflasher-raiden"
+version = "0.1.0"
+dependencies = [
+ "futures-lite",
+ "log",
+ "nusb",
+ "rflasher-core",
 ]
 
 [[package]]

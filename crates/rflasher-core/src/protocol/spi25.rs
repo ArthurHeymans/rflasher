@@ -217,16 +217,26 @@ pub fn software_reset<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
 
 /// Read SFDP (Serial Flash Discoverable Parameters)
 pub fn read_sfdp<M: SpiMaster + ?Sized>(master: &mut M, addr: u32, buf: &mut [u8]) -> Result<()> {
-    let mut cmd = SpiCommand {
-        opcode: opcodes::RDSFDP,
-        address: Some(addr),
-        address_width: AddressWidth::ThreeByte,
-        io_mode: crate::spi::IoMode::Single,
-        dummy_cycles: 8, // SFDP requires 8 dummy cycles
-        write_data: &[],
-        read_buf: buf,
-    };
-    master.execute(&mut cmd)
+    let max_read = master.max_read_len();
+    let mut offset = 0;
+
+    while offset < buf.len() {
+        let chunk_len = core::cmp::min(max_read, buf.len() - offset);
+        let chunk = &mut buf[offset..offset + chunk_len];
+        let mut cmd = SpiCommand {
+            opcode: opcodes::RDSFDP,
+            address: Some(addr + offset as u32),
+            address_width: AddressWidth::ThreeByte,
+            io_mode: crate::spi::IoMode::Single,
+            dummy_cycles: 8, // SFDP requires 8 dummy cycles
+            write_data: &[],
+            read_buf: chunk,
+        };
+        master.execute(&mut cmd)?;
+        offset += chunk_len;
+    }
+
+    Ok(())
 }
 
 /// Check if the Write Enable Latch is set

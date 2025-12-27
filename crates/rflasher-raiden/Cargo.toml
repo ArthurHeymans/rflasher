@@ -1,0 +1,16 @@
+[package]
+name = "rflasher-raiden"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Raiden Debug SPI (Chrome OS EC USB) programmer support for rflasher"
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std", "nusb", "futures-lite"]
+
+[dependencies]
+rflasher-core.workspace = true
+nusb = { workspace = true, optional = true }
+futures-lite = { version = "2", optional = true }
+log.workspace = true
