@@ -77,6 +77,18 @@ struct SwseqRegs {
     opmenu: usize,
 }
 
+/// ICH7 software sequencing register offsets
+#[derive(Debug, Clone, Copy)]
+struct Ich7SwseqRegs {
+    spis: usize,
+    spic: usize,
+    spia: usize,
+    spid0: usize,
+    preop: usize,
+    optype: usize,
+    opmenu: usize,
+}
+
 /// Hardware sequencing data
 #[derive(Debug, Clone, Copy)]
 struct HwseqData {
@@ -185,8 +197,10 @@ pub struct IchSpiController {
     requested_mode: SpiMode,
     /// Actual operating mode (after validation)
     mode: SpiMode,
-    /// Software sequencing registers
+    /// Software sequencing registers (ICH9+)
     swseq: SwseqRegs,
+    /// ICH7 software sequencing registers
+    ich7_swseq: Ich7SwseqRegs,
     /// Hardware sequencing data
     hwseq: HwseqData,
     /// Current opcodes (for software sequencing)
@@ -243,6 +257,17 @@ impl IchSpiController {
             )
         };
 
+        // ICH7 software sequencing registers
+        let ich7_swseq = Ich7SwseqRegs {
+            spis: ICH7_REG_SPIS,
+            spic: ICH7_REG_SPIC,
+            spia: ICH7_REG_SPIA,
+            spid0: ICH7_REG_SPID0,
+            preop: ICH7_REG_PREOP,
+            optype: ICH7_REG_OPTYPE,
+            opmenu: ICH7_REG_OPMENU,
+        };
+
         let mut controller = Self {
             spibar,
             generation,
@@ -255,6 +280,7 @@ impl IchSpiController {
             requested_mode: mode,
             mode: SpiMode::Auto, // Will be determined during init
             swseq,
+            ich7_swseq,
             hwseq,
             opcodes: None,
             bbar: 0,
@@ -363,26 +389,138 @@ impl IchSpiController {
     }
 
     /// Initialize ICH7 SPI controller
+    ///
+    /// ICH7 only supports software sequencing (no hwseq).
     fn init_ich7(&mut self) -> Result<(), InternalError> {
+        // Log register values like flashprog does
         let spis = self.spibar.read16(ICH7_REG_SPIS);
-        log::debug!("ICH7 SPIS: {:#06x}", spis);
+        let spic = self.spibar.read16(ICH7_REG_SPIC);
+        let spia = self.spibar.read32(ICH7_REG_SPIA);
 
-        // Check for lockdown
+        log::debug!("0x00: {:#06x} (SPIS)", spis);
+        log::debug!("0x02: {:#06x} (SPIC)", spic);
+        log::debug!("0x04: {:#010x} (SPIA)", spia);
+
+        // Read BBAR
+        self.bbar = self.spibar.read32(0x50);
+        log::debug!("0x50: {:#010x} (BBAR)", self.bbar);
+
+        // Log opcode registers
+        let preop = self.spibar.read16(ICH7_REG_PREOP);
+        let optype = self.spibar.read16(ICH7_REG_OPTYPE);
+        let opmenu_lo = self.spibar.read32(ICH7_REG_OPMENU);
+        let opmenu_hi = self.spibar.read32(ICH7_REG_OPMENU + 4);
+
+        log::debug!("0x54: {:#06x} (PREOP)", preop);
+        log::debug!("0x56: {:#06x} (OPTYPE)", optype);
+        log::debug!("0x58: {:#010x} (OPMENU)", opmenu_lo);
+        log::debug!("0x5c: {:#010x} (OPMENU+4)", opmenu_hi);
+
+        // Log PBR registers (Protected BIOS Range)
+        for i in 0..3 {
+            let offs = 0x60 + (i * 4);
+            let pbr = self.spibar.read32(offs);
+            log::debug!("{:#04x}: {:#010x} (PBR{})", offs, pbr, i);
+        }
+
+        // Check for lockdown (bit 15 of SPIS)
         if spis & (1 << 15) != 0 {
             log::warn!("SPI Configuration Lockdown activated");
             self.locked = true;
         }
 
-        self.bbar = self.spibar.read32(0x50);
-        log::debug!("ICH7 BBAR: {:#010x}", self.bbar);
+        // Initialize opcodes using ICH7 register offsets
+        self.init_ich7_opcodes()?;
 
-        // Initialize opcodes
-        self.init_opcodes()?;
-
-        // Try to set BBAR to 0
+        // Try to set BBAR to 0 (allow access to all flash addresses)
         if !self.locked {
             self.set_bbar(0);
         }
+
+        // ICH7 only supports swseq
+        self.mode = SpiMode::SoftwareSequencing;
+        log::info!("Using swseq mode on ICH7 (hwseq not supported)");
+
+        Ok(())
+    }
+
+    /// Initialize opcodes for ICH7 software sequencing
+    fn init_ich7_opcodes(&mut self) -> Result<(), InternalError> {
+        if self.locked {
+            // Read existing opcodes from hardware
+            log::debug!("ICH7: Reading OPCODES from locked controller...");
+            self.opcodes = Some(self.generate_ich7_opcodes());
+        } else {
+            // Program our default opcodes
+            log::debug!("ICH7: Programming OPCODES...");
+            let opcodes = Opcodes::default();
+            self.program_ich7_opcodes(&opcodes)?;
+            self.opcodes = Some(opcodes);
+        }
+
+        if let Some(ref opcodes) = self.opcodes {
+            self.print_opcodes(opcodes);
+        }
+
+        Ok(())
+    }
+
+    /// Generate opcodes from ICH7 hardware registers
+    fn generate_ich7_opcodes(&self) -> Opcodes {
+        let preop = self.spibar.read16(self.ich7_swseq.preop);
+        let optype = self.spibar.read16(self.ich7_swseq.optype);
+        let opmenu_lo = self.spibar.read32(self.ich7_swseq.opmenu);
+        let opmenu_hi = self.spibar.read32(self.ich7_swseq.opmenu + 4);
+
+        let mut opcodes = Opcodes {
+            preop: [preop as u8, (preop >> 8) as u8],
+            opcode: [Opcode::default(); 8],
+        };
+
+        let mut optype_val = optype;
+        for i in 0..8 {
+            opcodes.opcode[i].spi_type = (optype_val & 0x3) as u8;
+            optype_val >>= 2;
+        }
+
+        let mut opmenu = opmenu_lo;
+        for i in 0..4 {
+            opcodes.opcode[i].opcode = (opmenu & 0xFF) as u8;
+            opmenu >>= 8;
+        }
+
+        opmenu = opmenu_hi;
+        for i in 4..8 {
+            opcodes.opcode[i].opcode = (opmenu & 0xFF) as u8;
+            opmenu >>= 8;
+        }
+
+        opcodes
+    }
+
+    /// Program opcodes to ICH7 hardware registers
+    fn program_ich7_opcodes(&self, opcodes: &Opcodes) -> Result<(), InternalError> {
+        let preop = (opcodes.preop[0] as u16) | ((opcodes.preop[1] as u16) << 8);
+
+        let mut optype: u16 = 0;
+        for (i, op) in opcodes.opcode.iter().enumerate() {
+            optype |= (op.spi_type as u16) << (i * 2);
+        }
+
+        let mut opmenu_lo: u32 = 0;
+        for i in 0..4 {
+            opmenu_lo |= (opcodes.opcode[i].opcode as u32) << (i * 8);
+        }
+
+        let mut opmenu_hi: u32 = 0;
+        for i in 4..8 {
+            opmenu_hi |= (opcodes.opcode[i].opcode as u32) << ((i - 4) * 8);
+        }
+
+        self.spibar.write16(self.ich7_swseq.preop, preop);
+        self.spibar.write16(self.ich7_swseq.optype, optype);
+        self.spibar.write32(self.ich7_swseq.opmenu, opmenu_lo);
+        self.spibar.write32(self.ich7_swseq.opmenu + 4, opmenu_hi);
 
         Ok(())
     }
@@ -1517,6 +1655,540 @@ impl IchSpiController {
         Ok(())
     }
 
+    // ========================================================================
+    // ICH7 Software Sequencing Operations
+    // ========================================================================
+
+    /// Wait for ICH7 software sequencing cycle to not be in progress
+    ///
+    /// This should be called before starting a new cycle to ensure the
+    /// previous one has completed.
+    #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
+    fn ich7_swseq_wait_idle(&self, timeout_us: u32) -> Result<(), InternalError> {
+        let mut start = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        unsafe {
+            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut start);
+        }
+
+        let timeout_ns = (timeout_us as i64) * 1000;
+        let end_nsec = start.tv_nsec as i64 + timeout_ns;
+        let end_sec = start.tv_sec as i64 + (end_nsec / 1_000_000_000);
+        let end_nsec = end_nsec % 1_000_000_000;
+
+        loop {
+            let spis = self.spibar.read16(self.ich7_swseq.spis);
+
+            if spis & SPIS_SCIP == 0 {
+                return Ok(());
+            }
+
+            let mut now = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            unsafe {
+                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
+            }
+
+            if now.tv_sec as i64 > end_sec
+                || (now.tv_sec as i64 == end_sec && now.tv_nsec as i64 >= end_nsec)
+            {
+                return Err(InternalError::Io(
+                    "ICH7: SCIP never cleared (swseq busy timeout)",
+                ));
+            }
+
+            std::hint::spin_loop();
+        }
+    }
+
+    /// Wait for ICH7 software sequencing cycle to complete
+    #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
+    fn ich7_swseq_wait_complete(&self, timeout_us: u32) -> Result<(), InternalError> {
+        let done_or_err = SPIS_CDS | SPIS_FCERR;
+
+        let mut start = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        unsafe {
+            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut start);
+        }
+
+        let timeout_ns = (timeout_us as i64) * 1000;
+        let end_nsec = start.tv_nsec as i64 + timeout_ns;
+        let end_sec = start.tv_sec as i64 + (end_nsec / 1_000_000_000);
+        let end_nsec = end_nsec % 1_000_000_000;
+
+        loop {
+            let spis = self.spibar.read16(self.ich7_swseq.spis);
+
+            if spis & done_or_err != 0 {
+                // Check for error
+                if spis & SPIS_FCERR != 0 {
+                    log::debug!("ICH7 transaction error, SPIS={:#06x}", spis);
+                    // Clear error by keeping reserved bits and writing 1 to error bit
+                    let clear = (spis & SPIS_RESERVED_MASK) | SPIS_FCERR;
+                    self.spibar.write16(self.ich7_swseq.spis, clear);
+                    return Err(InternalError::Io(
+                        "ICH7: Software sequencing transaction error",
+                    ));
+                }
+
+                return Ok(());
+            }
+
+            let mut now = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            unsafe {
+                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
+            }
+
+            if now.tv_sec as i64 > end_sec
+                || (now.tv_sec as i64 == end_sec && now.tv_nsec as i64 >= end_nsec)
+            {
+                return Err(InternalError::Io("ICH7: Software sequencing timeout"));
+            }
+
+            std::hint::spin_loop();
+        }
+    }
+
+    /// Read data from ICH7 SPID registers
+    ///
+    /// Optimized to read full 32-bit words and extract bytes.
+    #[inline(always)]
+    fn ich7_read_data(&self, buf: &mut [u8]) {
+        let len = buf.len();
+        let mut offset = 0;
+
+        // Process full 32-bit words
+        while offset + 4 <= len {
+            let temp = self.spibar.read32(self.ich7_swseq.spid0 + offset);
+            buf[offset] = temp as u8;
+            buf[offset + 1] = (temp >> 8) as u8;
+            buf[offset + 2] = (temp >> 16) as u8;
+            buf[offset + 3] = (temp >> 24) as u8;
+            offset += 4;
+        }
+
+        // Handle remaining bytes (0-3)
+        if offset < len {
+            let temp = self.spibar.read32(self.ich7_swseq.spid0 + offset);
+            let remaining = len - offset;
+            if remaining > 0 {
+                buf[offset] = temp as u8;
+            }
+            if remaining > 1 {
+                buf[offset + 1] = (temp >> 8) as u8;
+            }
+            if remaining > 2 {
+                buf[offset + 2] = (temp >> 16) as u8;
+            }
+        }
+    }
+
+    /// Fill ICH7 SPID registers with data
+    #[inline(always)]
+    fn ich7_fill_data(&self, data: &[u8]) {
+        let len = data.len();
+        if len == 0 {
+            return;
+        }
+
+        let mut offset = 0;
+
+        // Process full 32-bit words
+        while offset + 4 <= len {
+            let temp = (data[offset] as u32)
+                | ((data[offset + 1] as u32) << 8)
+                | ((data[offset + 2] as u32) << 16)
+                | ((data[offset + 3] as u32) << 24);
+            self.spibar.write32(self.ich7_swseq.spid0 + offset, temp);
+            offset += 4;
+        }
+
+        // Handle remaining bytes (0-3)
+        if offset < len {
+            let mut temp: u32 = 0;
+            let remaining = len - offset;
+            if remaining > 0 {
+                temp |= data[offset] as u32;
+            }
+            if remaining > 1 {
+                temp |= (data[offset + 1] as u32) << 8;
+            }
+            if remaining > 2 {
+                temp |= (data[offset + 2] as u32) << 16;
+            }
+            self.spibar.write32(self.ich7_swseq.spid0 + offset, temp);
+        }
+    }
+
+    /// Run an opcode using ICH7 software sequencing
+    ///
+    /// This is the core swseq execution function for ICH7, equivalent to ich7_run_opcode
+    /// in flashprog.
+    ///
+    /// # Arguments
+    /// * `opcode` - The SPI opcode byte
+    /// * `addr` - Address for address-type opcodes (ignored for no-address opcodes)
+    /// * `data` - Data buffer (for writes: data to send, for reads: buffer to fill)
+    /// * `is_write` - True if this is a write operation
+    /// * `atomic` - 0 = none, 1 = use preop0, 2 = use preop1
+    fn ich7_run_opcode(
+        &self,
+        opcode: u8,
+        addr: u32,
+        data: &mut [u8],
+        is_write: bool,
+        atomic: u8,
+    ) -> Result<(), InternalError> {
+        let datalength = data.len();
+        if datalength > Self::SWSEQ_MAX_DATA {
+            return Err(InternalError::Io("Data length exceeds swseq maximum"));
+        }
+
+        // Wait for any previous cycle to complete
+        self.ich7_swseq_wait_idle(60_000)?; // 60ms timeout
+
+        // Program offset in flash into SPIA while preserving reserved bits
+        let spia = self.spibar.read32(self.ich7_swseq.spia) & !0x00ff_ffff;
+        self.spibar
+            .write32(self.ich7_swseq.spia, (addr & 0x00ff_ffff) | spia);
+
+        // Fill data registers for write commands
+        if is_write && datalength > 0 {
+            self.ich7_fill_data(data);
+        }
+
+        // Assemble SPIS - clear status bits by writing 1 to them
+        let mut spis = self.spibar.read16(self.ich7_swseq.spis);
+        // Keep reserved bits
+        spis &= SPIS_RESERVED_MASK;
+        // Clear done and error status
+        spis |= SPIS_CDS | SPIS_FCERR;
+        self.spibar.write16(self.ich7_swseq.spis, spis);
+
+        // Assemble SPIC
+        let mut spic: u16 = 0;
+
+        // Set data byte count (bits 8-13) and data cycle bit
+        if datalength > 0 {
+            spic |= SPIC_DS;
+            // Data byte count is bits 8-13, max 63 bytes
+            spic |= (((datalength - 1) & 0x3f) as u16) << 8;
+        }
+
+        // Find opcode in opmenu
+        let opmenu_lo = self.spibar.read32(self.ich7_swseq.opmenu);
+        let opmenu_hi = self.spibar.read32(self.ich7_swseq.opmenu + 4);
+        let opmenu = (opmenu_lo as u64) | ((opmenu_hi as u64) << 32);
+
+        let mut opcode_index = None;
+        let mut opmenu_tmp = opmenu;
+        for i in 0..8 {
+            if (opmenu_tmp & 0xff) as u8 == opcode {
+                opcode_index = Some(i);
+                break;
+            }
+            opmenu_tmp >>= 8;
+        }
+
+        let opcode_index = opcode_index.ok_or_else(|| {
+            log::debug!("ICH7: Opcode {:#04x} not found in opmenu", opcode);
+            InternalError::NotSupported("Opcode not in OPMENU table")
+        })?;
+
+        // Select opcode (bits 4-6)
+        spic |= ((opcode_index & 0x7) as u16) << 4;
+
+        // Handle atomic operations (preop + main op)
+        let timeout_us = match atomic {
+            2 => {
+                // Select second preop
+                spic |= SPIC_SPOP;
+                // Atomic command
+                spic |= SPIC_ACS;
+                60_000_000 // 60 seconds for chip erase
+            }
+            1 => {
+                // Atomic command (uses first preop)
+                spic |= SPIC_ACS;
+                60_000_000 // 60 seconds for chip erase
+            }
+            _ => 60_000, // 60ms for normal operations
+        };
+
+        // Start the cycle
+        spic |= SPIC_SCGO;
+
+        // Write control register
+        self.spibar.write16(self.ich7_swseq.spic, spic);
+
+        // Wait for completion
+        self.ich7_swseq_wait_complete(timeout_us)?;
+
+        // Read data for read commands
+        if !is_write && datalength > 0 {
+            self.ich7_read_data(data);
+        }
+
+        Ok(())
+    }
+
+    /// Send a raw SPI command using ICH7 software sequencing
+    pub fn ich7_swseq_send_command(
+        &self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+    ) -> Result<(), InternalError> {
+        if writearr.is_empty() {
+            return Err(InternalError::Io("Empty write array"));
+        }
+
+        let opcode = writearr[0];
+        let writecnt = writearr.len();
+        let readcnt = readarr.len();
+
+        // Find opcode in table
+        let opcode_index = self.find_opcode_index(opcode).ok_or_else(|| {
+            log::debug!("ICH7: Opcode {:#04x} not found in opcode table", opcode);
+            InternalError::NotSupported("Opcode not available in OPMENU")
+        })?;
+
+        let opcodes = self.opcodes.as_ref().unwrap();
+        let spi_type = opcodes.opcode[opcode_index].spi_type;
+
+        // Validate command format based on opcode type
+        match spi_type {
+            SPI_OPCODE_TYPE_READ_WITH_ADDRESS => {
+                if writecnt != 4 {
+                    return Err(InternalError::Io(
+                        "Read with address requires exactly 4 write bytes",
+                    ));
+                }
+            }
+            SPI_OPCODE_TYPE_READ_NO_ADDRESS => {
+                if writecnt != 1 {
+                    return Err(InternalError::Io(
+                        "Read without address requires exactly 1 write byte",
+                    ));
+                }
+            }
+            SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS => {
+                if writecnt < 4 {
+                    return Err(InternalError::Io(
+                        "Write with address requires at least 4 write bytes",
+                    ));
+                }
+                if readcnt > 0 {
+                    return Err(InternalError::Io("Write commands cannot have read data"));
+                }
+            }
+            SPI_OPCODE_TYPE_WRITE_NO_ADDRESS => {
+                if readcnt > 0 {
+                    return Err(InternalError::Io("Write commands cannot have read data"));
+                }
+            }
+            _ => {}
+        }
+
+        // Extract address and data based on opcode type
+        let (addr, data_slice, is_write): (u32, &[u8], bool) = match spi_type {
+            SPI_OPCODE_TYPE_WRITE_NO_ADDRESS => {
+                // Data starts after opcode
+                (0, &writearr[1..], true)
+            }
+            SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS => {
+                // Address is bytes 1-3, data is bytes 4+
+                let addr = ((writearr[1] as u32) << 16)
+                    | ((writearr[2] as u32) << 8)
+                    | (writearr[3] as u32);
+                (addr, &writearr[4..], true)
+            }
+            SPI_OPCODE_TYPE_READ_WITH_ADDRESS => {
+                // Address is bytes 1-3
+                let addr = ((writearr[1] as u32) << 16)
+                    | ((writearr[2] as u32) << 8)
+                    | (writearr[3] as u32);
+                (addr, &[], false)
+            }
+            SPI_OPCODE_TYPE_READ_NO_ADDRESS => {
+                // No address, just read data
+                (0, &[], false)
+            }
+            _ => (0, &[], false),
+        };
+
+        // Determine if we need atomic mode (preop + main op)
+        let atomic = if is_write {
+            self.get_atomic_for_opcode(opcode)
+        } else {
+            0
+        };
+
+        // For read operations, we need to use the readarr
+        // For write operations, we use the data from writearr
+        if is_write {
+            let mut data_buf: [u8; 64] = [0; 64];
+            let len = data_slice.len().min(64);
+            data_buf[..len].copy_from_slice(&data_slice[..len]);
+            self.ich7_run_opcode(opcode, addr, &mut data_buf[..len], true, atomic)
+        } else {
+            let len = readcnt.min(64);
+            self.ich7_run_opcode(opcode, addr, &mut readarr[..len], false, 0)
+        }
+    }
+
+    /// Read data using ICH7 software sequencing
+    pub fn ich7_swseq_read(&self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+        // Check we have a read opcode available
+        let read_opcode = if self.find_opcode_index(JEDEC_READ).is_some() {
+            JEDEC_READ
+        } else if self.find_opcode_index(JEDEC_FAST_READ).is_some() {
+            JEDEC_FAST_READ
+        } else {
+            return Err(InternalError::NotSupported("No read opcode available"));
+        };
+
+        let len = buf.len();
+        let mut offset = 0;
+        let mut current_addr = addr;
+
+        while offset < len {
+            // Max 64 bytes per transfer
+            let remaining = len - offset;
+            let block_len = remaining.min(Self::SWSEQ_MAX_DATA);
+
+            // Build write array: opcode + 3-byte address
+            let writearr = [
+                read_opcode,
+                ((current_addr >> 16) & 0xff) as u8,
+                ((current_addr >> 8) & 0xff) as u8,
+                (current_addr & 0xff) as u8,
+            ];
+
+            self.ich7_swseq_send_command(&writearr, &mut buf[offset..offset + block_len])?;
+
+            offset += block_len;
+            current_addr += block_len as u32;
+        }
+
+        Ok(())
+    }
+
+    /// Write data using ICH7 software sequencing
+    pub fn ich7_swseq_write(&self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+        // Check we have a program opcode available
+        if self.find_opcode_index(JEDEC_BYTE_PROGRAM).is_none() {
+            return Err(InternalError::NotSupported("No program opcode available"));
+        }
+
+        let len = data.len();
+        let mut offset = 0;
+        let mut current_addr = addr;
+
+        while offset < len {
+            // Max 64 bytes per transfer, but also respect page boundaries (256 bytes)
+            let remaining = len - offset;
+            let page_remaining = 256 - (current_addr as usize & 0xff);
+            let block_len = remaining.min(Self::SWSEQ_MAX_DATA).min(page_remaining);
+
+            // Build write array: opcode + 3-byte address + data
+            let mut writearr = [0u8; 68]; // 4 header + 64 data max
+            writearr[0] = JEDEC_BYTE_PROGRAM;
+            writearr[1] = ((current_addr >> 16) & 0xff) as u8;
+            writearr[2] = ((current_addr >> 8) & 0xff) as u8;
+            writearr[3] = (current_addr & 0xff) as u8;
+            writearr[4..4 + block_len].copy_from_slice(&data[offset..offset + block_len]);
+
+            // Send program command (WREN is handled automatically via atomic mode)
+            self.ich7_swseq_send_command(&writearr[..4 + block_len], &mut [])?;
+
+            // Wait for programming to complete by polling status register
+            self.ich7_swseq_wait_wip()?;
+
+            offset += block_len;
+            current_addr += block_len as u32;
+        }
+
+        Ok(())
+    }
+
+    /// Erase a block using ICH7 software sequencing
+    pub fn ich7_swseq_erase(&self, addr: u32, len: u32) -> Result<(), InternalError> {
+        // Find an erase opcode - prefer 4KB sector erase for granularity
+        let (erase_opcode, erase_size) = if self.find_opcode_index(JEDEC_SE).is_some() {
+            (JEDEC_SE, 4096u32)
+        } else if self.find_opcode_index(JEDEC_BE_52).is_some() {
+            (JEDEC_BE_52, 32768u32)
+        } else if self.find_opcode_index(JEDEC_BE_D8).is_some() {
+            (JEDEC_BE_D8, 65536u32)
+        } else {
+            return Err(InternalError::NotSupported("No erase opcode available"));
+        };
+
+        // Verify alignment
+        if addr & (erase_size - 1) != 0 || len & (erase_size - 1) != 0 {
+            return Err(InternalError::Io("Erase address/length not aligned"));
+        }
+
+        let mut current_addr = addr;
+        let end_addr = addr + len;
+
+        while current_addr < end_addr {
+            // Build erase command: opcode + 3-byte address
+            let erase_arr = [
+                erase_opcode,
+                ((current_addr >> 16) & 0xff) as u8,
+                ((current_addr >> 8) & 0xff) as u8,
+                (current_addr & 0xff) as u8,
+            ];
+            self.ich7_swseq_send_command(&erase_arr, &mut [])?;
+
+            // Wait for erase to complete
+            self.ich7_swseq_wait_wip()?;
+
+            current_addr += erase_size;
+        }
+
+        Ok(())
+    }
+
+    /// Wait for Write-In-Progress (WIP) bit to clear using ICH7 swseq
+    fn ich7_swseq_wait_wip(&self) -> Result<(), InternalError> {
+        // Check we have RDSR opcode
+        if self.find_opcode_index(JEDEC_RDSR).is_none() {
+            // No RDSR available, just wait a fixed time
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            return Ok(());
+        }
+
+        let rdsr_arr = [JEDEC_RDSR];
+        let mut status = [0u8; 1];
+
+        // Poll for up to 60 seconds (for chip erase)
+        for _ in 0..600_000 {
+            self.ich7_swseq_send_command(&rdsr_arr, &mut status)?;
+
+            // WIP is bit 0
+            if status[0] & 0x01 == 0 {
+                return Ok(());
+            }
+
+            // Small delay between polls
+            std::thread::sleep(std::time::Duration::from_micros(100));
+        }
+
+        Err(InternalError::Io("Timeout waiting for WIP to clear"))
+    }
+
     /// Send a raw SPI command using software sequencing
     ///
     /// This is the main public interface for swseq commands, implementing the
@@ -1799,6 +2471,8 @@ impl Controller for IchSpiController {
     fn controller_read(&mut self, addr: u32, buf: &mut [u8], _chip_size: usize) -> CoreResult<()> {
         let result = if self.mode == SpiMode::HardwareSequencing {
             self.hwseq_read(addr, buf)
+        } else if self.generation == IchChipset::Ich7 {
+            self.ich7_swseq_read(addr, buf)
         } else {
             self.swseq_read(addr, buf)
         };
@@ -1808,6 +2482,8 @@ impl Controller for IchSpiController {
     fn controller_write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
         let result = if self.mode == SpiMode::HardwareSequencing {
             self.hwseq_write(addr, data)
+        } else if self.generation == IchChipset::Ich7 {
+            self.ich7_swseq_write(addr, data)
         } else {
             self.swseq_write(addr, data)
         };
@@ -1817,6 +2493,8 @@ impl Controller for IchSpiController {
     fn controller_erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
         let result = if self.mode == SpiMode::HardwareSequencing {
             self.hwseq_erase(addr, len)
+        } else if self.generation == IchChipset::Ich7 {
+            self.ich7_swseq_erase(addr, len)
         } else {
             self.swseq_erase(addr, len)
         };
@@ -1920,9 +2598,13 @@ impl Controller for IchSpiController {
             write_len += data_len;
         }
 
-        // Execute the command
-        self.swseq_send_command(&writearr[..write_len], cmd.read_buf)
-            .map_err(Self::map_internal_error)
+        // Execute the command - route to appropriate swseq implementation
+        let result = if self.generation == IchChipset::Ich7 {
+            self.ich7_swseq_send_command(&writearr[..write_len], cmd.read_buf)
+        } else {
+            self.swseq_send_command(&writearr[..write_len], cmd.read_buf)
+        };
+        result.map_err(Self::map_internal_error)
     }
 
     fn probe_opcode(&self, opcode: u8) -> bool {
