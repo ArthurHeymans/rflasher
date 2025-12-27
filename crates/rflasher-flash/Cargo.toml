@@ -10,6 +10,7 @@ log = "0.4"
 # Optional programmer dependencies
 rflasher-dummy = { path = "../rflasher-dummy", optional = true }
 rflasher-ch341a = { path = "../rflasher-ch341a", optional = true }
+rflasher-ch347 = { path = "../rflasher-ch347", optional = true }
 rflasher-serprog = { path = "../rflasher-serprog", optional = true }
 rflasher-ftdi = { path = "../rflasher-ftdi", optional = true }
 rflasher-linux-spi = { path = "../rflasher-linux-spi", optional = true }
@@ -26,6 +27,7 @@ alloc = ["rflasher-core/alloc"]
 # Programmer features
 dummy = ["dep:rflasher-dummy"]
 ch341a = ["dep:rflasher-ch341a"]
+ch347 = ["dep:rflasher-ch347"]
 serprog = ["dep:rflasher-serprog"]
 ftdi = ["dep:rflasher-ftdi"]
 linux-spi = ["dep:rflasher-linux-spi"]

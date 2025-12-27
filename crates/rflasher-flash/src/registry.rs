@@ -175,6 +175,9 @@ pub fn open_flash(
         #[cfg(feature = "ch341a")]
         "ch341a" | "ch341a_spi" => open_ch341a(&params, db),
 
+        #[cfg(feature = "ch347")]
+        "ch347" | "ch347_spi" => open_ch347(&params, db),
+
         #[cfg(feature = "serprog")]
         "serprog" => open_serprog(&params, db),
 
@@ -243,6 +246,34 @@ fn open_ch341a(
     let master = rflasher_ch341a::Ch341a::open().map_err(|e| {
         format!(
             "Failed to open CH341A: {}\nMake sure the device is connected and you have permissions.",
+            e
+        )
+    })?;
+
+    probe_and_create_handle(master, db)
+}
+
+#[cfg(feature = "ch347")]
+fn open_ch347(
+    params: &ProgrammerParams,
+    db: &ChipDatabase,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    use rflasher_ch347::{parse_options, Ch347};
+
+    log::info!("Opening CH347 programmer...");
+
+    // Convert HashMap to Vec<(&str, &str)> for parse_options
+    let options: Vec<(&str, &str)> = params
+        .params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let config = parse_options(&options).map_err(|e| format!("Invalid CH347 parameters: {}", e))?;
+
+    let master = Ch347::open_with_config(config).map_err(|e| {
+        format!(
+            "Failed to open CH347: {}\nMake sure the device is connected and you have permissions.",
             e
         )
     })?;
@@ -559,6 +590,13 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "ch341a",
         aliases: &["ch341a_spi"],
         description: "CH341A USB SPI programmer (VID:1a86 PID:5512)",
+    });
+
+    #[cfg(feature = "ch347")]
+    programmers.push(ProgrammerInfo {
+        name: "ch347",
+        aliases: &["ch347_spi"],
+        description: "CH347 USB SPI programmer (VID:1a86 PID:55db/55de) (spispeed=<khz>,cs=<0|1>)",
     });
 
     #[cfg(feature = "serprog")]
