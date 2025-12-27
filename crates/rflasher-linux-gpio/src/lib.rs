@@ -64,8 +64,19 @@
 //!
 //! # System Requirements
 //!
-//! - Linux kernel 4.8+ with GPIO character device support (kernel 5.5+ for v2 API)
+//! - Linux kernel 4.8+ with GPIO character device support
 //! - Access to `/dev/gpiochipN` devices (may require root or udev rules)
+//!
+//! # GPIO Character Device API Versions
+//!
+//! This crate supports both versions of the Linux GPIO character device API:
+//!
+//! - **uAPI v1** (Linux 4.8+): The original GPIO character device interface
+//! - **uAPI v2** (Linux 5.10+): The newer interface with improved line configuration
+//!
+//! The appropriate API version is automatically detected and used at runtime.
+//! This ensures compatibility with both older systems (e.g., Raspberry Pi with
+//! older kernels) and newer systems with the latest kernel features.
 //!
 //! # Known Working Platforms
 //!

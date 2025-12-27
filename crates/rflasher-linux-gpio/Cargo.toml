@@ -13,4 +13,4 @@ std = ["rflasher-core/std"]
 rflasher-core.workspace = true
 log.workspace = true
 thiserror.workspace = true
-gpiocdev = "0.8"
+gpiocdev = { version = "0.8", features = ["uapi_v1", "uapi_v2"] }
