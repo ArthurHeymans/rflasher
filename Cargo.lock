@@ -704,6 +704,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rflasher-dediprog"
+version = "0.1.0"
+dependencies = [
+ "futures-lite",
+ "log",
+ "nusb",
+ "rflasher-core",
+]
+
+[[package]]
 name = "rflasher-dummy"
 version = "0.1.0"
 dependencies = [
@@ -719,6 +729,7 @@ dependencies = [
  "rflasher-ch341a",
  "rflasher-ch347",
  "rflasher-core",
+ "rflasher-dediprog",
  "rflasher-dummy",
  "rflasher-ft4222",
  "rflasher-ftdi",

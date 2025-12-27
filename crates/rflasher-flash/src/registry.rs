@@ -178,6 +178,9 @@ pub fn open_flash(
         #[cfg(feature = "ch347")]
         "ch347" | "ch347_spi" => open_ch347(&params, db),
 
+        #[cfg(feature = "dediprog")]
+        "dediprog" | "dediprog_spi" => open_dediprog(&params, db),
+
         #[cfg(feature = "serprog")]
         "serprog" => open_serprog(&params, db),
 
@@ -280,6 +283,42 @@ fn open_ch347(
             e
         )
     })?;
+
+    probe_and_create_handle(master, db)
+}
+
+#[cfg(feature = "dediprog")]
+fn open_dediprog(
+    params: &ProgrammerParams,
+    db: &ChipDatabase,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    use rflasher_dediprog::{parse_options, Dediprog};
+
+    log::info!("Opening Dediprog programmer...");
+
+    // Convert HashMap to Vec<(&str, &str)> for parse_options
+    let options: Vec<(&str, &str)> = params
+        .params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let config =
+        parse_options(&options).map_err(|e| format!("Invalid Dediprog parameters: {}", e))?;
+
+    let master = Dediprog::open_with_config(config).map_err(|e| {
+        format!(
+            "Failed to open Dediprog: {}\n\
+             Make sure the device is connected and you have USB permissions.",
+            e
+        )
+    })?;
+
+    log::info!(
+        "Dediprog {}: {}",
+        master.device_type(),
+        master.device_string()
+    );
 
     probe_and_create_handle(master, db)
 }
@@ -637,6 +676,14 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "ch347",
         aliases: &["ch347_spi"],
         description: "CH347 USB SPI programmer (VID:1a86 PID:55db/55de) (spispeed=<khz>,cs=<0|1>)",
+    });
+
+    #[cfg(feature = "dediprog")]
+    programmers.push(ProgrammerInfo {
+        name: "dediprog",
+        aliases: &["dediprog_spi"],
+        description:
+            "Dediprog SF100/SF200/SF600/SF700 USB SPI (voltage=<V>,spispeed=<speed>,target=<1|2>)",
     });
 
     #[cfg(feature = "serprog")]
