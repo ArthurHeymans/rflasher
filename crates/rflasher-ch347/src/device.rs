@@ -29,14 +29,7 @@ use crate::protocol::*;
 /// - Two chip select lines (CS0, CS1)
 /// - SPI modes 0-3
 /// - 4-byte address support (software handled)
-///
-/// # Future Features (not yet implemented)
-///
-/// - Dual I/O mode (2-bit): Uses MOSI and MISO for bidirectional data
-/// - Quad I/O mode (4-bit): Uses 4 data lines for higher throughput
-///
-/// These modes require additional protocol support and are documented here
-/// for future implementation.
+/// - Standard single-bit SPI only (dual/quad modes not supported)
 pub struct Ch347 {
     /// USB device handle
     _device: Device,

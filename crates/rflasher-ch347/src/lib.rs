@@ -44,16 +44,17 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! # Dual/Quad I/O Support (Future)
+//! # Limitations
 //!
-//! The CH347 hardware supports dual and quad I/O modes, but these are not
-//! yet implemented in this driver. The hardware has the following capabilities:
+//! This driver currently only implements standard single-bit SPI mode.
+//! The CH347 hardware may support dual and quad I/O modes, but:
 //!
-//! - **Dual I/O**: Uses MOSI and MISO for bidirectional 2-bit data transfer
-//! - **Quad I/O**: Uses 4 data lines (IO0-IO3) for 4-bit data transfer
+//! - **Dual I/O (2-bit)**: Not supported - requires additional hardware investigation
+//! - **Quad I/O (4-bit)**: Not supported - requires additional hardware investigation
 //!
-//! These modes require additional protocol commands and state management
-//! that are planned for future implementation.
+//! The USB protocol commands for these modes are not documented, and it's unclear
+//! if the CH347 hardware actually supports them. Standard SPI mode covers the vast
+//! majority of flash chip programming use cases.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
