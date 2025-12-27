@@ -9,7 +9,7 @@ use crate::transport::Transport;
 
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::SpiCommand;
+use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
 
 /// Serprog programmer
 ///
@@ -374,6 +374,9 @@ impl<T: Transport> SpiMaster for Serprog<T> {
     }
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        // Check that the requested I/O mode is supported
+        check_io_mode_supported(cmd.io_mode, self.features())?;
+
         // Build the write data: opcode + address + dummy + write_data
         let header_len = cmd.header_len();
         let mut write_data = vec![0u8; header_len + cmd.write_data.len()];

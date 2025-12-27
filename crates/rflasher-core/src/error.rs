@@ -53,6 +53,8 @@ pub enum Error {
     ProgrammerNotReady,
     /// General programmer error
     ProgrammerError,
+    /// Requested I/O mode is not supported by the programmer
+    IoModeNotSupported,
 
     // I/O errors
     /// Read operation failed
@@ -85,6 +87,7 @@ impl fmt::Display for Error {
             Self::RegionProtected => write!(f, "region is protected"),
             Self::ProgrammerNotReady => write!(f, "programmer not ready"),
             Self::ProgrammerError => write!(f, "programmer error"),
+            Self::IoModeNotSupported => write!(f, "I/O mode not supported by programmer"),
             Self::ReadError => write!(f, "read operation failed"),
             Self::IoError => write!(f, "I/O error"),
             Self::LayoutError => write!(f, "layout validation failed"),

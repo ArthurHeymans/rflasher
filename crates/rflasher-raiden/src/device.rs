@@ -9,7 +9,7 @@ use nusb::transfer::{Queue, RequestBuffer};
 use nusb::{Device, Interface};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::SpiCommand;
+use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
 
 use crate::error::{RaidenError, Result};
 use crate::protocol::*;
@@ -522,6 +522,9 @@ impl SpiMaster for RaidenDebugSpi {
     }
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        // Check that the requested I/O mode is supported
+        check_io_mode_supported(cmd.io_mode, self.features())?;
+
         // Build the command bytes to send
         let header_len = cmd.header_len();
         let mut write_data = vec![0u8; header_len + cmd.write_data.len()];

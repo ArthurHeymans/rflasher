@@ -52,4 +52,70 @@ impl IoMode {
     pub const fn is_multi_io(&self) -> bool {
         !matches!(self, Self::Single)
     }
+
+    /// Returns true if this mode requires dual I/O capability
+    pub const fn requires_dual(&self) -> bool {
+        matches!(self, Self::DualOut | Self::DualIo)
+    }
+
+    /// Returns true if this mode requires quad I/O capability
+    pub const fn requires_quad(&self) -> bool {
+        matches!(self, Self::QuadOut | Self::QuadIo | Self::Qpi)
+    }
+}
+
+use crate::error::{Error, Result};
+use crate::programmer::SpiFeatures;
+
+/// Check if a programmer supports the requested I/O mode
+///
+/// Returns `Ok(())` if the mode is supported, or `Err(IoModeNotSupported)` if not.
+///
+/// # Example
+///
+/// ```ignore
+/// fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+///     check_io_mode_supported(cmd.io_mode, self.features())?;
+///     // ... execute the command
+/// }
+/// ```
+pub fn check_io_mode_supported(mode: IoMode, features: SpiFeatures) -> Result<()> {
+    match mode {
+        IoMode::Single => Ok(()),
+        IoMode::DualOut => {
+            if features.contains(SpiFeatures::DUAL_IN) {
+                Ok(())
+            } else {
+                Err(Error::IoModeNotSupported)
+            }
+        }
+        IoMode::DualIo => {
+            if features.contains(SpiFeatures::DUAL_IO) {
+                Ok(())
+            } else {
+                Err(Error::IoModeNotSupported)
+            }
+        }
+        IoMode::QuadOut => {
+            if features.contains(SpiFeatures::QUAD_IN) {
+                Ok(())
+            } else {
+                Err(Error::IoModeNotSupported)
+            }
+        }
+        IoMode::QuadIo => {
+            if features.contains(SpiFeatures::QUAD_IO) {
+                Ok(())
+            } else {
+                Err(Error::IoModeNotSupported)
+            }
+        }
+        IoMode::Qpi => {
+            if features.contains(SpiFeatures::QPI) {
+                Ok(())
+            } else {
+                Err(Error::IoModeNotSupported)
+            }
+        }
+    }
 }

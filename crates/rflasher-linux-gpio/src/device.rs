@@ -5,6 +5,15 @@
 //!
 //! SPI is implemented via bit-banging, where GPIO pins are directly controlled
 //! to generate SPI clock, data, and chip select signals.
+//!
+//! ## Multi-IO Support
+//!
+//! This programmer supports dual I/O (2-bit) and quad I/O (4-bit) modes when
+//! the appropriate GPIO pins are configured:
+//!
+//! - **Single I/O (1-1-1)**: Uses MOSI for output and MISO for input
+//! - **Dual I/O**: Uses IO0 (MOSI) and IO1 (MISO) bidirectionally
+//! - **Quad I/O**: Uses IO0-IO3 bidirectionally (requires io2 and io3 pins)
 
 use crate::error::{LinuxGpioError, Result};
 
@@ -12,8 +21,9 @@ use gpiocdev::line::{Offset, Value};
 use gpiocdev::request::{Config, Request};
 
 use rflasher_core::error::Result as CoreResult;
+use rflasher_core::programmer::bitbang::{self, BitbangDualIo, BitbangQuadIo, BitbangSpiMaster};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::SpiCommand;
+use rflasher_core::spi::{IoMode, SpiCommand};
 
 /// GPIO line indices
 #[derive(Debug, Clone, Copy)]
@@ -111,20 +121,33 @@ impl LinuxGpioSpiConfig {
     }
 }
 
+/// Current I/O direction state for multi-IO pins
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IoDirection {
+    /// Lines are configured for output (write phase)
+    Output,
+    /// Lines are configured for input (read phase)
+    Input,
+}
+
 /// Linux GPIO SPI programmer using bitbanging
 ///
 /// This struct implements the `SpiMaster` trait for Linux systems using
 /// GPIO pins controlled via the gpiocdev crate (character device interface).
+///
+/// It also implements `BitbangSpiMaster`, `BitbangDualIo`, and optionally
+/// `BitbangQuadIo` for multi-IO support.
 pub struct LinuxGpioSpi {
     /// GPIO line request handle
     request: Request,
     /// GPIO line offsets indexed by Line enum
     offsets: [Offset; MAX_LINES],
     /// Number of I/O lines (2 for single/dual, 4 for quad)
-    #[allow(dead_code)]
     io_lines: usize,
     /// Half-period delay in nanoseconds
     half_period_ns: u64,
+    /// Current direction of multi-IO lines
+    io_direction: IoDirection,
 }
 
 impl LinuxGpioSpi {
@@ -200,20 +223,308 @@ impl LinuxGpioSpi {
             offsets,
             io_lines,
             half_period_ns: config.half_period_ns,
+            io_direction: IoDirection::Input, // Start with I/O lines as inputs
         })
     }
 
-    /// Delay for half a clock period
+    /// Perform an SPI transaction (single I/O mode)
+    fn spi_transaction(&mut self, write_data: &[u8], read_buf: &mut [u8]) {
+        // Assert CS (active low)
+        BitbangSpiMaster::set_cs(self, true);
+
+        // Write phase
+        bitbang::single::write_bytes(self, write_data);
+
+        // Read phase
+        bitbang::single::read_bytes(self, read_buf);
+
+        // De-assert CS
+        BitbangSpiMaster::set_sck(self, false);
+        BitbangSpiMaster::half_period_delay(self);
+        BitbangSpiMaster::set_cs(self, false);
+        BitbangSpiMaster::half_period_delay(self);
+    }
+
+    /// Configure I/O lines for output (multi-IO write phase)
+    fn configure_io_output(&mut self) {
+        if self.io_direction == IoDirection::Output {
+            return;
+        }
+
+        // Configure MOSI/IO0 and MISO/IO1 as outputs
+        let mut cfg = Config::default();
+        cfg.with_line(self.offsets[Line::Mosi as usize])
+            .as_output(Value::Inactive);
+        cfg.with_line(self.offsets[Line::Miso as usize])
+            .as_output(Value::Inactive);
+        if self.io_lines == 4 {
+            cfg.with_line(self.offsets[Line::Io2 as usize])
+                .as_output(Value::Inactive);
+            cfg.with_line(self.offsets[Line::Io3 as usize])
+                .as_output(Value::Inactive);
+        }
+
+        if let Err(e) = self.request.reconfigure(&cfg) {
+            log::error!("Failed to configure I/O lines as output: {}", e);
+        }
+        self.io_direction = IoDirection::Output;
+    }
+
+    /// Configure I/O lines for input (multi-IO read phase)
+    fn configure_io_input(&mut self) {
+        if self.io_direction == IoDirection::Input {
+            return;
+        }
+
+        // Configure MOSI/IO0 and MISO/IO1 as inputs
+        let mut cfg = Config::default();
+        cfg.with_line(self.offsets[Line::Mosi as usize]).as_input();
+        cfg.with_line(self.offsets[Line::Miso as usize]).as_input();
+        if self.io_lines == 4 {
+            cfg.with_line(self.offsets[Line::Io2 as usize]).as_input();
+            cfg.with_line(self.offsets[Line::Io3 as usize]).as_input();
+        }
+
+        if let Err(e) = self.request.reconfigure(&cfg) {
+            log::error!("Failed to configure I/O lines as input: {}", e);
+        }
+        self.io_direction = IoDirection::Input;
+    }
+
+    /// Set dual I/O lines (IO0/IO1) values
+    ///
+    /// `io` bits: bit 0 -> IO0, bit 1 -> IO1
+    fn set_dual_io(&self, io: u8) {
+        let io0 = if io & 0x1 != 0 {
+            Value::Active
+        } else {
+            Value::Inactive
+        };
+        let io1 = if io & 0x2 != 0 {
+            Value::Active
+        } else {
+            Value::Inactive
+        };
+
+        if let Err(e) = self
+            .request
+            .set_value(self.offsets[Line::Mosi as usize], io0)
+        {
+            log::error!("Failed to set IO0: {}", e);
+        }
+        if let Err(e) = self
+            .request
+            .set_value(self.offsets[Line::Miso as usize], io1)
+        {
+            log::error!("Failed to set IO1: {}", e);
+        }
+    }
+
+    /// Get dual I/O lines (IO0/IO1) values
+    ///
+    /// Returns bits: bit 0 <- IO0, bit 1 <- IO1
+    fn get_dual_io(&self) -> u8 {
+        let mut result = 0u8;
+
+        if let Ok(Value::Active) = self.request.value(self.offsets[Line::Mosi as usize]) {
+            result |= 0x1;
+        }
+        if let Ok(Value::Active) = self.request.value(self.offsets[Line::Miso as usize]) {
+            result |= 0x2;
+        }
+
+        result
+    }
+
+    /// Set quad I/O lines (IO0/IO1/IO2/IO3) values
+    ///
+    /// `io` bits: bit 0 -> IO0, bit 1 -> IO1, bit 2 -> IO2, bit 3 -> IO3
+    fn set_quad_io(&self, io: u8) {
+        let vals = [
+            if io & 0x1 != 0 {
+                Value::Active
+            } else {
+                Value::Inactive
+            },
+            if io & 0x2 != 0 {
+                Value::Active
+            } else {
+                Value::Inactive
+            },
+            if io & 0x4 != 0 {
+                Value::Active
+            } else {
+                Value::Inactive
+            },
+            if io & 0x8 != 0 {
+                Value::Active
+            } else {
+                Value::Inactive
+            },
+        ];
+
+        if let Err(e) = self
+            .request
+            .set_value(self.offsets[Line::Mosi as usize], vals[0])
+        {
+            log::error!("Failed to set IO0: {}", e);
+        }
+        if let Err(e) = self
+            .request
+            .set_value(self.offsets[Line::Miso as usize], vals[1])
+        {
+            log::error!("Failed to set IO1: {}", e);
+        }
+        if let Err(e) = self
+            .request
+            .set_value(self.offsets[Line::Io2 as usize], vals[2])
+        {
+            log::error!("Failed to set IO2: {}", e);
+        }
+        if let Err(e) = self
+            .request
+            .set_value(self.offsets[Line::Io3 as usize], vals[3])
+        {
+            log::error!("Failed to set IO3: {}", e);
+        }
+    }
+
+    /// Get quad I/O lines (IO0/IO1/IO2/IO3) values
+    ///
+    /// Returns bits: bit 0 <- IO0, bit 1 <- IO1, bit 2 <- IO2, bit 3 <- IO3
+    fn get_quad_io(&self) -> u8 {
+        let mut result = 0u8;
+
+        if let Ok(Value::Active) = self.request.value(self.offsets[Line::Mosi as usize]) {
+            result |= 0x1;
+        }
+        if let Ok(Value::Active) = self.request.value(self.offsets[Line::Miso as usize]) {
+            result |= 0x2;
+        }
+        if let Ok(Value::Active) = self.request.value(self.offsets[Line::Io2 as usize]) {
+            result |= 0x4;
+        }
+        if let Ok(Value::Active) = self.request.value(self.offsets[Line::Io3 as usize]) {
+            result |= 0x8;
+        }
+
+        result
+    }
+
+    /// Check if this programmer has quad I/O capability
+    pub fn has_quad_io(&self) -> bool {
+        self.io_lines == 4
+    }
+
+    /// Execute an SPI command with multi-IO support
+    fn execute_multi_io(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        // Build the header: opcode + address + dummy bytes
+        let header_len = cmd.header_len();
+        let mut header = vec![0u8; header_len];
+        cmd.encode_header(&mut header);
+
+        self.set_cs_active(true);
+
+        match cmd.io_mode {
+            IoMode::Single => {
+                // 1-1-1: All single-wire
+                bitbang::single::write_bytes(self, &header);
+                bitbang::single::write_bytes(self, cmd.write_data);
+                bitbang::single::read_bytes(self, cmd.read_buf);
+            }
+            IoMode::DualOut => {
+                // 1-1-2: Opcode+address single, data dual (read only)
+                bitbang::single::write_bytes(self, &header);
+                bitbang::single::write_bytes(self, cmd.write_data);
+                self.set_idle_io();
+                bitbang::dual::read_bytes(self, cmd.read_buf);
+            }
+            IoMode::DualIo => {
+                // 1-2-2: Opcode single, address+data dual
+                if !header.is_empty() {
+                    bitbang::single::write_byte(self, header[0]); // opcode
+                }
+                self.configure_io_output();
+                bitbang::dual::write_bytes(self, &header[1..]); // address + dummy
+                bitbang::dual::write_bytes(self, cmd.write_data);
+                self.set_idle_io();
+                bitbang::dual::read_bytes(self, cmd.read_buf);
+            }
+            IoMode::QuadOut if self.io_lines == 4 => {
+                // 1-1-4: Opcode+address single, data quad (read only)
+                bitbang::single::write_bytes(self, &header);
+                bitbang::single::write_bytes(self, cmd.write_data);
+                self.set_idle_io();
+                bitbang::quad::read_bytes(self, cmd.read_buf);
+            }
+            IoMode::QuadIo if self.io_lines == 4 => {
+                // 1-4-4: Opcode single, address+data quad
+                if !header.is_empty() {
+                    bitbang::single::write_byte(self, header[0]); // opcode
+                }
+                self.configure_io_output();
+                bitbang::quad::write_bytes(self, &header[1..]); // address + dummy
+                bitbang::quad::write_bytes(self, cmd.write_data);
+                self.set_idle_io();
+                bitbang::quad::read_bytes(self, cmd.read_buf);
+            }
+            IoMode::Qpi if self.io_lines == 4 => {
+                // 4-4-4: Everything quad
+                self.configure_io_output();
+                bitbang::quad::write_bytes(self, &header);
+                bitbang::quad::write_bytes(self, cmd.write_data);
+                self.set_idle_io();
+                bitbang::quad::read_bytes(self, cmd.read_buf);
+            }
+            // Fall back to single I/O for unsupported modes
+            _ => {
+                if cmd.io_mode != IoMode::Single {
+                    log::warn!(
+                        "linux_gpio_spi: {:?} mode not supported (io_lines={}), falling back to single I/O",
+                        cmd.io_mode,
+                        self.io_lines
+                    );
+                }
+                bitbang::single::write_bytes(self, &header);
+                bitbang::single::write_bytes(self, cmd.write_data);
+                bitbang::single::read_bytes(self, cmd.read_buf);
+            }
+        }
+
+        // Deassert CS
+        self.set_sck_val(false);
+        self.do_half_period_delay();
+        self.set_cs_active(false);
+        self.do_half_period_delay();
+
+        Ok(())
+    }
+
+    /// Set CS with clearer semantics (true = chip active)
     #[inline]
-    fn half_period_delay(&self) {
+    fn set_cs_active(&mut self, active: bool) {
+        BitbangSpiMaster::set_cs(self, active);
+    }
+
+    /// Set SCK with clearer semantics
+    #[inline]
+    fn set_sck_val(&mut self, high: bool) {
+        BitbangSpiMaster::set_sck(self, high);
+    }
+
+    /// Get half period delay value
+    #[inline]
+    fn do_half_period_delay(&self) {
         if self.half_period_ns > 0 {
             std::thread::sleep(std::time::Duration::from_nanos(self.half_period_ns));
         }
     }
+}
 
-    /// Set chip select (CS is active low)
-    #[inline]
-    fn set_cs(&self, active: bool) {
+// Implement BitbangSpiMaster trait
+impl BitbangSpiMaster for LinuxGpioSpi {
+    fn set_cs(&mut self, active: bool) {
+        // CS is active low
         let value = if active {
             Value::Inactive
         } else {
@@ -227,9 +538,7 @@ impl LinuxGpioSpi {
         }
     }
 
-    /// Set clock line
-    #[inline]
-    fn set_sck(&self, high: bool) {
+    fn set_sck(&mut self, high: bool) {
         let value = if high { Value::Active } else { Value::Inactive };
         if let Err(e) = self
             .request
@@ -239,9 +548,7 @@ impl LinuxGpioSpi {
         }
     }
 
-    /// Set MOSI line
-    #[inline]
-    fn set_mosi(&self, high: bool) {
+    fn set_mosi(&mut self, high: bool) {
         let value = if high { Value::Active } else { Value::Inactive };
         if let Err(e) = self
             .request
@@ -251,8 +558,6 @@ impl LinuxGpioSpi {
         }
     }
 
-    /// Get MISO line value
-    #[inline]
     fn get_miso(&self) -> bool {
         match self.request.value(self.offsets[Line::Miso as usize]) {
             Ok(Value::Active) => true,
@@ -264,62 +569,71 @@ impl LinuxGpioSpi {
         }
     }
 
-    /// Write a byte to SPI (bit-bang, MSB first)
-    fn write_byte(&self, byte: u8) {
-        for i in (0..8).rev() {
-            let bit = (byte >> i) & 1 != 0;
-            self.set_sck(false);
-            self.set_mosi(bit);
-            self.half_period_delay();
-            self.set_sck(true);
-            self.half_period_delay();
+    fn half_period_delay(&self) {
+        if self.half_period_ns > 0 {
+            std::thread::sleep(std::time::Duration::from_nanos(self.half_period_ns));
         }
     }
+}
 
-    /// Read a byte from SPI (bit-bang, MSB first)
-    fn read_byte(&self) -> u8 {
-        let mut byte = 0u8;
-        for _ in 0..8 {
-            self.set_sck(false);
-            self.half_period_delay();
-            byte <<= 1;
-            if self.get_miso() {
-                byte |= 1;
-            }
-            self.set_sck(true);
-            self.half_period_delay();
-        }
-        byte
+// Implement BitbangDualIo trait (always available since we have at least IO0/IO1)
+impl BitbangDualIo for LinuxGpioSpi {
+    fn set_sck_set_dual_io(&mut self, sck: bool, io: u8) {
+        // Ensure we're in output mode
+        self.configure_io_output();
+
+        BitbangSpiMaster::set_sck(self, sck);
+        self.set_dual_io(io);
     }
 
-    /// Perform an SPI transaction
-    fn spi_transaction(&self, write_data: &[u8], read_buf: &mut [u8]) {
-        // Assert CS (active low)
-        self.set_cs(true);
+    fn set_sck_get_dual_io(&mut self, sck: bool) -> u8 {
+        BitbangSpiMaster::set_sck(self, sck);
+        self.get_dual_io()
+    }
 
-        // Write phase
-        for &byte in write_data {
-            self.write_byte(byte);
+    fn set_idle_io(&mut self) {
+        self.configure_io_input();
+    }
+}
+
+// Implement BitbangQuadIo trait (conditionally, only if we have IO2/IO3)
+// Note: We implement it unconditionally but the quad methods will log warnings
+// if called without quad pins configured
+impl BitbangQuadIo for LinuxGpioSpi {
+    fn set_sck_set_quad_io(&mut self, sck: bool, io: u8) {
+        if self.io_lines != 4 {
+            log::warn!("set_sck_set_quad_io called but quad I/O not configured");
+            return;
         }
 
-        // Read phase
-        for byte in read_buf.iter_mut() {
-            *byte = self.read_byte();
+        // Ensure we're in output mode
+        self.configure_io_output();
+
+        BitbangSpiMaster::set_sck(self, sck);
+        self.set_quad_io(io);
+    }
+
+    fn set_sck_get_quad_io(&mut self, sck: bool) -> u8 {
+        if self.io_lines != 4 {
+            log::warn!("set_sck_get_quad_io called but quad I/O not configured");
+            return 0;
         }
 
-        // De-assert CS
-        self.set_sck(false);
-        self.half_period_delay();
-        self.set_cs(false);
-        self.half_period_delay();
+        BitbangSpiMaster::set_sck(self, sck);
+        self.get_quad_io()
     }
 }
 
 impl SpiMaster for LinuxGpioSpi {
     fn features(&self) -> SpiFeatures {
         // Bitbang supports 4-byte addressing (done in software)
-        // Could add dual/quad support if io_lines == 4
-        SpiFeatures::FOUR_BYTE_ADDR
+        // Dual I/O is always available (IO0/IO1 = MOSI/MISO)
+        // Quad I/O only if io2/io3 pins are configured
+        let mut features = SpiFeatures::FOUR_BYTE_ADDR | SpiFeatures::DUAL;
+        if self.io_lines == 4 {
+            features |= SpiFeatures::QUAD | SpiFeatures::QPI;
+        }
+        features
     }
 
     fn max_read_len(&self) -> usize {
@@ -333,6 +647,12 @@ impl SpiMaster for LinuxGpioSpi {
     }
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        // Use multi-IO execution if the command requests it
+        if cmd.io_mode != IoMode::Single {
+            return self.execute_multi_io(cmd);
+        }
+
+        // Fast path for single I/O mode (most common case)
         // Build the write data: opcode + address + dummy + write_data
         let header_len = cmd.header_len();
         let mut write_data = vec![0u8; header_len + cmd.write_data.len()];

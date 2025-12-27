@@ -175,7 +175,7 @@ impl DummyFlash {
 #[cfg(feature = "alloc")]
 impl SpiMaster for DummyFlash {
     fn features(&self) -> SpiFeatures {
-        SpiFeatures::FOUR_BYTE_ADDR | SpiFeatures::DUAL_OUTPUT | SpiFeatures::QUAD_OUTPUT
+        SpiFeatures::FOUR_BYTE_ADDR | SpiFeatures::DUAL | SpiFeatures::QUAD
     }
 
     fn max_read_len(&self) -> usize {
@@ -187,6 +187,10 @@ impl SpiMaster for DummyFlash {
     }
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+        // Note: DummyFlash accepts all I/O modes since it's an in-memory emulator.
+        // The io_mode field is ignored because we just simulate the flash behavior
+        // without actually transferring data on physical wires.
+
         match cmd.opcode {
             // JEDEC ID
             opcodes::RDID => {
