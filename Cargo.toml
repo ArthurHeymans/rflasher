@@ -8,6 +8,7 @@ members = [
     "crates/rflasher-ch347",
     "crates/rflasher-serprog",
     "crates/rflasher-ftdi",
+    "crates/rflasher-ft4222",
     "crates/rflasher-internal",
     "crates/rflasher-linux-spi",
     "crates/rflasher-linux-mtd",
@@ -55,7 +56,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["dummy", "ch341a", "ch347", "serprog", "linux-spi", "linux-mtd", "internal", "raiden"]
+default = ["dummy", "ch341a", "ch347", "serprog", "ft4222", "linux-spi", "linux-mtd", "internal", "raiden"]
 
 # Programmer features (passed through to rflasher-flash)
 dummy = ["rflasher-flash/dummy"]
@@ -63,6 +64,7 @@ ch341a = ["rflasher-flash/ch341a"]
 ch347 = ["rflasher-flash/ch347"]
 serprog = ["rflasher-flash/serprog"]
 ftdi = ["rflasher-flash/ftdi"]
+ft4222 = ["rflasher-flash/ft4222"]
 linux-spi = ["rflasher-flash/linux-spi"]
 linux-mtd = ["rflasher-flash/linux-mtd"]
 linux-gpio = ["rflasher-flash/linux-gpio"]
@@ -70,7 +72,7 @@ internal = ["rflasher-flash/internal"]
 raiden = ["rflasher-flash/raiden"]
 
 # Enable all programmers
-all-programmers = ["dummy", "ch341a", "ch347", "serprog", "ftdi", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden"]
+all-programmers = ["dummy", "ch341a", "ch347", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden"]
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std"] }

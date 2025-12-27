@@ -13,6 +13,7 @@ rflasher-ch341a = { path = "../rflasher-ch341a", optional = true }
 rflasher-ch347 = { path = "../rflasher-ch347", optional = true }
 rflasher-serprog = { path = "../rflasher-serprog", optional = true }
 rflasher-ftdi = { path = "../rflasher-ftdi", optional = true }
+rflasher-ft4222 = { path = "../rflasher-ft4222", optional = true }
 rflasher-linux-spi = { path = "../rflasher-linux-spi", optional = true }
 rflasher-linux-mtd = { path = "../rflasher-linux-mtd", optional = true }
 rflasher-linux-gpio = { path = "../rflasher-linux-gpio", optional = true }
@@ -30,6 +31,7 @@ ch341a = ["dep:rflasher-ch341a"]
 ch347 = ["dep:rflasher-ch347"]
 serprog = ["dep:rflasher-serprog"]
 ftdi = ["dep:rflasher-ftdi"]
+ft4222 = ["dep:rflasher-ft4222"]
 linux-spi = ["dep:rflasher-linux-spi"]
 linux-mtd = ["dep:rflasher-linux-mtd"]
 linux-gpio = ["dep:rflasher-linux-gpio"]

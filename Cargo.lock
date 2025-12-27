@@ -720,6 +720,7 @@ dependencies = [
  "rflasher-ch347",
  "rflasher-core",
  "rflasher-dummy",
+ "rflasher-ft4222",
  "rflasher-ftdi",
  "rflasher-internal",
  "rflasher-linux-gpio",
@@ -727,6 +728,16 @@ dependencies = [
  "rflasher-linux-spi",
  "rflasher-raiden",
  "rflasher-serprog",
+]
+
+[[package]]
+name = "rflasher-ft4222"
+version = "0.1.0"
+dependencies = [
+ "futures-lite",
+ "log",
+ "nusb",
+ "rflasher-core",
 ]
 
 [[package]]

@@ -184,6 +184,9 @@ pub fn open_flash(
         #[cfg(feature = "ftdi")]
         "ftdi" | "ft2232_spi" | "ft4232_spi" => open_ftdi(&params, db),
 
+        #[cfg(feature = "ft4222")]
+        "ft4222" | "ft4222_spi" => open_ft4222(&params, db),
+
         #[cfg(feature = "linux-spi")]
         "linux_spi" | "linux-spi" | "spidev" => open_linux_spi(&params, db),
 
@@ -320,8 +323,9 @@ fn open_serprog(
             let mut serprog = rflasher_serprog::Serprog::new(transport)
                 .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
 
-            if let Some(speed) = spispeed {
-                if let Err(e) = serprog.set_spi_speed(speed) {
+            if let Some(speed_khz) = spispeed {
+                // Convert kHz to Hz
+                if let Err(e) = serprog.set_spi_speed(speed_khz * 1000) {
                     log::warn!("Failed to set SPI speed: {}", e);
                 }
             }
@@ -339,8 +343,9 @@ fn open_serprog(
             let mut serprog = rflasher_serprog::Serprog::new(transport)
                 .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
 
-            if let Some(speed) = spispeed {
-                if let Err(e) = serprog.set_spi_speed(speed) {
+            if let Some(speed_khz) = spispeed {
+                // Convert kHz to Hz
+                if let Err(e) = serprog.set_spi_speed(speed_khz * 1000) {
                     log::warn!("Failed to set SPI speed: {}", e);
                 }
             }
@@ -382,6 +387,41 @@ fn open_ftdi(
             e
         )
     })?;
+
+    probe_and_create_handle(master, db)
+}
+
+#[cfg(feature = "ft4222")]
+fn open_ft4222(
+    params: &ProgrammerParams,
+    db: &ChipDatabase,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    use rflasher_ft4222::{parse_options, Ft4222};
+
+    log::info!("Opening FT4222H programmer...");
+
+    // Convert HashMap to Vec<(&str, &str)> for parse_options
+    let options: Vec<(&str, &str)> = params
+        .params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let config =
+        parse_options(&options).map_err(|e| format!("Invalid FT4222 parameters: {}", e))?;
+
+    let master = Ft4222::open_with_config(config).map_err(|e| {
+        format!(
+            "Failed to open FT4222H device: {}\n\
+             Make sure the device is connected and you have USB permissions.",
+            e
+        )
+    })?;
+
+    log::info!(
+        "FT4222H: actual SPI clock = {} kHz",
+        master.actual_speed_khz()
+    );
 
     probe_and_create_handle(master, db)
 }
@@ -603,7 +643,8 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
     programmers.push(ProgrammerInfo {
         name: "serprog",
         aliases: &[],
-        description: "Serial Flasher Protocol over serial/network (dev=<port> or ip=<host:port>)",
+        description:
+            "Serial Flasher Protocol over serial/network (dev=<port>,ip=<host:port>,spispeed=<khz>)",
     });
 
     #[cfg(feature = "ftdi")]
@@ -611,6 +652,13 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "ftdi",
         aliases: &["ft2232_spi", "ft4232_spi"],
         description: "FTDI MPSSE programmer (FT2232H/FT4232H/FT232H) (type=<dev>,port=<A-D>)",
+    });
+
+    #[cfg(feature = "ft4222")]
+    programmers.push(ProgrammerInfo {
+        name: "ft4222",
+        aliases: &["ft4222_spi"],
+        description: "FTDI FT4222H USB SPI programmer (spispeed=<khz>,cs=<0-3>)",
     });
 
     #[cfg(feature = "linux-spi")]

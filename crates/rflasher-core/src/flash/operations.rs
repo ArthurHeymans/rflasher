@@ -878,8 +878,7 @@ pub fn read_fast<M: SpiMaster + ?Sized>(
         protocol::select_read_mode(master_features, chip_has_dual, chip_has_quad, use_4byte);
 
     // Enter 4-byte mode if needed and not using native commands
-    let enter_exit_4byte =
-        ctx.address_mode == AddressMode::FourByte && !ctx.use_native_4byte;
+    let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !ctx.use_native_4byte;
     if enter_exit_4byte {
         protocol::enter_4byte_mode(master)?;
     }
