@@ -187,6 +187,11 @@ pub fn open_flash(
         #[cfg(feature = "linux-mtd")]
         "linux_mtd" | "linux-mtd" | "mtd" => open_linux_mtd(&params),
 
+        #[cfg(feature = "linux-gpio")]
+        "linux_gpio_spi" | "linux-gpio-spi" | "linux_gpio" | "linux-gpio" => {
+            open_linux_gpio_spi(&params, db)
+        }
+
         #[cfg(feature = "internal")]
         "internal" => open_internal(&params, db),
 
@@ -416,6 +421,36 @@ fn open_linux_mtd(params: &ProgrammerParams) -> Result<FlashHandle, Box<dyn std:
     Ok(FlashHandle::without_chip_info(Box::new(device)))
 }
 
+#[cfg(feature = "linux-gpio")]
+fn open_linux_gpio_spi(
+    params: &ProgrammerParams,
+    db: &ChipDatabase,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    use rflasher_linux_gpio::{parse_options, LinuxGpioSpi};
+
+    log::info!("Opening Linux GPIO SPI (bitbang) programmer...");
+
+    let options: Vec<(&str, &str)> = params
+        .params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let config =
+        parse_options(&options).map_err(|e| format!("Invalid linux_gpio_spi parameters: {}", e))?;
+
+    let master = LinuxGpioSpi::open(&config).map_err(|e| {
+        format!(
+            "Failed to open Linux GPIO SPI device: {}\n\
+             Make sure the GPIO chip exists and you have permissions.\n\
+             You may need to run as root or add udev rules for /dev/gpiochipN",
+            e
+        )
+    })?;
+
+    probe_and_create_handle(master, db)
+}
+
 #[cfg(feature = "internal")]
 fn open_internal(
     params: &ProgrammerParams,
@@ -519,6 +554,13 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "linux_mtd",
         aliases: &["linux-mtd", "mtd"],
         description: "Linux MTD (Memory Technology Device) for NOR flash (dev=N)",
+    });
+
+    #[cfg(feature = "linux-gpio")]
+    programmers.push(ProgrammerInfo {
+        name: "linux_gpio_spi",
+        aliases: &["linux-gpio-spi", "linux_gpio", "linux-gpio"],
+        description: "Linux GPIO bitbang SPI (dev=/dev/gpiochipN,cs=N,sck=N,mosi=N,miso=N)",
     });
 
     #[cfg(feature = "internal")]

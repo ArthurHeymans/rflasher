@@ -1,0 +1,16 @@
+[package]
+name = "rflasher-linux-gpio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Linux GPIO bitbang SPI support for rflasher"
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std"]
+
+[dependencies]
+rflasher-core.workspace = true
+log.workspace = true
+thiserror.workspace = true
+gpiocdev = "0.8"

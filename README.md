@@ -22,6 +22,7 @@ Currently, rflasher supports the following programmers:
 - **Serprog** - Serial Flasher Protocol (serial port and TCP/IP)
 - **FTDI** - MPSSE-based programmers (FT2232H, FT4232H, FT232H, and compatible devices)
 - **Linux SPI** - Native Linux spidev interface (`/dev/spidevX.Y`)
+- **Linux GPIO** - GPIO bitbang SPI via Linux character device (`/dev/gpiochipN`)
 - **Dummy** - In-memory flash emulator for testing
 
 ### Opaque Programmers
@@ -186,6 +187,12 @@ rflasher probe -p ftdi:type=2232h,port=B,divisor=10
 # Linux SPI with custom speed
 rflasher probe -p linux_spi:dev=/dev/spidev0.0,spispeed=4000
 
+# Linux GPIO bitbang SPI (e.g., Raspberry Pi)
+rflasher probe -p linux_gpio_spi:gpiochip=0,cs=25,sck=11,mosi=10,miso=9
+
+# Linux GPIO with custom speed
+rflasher read -p linux_gpio_spi:dev=/dev/gpiochip0,cs=25,sck=11,mosi=10,miso=9,spispeed=500 -o flash.bin
+
 # Linux MTD device
 rflasher probe -p linux_mtd:dev=0
 
@@ -268,6 +275,7 @@ rflasher uses a workspace structure with clear separation of concerns:
 - **`rflasher-serprog`** - Serial Flasher Protocol implementation
 - **`rflasher-ftdi`** - FTDI MPSSE programmer support
 - **`rflasher-linux-spi`** - Linux spidev interface
+- **`rflasher-linux-gpio`** - Linux GPIO bitbang SPI via character device
 - **`rflasher-linux-mtd`** - Linux MTD (Memory Technology Device) interface
 - **`rflasher-dummy`** - In-memory flash emulator for testing
 

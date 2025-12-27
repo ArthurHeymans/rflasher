@@ -313,6 +313,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpiocdev"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a6009ef6766dd62a7f5933d379d357ae89eaee4e9c2455b6596f359627660a1"
+dependencies = [
+ "gpiocdev-uapi",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "gpiocdev-uapi"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb1a3ace06ef708255a33e738ec7a5e7718fe8e53bd9a39299b4f1cd4b13e9a3"
+dependencies = [
+ "bitflags 2.10.0",
+ "ioctl-sys",
+ "libc",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -356,6 +378,12 @@ dependencies = [
  "core-foundation-sys",
  "mach2",
 ]
+
+[[package]]
+name = "ioctl-sys"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bd11f3a29434026f5ff98c730b668ba74b1033637b8817940b54d040696133c"
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -682,6 +710,7 @@ dependencies = [
  "rflasher-dummy",
  "rflasher-ftdi",
  "rflasher-internal",
+ "rflasher-linux-gpio",
  "rflasher-linux-mtd",
  "rflasher-linux-spi",
  "rflasher-serprog",
@@ -703,6 +732,16 @@ name = "rflasher-internal"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "log",
+ "rflasher-core",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "rflasher-linux-gpio"
+version = "0.1.0"
+dependencies = [
+ "gpiocdev",
  "log",
  "rflasher-core",
  "thiserror 2.0.17",

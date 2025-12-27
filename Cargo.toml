@@ -10,6 +10,7 @@ members = [
     "crates/rflasher-internal",
     "crates/rflasher-linux-spi",
     "crates/rflasher-linux-mtd",
+    "crates/rflasher-linux-gpio",
     "crates/rflasher-dummy",
 ]
 
@@ -61,10 +62,11 @@ serprog = ["rflasher-flash/serprog"]
 ftdi = ["rflasher-flash/ftdi"]
 linux-spi = ["rflasher-flash/linux-spi"]
 linux-mtd = ["rflasher-flash/linux-mtd"]
+linux-gpio = ["rflasher-flash/linux-gpio"]
 internal = ["rflasher-flash/internal"]
 
 # Enable all programmers
-all-programmers = ["dummy", "ch341a", "serprog", "ftdi", "linux-spi", "linux-mtd", "internal"]
+all-programmers = ["dummy", "ch341a", "serprog", "ftdi", "linux-spi", "linux-mtd", "linux-gpio", "internal"]
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std"] }
