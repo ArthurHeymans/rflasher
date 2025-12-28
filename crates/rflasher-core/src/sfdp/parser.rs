@@ -1099,15 +1099,15 @@ mod tests {
 
         // Should have 4KB, 32KB, and 64KB erase
         assert!(
-            chip.erase_blocks.iter().any(|eb| eb.size() == 4096),
+            chip.erase_blocks.iter().any(|eb| eb.is_uniform() && eb.uniform_size() == Some(4096)),
             "Should have 4KB erase block"
         );
         assert!(
-            chip.erase_blocks.iter().any(|eb| eb.size() == 32768),
+            chip.erase_blocks.iter().any(|eb| eb.is_uniform() && eb.uniform_size() == Some(32768)),
             "Should have 32KB erase block"
         );
         assert!(
-            chip.erase_blocks.iter().any(|eb| eb.size() == 65536),
+            chip.erase_blocks.iter().any(|eb| eb.is_uniform() && eb.uniform_size() == Some(65536)),
             "Should have 64KB erase block"
         );
 
