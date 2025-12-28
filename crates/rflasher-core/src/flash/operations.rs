@@ -814,66 +814,26 @@ pub fn read_jedec_id<M: SpiMaster + ?Sized>(master: &mut M) -> Result<(u8, u16)>
 /// Read flash contents
 ///
 /// Automatically selects the best I/O mode based on programmer and chip capabilities.
+/// Uses dual or quad I/O when both the programmer and chip support it.
 pub fn read<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
     buf: &mut [u8],
 ) -> Result<()> {
-    if !ctx.is_valid_range(addr, buf.len()) {
-        return Err(Error::AddressOutOfBounds);
-    }
-
-    // TODO: Once FlashContext tracks chip multi-IO capabilities, we can use
-    // protocol::select_read_mode() to choose the optimal read mode.
-    // For now, we use single I/O reads.
-
-    match ctx.address_mode {
-        AddressMode::ThreeByte => protocol::read_3b(master, addr, buf),
-        AddressMode::FourByte => {
-            if ctx.use_native_4byte {
-                protocol::read_4b(master, addr, buf)
-            } else {
-                // Enter 4-byte mode, read, exit
-                protocol::enter_4byte_mode(master)?;
-                let result = protocol::read_3b(master, addr, buf);
-                let _ = protocol::exit_4byte_mode(master);
-                result
-            }
-        }
-    }
-}
-
-/// Read flash contents using the optimal I/O mode
-///
-/// This function automatically selects dual or quad I/O modes when supported
-/// by both the programmer and the flash chip.
-///
-/// # Arguments
-/// * `master` - The SPI master to use
-/// * `ctx` - Flash context with chip information
-/// * `addr` - Starting address to read from
-/// * `buf` - Buffer to read into
-/// * `chip_has_dual` - Whether the chip supports dual I/O
-/// * `chip_has_quad` - Whether the chip supports quad I/O
-pub fn read_fast<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    ctx: &FlashContext,
-    addr: u32,
-    buf: &mut [u8],
-    chip_has_dual: bool,
-    chip_has_quad: bool,
-) -> Result<()> {
+    use crate::chip::Features;
     use crate::spi::IoMode;
 
     if !ctx.is_valid_range(addr, buf.len()) {
         return Err(Error::AddressOutOfBounds);
     }
 
+    let chip_has_dual = ctx.chip.features.contains(Features::DUAL_IO);
+    let chip_has_quad = ctx.chip.features.contains(Features::QUAD_IO);
     let use_4byte = ctx.address_mode == AddressMode::FourByte && ctx.use_native_4byte;
     let master_features = master.features();
 
-    // Select the best read mode
+    // Select the best read mode based on chip and programmer capabilities
     let (io_mode, _opcode) =
         protocol::select_read_mode(master_features, chip_has_dual, chip_has_quad, use_4byte);
 

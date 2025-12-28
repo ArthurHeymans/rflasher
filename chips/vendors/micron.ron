@@ -115,6 +115,7 @@
             erase_blocks: [
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: KiB(128)),
             ],
         ),
         (
@@ -126,6 +127,7 @@
             erase_blocks: [
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: KiB(256)),
             ],
         ),
         (
@@ -137,6 +139,7 @@
             erase_blocks: [
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: KiB(512)),
             ],
         ),
         (
@@ -148,6 +151,7 @@
             erase_blocks: [
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(1)),
             ],
         ),
         (
@@ -159,6 +163,7 @@
             erase_blocks: [
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(2)),
             ],
         ),
         // N25Q series - High performance Quad SPI
@@ -172,6 +177,7 @@
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0x52, size: KiB(32)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(2)),
             ],
         ),
         (
@@ -184,6 +190,7 @@
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0x52, size: KiB(32)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(4)),
             ],
         ),
         (
@@ -196,6 +203,7 @@
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0x52, size: KiB(32)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(8)),
             ],
         ),
         (
@@ -208,6 +216,7 @@
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0x52, size: KiB(32)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(16)),
             ],
         ),
         (
@@ -220,6 +229,7 @@
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0x52, size: KiB(32)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(32)),
             ],
         ),
         (
@@ -232,6 +242,7 @@
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0x52, size: KiB(32)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(64)),
             ],
         ),
         // MT25Q series - Newer Quad SPI
@@ -245,6 +256,7 @@
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0x52, size: KiB(32)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(16)),
             ],
         ),
         (
@@ -257,6 +269,7 @@
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0x52, size: KiB(32)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(32)),
             ],
         ),
         (
@@ -269,6 +282,7 @@
                 (opcode: 0x20, size: KiB(4)),
                 (opcode: 0x52, size: KiB(32)),
                 (opcode: 0xD8, size: KiB(64)),
+                (opcode: 0xC7, size: MiB(64)),
             ],
         ),
     ],

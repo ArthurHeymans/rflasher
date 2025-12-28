@@ -1164,7 +1164,7 @@ mod tests {
         // Test FastReadParams::from_high_half
         // [31:24]=0xEB, [23:21]=2 mode, [20:16]=4 dummy
         // 0xEB_4_4_xxxx = 0xEB4_40000
-        let dword = 0xEB_44_0000u32;
+        let dword = 0xEB44_0000_u32;
         let params = FastReadParams::from_high_half(dword);
         assert!(params.is_supported());
         assert_eq!(params.opcode, 0xEB);
@@ -1181,7 +1181,7 @@ mod tests {
         assert_eq!(params.dummy_clocks, 4);
 
         // Test unsupported (opcode 0x00)
-        let dword = 0x00_00_0000u32;
+        let dword = 0x0000_0000_u32;
         let params = FastReadParams::from_high_half(dword);
         assert!(!params.is_supported());
     }

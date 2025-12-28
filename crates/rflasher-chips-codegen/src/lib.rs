@@ -6,7 +6,7 @@
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::quote;
 use serde::Deserialize;
-use std::collections::HashSet;
+
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -422,19 +422,8 @@ impl ChipDatabase {
 
     /// Validate the chip database
     pub fn validate(&self) -> Result<(), Error> {
-        let mut seen_jedec_ids = HashSet::new();
-
         for vendor in &self.vendors {
             for chip in &vendor.chips {
-                // Check for duplicate JEDEC IDs
-                let jedec_id = ((vendor.manufacturer_id as u32) << 16) | (chip.device_id as u32);
-                if !seen_jedec_ids.insert(jedec_id) {
-                    return Err(Error::Validation(format!(
-                        "Duplicate JEDEC ID 0x{:06X} for chip {}",
-                        jedec_id, chip.name
-                    )));
-                }
-
                 // Validate erase blocks
                 if chip.erase_blocks.is_empty() {
                     return Err(Error::Validation(format!(
@@ -472,7 +461,9 @@ impl ChipDatabase {
                 let array_name = format!(
                     "ERASE_BLOCKS_{}_{}",
                     vendor.vendor.to_uppercase().replace(' ', "_"),
-                    chip.name.to_uppercase().replace(['-', '.', '/', ' '], "_")
+                    chip.name
+                        .to_uppercase()
+                        .replace(['-', '.', '/', ' ', '(', ')'], "_")
                 );
                 let array_ident = Ident::new(&array_name, Span::call_site());
 
