@@ -228,12 +228,17 @@ pub fn plan_smart_erase(
             .iter()
             .filter(|eb| eb.is_uniform() && eb.total_size() < u32::MAX)
             .filter(|eb| current_addr.is_multiple_of(eb.min_block_size()))
-            .filter(|eb| eb.min_block_size() <= remaining_to_region_end || eb.min_block_size() == min_erase_size)
+            .filter(|eb| {
+                eb.min_block_size() <= remaining_to_region_end
+                    || eb.min_block_size() == min_erase_size
+            })
             .max_by_key(|eb| eb.min_block_size())
             .copied()
             .unwrap_or_else(|| EraseBlock::new(0x20, min_erase_size));
 
-        let block_size = erase_block.uniform_size().unwrap_or(erase_block.min_block_size());
+        let block_size = erase_block
+            .uniform_size()
+            .unwrap_or(erase_block.min_block_size());
         let erase_start = current_addr;
         let erase_end = erase_start + block_size - 1;
 
@@ -361,7 +366,9 @@ fn create_erase_layout(erase_blocks: &[EraseBlock], flash_size: u32) -> Vec<Eras
     let mut layouts = Vec::with_capacity(sorted_erasers.len());
 
     for (layout_idx, &erase_block) in sorted_erasers.iter().enumerate() {
-        let block_size = erase_block.uniform_size().unwrap_or(erase_block.min_block_size());
+        let block_size = erase_block
+            .uniform_size()
+            .unwrap_or(erase_block.min_block_size());
         let block_count = (flash_size / block_size) as usize;
         let mut blocks = Vec::with_capacity(block_count);
 
@@ -589,7 +596,10 @@ pub fn plan_optimal_erase(
     // Collect all selected blocks across all layouts
     let mut result = Vec::new();
     for layout in &layouts {
-        let block_size = layout.erase_block.uniform_size().unwrap_or(layout.erase_block.min_block_size());
+        let block_size = layout
+            .erase_block
+            .uniform_size()
+            .unwrap_or(layout.erase_block.min_block_size());
         for block in &layout.blocks {
             if block.selected && block.start_addr <= region_end && block.end_addr >= region_start {
                 result.push(OptimalEraseOp {
@@ -1250,7 +1260,9 @@ fn plan_erase_for_region(
                 )
             });
 
-        let block_size = erase_block.uniform_size().unwrap_or(erase_block.min_block_size());
+        let block_size = erase_block
+            .uniform_size()
+            .unwrap_or(erase_block.min_block_size());
         let erase_start = current_addr;
         let erase_end = erase_start + block_size - 1;
 
@@ -1367,7 +1379,9 @@ fn erase_single_block<M: SpiMaster + ?Sized>(
     }
 
     // Calculate timeout based on block size
-    let block_size = erase_block.uniform_size().unwrap_or(erase_block.max_block_size());
+    let block_size = erase_block
+        .uniform_size()
+        .unwrap_or(erase_block.max_block_size());
     let timeout_us = match block_size {
         s if s <= 4096 => 500_000,    // 4KB: 500ms
         s if s <= 32768 => 1_000_000, // 32KB: 1s

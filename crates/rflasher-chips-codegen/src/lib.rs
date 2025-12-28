@@ -451,11 +451,8 @@ impl ChipDatabase {
                 let total_size = chip.total_size.to_bytes();
                 let has_chip_erase = chip.erase_blocks.iter().any(|eb| {
                     // Check if this erase block covers the entire chip
-                    let erase_total: u32 = eb
-                        .regions
-                        .iter()
-                        .map(|r| r.size.to_bytes() * r.count)
-                        .sum();
+                    let erase_total: u32 =
+                        eb.regions.iter().map(|r| r.size.to_bytes() * r.count).sum();
                     erase_total == total_size
                 });
                 if !has_chip_erase {

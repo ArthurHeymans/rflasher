@@ -99,10 +99,7 @@ impl EraseBlock {
 
     /// Get the total size covered by this erase operation
     pub fn total_size(&self) -> u32 {
-        self.regions()
-            .iter()
-            .map(|r| r.total_size())
-            .sum()
+        self.regions().iter().map(|r| r.total_size()).sum()
     }
 
     /// Check if this is a uniform erase (single region)
@@ -121,20 +118,12 @@ impl EraseBlock {
 
     /// Get the minimum block size across all regions
     pub fn min_block_size(&self) -> u32 {
-        self.regions()
-            .iter()
-            .map(|r| r.size)
-            .min()
-            .unwrap_or(0)
+        self.regions().iter().map(|r| r.size).min().unwrap_or(0)
     }
 
     /// Get the maximum block size across all regions
     pub fn max_block_size(&self) -> u32 {
-        self.regions()
-            .iter()
-            .map(|r| r.size)
-            .max()
-            .unwrap_or(0)
+        self.regions().iter().map(|r| r.size).max().unwrap_or(0)
     }
 
     /// Get the block size at a given offset within this erase operation's coverage.
@@ -153,7 +142,6 @@ impl EraseBlock {
         }
         None
     }
-
 }
 
 /// Write granularity

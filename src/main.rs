@@ -378,7 +378,9 @@ fn print_chip_info(handle: &mut FlashHandle) {
                     println!("  Opcode 0x{:02X}: {}", eb.opcode, size_str);
                 } else {
                     // Non-uniform erase block - show all regions
-                    let regions: Vec<String> = eb.regions().iter()
+                    let regions: Vec<String> = eb
+                        .regions()
+                        .iter()
                         .map(|r| {
                             let size_str = if r.size >= 1024 * 1024 {
                                 format!("{}MiB", r.size / (1024 * 1024))
