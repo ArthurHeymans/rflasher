@@ -365,14 +365,33 @@ fn print_chip_info(handle: &mut FlashHandle) {
             println!();
             println!("Erase blocks:");
             for eb in chip.erase_blocks() {
-                let size_str = if eb.size >= 1024 * 1024 {
-                    format!("{} MiB", eb.size / (1024 * 1024))
-                } else if eb.size >= 1024 {
-                    format!("{} KiB", eb.size / 1024)
+                if eb.is_uniform() {
+                    // Uniform erase block - single size
+                    let size = eb.uniform_size().unwrap_or(0);
+                    let size_str = if size >= 1024 * 1024 {
+                        format!("{} MiB", size / (1024 * 1024))
+                    } else if size >= 1024 {
+                        format!("{} KiB", size / 1024)
+                    } else {
+                        format!("{} bytes", size)
+                    };
+                    println!("  Opcode 0x{:02X}: {}", eb.opcode, size_str);
                 } else {
-                    format!("{} bytes", eb.size)
-                };
-                println!("  Opcode 0x{:02X}: {}", eb.opcode, size_str);
+                    // Non-uniform erase block - show all regions
+                    let regions: Vec<String> = eb.regions().iter()
+                        .map(|r| {
+                            let size_str = if r.size >= 1024 * 1024 {
+                                format!("{}MiB", r.size / (1024 * 1024))
+                            } else if r.size >= 1024 {
+                                format!("{}KiB", r.size / 1024)
+                            } else {
+                                format!("{}B", r.size)
+                            };
+                            format!("{}x{}", r.count, size_str)
+                        })
+                        .collect();
+                    println!("  Opcode 0x{:02X}: {}", eb.opcode, regions.join(" + "));
+                }
             }
             println!();
             println!("Features:        {:?}", chip.features);

@@ -514,14 +514,14 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         .collect();
 
     // Sort by size (smallest first)
-    erase_blocks.sort_by_key(|eb| eb.size);
+    erase_blocks.sort_by_key(|eb| eb.min_block_size());
 
     // Set erase feature flags
     for eb in &erase_blocks {
-        match eb.size {
-            4096 => features |= Features::ERASE_4K,
-            32768 => features |= Features::ERASE_32K,
-            65536 => features |= Features::ERASE_64K,
+        match eb.uniform_size() {
+            Some(4096) => features |= Features::ERASE_4K,
+            Some(32768) => features |= Features::ERASE_32K,
+            Some(65536) => features |= Features::ERASE_64K,
             _ => {}
         }
     }
@@ -695,10 +695,12 @@ pub fn compare_with_chip(info: &SfdpInfo, chip: &FlashChip) -> Vec<SfdpMismatch>
 
     // Check for SFDP erase types not in database
     for sfdp_et in &sfdp_erase {
+        // For uniform erase blocks, compare with SFDP
         if let Some(db_eb) = chip
             .erase_blocks()
             .iter()
-            .find(|eb| eb.size == sfdp_et.size)
+            .filter(|eb| eb.is_uniform())
+            .find(|eb| eb.uniform_size() == Some(sfdp_et.size))
         {
             // Size matches, check opcode
             if db_eb.opcode != sfdp_et.opcode {
@@ -716,13 +718,15 @@ pub fn compare_with_chip(info: &SfdpInfo, chip: &FlashChip) -> Vec<SfdpMismatch>
         }
     }
 
-    // Check for database erase types not in SFDP
-    for db_eb in chip.erase_blocks() {
-        if !sfdp_erase.iter().any(|e| e.size == db_eb.size) {
-            mismatches.push(SfdpMismatch::ExtraEraseBlock {
-                size: db_eb.size,
-                opcode: db_eb.opcode,
-            });
+    // Check for database erase types not in SFDP (only uniform blocks)
+    for db_eb in chip.erase_blocks().iter().filter(|eb| eb.is_uniform()) {
+        if let Some(size) = db_eb.uniform_size() {
+            if !sfdp_erase.iter().any(|e| e.size == size) {
+                mismatches.push(SfdpMismatch::ExtraEraseBlock {
+                    size,
+                    opcode: db_eb.opcode,
+                });
+            }
         }
     }
 
@@ -1095,15 +1099,15 @@ mod tests {
 
         // Should have 4KB, 32KB, and 64KB erase
         assert!(
-            chip.erase_blocks.iter().any(|eb| eb.size == 4096),
+            chip.erase_blocks.iter().any(|eb| eb.size() == 4096),
             "Should have 4KB erase block"
         );
         assert!(
-            chip.erase_blocks.iter().any(|eb| eb.size == 32768),
+            chip.erase_blocks.iter().any(|eb| eb.size() == 32768),
             "Should have 32KB erase block"
         );
         assert!(
-            chip.erase_blocks.iter().any(|eb| eb.size == 65536),
+            chip.erase_blocks.iter().any(|eb| eb.size() == 65536),
             "Should have 64KB erase block"
         );
 

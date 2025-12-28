@@ -193,11 +193,11 @@ pub fn plan_smart_erase(
 
     let mut result = Vec::new();
 
-    // Find the smallest erase block size
+    // Find the smallest erase block size (for uniform erase blocks)
     let min_erase_size = erase_blocks
         .iter()
-        .filter(|eb| eb.size < u32::MAX) // Exclude chip erase
-        .map(|eb| eb.size)
+        .filter(|eb| eb.is_uniform() && eb.min_block_size() > 0 && eb.total_size() < u32::MAX) // Exclude chip erase
+        .map(|eb| eb.min_block_size())
         .min()
         .ok_or(Error::InvalidAlignment)?;
 
@@ -223,17 +223,19 @@ pub fn plan_smart_erase(
             0
         };
 
+        // For uniform erase blocks, find the best fit
         let erase_block = erase_blocks
             .iter()
-            .filter(|eb| eb.size < u32::MAX)
-            .filter(|eb| current_addr.is_multiple_of(eb.size))
-            .filter(|eb| eb.size <= remaining_to_region_end || eb.size == min_erase_size)
-            .max_by_key(|eb| eb.size)
+            .filter(|eb| eb.is_uniform() && eb.total_size() < u32::MAX)
+            .filter(|eb| current_addr.is_multiple_of(eb.min_block_size()))
+            .filter(|eb| eb.min_block_size() <= remaining_to_region_end || eb.min_block_size() == min_erase_size)
+            .max_by_key(|eb| eb.min_block_size())
             .copied()
             .unwrap_or_else(|| EraseBlock::new(0x20, min_erase_size));
 
+        let block_size = erase_block.uniform_size().unwrap_or(erase_block.min_block_size());
         let erase_start = current_addr;
-        let erase_end = erase_start + erase_block.size - 1;
+        let erase_end = erase_start + block_size - 1;
 
         // Determine if this block is unaligned (extends beyond region)
         let region_unaligned = erase_start < region_start || erase_end > region_end;
@@ -264,7 +266,7 @@ pub fn plan_smart_erase(
 
         result.push(EraseBlockPlan {
             start: erase_start,
-            size: erase_block.size,
+            size: block_size,
             erase_block,
             needs_erase,
             region_unaligned,
@@ -341,16 +343,16 @@ pub struct OptimalEraseOp {
 /// the next-smaller eraser it contains.
 #[cfg(feature = "alloc")]
 fn create_erase_layout(erase_blocks: &[EraseBlock], flash_size: u32) -> Vec<EraserLayout> {
-    // Filter out chip erase (size >= flash_size) and sort by size (smallest first)
+    // Filter out chip erase (size >= flash_size) and non-uniform blocks, sort by size (smallest first)
     let mut sorted_erasers: Vec<EraseBlock> = erase_blocks
         .iter()
-        .filter(|eb| eb.size < flash_size)
+        .filter(|eb| eb.is_uniform() && eb.min_block_size() > 0 && eb.min_block_size() < flash_size)
         .copied()
         .collect();
-    sorted_erasers.sort_by_key(|eb| eb.size);
+    sorted_erasers.sort_by_key(|eb| eb.min_block_size());
 
     // Remove duplicates (same size, different opcode)
-    sorted_erasers.dedup_by_key(|eb| eb.size);
+    sorted_erasers.dedup_by_key(|eb| eb.min_block_size());
 
     if sorted_erasers.is_empty() {
         return Vec::new();
@@ -359,14 +361,15 @@ fn create_erase_layout(erase_blocks: &[EraseBlock], flash_size: u32) -> Vec<Eras
     let mut layouts = Vec::with_capacity(sorted_erasers.len());
 
     for (layout_idx, &erase_block) in sorted_erasers.iter().enumerate() {
-        let block_count = (flash_size / erase_block.size) as usize;
+        let block_size = erase_block.uniform_size().unwrap_or(erase_block.min_block_size());
+        let block_count = (flash_size / block_size) as usize;
         let mut blocks = Vec::with_capacity(block_count);
 
         let mut sub_block_index = 0usize;
 
         for block_num in 0..block_count {
-            let start_addr = block_num as u32 * erase_block.size;
-            let end_addr = start_addr + erase_block.size - 1;
+            let start_addr = block_num as u32 * block_size;
+            let end_addr = start_addr + block_size - 1;
 
             let (first_sub_block_idx, last_sub_block_idx) = if layout_idx == 0 {
                 // Base case: smallest blocks have no sub-blocks
@@ -586,11 +589,12 @@ pub fn plan_optimal_erase(
     // Collect all selected blocks across all layouts
     let mut result = Vec::new();
     for layout in &layouts {
+        let block_size = layout.erase_block.uniform_size().unwrap_or(layout.erase_block.min_block_size());
         for block in &layout.blocks {
             if block.selected && block.start_addr <= region_end && block.end_addr >= region_start {
                 result.push(OptimalEraseOp {
                     start: block.start_addr,
-                    size: layout.erase_block.size,
+                    size: block_size,
                     erase_block: layout.erase_block,
                 });
             }
@@ -998,8 +1002,12 @@ pub fn erase<M: SpiMaster + ?Sized>(
     let mut current_addr = addr;
     let end_addr = addr + len;
 
+    // For non-uniform erase blocks, we need to track which block size applies
+    // at each address. For now, use the maximum block size for timeout calculation.
+    let max_block_size = erase_block.max_block_size();
+
     // Erase timeout depends on block size (larger blocks take longer)
-    let timeout_us = match erase_block.size {
+    let timeout_us = match max_block_size {
         s if s <= 4096 => 500_000,    // 4KB: 500ms
         s if s <= 32768 => 1_000_000, // 32KB: 1s
         s if s <= 65536 => 2_000_000, // 64KB: 2s
@@ -1007,6 +1015,12 @@ pub fn erase<M: SpiMaster + ?Sized>(
     };
 
     while current_addr < end_addr {
+        // Get the block size at the current offset within the erase layout
+        let offset_in_layout = current_addr - addr;
+        let block_size = erase_block
+            .block_size_at_offset(offset_in_layout)
+            .unwrap_or(max_block_size);
+
         let result = protocol::erase_block(
             master,
             opcode,
@@ -1023,14 +1037,14 @@ pub fn erase<M: SpiMaster + ?Sized>(
         }
 
         // Verify the block was erased (same as flashprog's check_erased_range)
-        if let Err(e) = check_erased_range(master, ctx, current_addr, erase_block.size) {
+        if let Err(e) = check_erased_range(master, ctx, current_addr, block_size) {
             if use_4byte && !use_native {
                 let _ = protocol::exit_4byte_mode(master);
             }
             return Err(e);
         }
 
-        current_addr += erase_block.size;
+        current_addr += block_size;
     }
 
     // Exit 4-byte mode
@@ -1122,10 +1136,16 @@ fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> Optio
         .iter()
         .filter(|eb| {
             // Skip chip erase for partial operations
-            eb.size <= len
+            // For non-uniform layouts, check the total coverage
+            eb.total_size() <= len
         })
-        .filter(|eb| addr.is_multiple_of(eb.size) && len.is_multiple_of(eb.size))
-        .max_by_key(|eb| eb.size)
+        .filter(|eb| {
+            // For uniform blocks, check alignment
+            // For non-uniform blocks, we need the min block size for alignment
+            let min_size = eb.min_block_size();
+            addr.is_multiple_of(min_size) && len.is_multiple_of(min_size)
+        })
+        .max_by_key(|eb| eb.max_block_size())
         .copied()
 }
 
@@ -1181,11 +1201,11 @@ fn plan_erase_for_region(
 ) -> Result<Vec<EraseBlockInfo>> {
     let mut result = Vec::new();
 
-    // Find the smallest erase block size
+    // Find the smallest erase block size (for uniform erase blocks)
     let min_erase_size = erase_blocks
         .iter()
-        .filter(|eb| eb.size < u32::MAX) // Exclude chip erase
-        .map(|eb| eb.size)
+        .filter(|eb| eb.is_uniform() && eb.min_block_size() > 0 && eb.total_size() < u32::MAX) // Exclude chip erase
+        .map(|eb| eb.min_block_size())
         .min()
         .ok_or(Error::InvalidAlignment)?;
 
@@ -1207,29 +1227,32 @@ fn plan_erase_for_region(
 
         let erase_block = erase_blocks
             .iter()
-            .filter(|eb| eb.size < u32::MAX) // Exclude chip erase
-            .filter(|eb| current_addr.is_multiple_of(eb.size))
+            .filter(|eb| eb.is_uniform() && eb.total_size() < u32::MAX) // Exclude chip erase
+            .filter(|eb| current_addr.is_multiple_of(eb.min_block_size()))
             .filter(|eb| {
                 // Prefer blocks that fit in the remaining region, but allow
                 // the minimum size even if it extends past
-                eb.size <= remaining_to_region_end || eb.size == min_erase_size
+                let block_size = eb.min_block_size();
+                block_size <= remaining_to_region_end || block_size == min_erase_size
             })
-            .max_by_key(|eb| eb.size)
+            .max_by_key(|eb| eb.min_block_size())
             .copied()
             .unwrap_or_else(|| {
                 // Fallback to smallest block at its aligned boundary
                 EraseBlock::new(
                     erase_blocks
                         .iter()
-                        .find(|eb| eb.size == min_erase_size)
+                        .filter(|eb| eb.is_uniform())
+                        .find(|eb| eb.min_block_size() == min_erase_size)
                         .map(|eb| eb.opcode)
                         .unwrap_or(0x20),
                     min_erase_size,
                 )
             });
 
+        let block_size = erase_block.uniform_size().unwrap_or(erase_block.min_block_size());
         let erase_start = current_addr;
-        let erase_end = erase_start + erase_block.size - 1;
+        let erase_end = erase_start + block_size - 1;
 
         // Check if this erase block extends beyond the region boundaries
         let region_unaligned = erase_start < region_start || erase_end > region_end;
@@ -1344,7 +1367,8 @@ fn erase_single_block<M: SpiMaster + ?Sized>(
     }
 
     // Calculate timeout based on block size
-    let timeout_us = match erase_block.size {
+    let block_size = erase_block.uniform_size().unwrap_or(erase_block.max_block_size());
+    let timeout_us = match block_size {
         s if s <= 4096 => 500_000,    // 4KB: 500ms
         s if s <= 32768 => 1_000_000, // 32KB: 1s
         s if s <= 65536 => 2_000_000, // 64KB: 2s
@@ -1361,7 +1385,7 @@ fn erase_single_block<M: SpiMaster + ?Sized>(
     result?;
 
     // Verify the block was erased (same as flashprog's check_erased_range)
-    check_erased_range(master, ctx, addr, erase_block.size)
+    check_erased_range(master, ctx, addr, block_size)
 }
 
 /// Erase a region of flash, handling erase block boundary crossing
@@ -2294,7 +2318,7 @@ mod tests {
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].erase_start, 0x1000);
         assert_eq!(plan[0].erase_end, 0x1FFF);
-        assert_eq!(plan[0].erase_block.size, 4096);
+        assert_eq!(plan[0].erase_block.uniform_size(), Some(4096));
         assert!(!plan[0].region_unaligned);
     }
 
@@ -2311,7 +2335,7 @@ mod tests {
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].erase_start, 0x10000);
         assert_eq!(plan[0].erase_end, 0x1FFFF);
-        assert_eq!(plan[0].erase_block.size, 65536);
+        assert_eq!(plan[0].erase_block.uniform_size(), Some(65536));
         assert!(!plan[0].region_unaligned);
     }
 

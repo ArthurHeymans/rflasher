@@ -246,13 +246,28 @@ impl FeaturesDef {
 // Chip definitions
 // ============================================================================
 
+/// Region definition: size and count pair
+#[derive(Debug, Clone, Deserialize)]
+pub struct RegionDef {
+    /// Size of each block in this region
+    pub size: Size,
+    /// Number of blocks of this size
+    pub count: u32,
+}
+
 /// Erase block definition in RON format
+///
+/// Supports both uniform blocks (single size across entire chip) and
+/// non-uniform layouts (multiple regions with different sizes, common
+/// in boot sector chips like PT/PU variants).
 #[derive(Debug, Clone, Deserialize)]
 pub struct EraseBlockDef {
     /// SPI opcode for this erase operation
     pub opcode: u8,
-    /// Size of the erase block
-    pub size: Size,
+    /// Regions for this erase opcode.
+    /// For uniform chips: single region covering the whole chip.
+    /// For non-uniform chips: multiple regions (e.g., boot sector chips).
+    pub regions: Vec<RegionDef>,
 }
 
 /// Test status for chip operations
@@ -434,10 +449,15 @@ impl ChipDatabase {
 
                 // Validate that chip erase exists
                 let total_size = chip.total_size.to_bytes();
-                let has_chip_erase = chip
-                    .erase_blocks
-                    .iter()
-                    .any(|eb| eb.size.to_bytes() == total_size);
+                let has_chip_erase = chip.erase_blocks.iter().any(|eb| {
+                    // Check if this erase block covers the entire chip
+                    let erase_total: u32 = eb
+                        .regions
+                        .iter()
+                        .map(|r| r.size.to_bytes() * r.count)
+                        .sum();
+                    erase_total == total_size
+                });
                 if !has_chip_erase {
                     return Err(Error::Validation(format!(
                         "Chip {} has no chip-erase block (size {} not found in erase_blocks)",
@@ -473,8 +493,50 @@ impl ChipDatabase {
                     .iter()
                     .map(|eb| {
                         let opcode = Literal::u8_unsuffixed(eb.opcode);
-                        let size = Literal::u32_unsuffixed(eb.size.to_bytes());
-                        quote!(EraseBlock::new(#opcode, #size))
+
+                        if eb.regions.len() == 1 {
+                            // Uniform erase block - use the simple constructor
+                            let size = Literal::u32_unsuffixed(eb.regions[0].size.to_bytes());
+                            let count = Literal::u32_unsuffixed(eb.regions[0].count);
+                            if eb.regions[0].count == 1 {
+                                // Single block (e.g., chip erase) - simplest form
+                                quote!(EraseBlock::new(#opcode, #size))
+                            } else {
+                                // Multiple uniform blocks
+                                quote!(EraseBlock {
+                                    opcode: #opcode,
+                                    region_count: 1,
+                                    regions: [
+                                        EraseRegion::new(#size, #count),
+                                        EraseRegion::new(0, 0),
+                                        EraseRegion::new(0, 0),
+                                        EraseRegion::new(0, 0),
+                                        EraseRegion::new(0, 0),
+                                        EraseRegion::new(0, 0),
+                                        EraseRegion::new(0, 0),
+                                        EraseRegion::new(0, 0),
+                                    ],
+                                })
+                            }
+                        } else {
+                            // Non-uniform erase block - use the full regions array
+                            let region_count = Literal::u8_unsuffixed(eb.regions.len() as u8);
+                            let mut regions = Vec::new();
+                            for region in &eb.regions {
+                                let size = Literal::u32_unsuffixed(region.size.to_bytes());
+                                let count = Literal::u32_unsuffixed(region.count);
+                                regions.push(quote!(EraseRegion::new(#size, #count)));
+                            }
+                            // Pad with empty regions to fill the array
+                            while regions.len() < 8 {
+                                regions.push(quote!(EraseRegion::new(0, 0)));
+                            }
+                            quote!(EraseBlock {
+                                opcode: #opcode,
+                                region_count: #region_count,
+                                regions: [#(#regions),*],
+                            })
+                        }
                     })
                     .collect();
 
@@ -576,10 +638,10 @@ mod tests {
                     ),
                     voltage: (min: 2700, max: 3600),
                     erase_blocks: [
-                        (opcode: 0x20, size: KiB(4)),
-                        (opcode: 0x52, size: KiB(32)),
-                        (opcode: 0xD8, size: KiB(64)),
-                        (opcode: 0xC7, size: MiB(16)),
+                        (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
+                        (opcode: 0x52, regions: [(size: KiB(32), count: 512)]),
+                        (opcode: 0xD8, regions: [(size: KiB(64), count: 256)]),
+                        (opcode: 0xC7, regions: [(size: MiB(16), count: 1)]),
                     ],
                     tested: (probe: Ok, read: Ok, erase: Ok, write: Ok, wp: Ok),
                 ),
@@ -598,6 +660,60 @@ mod tests {
         assert_eq!(chip.total_size.to_bytes(), 16 * 1024 * 1024);
         assert!(chip.features.wrsr_wren);
         assert!(chip.features.fast_read);
+    }
+
+    #[test]
+    fn test_parse_non_uniform_erase() {
+        // Test parsing a chip with non-uniform erase blocks (boot sector chip)
+        let ron = r#"
+        (
+            vendor: "AMIC",
+            manufacturer_id: 0x37,
+            chips: [
+                (
+                    name: "A25L10PT",
+                    device_id: 0x2021,
+                    total_size: KiB(128),
+                    features: (wrsr_wren: true),
+                    voltage: (min: 2700, max: 3600),
+                    erase_blocks: [
+                        (opcode: 0xD8, regions: [
+                            (size: KiB(64), count: 1),
+                            (size: KiB(32), count: 1),
+                            (size: KiB(16), count: 1),
+                            (size: KiB(8), count: 1),
+                            (size: KiB(4), count: 2),
+                        ]),
+                        (opcode: 0xC7, regions: [(size: KiB(128), count: 1)]),
+                    ],
+                ),
+            ],
+        )
+        "#;
+
+        let vendor: VendorDef = ron::from_str(ron).unwrap();
+        assert_eq!(vendor.chips.len(), 1);
+
+        let chip = &vendor.chips[0];
+        assert_eq!(chip.name, "A25L10PT");
+        assert_eq!(chip.erase_blocks.len(), 2);
+
+        // Check the non-uniform D8 erase block
+        let d8_block = &chip.erase_blocks[0];
+        assert_eq!(d8_block.opcode, 0xD8);
+        assert_eq!(d8_block.regions.len(), 5);
+        assert_eq!(d8_block.regions[0].size.to_bytes(), 64 * 1024);
+        assert_eq!(d8_block.regions[0].count, 1);
+        assert_eq!(d8_block.regions[4].size.to_bytes(), 4 * 1024);
+        assert_eq!(d8_block.regions[4].count, 2);
+
+        // Verify total size matches: 64 + 32 + 16 + 8 + 4*2 = 128KB
+        let total: u32 = d8_block
+            .regions
+            .iter()
+            .map(|r| r.size.to_bytes() * r.count)
+            .sum();
+        assert_eq!(total, 128 * 1024);
     }
 
     #[test]

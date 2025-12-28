@@ -13,9 +13,9 @@
             features: (wrsr_wren: false, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0x60, size: KiB(64)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 2)]),
+                (opcode: 0x60, regions: [(size: KiB(64), count: 1)]),
             ],
         ),
         (
@@ -25,9 +25,9 @@
             features: (wrsr_wren: true, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0x60, size: KiB(64)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 2)]),
+                (opcode: 0x60, regions: [(size: KiB(64), count: 1)]),
             ],
         ),
         (
@@ -37,9 +37,9 @@
             features: (wrsr_wren: false, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0x60, size: KiB(128)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 4)]),
+                (opcode: 0x60, regions: [(size: KiB(128), count: 1)]),
             ],
         ),
         (
@@ -49,9 +49,9 @@
             features: (wrsr_wren: true, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0x60, size: KiB(128)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 4)]),
+                (opcode: 0x60, regions: [(size: KiB(128), count: 1)]),
             ],
         ),
         (
@@ -61,9 +61,9 @@
             features: (wrsr_wren: false, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0x60, size: KiB(256)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 8)]),
+                (opcode: 0x60, regions: [(size: KiB(256), count: 1)]),
             ],
         ),
         (
@@ -73,10 +73,10 @@
             features: (wrsr_wren: true, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0xD8, size: KiB(64)),
-                (opcode: 0xC7, size: KiB(256)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 8)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 4)]),
+                (opcode: 0xC7, regions: [(size: KiB(256), count: 1)]),
             ],
         ),
         (
@@ -86,10 +86,10 @@
             features: (wrsr_wren: true, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0xD8, size: KiB(64)),
-                (opcode: 0xC7, size: KiB(512)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 16)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 8)]),
+                (opcode: 0xC7, regions: [(size: KiB(512), count: 1)]),
             ],
         ),
         (
@@ -99,10 +99,10 @@
             features: (wrsr_wren: true, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0xD8, size: KiB(64)),
-                (opcode: 0xC7, size: KiB(512)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 16)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 8)]),
+                (opcode: 0xC7, regions: [(size: KiB(512), count: 1)]),
             ],
         ),
         (
@@ -112,10 +112,10 @@
             features: (wrsr_wren: true, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0xD8, size: KiB(64)),
-                (opcode: 0xC7, size: MiB(1)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 32)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 16)]),
+                (opcode: 0xC7, regions: [(size: MiB(1), count: 1)]),
             ],
         ),
         (
@@ -125,10 +125,10 @@
             features: (wrsr_wren: true, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0xD8, size: KiB(64)),
-                (opcode: 0xC7, size: MiB(2)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 64)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 32)]),
+                (opcode: 0xC7, regions: [(size: MiB(2), count: 1)]),
             ],
         ),
         (
@@ -138,10 +138,10 @@
             features: (wrsr_wren: true, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0xD8, size: KiB(64)),
-                (opcode: 0xC7, size: MiB(4)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 128)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 64)]),
+                (opcode: 0xC7, regions: [(size: MiB(4), count: 1)]),
             ],
         ),
         (
@@ -151,10 +151,10 @@
             features: (wrsr_wren: true, erase_4k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(32)),
-                (opcode: 0xD8, size: KiB(64)),
-                (opcode: 0xC7, size: MiB(8)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 256)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 128)]),
+                (opcode: 0xC7, regions: [(size: MiB(8), count: 1)]),
             ],
         ),
         // SST26 series - Newer generation with improved features
@@ -165,10 +165,10 @@
             features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(8)),
-                (opcode: 0xD8, size: KiB(64)),
-                (opcode: 0xC7, size: MiB(2)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
+                (opcode: 0x52, regions: [(size: KiB(8), count: 256)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 32)]),
+                (opcode: 0xC7, regions: [(size: MiB(2), count: 1)]),
             ],
         ),
         (
@@ -178,10 +178,10 @@
             features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(8)),
-                (opcode: 0xD8, size: KiB(64)),
-                (opcode: 0xC7, size: MiB(4)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
+                (opcode: 0x52, regions: [(size: KiB(8), count: 512)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 64)]),
+                (opcode: 0xC7, regions: [(size: MiB(4), count: 1)]),
             ],
         ),
         (
@@ -191,10 +191,10 @@
             features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
-                (opcode: 0x20, size: KiB(4)),
-                (opcode: 0x52, size: KiB(8)),
-                (opcode: 0xD8, size: KiB(64)),
-                (opcode: 0xC7, size: MiB(8)),
+                (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
+                (opcode: 0x52, regions: [(size: KiB(8), count: 1024)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 128)]),
+                (opcode: 0xC7, regions: [(size: MiB(8), count: 1)]),
             ],
         ),
     ],

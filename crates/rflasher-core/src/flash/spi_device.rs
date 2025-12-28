@@ -235,8 +235,11 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         let mut current_addr = addr;
         let end_addr = addr + len;
 
+        // For non-uniform erase blocks, use the maximum block size for timeout calculation
+        let max_block_size = erase_block.max_block_size();
+
         // Erase timeout depends on block size
-        let timeout_us = match erase_block.size {
+        let timeout_us = match max_block_size {
             s if s <= 4096 => 500_000,    // 4KB: 500ms
             s if s <= 32768 => 1_000_000, // 32KB: 1s
             s if s <= 65536 => 2_000_000, // 64KB: 2s
@@ -244,6 +247,12 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         };
 
         while current_addr < end_addr {
+            // Get the block size at the current offset within the erase layout
+            let offset_in_layout = current_addr - addr;
+            let block_size = erase_block
+                .block_size_at_offset(offset_in_layout)
+                .unwrap_or(max_block_size);
+
             let result = protocol::erase_block(
                 self.master(),
                 opcode,
@@ -260,14 +269,14 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             }
 
             // Verify the block was erased
-            if let Err(e) = self.check_erased_range(current_addr, erase_block.size) {
+            if let Err(e) = self.check_erased_range(current_addr, block_size) {
                 if use_4byte && !use_native {
                     let _ = protocol::exit_4byte_mode(self.master());
                 }
                 return Err(e);
             }
 
-            current_addr += erase_block.size;
+            current_addr += block_size;
         }
 
         // Exit 4-byte mode
@@ -308,9 +317,18 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
 fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> Option<EraseBlock> {
     erase_blocks
         .iter()
-        .filter(|eb| eb.size <= len)
-        .filter(|eb| addr.is_multiple_of(eb.size) && len.is_multiple_of(eb.size))
-        .max_by_key(|eb| eb.size)
+        .filter(|eb| {
+            // Skip chip erase for partial operations
+            // For non-uniform layouts, check the total coverage
+            eb.total_size() <= len
+        })
+        .filter(|eb| {
+            // For uniform blocks, check alignment
+            // For non-uniform blocks, we need the min block size for alignment
+            let min_size = eb.min_block_size();
+            addr.is_multiple_of(min_size) && len.is_multiple_of(min_size)
+        })
+        .max_by_key(|eb| eb.max_block_size())
         .copied()
 }
 
