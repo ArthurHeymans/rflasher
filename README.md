@@ -315,8 +315,6 @@ rflasher uses a workspace structure with clear separation of concerns:
 - **`rflasher-linux-mtd`** - Linux MTD (Memory Technology Device) interface
 - **`rflasher-dummy`** - In-memory flash emulator for testing
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed implementation information.
-
 ## Safety Warnings
 
 ⚠️ **IMPORTANT SAFETY INFORMATION**
