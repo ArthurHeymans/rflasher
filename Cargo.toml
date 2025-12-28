@@ -8,6 +8,7 @@ members = [
     "crates/rflasher-ch347",
     "crates/rflasher-dediprog",
     "crates/rflasher-serprog",
+    "crates/rflasher-postcard",
     "crates/rflasher-ftdi",
     "crates/rflasher-ft4222",
     "crates/rflasher-internal",
@@ -57,7 +58,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "linux-spi", "linux-mtd", "internal", "raiden"]
+default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "linux-spi", "linux-mtd", "internal", "raiden", "postcard"]
 
 # Programmer features (passed through to rflasher-flash)
 dummy = ["rflasher-flash/dummy"]
@@ -72,9 +73,10 @@ linux-mtd = ["rflasher-flash/linux-mtd"]
 linux-gpio = ["rflasher-flash/linux-gpio"]
 internal = ["rflasher-flash/internal"]
 raiden = ["rflasher-flash/raiden"]
+postcard = ["rflasher-flash/postcard"]
 
 # Enable all programmers
-all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden"]
+all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "postcard"]
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std"] }

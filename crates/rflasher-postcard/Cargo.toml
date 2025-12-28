@@ -1,0 +1,42 @@
+[package]
+name = "rflasher-postcard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Postcard-RPC based flash programmer for rflasher"
+
+[features]
+default = ["std"]
+std = [
+    "rflasher-core",
+    "postcard-rpc/use-std",
+    "postcard-rpc/raw-nusb",
+    "dep:tokio",
+    "dep:nusb",
+]
+# Enable rflasher-core integration (IoMode conversion, etc.)
+rflasher-core = ["dep:rflasher-core"]
+# Enable defmt formatting for embedded debugging
+defmt = ["dep:defmt", "heapless/defmt-03"]
+
+[dependencies]
+# Postcard-RPC dependencies
+postcard = { version = "1.0", default-features = false }
+postcard-rpc = { version = "0.12", default-features = false }
+postcard-schema = { version = "0.2", default-features = false, features = ["derive", "heapless-v0_8"] }
+serde = { workspace = true }
+heapless = { version = "0.8", features = ["serde"] }
+
+# Optional: rflasher-core for SpiMaster trait
+rflasher-core = { workspace = true, optional = true }
+
+# Optional: defmt for embedded debugging
+defmt = { version = "0.3", optional = true }
+
+# std-only dependencies
+tokio = { version = "1", features = ["rt", "sync", "macros"], optional = true }
+nusb = { workspace = true, optional = true }
+log = { workspace = true, optional = true }
+
+[package.metadata.docs.rs]
+all-features = true

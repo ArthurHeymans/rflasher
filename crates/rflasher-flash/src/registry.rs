@@ -207,6 +207,9 @@ pub fn open_flash(
         #[cfg(feature = "raiden")]
         "raiden_debug_spi" | "raiden" | "raiden_spi" => open_raiden(&params, db),
 
+        #[cfg(feature = "postcard")]
+        "postcard" | "postcard_rpc" => open_postcard(&params, db),
+
         _ => Err(format!("Unknown programmer: {}", params.name).into()),
     }
 }
@@ -641,6 +644,79 @@ fn open_raiden(
     probe_and_create_handle(master, db)
 }
 
+#[cfg(feature = "postcard")]
+fn open_postcard(
+    params: &ProgrammerParams,
+    db: &ChipDatabase,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    use rflasher_postcard::PostcardProgrammer;
+
+    log::info!("Opening postcard-rpc USB programmer...");
+
+    // Parse VID/PID if specified, otherwise use defaults
+    let vid: u16 = params
+        .params
+        .get("vid")
+        .and_then(|v| u16::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+        .unwrap_or(rflasher_postcard::protocol::USB_VID);
+
+    let pid: u16 = params
+        .params
+        .get("pid")
+        .and_then(|v| u16::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+        .unwrap_or(rflasher_postcard::protocol::USB_PID);
+
+    let serial = params.params.get("serial").map(|s| s.as_str());
+
+    let mut master = PostcardProgrammer::open_usb_with_serial(vid, pid, serial).map_err(|e| {
+        format!(
+            "Failed to open postcard-rpc programmer: {}\n\
+             Make sure the device is connected and you have USB permissions.\n\
+             Use vid=XXXX,pid=XXXX to specify custom USB IDs.",
+            e
+        )
+    })?;
+
+    // Log device info
+    if let Some(info) = master.device_info() {
+        log::info!("Device: {} v{}", info.name, info.version);
+        log::info!(
+            "Max SPI freq: {} Hz, max read: {}, max write: {}",
+            info.max_spi_freq,
+            info.max_read_len,
+            info.max_write_len
+        );
+    }
+
+    // Set SPI frequency if specified
+    if let Some(freq_str) = params.params.get("spispeed") {
+        let freq_khz: u32 = freq_str
+            .parse()
+            .map_err(|_| format!("Invalid spispeed value: {}", freq_str))?;
+        let actual = master
+            .set_spi_freq(freq_khz * 1000)
+            .map_err(|e| format!("Failed to set SPI frequency: {}", e))?;
+        log::info!(
+            "SPI frequency: requested {} kHz, actual {} kHz",
+            freq_khz,
+            actual / 1000
+        );
+    }
+
+    // Set chip select if specified
+    if let Some(cs_str) = params.params.get("cs") {
+        let cs: u8 = cs_str
+            .parse()
+            .map_err(|_| format!("Invalid cs value: {}", cs_str))?;
+        master
+            .set_chip_select(cs)
+            .map_err(|e| format!("Failed to set chip select: {}", e))?;
+        log::info!("Using chip select: {}", cs);
+    }
+
+    probe_and_create_handle(master, db)
+}
+
 // Programmer information and listing
 /// Information about a programmer
 pub struct ProgrammerInfo {
@@ -741,6 +817,13 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "raiden_debug_spi",
         aliases: &["raiden", "raiden_spi"],
         description: "Chrome OS EC USB SPI (serial=<sn>,target=<ap|ec|h1>)",
+    });
+
+    #[cfg(feature = "postcard")]
+    programmers.push(ProgrammerInfo {
+        name: "postcard",
+        aliases: &["postcard_rpc"],
+        description: "Postcard-RPC USB programmer (vid=XXXX,pid=XXXX,serial=<sn>,spispeed=<khz>,cs=<n>)",
     });
 
     programmers

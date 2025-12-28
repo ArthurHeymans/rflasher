@@ -20,6 +20,7 @@ rflasher-linux-mtd = { path = "../rflasher-linux-mtd", optional = true }
 rflasher-linux-gpio = { path = "../rflasher-linux-gpio", optional = true }
 rflasher-internal = { path = "../rflasher-internal", optional = true }
 rflasher-raiden = { path = "../rflasher-raiden", optional = true }
+rflasher-postcard = { path = "../rflasher-postcard", optional = true }
 
 [features]
 default = ["std"]
@@ -39,3 +40,4 @@ linux-mtd = ["dep:rflasher-linux-mtd"]
 linux-gpio = ["dep:rflasher-linux-gpio"]
 internal = ["dep:rflasher-internal"]
 raiden = ["dep:rflasher-raiden"]
+postcard = ["dep:rflasher-postcard"]
