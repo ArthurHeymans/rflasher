@@ -2,6 +2,10 @@
 
 A modern Rust implementation for reading, writing, and erasing SPI flash chips. This is a loose port of [flashprog](https://github.com/SourceArcade/flashprog).
 
+> **⚠️ ALPHA SOFTWARE WARNING**
+>
+> rflasher is currently in **alpha stage** and should **not be relied upon for production use**. For critical flash programming tasks, please use the original [flashprog](https://github.com/SourceArcade/flashprog) instead. This project is under active development and may contain bugs that could damage your hardware or data.
+
 ## Features
 
 - **Modern Rust Architecture**: Clean separation of concerns with workspace organization
@@ -20,9 +24,12 @@ Currently, rflasher supports the following programmers:
 
 - **CH341A** - USB SPI programmer (VID: 0x1A86, PID: 0x5512)
 - **CH347** - USB SPI programmer (VID: 0x1A86, PID: 0x55DB/0x55DE)
+- **Dediprog** - Professional USB SPI programmers (SF100, SF200, SF600, SF600PG2, SF700)
 - **Serprog** - Serial Flasher Protocol (serial port and TCP/IP)
 - **FTDI** - MPSSE-based programmers (FT2232H, FT4232H, FT232H, and compatible devices)
 - **FT4222H** - FTDI FT4222H USB to SPI bridge (VID: 0x0403, PID: 0x601C)
+- **Raiden** - Chrome OS debug hardware (SuzyQable, Servo V4, C2D2, uServo, Servo Micro)
+- **Internal** - Built-in chipset SPI controllers (Intel ICH7-500 Series, AMD FCH 790b)
 - **Linux SPI** - Native Linux spidev interface (`/dev/spidevX.Y`)
 - **Linux GPIO** - GPIO bitbang SPI via Linux character device (`/dev/gpiochipN`)
 - **Dummy** - In-memory flash emulator for testing
@@ -33,11 +40,21 @@ Currently, rflasher supports the following programmers:
 
 ## Supported Flash Chips
 
-Currently includes **57 flash chips** from:
+Currently includes **215 flash chips** from:
 
-- **Winbond** - W25Q and W25X series (24 chips)
-- **GigaDevice** - GD25Q and GD25LQ series (15 chips)
-- **Macronix** - MX25L, MX25U, MX25R, and MX66 series (18 chips)
+- **AMIC** - A25L series (14 chips)
+- **Atmel** - AT25DF and AT26DF series (25 chips)
+- **EON** - EN25 series (10 chips)
+- **ESMT** - F25L series (6 chips)
+- **GigaDevice** - GD25Q, GD25LQ, and GD25WQ series (30 chips)
+- **ISSI** - IS25LP and IS25WP series (10 chips)
+- **Macronix** - MX25L, MX25U, MX25R, and MX66 series (35 chips)
+- **Micron/Numonyx** - N25Q, MT25Q, and M25P series (23 chips)
+- **Spansion** - S25FL series (12 chips)
+- **SST** - SST25VF series (15 chips)
+- **Winbond** - W25Q and W25X series (22 chips)
+- **XMC** - XM25QH series (6 chips)
+- **XTX** - XT25F series (7 chips)
 
 Chip definitions are stored as RON files in `chips/vendors/` and can be easily extended. See the [chip database structure](chips/vendors/) for examples.
 
@@ -50,10 +67,10 @@ Chip definitions are stored as RON files in `chips/vendors/` and can be easily e
 git clone https://github.com/user/rflasher
 cd rflasher
 
-# Build with default features (all programmers except FTDI)
+# Build with default features (most common programmers)
 cargo build --release
 
-# Build with all programmers (requires libftdi1-dev)
+# Build with all programmers (includes FTDI, requires libftdi1-dev)
 cargo build --release --features all-programmers
 
 # Build with specific programmers only
@@ -180,6 +197,15 @@ rflasher probe -p serprog:dev=/dev/ttyUSB0:115200
 # Serprog via TCP (e.g., ESP8266-based programmer)
 rflasher probe -p serprog:ip=192.168.1.100:5000
 
+# Dediprog SF600 with 12MHz SPI speed
+rflasher probe -p dediprog:spispeed=12M
+
+# Raiden Debug SPI (Chrome OS debug hardware)
+rflasher probe -p raiden
+
+# Internal chipset programmer (Intel/AMD)
+rflasher probe -p internal
+
 # FTDI with specific device type
 rflasher probe -p ftdi:type=2232h
 
@@ -278,9 +304,12 @@ rflasher uses a workspace structure with clear separation of concerns:
 - **`rflasher-chips-codegen`** - Build-time code generator for chip database
 - **`rflasher-ch341a`** - CH341A USB programmer support
 - **`rflasher-ch347`** - CH347 USB programmer support
+- **`rflasher-dediprog`** - Dediprog SF-series USB programmer support
 - **`rflasher-serprog`** - Serial Flasher Protocol implementation
 - **`rflasher-ftdi`** - FTDI MPSSE programmer support
 - **`rflasher-ft4222`** - FTDI FT4222H USB to SPI bridge support
+- **`rflasher-raiden`** - Raiden Debug SPI (Chrome OS debug hardware) support
+- **`rflasher-internal`** - Internal chipset SPI controller support (Intel ICH/PCH, AMD FCH)
 - **`rflasher-linux-spi`** - Linux spidev interface
 - **`rflasher-linux-gpio`** - Linux GPIO bitbang SPI via character device
 - **`rflasher-linux-mtd`** - Linux MTD (Memory Technology Device) interface
@@ -354,9 +383,9 @@ See existing programmer crates for examples.
 
 The following features are planned for future development:
 
-- [ ] **Port more flash chips** - The original flashprog has ~600 chip definitions; we currently have 57
+- [ ] **Port more flash chips** - The original flashprog has ~600 chip definitions; we currently have 215
 - [ ] **Add more SPI programmers** - Port remaining SPI programmers from flashprog
-- [ ] **Intel Internal Programmer** - Support for reading/writing via Intel chipset (OpaqueMaster)
+- [x] **Intel/AMD Internal Programmer** - Support for reading/writing via chipset SPI controllers
 - [x] **Optimal erase algorithm** - Minimize erase operations by using largest possible erase blocks
 
 ## License
