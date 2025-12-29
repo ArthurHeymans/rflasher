@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use super::types::{ChipTestStatus, EraseBlock, FlashChip, TestStatus, WriteGranularity};
+use super::types::{ChipTestStatus, EraseBlock, EraseRegion, FlashChip, TestStatus, WriteGranularity};
 use super::Features;
 
 /// Error type for chip database operations
@@ -189,11 +189,18 @@ impl From<FeaturesDef> for Features {
     }
 }
 
+/// Region definition: size and count pair
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RegionDef {
+    size: Size,
+    count: u32,
+}
+
 /// Erase block definition in RON format
 #[derive(Debug, Clone, serde::Deserialize)]
 struct EraseBlockDef {
     opcode: u8,
-    size: Size,
+    regions: Vec<RegionDef>,
 }
 
 /// Voltage range in millivolts
@@ -350,7 +357,14 @@ impl ChipDatabase {
                 erase_blocks: chip_def
                     .erase_blocks
                     .into_iter()
-                    .map(|eb| EraseBlock::new(eb.opcode, eb.size.to_bytes()))
+                    .map(|eb| {
+                        let regions: Vec<EraseRegion> = eb
+                            .regions
+                            .iter()
+                            .map(|r| EraseRegion::new(r.size.to_bytes(), r.count))
+                            .collect();
+                        EraseBlock::with_regions(eb.opcode, &regions)
+                    })
                     .collect(),
                 tested: chip_def.tested.into(),
             };
