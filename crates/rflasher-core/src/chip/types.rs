@@ -1,9 +1,26 @@
 //! Flash chip type definitions
 
 #[cfg(feature = "alloc")]
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, vec, vec::Vec};
 
 use super::features::Features;
+
+/// Maximum number of erase regions per erase block (for no_std)
+pub const MAX_ERASE_REGIONS: usize = 8;
+
+/// Type alias for the regions collection.
+///
+/// Uses `heapless::Vec` for no_std (stack-allocated, max 8 regions),
+/// or `alloc::vec::Vec` for std/alloc (heap-allocated, unlimited).
+#[cfg(not(feature = "alloc"))]
+pub type RegionVec = heapless::Vec<EraseRegion, MAX_ERASE_REGIONS>;
+
+/// Type alias for the regions collection.
+///
+/// Uses `heapless::Vec` for no_std (stack-allocated, max 8 regions),
+/// or `alloc::vec::Vec` for std/alloc (heap-allocated, unlimited).
+#[cfg(feature = "alloc")]
+pub type RegionVec = Vec<EraseRegion>;
 
 /// Region definition: size and count pair
 ///
@@ -38,73 +55,99 @@ impl EraseRegion {
 /// For uniform chips, there's typically one region.
 /// For non-uniform chips (like PT/PU boot sector variants),
 /// there may be multiple regions with different block sizes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
 pub struct EraseBlock {
     /// SPI opcode for this erase operation
     pub opcode: u8,
-    /// Number of regions for this erase operation
-    pub region_count: u8,
-    /// Regions for this erase operation (up to 8 regions)
-    pub regions: [EraseRegion; 8],
+    /// Regions for this erase operation (up to 8 regions for no_std)
+    pub regions: RegionVec,
 }
 
 impl EraseBlock {
     /// Create a new erase block with a single uniform region
-    pub const fn new(opcode: u8, size: u32) -> Self {
+    ///
+    /// Note: This creates a block with count=1, suitable for chip erase operations.
+    /// For sector/block erase operations, use `with_count()` instead to specify
+    /// the number of blocks on the chip.
+    #[cfg(feature = "alloc")]
+    pub fn new(opcode: u8, size: u32) -> Self {
         Self {
             opcode,
-            region_count: 1,
-            regions: [
-                EraseRegion::new(size, 1),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-            ],
+            regions: vec![EraseRegion::new(size, 1)],
+        }
+    }
+
+    /// Create a new erase block with a single uniform region
+    ///
+    /// Note: This creates a block with count=1, suitable for chip erase operations.
+    /// For sector/block erase operations, use `with_count()` instead to specify
+    /// the number of blocks on the chip.
+    #[cfg(not(feature = "alloc"))]
+    pub fn new(opcode: u8, size: u32) -> Self {
+        let mut regions = RegionVec::new();
+        regions.push(EraseRegion::new(size, 1)).unwrap();
+        Self { opcode, regions }
+    }
+
+    /// Create a new erase block with a single uniform region and specified count
+    ///
+    /// This is the correct way to create sector/block erase definitions where
+    /// multiple blocks of the same size exist on the chip.
+    #[cfg(feature = "alloc")]
+    pub fn with_count(opcode: u8, size: u32, count: u32) -> Self {
+        Self {
+            opcode,
+            regions: vec![EraseRegion::new(size, count)],
+        }
+    }
+
+    /// Create a new erase block with a single uniform region and specified count
+    ///
+    /// This is the correct way to create sector/block erase definitions where
+    /// multiple blocks of the same size exist on the chip.
+    #[cfg(not(feature = "alloc"))]
+    pub fn with_count(opcode: u8, size: u32, count: u32) -> Self {
+        let mut regions = RegionVec::new();
+        regions.push(EraseRegion::new(size, count)).unwrap();
+        Self { opcode, regions }
+    }
+
+    /// Create an erase block from multiple regions
+    #[cfg(feature = "alloc")]
+    pub fn with_regions(opcode: u8, regions: &[EraseRegion]) -> Self {
+        Self {
+            opcode,
+            regions: regions.to_vec(),
         }
     }
 
     /// Create an erase block from multiple regions
-    pub const fn with_regions(opcode: u8, regions: &[EraseRegion]) -> Self {
-        let mut eb = Self {
-            opcode,
-            region_count: regions.len() as u8,
-            regions: [
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-                EraseRegion::new(0, 0),
-            ],
-        };
-        let mut i = 0;
-        while i < regions.len() && i < 8 {
-            eb.regions[i] = regions[i];
-            i += 1;
+    #[cfg(not(feature = "alloc"))]
+    pub fn with_regions(opcode: u8, regions: &[EraseRegion]) -> Self {
+        let mut vec = RegionVec::new();
+        for region in regions.iter().take(MAX_ERASE_REGIONS) {
+            vec.push(*region).unwrap();
         }
-        eb
+        Self {
+            opcode,
+            regions: vec,
+        }
     }
 
     /// Get the active regions for this erase block
     pub fn regions(&self) -> &[EraseRegion] {
-        &self.regions[..self.region_count as usize]
+        &self.regions
     }
 
     /// Get the total size covered by this erase operation
     pub fn total_size(&self) -> u32 {
-        self.regions().iter().map(|r| r.total_size()).sum()
+        self.regions.iter().map(|r| r.total_size()).sum()
     }
 
     /// Check if this is a uniform erase (single region)
     pub fn is_uniform(&self) -> bool {
-        self.region_count == 1
+        self.regions.len() == 1
     }
 
     /// Get the uniform block size (only valid if is_uniform() is true)
@@ -118,12 +161,22 @@ impl EraseBlock {
 
     /// Get the minimum block size across all regions
     pub fn min_block_size(&self) -> u32 {
-        self.regions().iter().map(|r| r.size).min().unwrap_or(0)
+        self.regions.iter().map(|r| r.size).min().unwrap_or(0)
     }
 
     /// Get the maximum block size across all regions
     pub fn max_block_size(&self) -> u32 {
-        self.regions().iter().map(|r| r.size).max().unwrap_or(0)
+        self.regions.iter().map(|r| r.size).max().unwrap_or(0)
+    }
+
+    /// Check if this is a chip erase block (single large block, typically used for full chip erase)
+    ///
+    /// A chip erase block is characterized by having a single region with count=1.
+    /// This is used by opcodes like 0xC7 or 0x60 which erase the entire chip at once.
+    pub fn is_chip_erase(&self) -> bool {
+        // Chip erase blocks have exactly one region with count=1
+        // This distinguishes them from sector/block erase which have count > 1
+        self.regions.len() == 1 && self.regions[0].count == 1
     }
 
     /// Get the block size at a given offset within this erase operation's coverage.
@@ -133,7 +186,7 @@ impl EraseBlock {
     /// for the region containing the given offset.
     pub fn block_size_at_offset(&self, offset: u32) -> Option<u32> {
         let mut current_offset = 0u32;
-        for region in self.regions() {
+        for region in self.regions.iter() {
             let region_end = current_offset + region.total_size();
             if offset < region_end {
                 return Some(region.size);
@@ -354,6 +407,44 @@ impl FlashChip {
     #[cfg(not(feature = "alloc"))]
     pub fn erase_blocks(&self) -> &[EraseBlock] {
         self.erase_blocks
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_chip_erase() {
+        // Chip erase: single block with count=1
+        let chip_erase = EraseBlock::new(0xC7, 8 * 1024 * 1024);
+        assert!(chip_erase.is_chip_erase());
+        assert!(chip_erase.is_uniform());
+
+        // 4KB sector erase: count > 1
+        let sector_erase = EraseBlock::with_count(0x20, 4096, 2048);
+        assert!(!sector_erase.is_chip_erase());
+        assert!(sector_erase.is_uniform());
+
+        // 64KB block erase: count > 1
+        let block_erase = EraseBlock::with_count(0xD8, 65536, 128);
+        assert!(!block_erase.is_chip_erase());
+        assert!(block_erase.is_uniform());
+    }
+
+    #[test]
+    fn test_non_uniform_is_not_chip_erase() {
+        // Non-uniform boot sector chip - not a chip erase
+        let boot_sector = EraseBlock::with_regions(
+            0xD8,
+            &[
+                EraseRegion::new(4096, 2),
+                EraseRegion::new(8192, 1),
+                EraseRegion::new(65536, 1),
+            ],
+        );
+        assert!(!boot_sector.is_chip_erase());
+        assert!(!boot_sector.is_uniform());
     }
 }
 

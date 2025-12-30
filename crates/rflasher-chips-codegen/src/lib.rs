@@ -3,7 +3,7 @@
 //! This crate parses RON chip definitions and generates Rust code
 //! that can be included in rflasher-core at build time.
 
-use proc_macro2::{Ident, Literal, Span, TokenStream};
+use proc_macro2::{Literal, TokenStream};
 use quote::quote;
 use serde::Deserialize;
 
@@ -469,22 +469,11 @@ impl ChipDatabase {
 
     /// Generate Rust code for the chip database
     pub fn generate_code(&self) -> String {
-        let mut erase_block_defs = Vec::new();
         let mut chip_defs = Vec::new();
 
         for vendor in &self.vendors {
             for chip in &vendor.chips {
-                // Generate erase block array name
-                let array_name = format!(
-                    "ERASE_BLOCKS_{}_{}",
-                    vendor.vendor.to_uppercase().replace(' ', "_"),
-                    chip.name
-                        .to_uppercase()
-                        .replace(['-', '.', '/', ' ', '(', ')'], "_")
-                );
-                let array_ident = Ident::new(&array_name, Span::call_site());
-
-                // Generate erase blocks
+                // Generate erase blocks using constructors
                 let erase_blocks: Vec<_> = chip
                     .erase_blocks
                     .iter()
@@ -500,48 +489,23 @@ impl ChipDatabase {
                                 quote!(EraseBlock::new(#opcode, #size))
                             } else {
                                 // Multiple uniform blocks
-                                quote!(EraseBlock {
-                                    opcode: #opcode,
-                                    region_count: 1,
-                                    regions: [
-                                        EraseRegion::new(#size, #count),
-                                        EraseRegion::new(0, 0),
-                                        EraseRegion::new(0, 0),
-                                        EraseRegion::new(0, 0),
-                                        EraseRegion::new(0, 0),
-                                        EraseRegion::new(0, 0),
-                                        EraseRegion::new(0, 0),
-                                        EraseRegion::new(0, 0),
-                                    ],
-                                })
+                                quote!(EraseBlock::with_count(#opcode, #size, #count))
                             }
                         } else {
-                            // Non-uniform erase block - use the full regions array
-                            let region_count = Literal::u8_unsuffixed(eb.regions.len() as u8);
-                            let mut regions = Vec::new();
-                            for region in &eb.regions {
-                                let size = Literal::u32_unsuffixed(region.size.to_bytes());
-                                let count = Literal::u32_unsuffixed(region.count);
-                                regions.push(quote!(EraseRegion::new(#size, #count)));
-                            }
-                            // Pad with empty regions to fill the array
-                            while regions.len() < 8 {
-                                regions.push(quote!(EraseRegion::new(0, 0)));
-                            }
-                            quote!(EraseBlock {
-                                opcode: #opcode,
-                                region_count: #region_count,
-                                regions: [#(#regions),*],
-                            })
+                            // Non-uniform erase block - use with_regions
+                            let regions: Vec<_> = eb
+                                .regions
+                                .iter()
+                                .map(|region| {
+                                    let size = Literal::u32_unsuffixed(region.size.to_bytes());
+                                    let count = Literal::u32_unsuffixed(region.count);
+                                    quote!(EraseRegion::new(#size, #count))
+                                })
+                                .collect();
+                            quote!(EraseBlock::with_regions(#opcode, &[#(#regions),*]))
                         }
                     })
                     .collect();
-
-                erase_block_defs.push(quote! {
-                    static #array_ident: &[EraseBlock] = &[
-                        #(#erase_blocks),*
-                    ];
-                });
 
                 // Generate chip definition
                 let vendor_name = &vendor.vendor;
@@ -568,7 +532,7 @@ impl ChipDatabase {
                         voltage_min_mv: #voltage_min,
                         voltage_max_mv: #voltage_max,
                         write_granularity: #write_gran,
-                        erase_blocks: #array_ident,
+                        erase_blocks: vec![#(#erase_blocks),*],
                         tested: #tested,
                     }
                 });
@@ -579,14 +543,19 @@ impl ChipDatabase {
             // Auto-generated by rflasher-chips-codegen
             // Do not edit manually!
 
-            #(#erase_block_defs)*
+            use once_cell::sync::Lazy;
+            use alloc::vec;
+            use alloc::vec::Vec;
 
             /// Static chip database
             ///
             /// Generated from RON files in chips/vendors/
-            pub static CHIPS: &[FlashChip] = &[
-                #(#chip_defs),*
-            ];
+            /// Lazily initialized on first access.
+            pub static CHIPS: Lazy<Vec<FlashChip>> = Lazy::new(|| {
+                vec![
+                    #(#chip_defs),*
+                ]
+            });
         };
 
         // Format the output with prettyplease

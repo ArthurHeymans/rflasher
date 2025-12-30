@@ -319,8 +319,8 @@ fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> Optio
         .iter()
         .filter(|eb| {
             // Skip chip erase for partial operations
-            // For non-uniform layouts, check the total coverage
-            eb.total_size() <= len
+            // Use min_block_size() to get the individual block size (not total coverage)
+            !eb.is_chip_erase() && eb.min_block_size() <= len
         })
         .filter(|eb| {
             // For uniform blocks, check alignment
@@ -329,7 +329,7 @@ fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> Optio
             addr.is_multiple_of(min_size) && len.is_multiple_of(min_size)
         })
         .max_by_key(|eb| eb.max_block_size())
-        .copied()
+        .cloned()
 }
 
 /// Map a 3-byte erase opcode to its 4-byte equivalent
