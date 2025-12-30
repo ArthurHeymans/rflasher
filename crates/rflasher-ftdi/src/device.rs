@@ -441,6 +441,13 @@ impl Drop for Ftdi {
     }
 }
 
+// SAFETY: Ftdi can be sent between threads safely. The underlying ftdi::Device
+// contains a raw pointer to the libftdi context, which is not inherently Send.
+// However, the device is safe to use from different threads as long as it's not
+// accessed concurrently. The Ftdi struct requires &mut self for all operations,
+// which guarantees exclusive access.
+unsafe impl Send for Ftdi {}
+
 impl SpiMaster for Ftdi {
     fn features(&self) -> SpiFeatures {
         // FTDI MPSSE supports 4-byte addressing (software handled)
