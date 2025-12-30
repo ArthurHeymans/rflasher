@@ -20,4 +20,7 @@ mod list;
 pub mod unified;
 pub mod wp;
 
+#[cfg(feature = "repl")]
+pub mod repl;
+
 pub use list::{list_chips, list_programmers};

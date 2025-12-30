@@ -1,0 +1,17 @@
+[package]
+name = "rflasher-repl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Steel Scheme REPL for scripting raw SPI commands"
+
+[dependencies]
+rflasher-core = { workspace = true, features = ["std"] }
+steel-core = "0.7"
+steel-parser = "0.7"
+rustyline = { version = "14.0", features = ["derive"] }
+colored = "3.0"
+crossbeam-utils = "0.8"
+directories = "6.0"
+thiserror.workspace = true
+log.workspace = true

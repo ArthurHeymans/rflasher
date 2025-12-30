@@ -15,6 +15,7 @@ A modern Rust implementation for reading, writing, and erasing SPI flash chips. 
 - **Layout Support**: Intel Flash Descriptor (IFD) and FMAP parsing for region-based operations
 - **Progress Reporting**: Real-time progress bars for all operations using `indicatif`
 - **Safety Features**: Write protection detection, verification, and region-based access control
+- **Experimental REPL**: Steel Scheme-based REPL for scripting raw SPI commands (requires `--features repl`)
 
 ## Supported Programmers
 
@@ -294,6 +295,65 @@ rflasher -v probe -p ch341a
 # Maximum verbosity (shows trace-level messages)
 rflasher -vv read -p ch341a -o flash.bin
 ```
+
+### Experimental: Scheme REPL
+
+> **Note**: The REPL is an experimental feature and requires building with `--features repl`.
+
+rflasher includes a Steel Scheme-based REPL for scripting raw SPI commands. This is useful for advanced users who need to execute custom SPI sequences, experiment with flash commands, or automate testing.
+
+```bash
+# Build with REPL support
+cargo build --release --features repl
+
+# Start REPL with serprog programmer
+rflasher repl -p serprog:dev=/dev/ttyACM0
+
+# Start REPL with CH341A
+rflasher repl -p ch341a
+```
+
+Example REPL session:
+
+```scheme
+        __ _           _
+   _ _ / _| |__ _ _____| |_  ___ _ _
+  | '_|  _| / _` (_-< ' \/ -_) '_|    Version 0.1.0
+  |_| |_| |_\__,_/__/_||_\___|_|      :? for help
+
+Type (rflasher-help) for available commands, (quit) or (exit) to exit.
+
+λ > (read-jedec-id)
+=> (239 16389)
+
+λ > (read-status1)
+=> 0
+
+λ > (spi-read READ 0 16)
+=> (255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255)
+
+λ > (bytes->hex (spi-read READ 0 32))
+=> "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff"
+
+λ > (define data (make-bytes 256 #xAA))
+λ > (write-enable)
+=> #t
+λ > (spi-write PP #x1000 data)
+=> #t
+λ > (wait-ready)
+=> #t
+
+λ > (quit)
+Goodbye!
+```
+
+Available functions include:
+- **SPI operations**: `spi-transfer`, `spi-read`, `spi-write`, `read-jedec-id`, `read-status1/2/3`, `write-enable`, `write-disable`, `is-busy?`, `wait-ready`
+- **Erase operations**: `chip-erase`, `sector-erase`, `block-erase-32k`, `block-erase-64k`
+- **Byte utilities**: `make-bytes`, `bytes-length`, `bytes-ref`, `bytes-set!`, `bytes->list`, `list->bytes`, `bytes->hex`, `hex->bytes`, `bytes-slice`
+- **SPI25 constants**: `WREN`, `WRDI`, `RDSR`, `WRSR`, `READ`, `FAST_READ`, `PP`, `SE`, `BE_32K`, `BE_64K`, `CE`, `RDID`, etc.
+
+Type `(rflasher-help)` in the REPL for the full list of commands.
 
 ## Architecture
 

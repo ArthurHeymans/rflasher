@@ -8,7 +8,9 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use super::types::{ChipTestStatus, EraseBlock, EraseRegion, FlashChip, TestStatus, WriteGranularity};
+use super::types::{
+    ChipTestStatus, EraseBlock, EraseRegion, FlashChip, TestStatus, WriteGranularity,
+};
 use super::Features;
 
 /// Error type for chip database operations

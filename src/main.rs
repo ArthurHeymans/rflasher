@@ -199,6 +199,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 commands::wp::cmd_region(&mut handle, &layout_obj, &region_name, temporary)
             }
         },
+        #[cfg(feature = "repl")]
+        Commands::Repl { programmer, script } => {
+            commands::repl::cmd_repl(&programmer, script.as_deref())
+        }
     };
 
     result

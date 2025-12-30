@@ -16,6 +16,7 @@ members = [
     "crates/rflasher-linux-gpio",
     "crates/rflasher-dummy",
     "crates/rflasher-raiden",
+    "crates/rflasher-repl",
 ]
 
 [workspace.package]
@@ -73,12 +74,16 @@ linux-gpio = ["rflasher-flash/linux-gpio"]
 internal = ["rflasher-flash/internal"]
 raiden = ["rflasher-flash/raiden"]
 
+# REPL feature for scripting with Steel Scheme
+repl = ["dep:rflasher-repl"]
+
 # Enable all programmers
 all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden"]
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std"] }
 rflasher-flash = { path = "crates/rflasher-flash", features = ["std"] }
+rflasher-repl = { path = "crates/rflasher-repl", optional = true }
 clap.workspace = true
 clap_mangen = "0.2"
 env_logger.workspace = true

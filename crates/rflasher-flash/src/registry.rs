@@ -138,6 +138,232 @@ pub fn parse_programmer_params(s: &str) -> Result<ProgrammerParams, Box<dyn std:
     })
 }
 
+/// A boxed SPI master for use with the REPL
+pub type BoxedSpiMaster = Box<dyn rflasher_core::programmer::SpiMaster + Send>;
+
+/// Open a raw SPI programmer without the FlashDevice wrapper
+///
+/// This is used by the REPL to get direct access to SPI commands.
+/// Only SPI-based programmers are supported (not opaque ones like internal in hwseq mode).
+///
+/// # Arguments
+/// * `programmer` - Programmer specification (e.g., "ch341a" or "serprog:dev=/dev/ttyUSB0")
+///
+/// # Returns
+/// A boxed SpiMaster that can execute raw SPI commands
+pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn std::error::Error>> {
+    let params = parse_programmer_params(programmer)?;
+
+    match params.name.as_str() {
+        #[cfg(feature = "dummy")]
+        "dummy" => {
+            let master = rflasher_dummy::DummyFlash::new_default();
+            Ok(Box::new(master))
+        }
+
+        #[cfg(feature = "ch341a")]
+        "ch341a" | "ch341a_spi" => {
+            log::info!("Opening CH341A programmer for REPL...");
+            let master = rflasher_ch341a::Ch341a::open().map_err(|e| {
+                format!(
+                    "Failed to open CH341A: {}\nMake sure the device is connected and you have permissions.",
+                    e
+                )
+            })?;
+            Ok(Box::new(master))
+        }
+
+        #[cfg(feature = "ch347")]
+        "ch347" | "ch347_spi" => {
+            use rflasher_ch347::{parse_options, Ch347};
+            log::info!("Opening CH347 programmer for REPL...");
+            let options: Vec<(&str, &str)> = params
+                .params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let config = parse_options(&options).map_err(|e| format!("Invalid CH347 parameters: {}", e))?;
+            let master = Ch347::open_with_config(config).map_err(|e| {
+                format!(
+                    "Failed to open CH347: {}\nMake sure the device is connected and you have permissions.",
+                    e
+                )
+            })?;
+            Ok(Box::new(master))
+        }
+
+        #[cfg(feature = "dediprog")]
+        "dediprog" | "dediprog_spi" => {
+            use rflasher_dediprog::{parse_options, Dediprog};
+            log::info!("Opening Dediprog programmer for REPL...");
+            let options: Vec<(&str, &str)> = params
+                .params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let config = parse_options(&options).map_err(|e| format!("Invalid Dediprog parameters: {}", e))?;
+            let master = Dediprog::open_with_config(config).map_err(|e| {
+                format!(
+                    "Failed to open Dediprog: {}\nMake sure the device is connected and you have USB permissions.",
+                    e
+                )
+            })?;
+            Ok(Box::new(master))
+        }
+
+        #[cfg(feature = "serprog")]
+        "serprog" => {
+            use rflasher_serprog::SerprogConnection;
+            log::info!("Opening serprog programmer for REPL...");
+            let conn_str = params
+                .params
+                .iter()
+                .filter(|(k, _)| *k == "dev" || *k == "ip")
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join(",");
+            if conn_str.is_empty() {
+                return Err("serprog requires connection parameters (dev= or ip=)".into());
+            }
+            let conn = SerprogConnection::parse(&conn_str)
+                .map_err(|e| format!("Invalid serprog parameters: {}", e))?;
+            let spispeed: Option<u32> = params.params.get("spispeed").and_then(|v| v.parse().ok());
+            let cs: Option<u8> = params.params.get("cs").and_then(|v| v.parse().ok());
+
+            match conn {
+                SerprogConnection::Serial { device, baud } => {
+                    let transport = rflasher_serprog::SerialTransport::open(&device, baud)
+                        .map_err(|e| format!("Failed to open serial port {}: {}", device, e))?;
+                    let mut serprog = rflasher_serprog::Serprog::new(transport)
+                        .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
+                    if let Some(speed_khz) = spispeed {
+                        if let Err(e) = serprog.set_spi_speed(speed_khz * 1000) {
+                            log::warn!("Failed to set SPI speed: {}", e);
+                        }
+                    }
+                    if let Some(chip_select) = cs {
+                        serprog.set_spi_cs(chip_select)
+                            .map_err(|e| format!("Failed to set chip select: {}", e))?;
+                    }
+                    Ok(Box::new(serprog))
+                }
+                SerprogConnection::Tcp { host, port } => {
+                    let transport = rflasher_serprog::TcpTransport::connect(&host, port)
+                        .map_err(|e| format!("Failed to connect to {}:{}: {}", host, port, e))?;
+                    let mut serprog = rflasher_serprog::Serprog::new(transport)
+                        .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
+                    if let Some(speed_khz) = spispeed {
+                        if let Err(e) = serprog.set_spi_speed(speed_khz * 1000) {
+                            log::warn!("Failed to set SPI speed: {}", e);
+                        }
+                    }
+                    if let Some(chip_select) = cs {
+                        serprog.set_spi_cs(chip_select)
+                            .map_err(|e| format!("Failed to set chip select: {}", e))?;
+                    }
+                    Ok(Box::new(serprog))
+                }
+            }
+        }
+
+        #[cfg(feature = "ftdi")]
+        "ftdi" | "ft2232_spi" | "ft4232_spi" => {
+            use rflasher_ftdi::{parse_options, Ftdi};
+            log::info!("Opening FTDI programmer for REPL...");
+            let options: Vec<(&str, &str)> = params
+                .params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let config = parse_options(&options).map_err(|e| format!("Invalid FTDI parameters: {}", e))?;
+            let master = Ftdi::open(&config).map_err(|e| {
+                format!("Failed to open FTDI device: {}", e)
+            })?;
+            Ok(Box::new(master))
+        }
+
+        #[cfg(feature = "ft4222")]
+        "ft4222" | "ft4222_spi" => {
+            use rflasher_ft4222::{parse_options, Ft4222};
+            log::info!("Opening FT4222H programmer for REPL...");
+            let options: Vec<(&str, &str)> = params
+                .params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let config = parse_options(&options).map_err(|e| format!("Invalid FT4222 parameters: {}", e))?;
+            let master = Ft4222::open_with_config(config).map_err(|e| {
+                format!("Failed to open FT4222H device: {}", e)
+            })?;
+            Ok(Box::new(master))
+        }
+
+        #[cfg(feature = "linux-spi")]
+        "linux_spi" | "linux-spi" | "spidev" => {
+            use rflasher_linux_spi::{parse_options, LinuxSpi};
+            log::info!("Opening Linux SPI programmer for REPL...");
+            let options: Vec<(&str, &str)> = params
+                .params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let config = parse_options(&options).map_err(|e| format!("Invalid linux_spi parameters: {}", e))?;
+            let master = LinuxSpi::open(&config).map_err(|e| {
+                format!("Failed to open Linux SPI device: {}", e)
+            })?;
+            Ok(Box::new(master))
+        }
+
+        #[cfg(feature = "linux-gpio")]
+        "linux_gpio_spi" | "linux-gpio-spi" | "linux_gpio" | "linux-gpio" => {
+            use rflasher_linux_gpio::{parse_options, LinuxGpioSpi};
+            log::info!("Opening Linux GPIO SPI programmer for REPL...");
+            let options: Vec<(&str, &str)> = params
+                .params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let config = parse_options(&options).map_err(|e| format!("Invalid linux_gpio_spi parameters: {}", e))?;
+            let master = LinuxGpioSpi::open(&config).map_err(|e| {
+                format!("Failed to open Linux GPIO SPI device: {}", e)
+            })?;
+            Ok(Box::new(master))
+        }
+
+        #[cfg(feature = "raiden")]
+        "raiden_debug_spi" | "raiden" | "raiden_spi" => {
+            use rflasher_raiden::{parse_options, RaidenDebugSpi};
+            log::info!("Opening Raiden Debug SPI programmer for REPL...");
+            let options: Vec<(&str, &str)> = params
+                .params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let config = parse_options(&options).map_err(|e| format!("Invalid raiden parameters: {}", e))?;
+            let master = RaidenDebugSpi::open_with_config(&config).map_err(|e| {
+                format!("Failed to open Raiden Debug SPI device: {}", e)
+            })?;
+            Ok(Box::new(master))
+        }
+
+        // Internal and MTD are opaque-only or not SPI-based
+        #[cfg(feature = "internal")]
+        "internal" => {
+            Err("The REPL is only supported for SPI-based programmers. \
+                 The internal programmer in hardware sequencing mode doesn't support raw SPI commands. \
+                 If you need raw SPI access, try internal:ich_spi_mode=swseq (if supported).".into())
+        }
+
+        #[cfg(feature = "linux-mtd")]
+        "linux_mtd" | "linux-mtd" | "mtd" => {
+            Err("The REPL is only supported for SPI-based programmers. \
+                 The linux_mtd programmer uses the MTD subsystem and doesn't expose raw SPI.".into())
+        }
+
+        _ => Err(format!("Unknown programmer: {}", params.name).into()),
+    }
+}
+
 /// Open a flash programmer and create a FlashHandle
 ///
 /// This is the main entry point for the CLI. It handles:

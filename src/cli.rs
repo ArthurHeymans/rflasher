@@ -199,6 +199,18 @@ pub enum Commands {
     /// Write protection operations
     #[command(subcommand, name = "wp", alias = "write-protect")]
     Wp(WpCommands),
+
+    /// Start Scheme REPL for scripting SPI commands
+    #[cfg(feature = "repl")]
+    Repl {
+        /// Programmer to use
+        #[arg(short, long, help = programmer_help())]
+        programmer: String,
+
+        /// Script file to run instead of interactive REPL
+        #[arg(short, long)]
+        script: Option<std::path::PathBuf>,
+    },
 }
 
 /// Write protection subcommands
