@@ -109,8 +109,11 @@ fn collect_globals(_engine: &Engine) -> HashSet<InternedString> {
         "sector-erase",
         "block-erase-32k",
         "block-erase-64k",
+        "page-program",
+        "page-program-4b",
         // Byte utilities
         "make-bytes",
+        "random-bytes",
         "bytes-length",
         "bytes-ref",
         "bytes-set!",

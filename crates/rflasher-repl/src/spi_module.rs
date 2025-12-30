@@ -247,9 +247,33 @@ pub fn create_spi_module_boxed(master: SharedBoxedMaster) -> BuiltInModule {
         erase_block_boxed(&m, opcodes::BE_D8, addr as u32, false)
     });
 
+    // Page program helpers
+    let m = Arc::clone(&master);
+    module.register_fn("page-program", move |addr: isize, data: SteelVal| {
+        page_program_boxed(&m, addr as u32, data, false)
+    });
+
+    let m = Arc::clone(&master);
+    module.register_fn("page-program-4b", move |addr: isize, data: SteelVal| {
+        page_program_boxed(&m, addr as u32, data, true)
+    });
+
     // Byte vector utilities
     module.register_fn("make-bytes", |len: isize, fill: isize| -> SteelVal {
         let bytes: Vec<u8> = vec![fill as u8; len as usize];
+        bytes_to_steel(&bytes)
+    });
+
+    module.register_fn("random-bytes", |len: isize| -> SteelVal {
+        use std::collections::hash_map::RandomState;
+        use std::hash::{BuildHasher, Hasher};
+        let mut bytes = Vec::with_capacity(len as usize);
+        for _ in 0..len {
+            let s = RandomState::new();
+            let mut hasher = s.build_hasher();
+            hasher.write_u8(0);
+            bytes.push(hasher.finish() as u8);
+        }
         bytes_to_steel(&bytes)
     });
 
@@ -546,9 +570,33 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
         erase_block(&m, opcodes::BE_D8, addr as u32, false)
     });
 
+    // Page program helpers
+    let m = Arc::clone(&master);
+    module.register_fn("page-program", move |addr: isize, data: SteelVal| {
+        page_program(&m, addr as u32, data, false)
+    });
+
+    let m = Arc::clone(&master);
+    module.register_fn("page-program-4b", move |addr: isize, data: SteelVal| {
+        page_program(&m, addr as u32, data, true)
+    });
+
     // Byte vector utilities
     module.register_fn("make-bytes", |len: isize, fill: isize| -> SteelVal {
         let bytes: Vec<u8> = vec![fill as u8; len as usize];
+        bytes_to_steel(&bytes)
+    });
+
+    module.register_fn("random-bytes", |len: isize| -> SteelVal {
+        use std::collections::hash_map::RandomState;
+        use std::hash::{BuildHasher, Hasher};
+        let mut bytes = Vec::with_capacity(len as usize);
+        for _ in 0..len {
+            let s = RandomState::new();
+            let mut hasher = s.build_hasher();
+            hasher.write_u8(0);
+            bytes.push(hasher.finish() as u8);
+        }
         bytes_to_steel(&bytes)
     });
 
@@ -1092,6 +1140,47 @@ fn erase_block_boxed(
     Ok(true)
 }
 
+fn page_program_boxed(
+    master: &SharedBoxedMaster,
+    addr: u32,
+    data: SteelVal,
+    use_4byte: bool,
+) -> Result<bool, String> {
+    let bytes = steel_to_bytes(&data)?;
+
+    // Validate page size (max 256 bytes for standard page program)
+    if bytes.len() > 256 {
+        return Err(format!(
+            "page program data too large: {} bytes (max 256)",
+            bytes.len()
+        ));
+    }
+
+    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
+
+    // Send WREN first
+    let mut wren = SpiCommand::simple(opcodes::WREN);
+    m.execute(&mut wren)
+        .map_err(|e| format!("WREN error: {}", e))?;
+
+    // Send page program command
+    let mut cmd = if use_4byte {
+        SpiCommand::write_4b(opcodes::PP_4B, addr, &bytes)
+    } else {
+        SpiCommand::write_3b(opcodes::PP, addr, &bytes)
+    };
+    m.execute(&mut cmd)
+        .map_err(|e| format!("page program error: {}", e))?;
+
+    // Drop the lock before polling
+    drop(m);
+
+    // Wait for completion (typical page program time is 0.7-3ms, max ~5ms)
+    wait_ready_boxed(master, 10_000)?;
+
+    Ok(true)
+}
+
 // =============================================================================
 // Generic master implementations
 // =============================================================================
@@ -1417,6 +1506,47 @@ fn erase_block<M: SpiMaster>(
     Ok(true)
 }
 
+fn page_program<M: SpiMaster>(
+    master: &SharedMaster<M>,
+    addr: u32,
+    data: SteelVal,
+    use_4byte: bool,
+) -> Result<bool, String> {
+    let bytes = steel_to_bytes(&data)?;
+
+    // Validate page size (max 256 bytes for standard page program)
+    if bytes.len() > 256 {
+        return Err(format!(
+            "page program data too large: {} bytes (max 256)",
+            bytes.len()
+        ));
+    }
+
+    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
+
+    // Send WREN first
+    let mut wren = SpiCommand::simple(opcodes::WREN);
+    m.execute(&mut wren)
+        .map_err(|e| format!("WREN error: {}", e))?;
+
+    // Send page program command
+    let mut cmd = if use_4byte {
+        SpiCommand::write_4b(opcodes::PP_4B, addr, &bytes)
+    } else {
+        SpiCommand::write_3b(opcodes::PP, addr, &bytes)
+    };
+    m.execute(&mut cmd)
+        .map_err(|e| format!("page program error: {}", e))?;
+
+    // Drop the lock before polling
+    drop(m);
+
+    // Wait for completion (typical page program time is 0.7-3ms, max ~5ms)
+    wait_ready(master, 10_000)?;
+
+    Ok(true)
+}
+
 fn print_help() {
     println!(
         r#"
@@ -1481,6 +1611,8 @@ HIGH-LEVEL HELPERS
 (sector-erase addr)     Erase 4KB sector at addr.
 (block-erase-32k addr)  Erase 32KB block at addr.
 (block-erase-64k addr)  Erase 64KB block at addr.
+(page-program addr data)     Program up to 256 bytes at addr (handles WREN + wait).
+(page-program-4b addr data)  Same as page-program but with 4-byte addressing.
 (enter-4byte-mode)      Enter 4-byte address mode.
 (exit-4byte-mode)       Exit 4-byte address mode.
 (reset-enable)          Send Reset Enable command.
@@ -1492,6 +1624,7 @@ HIGH-LEVEL HELPERS
 BYTE UTILITIES
 --------------
 (make-bytes len fill)   Create a byte list of len bytes, all set to fill.
+(random-bytes len)      Create a byte list of len random bytes.
 (bytes-length data)     Return length of byte list.
 (bytes-ref data idx)    Get byte at index.
 (bytes->list data)      Convert to list.
@@ -1531,6 +1664,15 @@ EXAMPLES
 ; Convert data to hex for display
 > (bytes->hex (spi-read READ 0 8))
 "ff ff ff ff ff ff ff ff"
+
+; Generate random data and program a page (erase sector first!)
+> (sector-erase #x1000)
+> (wait-ready 1000000)
+> (define data (random-bytes 256))
+> (page-program #x1000 data)
+#t
+> (equal? data (spi-read READ #x1000 256))
+#t
 
 (quit) or (exit) to exit the REPL.
 "#
