@@ -178,13 +178,10 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
             let chunk = &data[offset..offset + chunk_size];
 
-            // Program timeout: typical page program time is 0.7-3ms
-            let timeout_us = 10_000; // 10ms
-
             let result = if use_4byte && use_native {
-                protocol::program_page_4b(self.master(), current_addr, chunk, timeout_us)
+                protocol::program_page_4b(self.master(), current_addr, chunk)
             } else {
-                protocol::program_page_3b(self.master(), current_addr, chunk, timeout_us)
+                protocol::program_page_3b(self.master(), current_addr, chunk)
             };
 
             if result.is_err() {
@@ -238,12 +235,12 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         // For non-uniform erase blocks, use the maximum block size for timeout calculation
         let max_block_size = erase_block.max_block_size();
 
-        // Erase timeout depends on block size
-        let timeout_us = match max_block_size {
-            s if s <= 4096 => 500_000,    // 4KB: 500ms
-            s if s <= 32768 => 1_000_000, // 32KB: 1s
-            s if s <= 65536 => 2_000_000, // 64KB: 2s
-            _ => 60_000_000,              // Chip erase: 60s
+        // Poll delay and timeout depend on block size
+        let (poll_delay_us, timeout_us) = match max_block_size {
+            s if s <= 4096 => (10_000, 1_000_000), // 4KB: 10ms poll, 1s timeout
+            s if s <= 32768 => (100_000, 4_000_000), // 32KB: 100ms poll, 4s timeout
+            s if s <= 65536 => (100_000, 4_000_000), // 64KB: 100ms poll, 4s timeout
+            _ => (500_000, 60_000_000),            // Larger: 500ms poll, 60s timeout
         };
 
         while current_addr < end_addr {
@@ -258,6 +255,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
                 opcode,
                 current_addr,
                 use_4byte && use_native,
+                poll_delay_us,
                 timeout_us,
             );
 

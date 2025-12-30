@@ -978,13 +978,10 @@ pub fn write<M: SpiMaster + ?Sized>(
 
         let chunk = &data[offset..offset + chunk_size];
 
-        // Program timeout: typical page program time is 0.7-3ms
-        let timeout_us = 10_000; // 10ms
-
         let result = if use_4byte && use_native {
-            protocol::program_page_4b(master, current_addr, chunk, timeout_us)
+            protocol::program_page_4b(master, current_addr, chunk)
         } else {
-            protocol::program_page_3b(master, current_addr, chunk, timeout_us)
+            protocol::program_page_3b(master, current_addr, chunk)
         };
 
         if result.is_err() {
@@ -1047,12 +1044,16 @@ pub fn erase<M: SpiMaster + ?Sized>(
     // at each address. For now, use the maximum block size for timeout calculation.
     let max_block_size = erase_block.max_block_size();
 
-    // Erase timeout depends on block size (larger blocks take longer)
-    let timeout_us = match max_block_size {
-        s if s <= 4096 => 500_000,    // 4KB: 500ms
-        s if s <= 32768 => 1_000_000, // 32KB: 1s
-        s if s <= 65536 => 2_000_000, // 64KB: 2s
-        _ => 60_000_000,              // Chip erase: 60s
+    // Poll delay and timeout depend on block size (larger blocks take longer)
+    // Values based on flashprog's spi25.c:
+    // - 4KB: 10ms poll, 1s timeout (typical 45-400ms)
+    // - 32KB: 100ms poll, 4s timeout (typical 120-1600ms)
+    // - 64KB: 100ms poll, 4s timeout (typical 150-2000ms)
+    let (poll_delay_us, timeout_us) = match max_block_size {
+        s if s <= 4096 => (10_000, 1_000_000), // 4KB: 10ms poll, 1s timeout
+        s if s <= 32768 => (100_000, 4_000_000), // 32KB: 100ms poll, 4s timeout
+        s if s <= 65536 => (100_000, 4_000_000), // 64KB: 100ms poll, 4s timeout
+        _ => (500_000, 60_000_000),            // Larger: 500ms poll, 60s timeout
     };
 
     while current_addr < end_addr {
@@ -1067,6 +1068,7 @@ pub fn erase<M: SpiMaster + ?Sized>(
             opcode,
             current_addr,
             use_4byte && use_native,
+            poll_delay_us,
             timeout_us,
         );
 
@@ -1101,9 +1103,7 @@ pub fn erase<M: SpiMaster + ?Sized>(
 /// This function erases the chip and then verifies the erase by reading back
 /// the contents and checking they are all 0xFF.
 pub fn chip_erase<M: SpiMaster + ?Sized>(master: &mut M, ctx: &FlashContext) -> Result<()> {
-    // Chip erase timeout: up to 2 minutes for large chips
-    let timeout_us = 120_000_000;
-    protocol::chip_erase(master, timeout_us)?;
+    protocol::chip_erase(master)?;
 
     // Verify the erase succeeded by checking the chip contents
     check_erased_range(master, ctx, 0, ctx.total_size() as u32)
@@ -1420,14 +1420,23 @@ fn erase_single_block<M: SpiMaster + ?Sized>(
     let block_size = erase_block
         .uniform_size()
         .unwrap_or(erase_block.max_block_size());
-    let timeout_us = match block_size {
-        s if s <= 4096 => 500_000,    // 4KB: 500ms
-        s if s <= 32768 => 1_000_000, // 32KB: 1s
-        s if s <= 65536 => 2_000_000, // 64KB: 2s
-        _ => 60_000_000,              // Larger: 60s
+
+    // Poll delay and timeout depend on block size
+    let (poll_delay_us, timeout_us) = match block_size {
+        s if s <= 4096 => (10_000, 1_000_000), // 4KB: 10ms poll, 1s timeout
+        s if s <= 32768 => (100_000, 4_000_000), // 32KB: 100ms poll, 4s timeout
+        s if s <= 65536 => (100_000, 4_000_000), // 64KB: 100ms poll, 4s timeout
+        _ => (500_000, 60_000_000),            // Larger: 500ms poll, 60s timeout
     };
 
-    let result = protocol::erase_block(master, opcode, addr, use_4byte && use_native, timeout_us);
+    let result = protocol::erase_block(
+        master,
+        opcode,
+        addr,
+        use_4byte && use_native,
+        poll_delay_us,
+        timeout_us,
+    );
 
     // Exit 4-byte mode
     if use_4byte && !use_native {
