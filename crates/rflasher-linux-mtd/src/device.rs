@@ -325,7 +325,9 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
         }
 
         if self.info.num_erase_regions != 0 {
-            return Err(rflasher_core::error::Error::EraseError);
+            return Err(rflasher_core::error::Error::EraseError(
+                rflasher_core::error::EraseFailure::Unknown,
+            ));
         }
 
         let erase_size = self.info.erase_size as u32;
@@ -341,8 +343,13 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
             // SAFETY: We're calling an ioctl with a valid file descriptor and
             // a properly initialized EraseInfo struct
             unsafe {
-                memerase(self.file.as_raw_fd(), &erase_info)
-                    .map_err(|_| rflasher_core::error::Error::EraseError)?;
+                memerase(self.file.as_raw_fd(), &erase_info).map_err(|_| {
+                    rflasher_core::error::Error::EraseError(
+                        rflasher_core::error::EraseFailure::CommandFailed {
+                            addr: addr + offset,
+                        },
+                    )
+                })?;
             }
 
             offset += erase_size;

@@ -5,6 +5,25 @@
 
 use core::fmt;
 
+/// Details about an erase failure
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EraseFailure {
+    /// Erase command failed or timed out
+    CommandFailed {
+        /// Address where erase was attempted
+        addr: u32,
+    },
+    /// Erase verification failed - flash not erased to 0xFF
+    VerifyFailed {
+        /// Address where first non-0xFF byte was found
+        addr: u32,
+        /// The byte value found (should be 0xFF if erased)
+        found: u8,
+    },
+    /// Generic erase failure (no details available)
+    Unknown,
+}
+
 /// Core error type - no_std compatible, Copy for efficiency
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -26,7 +45,7 @@ pub enum Error {
 
     // Operation errors
     /// Erase operation failed
-    EraseError,
+    EraseError(EraseFailure),
     /// Write/program operation failed
     WriteError,
     /// Verify operation failed (data mismatch)
@@ -67,6 +86,24 @@ pub enum Error {
     LayoutError,
 }
 
+impl fmt::Display for EraseFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CommandFailed { addr } => {
+                write!(f, "erase command failed at address 0x{:08X}", addr)
+            }
+            Self::VerifyFailed { addr, found } => {
+                write!(
+                    f,
+                    "erase verify failed at 0x{:08X}: expected 0xFF, found 0x{:02X}",
+                    addr, found
+                )
+            }
+            Self::Unknown => write!(f, "erase failed"),
+        }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -76,7 +113,7 @@ impl fmt::Display for Error {
             Self::ChipNotFound => write!(f, "flash chip not found"),
             Self::ChipNotSupported => write!(f, "flash chip not supported"),
             Self::JedecIdMismatch => write!(f, "JEDEC ID mismatch"),
-            Self::EraseError => write!(f, "erase operation failed"),
+            Self::EraseError(failure) => write!(f, "{}", failure),
             Self::WriteError => write!(f, "write operation failed"),
             Self::VerifyError => write!(f, "verify failed: data mismatch"),
             Self::Timeout => write!(f, "operation timed out"),

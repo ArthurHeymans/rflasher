@@ -10,7 +10,7 @@ use crate::chip::ChipDatabase;
 use crate::chip::EraseBlock;
 #[cfg(feature = "alloc")]
 use crate::chip::WriteGranularity;
-use crate::error::{Error, Result};
+use crate::error::{EraseFailure, Error, Result};
 #[cfg(feature = "alloc")]
 use crate::layout::{Layout, LayoutError, Region};
 use crate::programmer::SpiMaster;
@@ -1131,8 +1131,15 @@ fn check_erased_range<M: SpiMaster + ?Sized>(
         read(master, ctx, addr + offset, chunk_buf)?;
 
         // Check all bytes are erased
-        if !chunk_buf.iter().all(|&b| b == ERASED_VALUE) {
-            return Err(Error::EraseError);
+        if let Some((idx, &found)) = chunk_buf
+            .iter()
+            .enumerate()
+            .find(|(_, &b)| b != ERASED_VALUE)
+        {
+            return Err(Error::EraseError(EraseFailure::VerifyFailed {
+                addr: addr + offset + idx as u32,
+                found,
+            }));
         }
 
         offset += chunk_len as u32;

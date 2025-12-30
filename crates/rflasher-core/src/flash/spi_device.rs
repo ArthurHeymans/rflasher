@@ -4,7 +4,7 @@
 //! `FlashDevice` for SPI-based programmers.
 
 use crate::chip::{EraseBlock, WriteGranularity};
-use crate::error::{Error, Result};
+use crate::error::{EraseFailure, Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
 use crate::programmer::SpiMaster;
@@ -302,8 +302,15 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
 
             self.read(addr + offset, chunk_buf)?;
 
-            if !chunk_buf.iter().all(|&b| b == ERASED_VALUE) {
-                return Err(Error::EraseError);
+            if let Some((idx, &found)) = chunk_buf
+                .iter()
+                .enumerate()
+                .find(|(_, &b)| b != ERASED_VALUE)
+            {
+                return Err(Error::EraseError(EraseFailure::VerifyFailed {
+                    addr: addr + offset + idx as u32,
+                    found,
+                }));
             }
 
             offset += chunk_len as u32;
