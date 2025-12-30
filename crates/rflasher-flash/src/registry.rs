@@ -79,6 +79,32 @@ fn log_probe_result(result: &ProbeResult) {
     log_sfdp_mismatches(&result.mismatches, &result.chip.name);
 }
 
+/// Parse a speed value in kHz from a string with optional suffix
+///
+/// Supports formats like:
+/// - "1000" - plain number in kHz
+/// - "1000k" or "1000K" - kHz (same as plain)
+/// - "30m" or "30M" - MHz (multiplied by 1000)
+///
+/// Returns None if the string cannot be parsed.
+fn parse_speed_khz(s: &str) -> Option<u32> {
+    let s = s.trim().to_lowercase();
+
+    // Try with MHz suffix
+    if let Some(num) = s.strip_suffix('m') {
+        let val: f64 = num.trim().parse().ok()?;
+        return Some((val * 1000.0) as u32);
+    }
+
+    // Try with kHz suffix
+    if let Some(num) = s.strip_suffix('k') {
+        return num.trim().parse().ok();
+    }
+
+    // Plain number (assumed kHz)
+    s.parse().ok()
+}
+
 /// Common probe and create handle logic for SPI programmers
 fn probe_and_create_handle<M>(
     master: M,
@@ -227,7 +253,13 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
             }
             let conn = SerprogConnection::parse(&conn_str)
                 .map_err(|e| format!("Invalid serprog parameters: {}", e))?;
-            let spispeed: Option<u32> = params.params.get("spispeed").and_then(|v| v.parse().ok());
+            let spispeed: Option<u32> = params.params.get("spispeed").and_then(|v| {
+                let parsed = parse_speed_khz(v);
+                if parsed.is_none() {
+                    log::warn!("Invalid spispeed value '{}', ignoring", v);
+                }
+                parsed
+            });
             let cs: Option<u8> = params.params.get("cs").and_then(|v| v.parse().ok());
 
             match conn {
@@ -577,7 +609,13 @@ fn open_serprog(
         .map_err(|e| format!("Invalid serprog parameters: {}", e))?;
 
     // Parse optional parameters
-    let spispeed: Option<u32> = params.params.get("spispeed").and_then(|v| v.parse().ok());
+    let spispeed: Option<u32> = params.params.get("spispeed").and_then(|v| {
+        let parsed = parse_speed_khz(v);
+        if parsed.is_none() {
+            log::warn!("Invalid spispeed value '{}', ignoring", v);
+        }
+        parsed
+    });
     let cs: Option<u8> = params.params.get("cs").and_then(|v| v.parse().ok());
 
     // Open connection and create device with concrete type
