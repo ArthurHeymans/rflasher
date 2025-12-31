@@ -13,337 +13,23 @@ use steel::steel_vm::register_fn::RegisterFn;
 /// Type alias for boxed SPI master
 pub type BoxedSpiMaster = Box<dyn SpiMaster + Send>;
 
-/// Type alias for shared boxed SPI master
-type SharedBoxedMaster = Arc<Mutex<BoxedSpiMaster>>;
+/// Type alias for the shared SPI master
+type SharedMaster<M> = Arc<Mutex<M>>;
 
 /// Create the SPI module with functions bound to a boxed SPI master
-pub fn create_spi_module_boxed(master: SharedBoxedMaster) -> BuiltInModule {
+pub fn create_spi_module_boxed(master: Arc<Mutex<BoxedSpiMaster>>) -> BuiltInModule {
+    create_spi_module(master)
+}
+
+/// Create the SPI module with functions bound to the given master
+pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>) -> BuiltInModule {
     let mut module = BuiltInModule::new("rflasher/spi");
 
-    // Clone Arc for each closure
-    let m = Arc::clone(&master);
-    module.register_fn(
-        "spi-execute",
-        move |opcode: isize,
-              addr: SteelVal,
-              dummy: isize,
-              write_data: SteelVal,
-              read_len: isize| {
-            spi_execute_boxed(
-                &m,
-                opcode as u8,
-                addr,
-                dummy as u8,
-                write_data,
-                read_len as usize,
-            )
-        },
-    );
+    // Register SPI commands that need the master
+    register_spi_commands(&mut module, &master);
 
-    let m = Arc::clone(&master);
-    module.register_fn("spi-simple", move |opcode: isize| {
-        spi_simple_boxed(&m, opcode as u8)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("spi-read-reg", move |opcode: isize, len: isize| {
-        spi_read_reg_boxed(&m, opcode as u8, len as usize)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("spi-write-reg", move |opcode: isize, data: SteelVal| {
-        spi_write_reg_boxed(&m, opcode as u8, data)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("spi-read", move |opcode: isize, addr: isize, len: isize| {
-        spi_read_3b_boxed(&m, opcode as u8, addr as u32, len as usize)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn(
-        "spi-read-4b",
-        move |opcode: isize, addr: isize, len: isize| {
-            spi_read_4b_boxed(&m, opcode as u8, addr as u32, len as usize)
-        },
-    );
-
-    let m = Arc::clone(&master);
-    module.register_fn(
-        "spi-write",
-        move |opcode: isize, addr: isize, data: SteelVal| {
-            spi_write_3b_boxed(&m, opcode as u8, addr as u32, data)
-        },
-    );
-
-    let m = Arc::clone(&master);
-    module.register_fn(
-        "spi-write-4b",
-        move |opcode: isize, addr: isize, data: SteelVal| {
-            spi_write_4b_boxed(&m, opcode as u8, addr as u32, data)
-        },
-    );
-
-    // Dual I/O reads
-    let m = Arc::clone(&master);
-    module.register_fn(
-        "spi-read-dual-out",
-        move |opcode: isize, addr: isize, len: isize| {
-            spi_read_multi_boxed(
-                &m,
-                opcode as u8,
-                addr as u32,
-                len as usize,
-                IoMode::DualOut,
-                AddressWidth::ThreeByte,
-            )
-        },
-    );
-
-    let m = Arc::clone(&master);
-    module.register_fn(
-        "spi-read-dual-io",
-        move |opcode: isize, addr: isize, len: isize| {
-            spi_read_multi_boxed(
-                &m,
-                opcode as u8,
-                addr as u32,
-                len as usize,
-                IoMode::DualIo,
-                AddressWidth::ThreeByte,
-            )
-        },
-    );
-
-    // Quad I/O reads
-    let m = Arc::clone(&master);
-    module.register_fn(
-        "spi-read-quad-out",
-        move |opcode: isize, addr: isize, len: isize| {
-            spi_read_multi_boxed(
-                &m,
-                opcode as u8,
-                addr as u32,
-                len as usize,
-                IoMode::QuadOut,
-                AddressWidth::ThreeByte,
-            )
-        },
-    );
-
-    let m = Arc::clone(&master);
-    module.register_fn(
-        "spi-read-quad-io",
-        move |opcode: isize, addr: isize, len: isize| {
-            spi_read_multi_boxed(
-                &m,
-                opcode as u8,
-                addr as u32,
-                len as usize,
-                IoMode::QuadIo,
-                AddressWidth::ThreeByte,
-            )
-        },
-    );
-
-    // High-level helper functions
-    let m = Arc::clone(&master);
-    module.register_fn("read-jedec-id", move || read_jedec_id_boxed(&m));
-
-    let m = Arc::clone(&master);
-    module.register_fn("read-status1", move || read_status_boxed(&m, opcodes::RDSR));
-
-    let m = Arc::clone(&master);
-    module.register_fn("read-status2", move || {
-        read_status_boxed(&m, opcodes::RDSR2)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("read-status3", move || {
-        read_status_boxed(&m, opcodes::RDSR3)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("write-enable", move || {
-        write_simple_boxed(&m, opcodes::WREN)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("write-disable", move || {
-        write_simple_boxed(&m, opcodes::WRDI)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("chip-erase", move || chip_erase_boxed(&m));
-
-    let m = Arc::clone(&master);
-    module.register_fn("reset-enable", move || {
-        write_simple_boxed(&m, opcodes::RSTEN)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("reset", move || write_simple_boxed(&m, opcodes::RST));
-
-    let m = Arc::clone(&master);
-    module.register_fn("enter-4byte-mode", move || {
-        write_simple_boxed(&m, opcodes::EN4B)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("exit-4byte-mode", move || {
-        write_simple_boxed(&m, opcodes::EX4B)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("deep-power-down", move || {
-        write_simple_boxed(&m, opcodes::DP)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("release-power-down", move || {
-        write_simple_boxed(&m, opcodes::RDP)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("read-sfdp", move |addr: isize, len: isize| {
-        read_sfdp_boxed(&m, addr as u32, len as usize)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("is-busy?", move || is_busy_boxed(&m));
-
-    let m = Arc::clone(&master);
-    module.register_fn("wait-ready", move |timeout_us: isize| {
-        wait_ready_boxed(&m, timeout_us as u32)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("write-status1", move |value: isize| {
-        write_status_boxed(&m, opcodes::WRSR, value as u8)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("write-status2", move |value: isize| {
-        write_status_boxed(&m, opcodes::WRSR2, value as u8)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("write-status3", move |value: isize| {
-        write_status_boxed(&m, opcodes::WRSR3, value as u8)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("sector-erase", move |addr: isize| {
-        erase_block_boxed(&m, opcodes::SE_20, addr as u32, false)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("block-erase-32k", move |addr: isize| {
-        erase_block_boxed(&m, opcodes::BE_52, addr as u32, false)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("block-erase-64k", move |addr: isize| {
-        erase_block_boxed(&m, opcodes::BE_D8, addr as u32, false)
-    });
-
-    // Page program helpers
-    let m = Arc::clone(&master);
-    module.register_fn("page-program", move |addr: isize, data: SteelVal| {
-        page_program_boxed(&m, addr as u32, data, false)
-    });
-
-    let m = Arc::clone(&master);
-    module.register_fn("page-program-4b", move |addr: isize, data: SteelVal| {
-        page_program_boxed(&m, addr as u32, data, true)
-    });
-
-    // Byte vector utilities
-    module.register_fn("make-bytes", |len: isize, fill: isize| -> SteelVal {
-        let bytes: Vec<u8> = vec![fill as u8; len as usize];
-        bytes_to_steel(&bytes)
-    });
-
-    module.register_fn("random-bytes", |len: isize| -> SteelVal {
-        use std::collections::hash_map::RandomState;
-        use std::hash::{BuildHasher, Hasher};
-        let mut bytes = Vec::with_capacity(len as usize);
-        for _ in 0..len {
-            let s = RandomState::new();
-            let mut hasher = s.build_hasher();
-            hasher.write_u8(0);
-            bytes.push(hasher.finish() as u8);
-        }
-        bytes_to_steel(&bytes)
-    });
-
-    module.register_fn("bytes-length", |data: SteelVal| -> Result<isize, String> {
-        let bytes = steel_to_bytes(&data)?;
-        Ok(bytes.len() as isize)
-    });
-
-    module.register_fn(
-        "bytes-ref",
-        |data: SteelVal, index: isize| -> Result<isize, String> {
-            let bytes = steel_to_bytes(&data)?;
-            bytes
-                .get(index as usize)
-                .map(|&b| b as isize)
-                .ok_or_else(|| format!("index {} out of bounds", index))
-        },
-    );
-
-    module.register_fn(
-        "bytes->list",
-        |data: SteelVal| -> Result<SteelVal, String> {
-            let bytes = steel_to_bytes(&data)?;
-            Ok(SteelVal::ListV(
-                bytes.iter().map(|&b| SteelVal::IntV(b as isize)).collect(),
-            ))
-        },
-    );
-
-    module.register_fn(
-        "list->bytes",
-        |list: SteelVal| -> Result<SteelVal, String> {
-            match list {
-                SteelVal::ListV(items) => {
-                    let bytes: Result<Vec<u8>, String> = items
-                        .iter()
-                        .map(|v| match v {
-                            SteelVal::IntV(i) => Ok(*i as u8),
-                            _ => Err("list->bytes: expected list of integers".to_string()),
-                        })
-                        .collect();
-                    Ok(bytes_to_steel(&bytes?))
-                }
-                _ => Err("list->bytes: expected list".to_string()),
-            }
-        },
-    );
-
-    module.register_fn("bytes->hex", |data: SteelVal| -> Result<String, String> {
-        let bytes = steel_to_bytes(&data)?;
-        Ok(bytes
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<Vec<_>>()
-            .join(" "))
-    });
-
-    module.register_fn("hex->bytes", |hex: String| -> Result<SteelVal, String> {
-        let hex = hex.replace(" ", "").replace("0x", "").replace(",", "");
-        if !hex.len().is_multiple_of(2) {
-            return Err("hex string must have even length".to_string());
-        }
-        let bytes: Result<Vec<u8>, _> = (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
-            .collect();
-        bytes
-            .map(|b| bytes_to_steel(&b))
-            .map_err(|e| format!("invalid hex: {}", e))
-    });
+    // Register byte utilities (don't need master)
+    register_byte_utilities(&mut module);
 
     // Help function - named rflasher-help to avoid conflict with Steel's built-in help
     module.register_fn("rflasher-help", || {
@@ -354,15 +40,13 @@ pub fn create_spi_module_boxed(master: SharedBoxedMaster) -> BuiltInModule {
     module
 }
 
-/// Type alias for the shared SPI master
-type SharedMaster<M> = Arc<Mutex<M>>;
-
-/// Create the SPI module with functions bound to the given master
-pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>) -> BuiltInModule {
-    let mut module = BuiltInModule::new("rflasher/spi");
-
-    // Clone Arc for each closure
-    let m = Arc::clone(&master);
+/// Register all SPI command functions that require the master
+fn register_spi_commands<M: SpiMaster + Send + 'static>(
+    module: &mut BuiltInModule,
+    master: &SharedMaster<M>,
+) {
+    // Low-level SPI commands
+    let m = Arc::clone(master);
     module.register_fn(
         "spi-execute",
         move |opcode: isize,
@@ -381,27 +65,27 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
         },
     );
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("spi-simple", move |opcode: isize| {
         spi_simple(&m, opcode as u8)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("spi-read-reg", move |opcode: isize, len: isize| {
         spi_read_reg(&m, opcode as u8, len as usize)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("spi-write-reg", move |opcode: isize, data: SteelVal| {
         spi_write_reg(&m, opcode as u8, data)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("spi-read", move |opcode: isize, addr: isize, len: isize| {
         spi_read_3b(&m, opcode as u8, addr as u32, len as usize)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn(
         "spi-read-4b",
         move |opcode: isize, addr: isize, len: isize| {
@@ -409,7 +93,7 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
         },
     );
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn(
         "spi-write",
         move |opcode: isize, addr: isize, data: SteelVal| {
@@ -417,7 +101,7 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
         },
     );
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn(
         "spi-write-4b",
         move |opcode: isize, addr: isize, data: SteelVal| {
@@ -426,7 +110,7 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
     );
 
     // Dual I/O reads
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn(
         "spi-read-dual-out",
         move |opcode: isize, addr: isize, len: isize| {
@@ -441,7 +125,7 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
         },
     );
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn(
         "spi-read-dual-io",
         move |opcode: isize, addr: isize, len: isize| {
@@ -457,7 +141,7 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
     );
 
     // Quad I/O reads
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn(
         "spi-read-quad-out",
         move |opcode: isize, addr: isize, len: isize| {
@@ -472,7 +156,7 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
         },
     );
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn(
         "spi-read-quad-io",
         move |opcode: isize, addr: isize, len: isize| {
@@ -488,100 +172,102 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
     );
 
     // High-level helper functions
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("read-jedec-id", move || read_jedec_id(&m));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("read-status1", move || read_status(&m, opcodes::RDSR));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("read-status2", move || read_status(&m, opcodes::RDSR2));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("read-status3", move || read_status(&m, opcodes::RDSR3));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("write-enable", move || write_simple(&m, opcodes::WREN));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("write-disable", move || write_simple(&m, opcodes::WRDI));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("chip-erase", move || chip_erase(&m));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("reset-enable", move || write_simple(&m, opcodes::RSTEN));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("reset", move || write_simple(&m, opcodes::RST));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("enter-4byte-mode", move || write_simple(&m, opcodes::EN4B));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("exit-4byte-mode", move || write_simple(&m, opcodes::EX4B));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("deep-power-down", move || write_simple(&m, opcodes::DP));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("release-power-down", move || write_simple(&m, opcodes::RDP));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("read-sfdp", move |addr: isize, len: isize| {
         read_sfdp(&m, addr as u32, len as usize)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("is-busy?", move || is_busy(&m));
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("wait-ready", move |timeout_us: isize| {
         wait_ready(&m, timeout_us as u32)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("write-status1", move |value: isize| {
         write_status(&m, opcodes::WRSR, value as u8)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("write-status2", move |value: isize| {
         write_status(&m, opcodes::WRSR2, value as u8)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("write-status3", move |value: isize| {
         write_status(&m, opcodes::WRSR3, value as u8)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("sector-erase", move |addr: isize| {
         erase_block(&m, opcodes::SE_20, addr as u32, false)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("block-erase-32k", move |addr: isize| {
         erase_block(&m, opcodes::BE_52, addr as u32, false)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("block-erase-64k", move |addr: isize| {
         erase_block(&m, opcodes::BE_D8, addr as u32, false)
     });
 
     // Page program helpers
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("page-program", move |addr: isize, data: SteelVal| {
         page_program(&m, addr as u32, data, false)
     });
 
-    let m = Arc::clone(&master);
+    let m = Arc::clone(master);
     module.register_fn("page-program-4b", move |addr: isize, data: SteelVal| {
         page_program(&m, addr as u32, data, true)
     });
+}
 
-    // Byte vector utilities
+/// Register byte vector utility functions (independent of master)
+fn register_byte_utilities(module: &mut BuiltInModule) {
     module.register_fn("make-bytes", |len: isize, fill: isize| -> SteelVal {
         let bytes: Vec<u8> = vec![fill as u8; len as usize];
         bytes_to_steel(&bytes)
@@ -667,14 +353,6 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
             .map(|b| bytes_to_steel(&b))
             .map_err(|e| format!("invalid hex: {}", e))
     });
-
-    // Help function - named rflasher-help to avoid conflict with Steel's built-in help
-    module.register_fn("rflasher-help", || {
-        print_help();
-        SteelVal::Void
-    });
-
-    module
 }
 
 /// Create the SPI25 constants module
@@ -824,381 +502,7 @@ fn steel_to_bytes(val: &SteelVal) -> Result<Vec<u8>, String> {
 }
 
 // =============================================================================
-// Boxed master implementations
-// =============================================================================
-
-fn spi_execute_boxed(
-    master: &SharedBoxedMaster,
-    opcode: u8,
-    addr: SteelVal,
-    dummy: u8,
-    write_data: SteelVal,
-    read_len: usize,
-) -> Result<SteelVal, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let address = match addr {
-        SteelVal::BoolV(false) => None,
-        SteelVal::IntV(a) => Some(a as u32),
-        _ => return Err("address must be #f or integer".to_string()),
-    };
-
-    let write_bytes = match &write_data {
-        SteelVal::BoolV(false) => vec![],
-        _ => steel_to_bytes(&write_data)?,
-    };
-
-    let mut read_buf = vec![0u8; read_len];
-
-    let address_width = match address {
-        None => AddressWidth::None,
-        Some(a) if a <= 0xFFFFFF => AddressWidth::ThreeByte,
-        Some(_) => AddressWidth::FourByte,
-    };
-
-    let mut cmd = SpiCommand {
-        opcode,
-        address,
-        address_width,
-        io_mode: IoMode::Single,
-        dummy_cycles: dummy,
-        write_data: &write_bytes,
-        read_buf: &mut read_buf,
-    };
-
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    if read_len > 0 {
-        Ok(bytes_to_steel(&read_buf))
-    } else {
-        Ok(SteelVal::BoolV(true))
-    }
-}
-
-fn spi_simple_boxed(master: &SharedBoxedMaster, opcode: u8) -> Result<SteelVal, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let mut cmd = SpiCommand::simple(opcode);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    Ok(SteelVal::BoolV(true))
-}
-
-fn spi_read_reg_boxed(
-    master: &SharedBoxedMaster,
-    opcode: u8,
-    len: usize,
-) -> Result<SteelVal, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let mut buf = vec![0u8; len];
-    let mut cmd = SpiCommand::read_reg(opcode, &mut buf);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    if len == 1 {
-        Ok(SteelVal::IntV(buf[0] as isize))
-    } else {
-        Ok(bytes_to_steel(&buf))
-    }
-}
-
-fn spi_write_reg_boxed(
-    master: &SharedBoxedMaster,
-    opcode: u8,
-    data: SteelVal,
-) -> Result<SteelVal, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let bytes = steel_to_bytes(&data)?;
-    let mut cmd = SpiCommand::write_reg(opcode, &bytes);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    Ok(SteelVal::BoolV(true))
-}
-
-fn spi_read_3b_boxed(
-    master: &SharedBoxedMaster,
-    opcode: u8,
-    addr: u32,
-    len: usize,
-) -> Result<SteelVal, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let mut buf = vec![0u8; len];
-    let mut cmd = SpiCommand::read_3b(opcode, addr, &mut buf);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    Ok(bytes_to_steel(&buf))
-}
-
-fn spi_read_4b_boxed(
-    master: &SharedBoxedMaster,
-    opcode: u8,
-    addr: u32,
-    len: usize,
-) -> Result<SteelVal, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let mut buf = vec![0u8; len];
-    let mut cmd = SpiCommand::read_4b(opcode, addr, &mut buf);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    Ok(bytes_to_steel(&buf))
-}
-
-fn spi_read_multi_boxed(
-    master: &SharedBoxedMaster,
-    opcode: u8,
-    addr: u32,
-    len: usize,
-    io_mode: IoMode,
-    addr_width: AddressWidth,
-) -> Result<SteelVal, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let mut buf = vec![0u8; len];
-
-    let dummy = match io_mode {
-        IoMode::DualOut | IoMode::QuadOut => 8,
-        IoMode::DualIo => 4,
-        IoMode::QuadIo => 6,
-        _ => 0,
-    };
-
-    let mut cmd = SpiCommand {
-        opcode,
-        address: Some(addr),
-        address_width: addr_width,
-        io_mode,
-        dummy_cycles: dummy,
-        write_data: &[],
-        read_buf: &mut buf,
-    };
-
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    Ok(bytes_to_steel(&buf))
-}
-
-fn spi_write_3b_boxed(
-    master: &SharedBoxedMaster,
-    opcode: u8,
-    addr: u32,
-    data: SteelVal,
-) -> Result<SteelVal, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let bytes = steel_to_bytes(&data)?;
-    let mut cmd = SpiCommand::write_3b(opcode, addr, &bytes);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    Ok(SteelVal::BoolV(true))
-}
-
-fn spi_write_4b_boxed(
-    master: &SharedBoxedMaster,
-    opcode: u8,
-    addr: u32,
-    data: SteelVal,
-) -> Result<SteelVal, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let bytes = steel_to_bytes(&data)?;
-    let mut cmd = SpiCommand::write_4b(opcode, addr, &bytes);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    Ok(SteelVal::BoolV(true))
-}
-
-fn read_jedec_id_boxed(master: &SharedBoxedMaster) -> Result<SteelVal, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let mut buf = [0u8; 3];
-    let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut buf);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    let manufacturer = buf[0] as isize;
-    let device = ((buf[1] as isize) << 8) | (buf[2] as isize);
-
-    Ok(SteelVal::ListV(
-        vec![SteelVal::IntV(manufacturer), SteelVal::IntV(device)].into(),
-    ))
-}
-
-fn read_status_boxed(master: &SharedBoxedMaster, opcode: u8) -> Result<isize, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let mut buf = [0u8; 1];
-    let mut cmd = SpiCommand::read_reg(opcode, &mut buf);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    Ok(buf[0] as isize)
-}
-
-fn write_simple_boxed(master: &SharedBoxedMaster, opcode: u8) -> Result<bool, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let mut cmd = SpiCommand::simple(opcode);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    Ok(true)
-}
-
-fn write_status_boxed(master: &SharedBoxedMaster, opcode: u8, value: u8) -> Result<bool, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    // First send WREN
-    let mut wren = SpiCommand::simple(opcodes::WREN);
-    m.execute(&mut wren)
-        .map_err(|e| format!("WREN error: {}", e))?;
-
-    // Then write status
-    let data = [value];
-    let mut cmd = SpiCommand::write_reg(opcode, &data);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    Ok(true)
-}
-
-fn read_sfdp_boxed(master: &SharedBoxedMaster, addr: u32, len: usize) -> Result<SteelVal, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    let mut buf = vec![0u8; len];
-
-    let mut cmd = SpiCommand {
-        opcode: opcodes::RDSFDP,
-        address: Some(addr),
-        address_width: AddressWidth::ThreeByte,
-        io_mode: IoMode::Single,
-        dummy_cycles: 8,
-        write_data: &[],
-        read_buf: &mut buf,
-    };
-
-    m.execute(&mut cmd)
-        .map_err(|e| format!("SPI error: {}", e))?;
-
-    Ok(bytes_to_steel(&buf))
-}
-
-fn is_busy_boxed(master: &SharedBoxedMaster) -> Result<bool, String> {
-    let status = read_status_boxed(master, opcodes::RDSR)?;
-    Ok((status & (opcodes::SR1_WIP as isize)) != 0)
-}
-
-fn wait_ready_boxed(master: &SharedBoxedMaster, timeout_us: u32) -> Result<bool, String> {
-    let poll_interval_us = 100;
-    let max_polls = timeout_us / poll_interval_us;
-
-    for _ in 0..max_polls {
-        let status = read_status_boxed(master, opcodes::RDSR)?;
-        if (status & (opcodes::SR1_WIP as isize)) == 0 {
-            return Ok(true);
-        }
-
-        std::thread::sleep(std::time::Duration::from_micros(poll_interval_us as u64));
-    }
-
-    Err("timeout waiting for ready".to_string())
-}
-
-fn erase_block_boxed(
-    master: &SharedBoxedMaster,
-    opcode: u8,
-    addr: u32,
-    use_4byte: bool,
-) -> Result<bool, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    // Send WREN first
-    let mut wren = SpiCommand::simple(opcodes::WREN);
-    m.execute(&mut wren)
-        .map_err(|e| format!("WREN error: {}", e))?;
-
-    // Send erase command
-    let mut cmd = if use_4byte {
-        SpiCommand::erase_4b(opcode, addr)
-    } else {
-        SpiCommand::erase_3b(opcode, addr)
-    };
-    m.execute(&mut cmd)
-        .map_err(|e| format!("erase error: {}", e))?;
-
-    Ok(true)
-}
-
-fn page_program_boxed(
-    master: &SharedBoxedMaster,
-    addr: u32,
-    data: SteelVal,
-    use_4byte: bool,
-) -> Result<bool, String> {
-    let bytes = steel_to_bytes(&data)?;
-
-    // Validate page size (max 256 bytes for standard page program)
-    if bytes.len() > 256 {
-        return Err(format!(
-            "page program data too large: {} bytes (max 256)",
-            bytes.len()
-        ));
-    }
-
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    // Send WREN first
-    let mut wren = SpiCommand::simple(opcodes::WREN);
-    m.execute(&mut wren)
-        .map_err(|e| format!("WREN error: {}", e))?;
-
-    // Send page program command
-    let mut cmd = if use_4byte {
-        SpiCommand::write_4b(opcodes::PP_4B, addr, &bytes)
-    } else {
-        SpiCommand::write_3b(opcodes::PP, addr, &bytes)
-    };
-    m.execute(&mut cmd)
-        .map_err(|e| format!("page program error: {}", e))?;
-
-    // Drop the lock before polling
-    drop(m);
-
-    // Wait for completion (typical page program time is 0.7-3ms, max ~5ms)
-    wait_ready_boxed(master, 10_000)?;
-
-    Ok(true)
-}
-
-fn chip_erase_boxed(master: &SharedBoxedMaster) -> Result<bool, String> {
-    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
-
-    // Send WREN first
-    let mut wren = SpiCommand::simple(opcodes::WREN);
-    m.execute(&mut wren)
-        .map_err(|e| format!("WREN error: {}", e))?;
-
-    // Send chip erase command
-    let mut cmd = SpiCommand::simple(opcodes::CE_C7);
-    m.execute(&mut cmd)
-        .map_err(|e| format!("chip erase error: {}", e))?;
-
-    Ok(true)
-}
-
-// =============================================================================
-// Generic master implementations
+// SPI command implementations
 // =============================================================================
 
 fn spi_execute<M: SpiMaster>(

@@ -186,6 +186,34 @@ pub trait OpaqueMaster {
     fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
 }
 
+// Blanket impl for boxed SPI masters to allow trait objects
+#[cfg(feature = "alloc")]
+impl SpiMaster for alloc::boxed::Box<dyn SpiMaster + Send> {
+    fn features(&self) -> SpiFeatures {
+        (**self).features()
+    }
+
+    fn max_read_len(&self) -> usize {
+        (**self).max_read_len()
+    }
+
+    fn max_write_len(&self) -> usize {
+        (**self).max_write_len()
+    }
+
+    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+        (**self).execute(cmd)
+    }
+
+    fn probe_opcode(&self, opcode: u8) -> bool {
+        (**self).probe_opcode(opcode)
+    }
+
+    fn delay_us(&mut self, us: u32) {
+        (**self).delay_us(us)
+    }
+}
+
 /// Async opaque master trait
 pub trait AsyncOpaqueMaster {
     /// Get the total flash size in bytes
