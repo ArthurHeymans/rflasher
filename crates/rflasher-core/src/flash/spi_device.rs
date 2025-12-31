@@ -7,6 +7,7 @@ use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{EraseFailure, Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
+use crate::flash::operations::{map_to_4byte_erase_opcode, select_erase_block};
 use crate::programmer::SpiMaster;
 use crate::protocol;
 use crate::wp::{
@@ -288,6 +289,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
 impl<M: SpiMaster> SpiFlashDevice<M> {
     /// Check that a range of flash has been erased (all bytes are 0xFF)
+    ///
+    /// Uses the `FlashDevice::read` trait method, which differs from
+    /// `operations::check_erased_range` that uses the free function `read()`.
     fn check_erased_range(&mut self, addr: u32, len: u32) -> Result<()> {
         const ERASED_VALUE: u8 = 0xFF;
         const CHUNK_SIZE: usize = 4096;
@@ -315,36 +319,6 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
         }
 
         Ok(())
-    }
-}
-
-/// Select the best erase block size for the given operation
-fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> Option<EraseBlock> {
-    erase_blocks
-        .iter()
-        .filter(|eb| {
-            // Skip chip erase for partial operations
-            // Use min_block_size() to get the individual block size (not total coverage)
-            !eb.is_chip_erase() && eb.min_block_size() <= len
-        })
-        .filter(|eb| {
-            // For uniform blocks, check alignment
-            // For non-uniform blocks, we need the min block size for alignment
-            let min_size = eb.min_block_size();
-            addr.is_multiple_of(min_size) && len.is_multiple_of(min_size)
-        })
-        .max_by_key(|eb| eb.max_block_size())
-        .cloned()
-}
-
-/// Map a 3-byte erase opcode to its 4-byte equivalent
-fn map_to_4byte_erase_opcode(opcode: u8) -> u8 {
-    use crate::spi::opcodes;
-    match opcode {
-        opcodes::SE_20 => opcodes::SE_21,
-        opcodes::BE_52 => opcodes::BE_5C,
-        opcodes::BE_D8 => opcodes::BE_DC,
-        _ => opcode, // Chip erase doesn't need address
     }
 }
 
