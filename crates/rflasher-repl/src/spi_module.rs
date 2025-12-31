@@ -174,7 +174,7 @@ pub fn create_spi_module_boxed(master: SharedBoxedMaster) -> BuiltInModule {
     });
 
     let m = Arc::clone(&master);
-    module.register_fn("chip-erase", move || write_simple_boxed(&m, opcodes::CE_C7));
+    module.register_fn("chip-erase", move || chip_erase_boxed(&m));
 
     let m = Arc::clone(&master);
     module.register_fn("reset-enable", move || {
@@ -507,7 +507,7 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
     module.register_fn("write-disable", move || write_simple(&m, opcodes::WRDI));
 
     let m = Arc::clone(&master);
-    module.register_fn("chip-erase", move || write_simple(&m, opcodes::CE_C7));
+    module.register_fn("chip-erase", move || chip_erase(&m));
 
     let m = Arc::clone(&master);
     module.register_fn("reset-enable", move || write_simple(&m, opcodes::RSTEN));
@@ -1181,6 +1181,22 @@ fn page_program_boxed(
     Ok(true)
 }
 
+fn chip_erase_boxed(master: &SharedBoxedMaster) -> Result<bool, String> {
+    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
+
+    // Send WREN first
+    let mut wren = SpiCommand::simple(opcodes::WREN);
+    m.execute(&mut wren)
+        .map_err(|e| format!("WREN error: {}", e))?;
+
+    // Send chip erase command
+    let mut cmd = SpiCommand::simple(opcodes::CE_C7);
+    m.execute(&mut cmd)
+        .map_err(|e| format!("chip erase error: {}", e))?;
+
+    Ok(true)
+}
+
 // =============================================================================
 // Generic master implementations
 // =============================================================================
@@ -1543,6 +1559,22 @@ fn page_program<M: SpiMaster>(
 
     // Wait for completion (typical page program time is 0.7-3ms, max ~5ms)
     wait_ready(master, 10_000)?;
+
+    Ok(true)
+}
+
+fn chip_erase<M: SpiMaster>(master: &SharedMaster<M>) -> Result<bool, String> {
+    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
+
+    // Send WREN first
+    let mut wren = SpiCommand::simple(opcodes::WREN);
+    m.execute(&mut wren)
+        .map_err(|e| format!("WREN error: {}", e))?;
+
+    // Send chip erase command
+    let mut cmd = SpiCommand::simple(opcodes::CE_C7);
+    m.execute(&mut cmd)
+        .map_err(|e| format!("chip erase error: {}", e))?;
 
     Ok(true)
 }
