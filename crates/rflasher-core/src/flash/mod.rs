@@ -51,43 +51,10 @@ pub use device::FlashDeviceExt;
 pub use opaque_device::OpaqueFlashDevice;
 pub use spi_device::SpiFlashDevice;
 
-// Re-export SPI-specific operations (these work with SpiMaster directly)
-// For unified operations that work with any FlashDevice, use the `unified` module
-#[cfg(feature = "std")]
-pub use operations::probe;
-pub use operations::{chip_erase, erase, read, read_jedec_id, verify, write};
+// Re-export low-level SPI operations (work with SpiMaster directly)
+// For high-level operations that work with any FlashDevice, use the `unified` module
+pub use operations::{read, write};
 
 // Re-export detailed probe result
 #[cfg(feature = "std")]
 pub use operations::{probe_detailed, ProbeResult};
-
-// Re-export types from operations
-#[cfg(feature = "alloc")]
-pub use operations::{
-    // Layout-aware operations (SPI-specific)
-    erase_by_layout,
-    erase_region,
-    get_all_write_ranges,
-    get_next_write_range,
-    need_erase,
-    need_write,
-    // Optimal erase algorithm
-    plan_optimal_erase,
-    plan_optimal_erase_region,
-    plan_smart_erase,
-    read_by_layout,
-    // Smart write operations (SPI-specific)
-    smart_write,
-    smart_write_by_layout,
-    smart_write_region,
-    verify_by_layout,
-    write_by_layout,
-    write_region,
-    EraseBlockPlan,
-    NoProgress,
-    OptimalEraseOp,
-    // Progress reporting
-    WriteProgress,
-    WriteRange,
-    WriteStats,
-};

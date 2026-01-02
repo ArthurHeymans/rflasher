@@ -3,15 +3,28 @@
 //! This module provides high-level operations (smart write, layout-based
 //! operations, verification) that work with any type implementing the
 //! `FlashDevice` trait.
+//!
+//! The smart write support types (`WriteStats`, `WriteProgress`, `NoProgress`,
+//! `WriteRange`, `need_erase`, `need_write`, `get_all_write_ranges`) are
+//! re-exported from `operations.rs` to avoid duplication.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::chip::WriteGranularity;
 use crate::error::{Error, Result};
 use crate::flash::device::FlashDevice;
 use crate::flash::operations::{plan_optimal_erase, plan_optimal_erase_region};
 use crate::layout::{Layout, LayoutError, Region};
+
+// =============================================================================
+// Re-exports from operations.rs
+// =============================================================================
+
+// Re-export smart write support types from operations.rs
+// These are the canonical definitions - no duplication needed
+pub use crate::flash::operations::{
+    get_all_write_ranges, need_write, NoProgress, WriteProgress, WriteRange, WriteStats,
+};
 
 // =============================================================================
 // Constants
@@ -22,138 +35,6 @@ const ERASED_VALUE: u8 = 0xFF;
 
 /// Default read chunk size
 const READ_CHUNK_SIZE: usize = 4096;
-
-// =============================================================================
-// Smart write support types
-// =============================================================================
-
-/// Determine if an erase is required to transition from `have` to `want`
-///
-/// Flash memory can only change bits from 1 to 0 during writes. To change
-/// bits from 0 to 1, an erase is required (which sets all bits to 1).
-pub fn need_erase(have: &[u8], want: &[u8], granularity: WriteGranularity) -> bool {
-    assert_eq!(have.len(), want.len());
-
-    match granularity {
-        WriteGranularity::Bit => {
-            // For bit-granularity, we can only clear bits (1->0).
-            // We need erase if any bit needs to go from 0->1
-            have.iter().zip(want.iter()).any(|(h, w)| (h & w) != *w)
-        }
-        WriteGranularity::Byte | WriteGranularity::Page => {
-            // For byte/page granularity, if bytes differ, the old byte must be
-            // in erased state (0xFF) to allow writing the new value
-            have.iter().zip(want.iter()).any(|(h, w)| {
-                if h == w {
-                    false // No change needed
-                } else {
-                    *h != ERASED_VALUE // Need erase if not already erased
-                }
-            })
-        }
-    }
-}
-
-/// Check if a range of data needs to be written (differs from current contents)
-#[inline]
-pub fn need_write(have: &[u8], want: &[u8]) -> bool {
-    have != want
-}
-
-/// A contiguous range of bytes that needs to be written
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WriteRange {
-    /// Start offset within the compared buffers
-    pub start: u32,
-    /// Length in bytes
-    pub len: u32,
-}
-
-/// Find all contiguous ranges of changed bytes
-pub fn get_all_write_ranges(have: &[u8], want: &[u8]) -> Vec<WriteRange> {
-    assert_eq!(have.len(), want.len());
-
-    let mut ranges = Vec::new();
-    let mut i = 0;
-
-    while i < have.len() {
-        // Find start of changed region
-        while i < have.len() && have[i] == want[i] {
-            i += 1;
-        }
-        if i >= have.len() {
-            break;
-        }
-
-        let start = i;
-
-        // Find end of changed region
-        while i < have.len() && have[i] != want[i] {
-            i += 1;
-        }
-
-        ranges.push(WriteRange {
-            start: start as u32,
-            len: (i - start) as u32,
-        });
-    }
-
-    ranges
-}
-
-/// Statistics from a smart write operation
-#[derive(Debug, Clone, Default)]
-pub struct WriteStats {
-    /// Number of bytes that were different
-    pub bytes_changed: usize,
-    /// Number of erase operations performed
-    pub erases_performed: usize,
-    /// Total bytes erased
-    pub bytes_erased: usize,
-    /// Number of write operations performed
-    pub writes_performed: usize,
-    /// Total bytes written
-    pub bytes_written: usize,
-    /// Whether any flash operations were performed
-    pub flash_modified: bool,
-}
-
-/// Callback for progress reporting during operations
-pub trait WriteProgress {
-    /// Called when starting to read current flash contents
-    fn reading(&mut self, total_bytes: usize);
-
-    /// Called to update read progress
-    fn read_progress(&mut self, bytes_read: usize);
-
-    /// Called when starting erase operations
-    fn erasing(&mut self, blocks_to_erase: usize, bytes_to_erase: usize);
-
-    /// Called after each block is erased
-    fn erase_progress(&mut self, blocks_erased: usize, bytes_erased: usize);
-
-    /// Called when starting write operations
-    fn writing(&mut self, bytes_to_write: usize);
-
-    /// Called to update write progress
-    fn write_progress(&mut self, bytes_written: usize);
-
-    /// Called when the operation is complete
-    fn complete(&mut self, stats: &WriteStats);
-}
-
-/// A no-op progress reporter
-pub struct NoProgress;
-
-impl WriteProgress for NoProgress {
-    fn reading(&mut self, _total_bytes: usize) {}
-    fn read_progress(&mut self, _bytes_read: usize) {}
-    fn erasing(&mut self, _blocks_to_erase: usize, _bytes_to_erase: usize) {}
-    fn erase_progress(&mut self, _blocks_erased: usize, _bytes_erased: usize) {}
-    fn writing(&mut self, _bytes_to_write: usize) {}
-    fn write_progress(&mut self, _bytes_written: usize) {}
-    fn complete(&mut self, _stats: &WriteStats) {}
-}
 
 // =============================================================================
 // Unified operations
