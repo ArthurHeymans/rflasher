@@ -3,11 +3,11 @@
 //! This module provides the main `Ftdi` struct that implements SPI
 //! communication using FTDI's MPSSE engine and the `SpiMaster` trait.
 
-use std::future::IntoFuture;
 use std::io::{Read, Write};
 use std::time::Duration;
 
 use ftdi::{find_by_vid_pid, BitMode, Device, Interface};
+use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
@@ -409,14 +409,14 @@ impl Ftdi {
 
     /// List available FTDI devices
     pub fn list_devices() -> Result<Vec<FtdiDeviceInfo>> {
-        let mut devices = Vec::new();
+        let devices = nusb::list_devices()
+            .wait()
+            .map_err(|e| FtdiError::UsbError(e.to_string()))?
+            .filter_map(|dev| {
+                let vid = dev.vendor_id();
+                let pid = dev.product_id();
 
-        for dev in futures_lite::future::block_on(nusb::list_devices().into_future())? {
-            let vid = dev.vendor_id();
-            let pid = dev.product_id();
-
-            if let Some(info) = get_device_info(vid, pid) {
-                devices.push(FtdiDeviceInfo {
+                get_device_info(vid, pid).map(|info| FtdiDeviceInfo {
                     bus: dev.busnum(),
                     address: dev.device_address(),
                     vendor_id: vid,
@@ -424,9 +424,9 @@ impl Ftdi {
                     vendor_name: info.vendor_name,
                     device_name: info.device_name,
                     serial: None, // Would need to open device to get this
-                });
-            }
-        }
+                })
+            })
+            .collect();
 
         Ok(devices)
     }
