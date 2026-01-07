@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
-use nusb::transfer::{Queue, RequestBuffer};
-use nusb::{Device, Interface};
+use nusb::transfer::{Bulk, In, Out};
+use nusb::{Interface, MaybeFuture};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
@@ -36,8 +36,6 @@ pub struct RaidenConfig {
 /// - uServo
 /// - Servo Micro
 pub struct RaidenDebugSpi {
-    /// USB device handle
-    _device: Device,
     /// USB interface
     interface: Interface,
     /// Interface number (for control transfers)
@@ -89,15 +87,16 @@ impl RaidenDebugSpi {
         let device = device_info
             .info
             .open()
+            .wait()
             .map_err(|e| RaidenError::OpenFailed(e.to_string()))?;
 
         // Claim the interface
         let interface = device
             .claim_interface(device_info.interface_num)
+            .wait()
             .map_err(|e| RaidenError::ClaimFailed(e.to_string()))?;
 
         let mut raiden = Self {
-            _device: device,
             interface,
             interface_num: device_info.interface_num,
             in_ep: device_info.in_ep,
@@ -123,7 +122,7 @@ impl RaidenDebugSpi {
     fn find_devices(serial_filter: Option<&str>) -> Result<Vec<RaidenDeviceInfo>> {
         let mut devices = Vec::new();
 
-        for dev_info in nusb::list_devices()? {
+        for dev_info in nusb::list_devices().wait()? {
             // Check vendor ID
             if dev_info.vendor_id() != GOOGLE_VID {
                 continue;
@@ -148,7 +147,7 @@ impl RaidenDebugSpi {
                         || iface_info.protocol() == PROTOCOL_V2)
                 {
                     // Need to open device to get endpoint addresses
-                    let device = match dev_info.open() {
+                    let device = match dev_info.open().wait() {
                         Ok(d) => d,
                         Err(e) => {
                             log::debug!("Failed to open device for endpoint discovery: {}", e);
@@ -185,7 +184,7 @@ impl RaidenDebugSpi {
                     if let (Some(in_ep), Some(out_ep)) = (in_ep, out_ep) {
                         devices.push(RaidenDeviceInfo {
                             info: dev_info.clone(),
-                            bus: dev_info.bus_number(),
+                            bus: dev_info.busnum(),
                             address: dev_info.device_address(),
                             serial: dev_info.serial_number().map(|s| s.to_string()),
                             interface_num: iface_info.interface_number(),
@@ -224,19 +223,19 @@ impl RaidenDebugSpi {
         // bRequest: the request type (enable AP/EC/H1)
         // wValue: 0
         // wIndex: interface number
-        let result = futures_lite::future::block_on(self.interface.control_out(
-            nusb::transfer::ControlOut {
-                control_type: nusb::transfer::ControlType::Vendor,
-                recipient: nusb::transfer::Recipient::Interface,
-                request: request as u8,
-                value: 0,
-                index: self.interface_num as u16,
-                data: &[],
-            },
-        ));
-
-        result
-            .status
+        self.interface
+            .control_out(
+                nusb::transfer::ControlOut {
+                    control_type: nusb::transfer::ControlType::Vendor,
+                    recipient: nusb::transfer::Recipient::Interface,
+                    request: request as u8,
+                    value: 0,
+                    index: self.interface_num as u16,
+                    data: &[],
+                },
+                Duration::from_secs(5),
+            )
+            .wait()
             .map_err(|e| RaidenError::EnableFailed(e.to_string()))?;
 
         // Wait for target to stabilize
@@ -250,19 +249,19 @@ impl RaidenDebugSpi {
     fn disable(&mut self) -> Result<()> {
         log::debug!("Disabling SPI bridge (interface {})", self.interface_num);
 
-        let result = futures_lite::future::block_on(self.interface.control_out(
-            nusb::transfer::ControlOut {
-                control_type: nusb::transfer::ControlType::Vendor,
-                recipient: nusb::transfer::Recipient::Interface,
-                request: ControlRequest::Disable as u8,
-                value: 0,
-                index: self.interface_num as u16,
-                data: &[],
-            },
-        ));
-
-        result
-            .status
+        self.interface
+            .control_out(
+                nusb::transfer::ControlOut {
+                    control_type: nusb::transfer::ControlType::Vendor,
+                    recipient: nusb::transfer::Recipient::Interface,
+                    request: ControlRequest::Disable as u8,
+                    value: 0,
+                    index: self.interface_num as u16,
+                    data: &[],
+                },
+                Duration::from_secs(5),
+            )
+            .wait()
             .map_err(|e| RaidenError::EnableFailed(e.to_string()))?;
 
         Ok(())
@@ -311,13 +310,15 @@ impl RaidenDebugSpi {
 
     /// Send a packet to the device
     fn write_packet(&mut self, data: &[u8]) -> Result<()> {
-        let mut queue: Queue<Vec<u8>> = self.interface.bulk_out_queue(self.out_ep);
-        queue.submit(data.to_vec());
+        let mut out_ep = self
+            .interface
+            .endpoint::<Bulk, Out>(self.out_ep)
+            .map_err(|e| RaidenError::TransferFailed(e.to_string()))?;
 
-        let completion = futures_lite::future::block_on(async { queue.next_complete().await });
-
+        let buf = nusb::transfer::Buffer::from(data.to_vec());
+        let completion = out_ep.transfer_blocking(buf, Duration::from_secs(5));
         completion
-            .status
+            .into_result()
             .map_err(|e| RaidenError::TransferFailed(e.to_string()))?;
 
         log::trace!("USB write {} bytes", data.len());
@@ -326,17 +327,20 @@ impl RaidenDebugSpi {
 
     /// Read a packet from the device
     fn read_packet(&mut self) -> Result<Vec<u8>> {
-        let mut queue: Queue<RequestBuffer> = self.interface.bulk_in_queue(self.in_ep);
-        queue.submit(RequestBuffer::new(USB_PACKET_SIZE));
-
-        let completion = futures_lite::future::block_on(async { queue.next_complete().await });
-
-        completion
-            .status
+        let mut in_ep = self
+            .interface
+            .endpoint::<Bulk, In>(self.in_ep)
             .map_err(|e| RaidenError::TransferFailed(e.to_string()))?;
 
-        log::trace!("USB read {} bytes", completion.data.len());
-        Ok(completion.data)
+        let mut buf = nusb::transfer::Buffer::new(USB_PACKET_SIZE);
+        buf.set_requested_len(USB_PACKET_SIZE);
+        let completion = in_ep.transfer_blocking(buf, Duration::from_secs(5));
+        let data = completion
+            .into_result()
+            .map_err(|e| RaidenError::TransferFailed(e.to_string()))?;
+
+        log::trace!("USB read {} bytes", data.len());
+        Ok(data.to_vec())
     }
 
     /// Execute an SPI transaction using V1 protocol

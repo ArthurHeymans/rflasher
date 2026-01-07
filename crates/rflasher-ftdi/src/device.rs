@@ -7,6 +7,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use ftdi::{find_by_vid_pid, BitMode, Device, Interface};
+use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
@@ -408,24 +409,24 @@ impl Ftdi {
 
     /// List available FTDI devices
     pub fn list_devices() -> Result<Vec<FtdiDeviceInfo>> {
-        let mut devices = Vec::new();
+        let devices = nusb::list_devices()
+            .wait()
+            .map_err(|e| FtdiError::UsbError(e.to_string()))?
+            .filter_map(|dev| {
+                let vid = dev.vendor_id();
+                let pid = dev.product_id();
 
-        for dev in nusb::list_devices()? {
-            let vid = dev.vendor_id();
-            let pid = dev.product_id();
-
-            if let Some(info) = get_device_info(vid, pid) {
-                devices.push(FtdiDeviceInfo {
-                    bus: dev.bus_number(),
+                get_device_info(vid, pid).map(|info| FtdiDeviceInfo {
+                    bus: dev.busnum(),
                     address: dev.device_address(),
                     vendor_id: vid,
                     product_id: pid,
                     vendor_name: info.vendor_name,
                     device_name: info.device_name,
                     serial: None, // Would need to open device to get this
-                });
-            }
-        }
+                })
+            })
+            .collect();
 
         Ok(devices)
     }

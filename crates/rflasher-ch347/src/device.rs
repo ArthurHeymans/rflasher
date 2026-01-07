@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
-use nusb::transfer::{Queue, RequestBuffer};
-use nusb::{Device, Interface};
+use nusb::transfer::{Buffer, Bulk, In, Out};
+use nusb::{Endpoint, MaybeFuture};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
@@ -31,10 +31,10 @@ use crate::protocol::*;
 /// - 4-byte address support (software handled)
 /// - Standard single-bit SPI only (dual/quad modes not supported)
 pub struct Ch347 {
-    /// USB device handle
-    _device: Device,
-    /// USB interface
-    interface: Interface,
+    /// Bulk OUT endpoint for writes
+    out_ep: Endpoint<Bulk, Out>,
+    /// Bulk IN endpoint for reads
+    in_ep: Endpoint<Bulk, In>,
     /// Current SPI configuration
     config: SpiConfig,
     /// Device variant (T or F)
@@ -64,7 +64,9 @@ impl Ch347 {
 
     /// Open the nth CH347 device with custom configuration
     pub fn open_nth_with_config(index: usize, config: SpiConfig) -> Result<Self> {
-        let devices: Vec<_> = nusb::list_devices()?
+        let devices: Vec<_> = nusb::list_devices()
+            .wait()
+            .map_err(|e| Ch347Error::OpenFailed(e.to_string()))?
             .filter(|d| {
                 d.vendor_id() == CH347_USB_VENDOR
                     && (d.product_id() == CH347T_USB_PRODUCT
@@ -83,12 +85,13 @@ impl Ch347 {
             } else {
                 "F"
             },
-            device_info.bus_number(),
+            device_info.busnum(),
             device_info.device_address()
         );
 
         let device = device_info
             .open()
+            .wait()
             .map_err(|e| Ch347Error::OpenFailed(e.to_string()))?;
 
         // Get device descriptor for version info
@@ -106,15 +109,10 @@ impl Ch347 {
             .map_err(|e| Ch347Error::OpenFailed(format!("Failed to get config: {}", e)))?;
 
         let mut spi_interface: Option<u8> = None;
-        for iface in config_desc.interfaces() {
-            for alt in iface.alt_settings() {
-                if alt.class() == 0xFF {
-                    // LIBUSB_CLASS_VENDOR_SPEC
-                    spi_interface = Some(iface.interface_number());
-                    break;
-                }
-            }
-            if spi_interface.is_some() {
+        for iface in config_desc.interface_alt_settings() {
+            if iface.class() == 0xFF {
+                // LIBUSB_CLASS_VENDOR_SPEC
+                spi_interface = Some(iface.interface_number());
                 break;
             }
         }
@@ -128,11 +126,20 @@ impl Ch347 {
         // Claim interface
         let interface = device
             .claim_interface(iface_num)
+            .wait()
+            .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
+
+        // Open bulk endpoints
+        let out_ep = interface
+            .endpoint::<Bulk, Out>(WRITE_EP)
+            .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
+        let in_ep = interface
+            .endpoint::<Bulk, In>(READ_EP)
             .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
 
         let mut ch347 = Self {
-            _device: device,
-            interface,
+            out_ep,
+            in_ep,
             config,
             variant,
         };
@@ -145,7 +152,9 @@ impl Ch347 {
 
     /// List all connected CH347 devices
     pub fn list_devices() -> Result<Vec<Ch347DeviceInfo>> {
-        let devices: Vec<_> = nusb::list_devices()?
+        let devices: Vec<_> = nusb::list_devices()
+            .wait()
+            .map_err(|e| Ch347Error::OpenFailed(e.to_string()))?
             .filter(|d| {
                 d.vendor_id() == CH347_USB_VENDOR
                     && (d.product_id() == CH347T_USB_PRODUCT
@@ -155,7 +164,7 @@ impl Ch347 {
                 let variant =
                     Ch347Variant::from_product_id(d.product_id()).unwrap_or(Ch347Variant::Ch347T);
                 Ch347DeviceInfo {
-                    bus: d.bus_number(),
+                    bus: d.busnum(),
                     address: d.device_address(),
                     variant,
                 }
@@ -353,14 +362,13 @@ impl Ch347 {
 
     /// Write data to USB endpoint (blocking)
     fn usb_write(&mut self, data: &[u8]) -> Result<()> {
-        let mut queue: Queue<Vec<u8>> = self.interface.bulk_out_queue(WRITE_EP);
-        queue.submit(data.to_vec());
+        let mut buf = Buffer::new(data.len());
+        buf.extend_from_slice(data);
 
-        // Block on the completion
-        let completion = futures_lite::future::block_on(queue.next_complete());
+        let completion = self.out_ep.transfer_blocking(buf, Duration::from_secs(5));
 
         completion
-            .status
+            .into_result()
             .map_err(|e| Ch347Error::TransferFailed(e.to_string()))?;
 
         log::trace!("USB write {} bytes", data.len());
@@ -369,18 +377,20 @@ impl Ch347 {
 
     /// Read data from USB endpoint (blocking)
     fn usb_read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-        let mut queue: Queue<RequestBuffer> = self.interface.bulk_in_queue(READ_EP);
-        queue.submit(RequestBuffer::new(buffer.len()));
+        let max_packet_size = self.in_ep.max_packet_size();
+        // Request length must be multiple of max packet size
+        let request_len = buffer.len().div_ceil(max_packet_size) * max_packet_size;
+        let mut in_buf = Buffer::new(request_len);
+        in_buf.set_requested_len(request_len);
 
-        // Block on the completion
-        let completion = futures_lite::future::block_on(queue.next_complete());
+        let completion = self.in_ep.transfer_blocking(in_buf, Duration::from_secs(5));
 
-        completion
-            .status
+        let data = completion
+            .into_result()
             .map_err(|e| Ch347Error::TransferFailed(e.to_string()))?;
 
-        let received = completion.data.len();
-        buffer[..received].copy_from_slice(&completion.data);
+        let received = std::cmp::min(data.len(), buffer.len());
+        buffer[..received].copy_from_slice(&data[..received]);
 
         log::trace!("USB read {} bytes", received);
         Ok(received)
