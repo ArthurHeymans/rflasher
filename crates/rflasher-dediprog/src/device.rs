@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
-use nusb::transfer::{Queue, RequestBuffer};
-use nusb::{Device, Interface};
+use nusb::transfer::{Buffer, Bulk, In, Out};
+use nusb::{Endpoint, Interface, MaybeFuture};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
@@ -102,8 +102,6 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<DediprogConfig> {
 ///
 /// Supports SF100, SF200, SF600, SF600PG2, and SF700 programmers.
 pub struct Dediprog {
-    /// USB device handle
-    _device: Device,
     /// USB interface
     interface: Interface,
     /// Bulk IN endpoint
@@ -133,7 +131,9 @@ impl Dediprog {
     /// Open a Dediprog device with the specified configuration
     pub fn open_with_config(config: DediprogConfig) -> Result<Self> {
         // Find matching devices
-        let devices: Vec<_> = nusb::list_devices()?
+        let devices: Vec<_> = nusb::list_devices()
+            .wait()
+            .map_err(|e| DediprogError::OpenFailed(e.to_string()))?
             .filter(|d| {
                 d.vendor_id() == DEDIPROG_USB_VENDOR && d.product_id() == DEDIPROG_USB_PRODUCT
             })
@@ -177,21 +177,22 @@ impl Dediprog {
     fn try_open_device(device_info: &nusb::DeviceInfo, config: &DediprogConfig) -> Result<Self> {
         log::info!(
             "Opening Dediprog at bus {} address {}",
-            device_info.bus_number(),
+            device_info.busnum(),
             device_info.device_address()
         );
 
         let device = device_info
             .open()
+            .wait()
             .map_err(|e| DediprogError::OpenFailed(e.to_string()))?;
 
         // Claim interface 0
         let interface = device
             .claim_interface(0)
+            .wait()
             .map_err(|e| DediprogError::ClaimFailed(e.to_string()))?;
 
         let mut dediprog = Self {
-            _device: device,
             interface,
             in_endpoint: BULK_IN_EP,
             out_endpoint: BULK_OUT_EP_SF100, // Will be updated based on device type
@@ -261,12 +262,14 @@ impl Dediprog {
 
     /// List all connected Dediprog devices
     pub fn list_devices() -> Result<Vec<DediprogDeviceInfo>> {
-        let devices: Vec<_> = nusb::list_devices()?
+        let devices: Vec<_> = nusb::list_devices()
+            .wait()
+            .map_err(|e| DediprogError::OpenFailed(e.to_string()))?
             .filter(|d| {
                 d.vendor_id() == DEDIPROG_USB_VENDOR && d.product_id() == DEDIPROG_USB_PRODUCT
             })
             .map(|d| DediprogDeviceInfo {
-                bus: d.bus_number(),
+                bus: d.busnum(),
                 address: d.device_address(),
             })
             .collect();
@@ -512,18 +515,20 @@ impl Dediprog {
             nusb::transfer::Recipient::Other
         };
 
-        let result =
-            futures_lite::future::block_on(self.interface.control_in(nusb::transfer::ControlIn {
-                control_type: nusb::transfer::ControlType::Vendor,
-                recipient,
-                request,
-                value,
-                index,
-                length: buf.len() as u16,
-            }));
-
-        let data = result
-            .into_result()
+        let data = self
+            .interface
+            .control_in(
+                nusb::transfer::ControlIn {
+                    control_type: nusb::transfer::ControlType::Vendor,
+                    recipient,
+                    request,
+                    value,
+                    index,
+                    length: buf.len() as u16,
+                },
+                Duration::from_secs(5),
+            )
+            .wait()
             .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
 
         let len = data.len().min(buf.len());
@@ -544,19 +549,19 @@ impl Dediprog {
         index: u16,
         data: &[u8],
     ) -> Result<()> {
-        let result = futures_lite::future::block_on(self.interface.control_out(
-            nusb::transfer::ControlOut {
-                control_type: nusb::transfer::ControlType::Vendor,
-                recipient: nusb::transfer::Recipient::Endpoint,
-                request,
-                value,
-                index,
-                data,
-            },
-        ));
-
-        result
-            .status
+        self.interface
+            .control_out(
+                nusb::transfer::ControlOut {
+                    control_type: nusb::transfer::ControlType::Vendor,
+                    recipient: nusb::transfer::Recipient::Endpoint,
+                    request,
+                    value,
+                    index,
+                    data,
+                },
+                Duration::from_secs(5),
+            )
+            .wait()
             .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
 
         Ok(())
@@ -564,10 +569,17 @@ impl Dediprog {
 
     /// Bulk read
     fn bulk_read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let mut queue: Queue<RequestBuffer> = self.interface.bulk_in_queue(self.in_endpoint);
-        queue.submit(RequestBuffer::new(buf.len()));
+        let mut in_ep: Endpoint<Bulk, In> = self
+            .interface
+            .endpoint(self.in_endpoint)
+            .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
 
-        let completion = futures_lite::future::block_on(queue.next_complete());
+        let max_packet_size = in_ep.max_packet_size();
+        let request_len = ((buf.len() + max_packet_size - 1) / max_packet_size) * max_packet_size;
+        let mut in_buf = Buffer::new(request_len);
+        in_buf.set_requested_len(request_len);
+
+        let completion = in_ep.transfer_blocking(in_buf, Duration::from_secs(5));
         let data = completion
             .into_result()
             .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
@@ -580,12 +592,17 @@ impl Dediprog {
     /// Bulk write
     #[allow(dead_code)]
     fn bulk_write(&mut self, data: &[u8]) -> Result<()> {
-        let mut queue: Queue<Vec<u8>> = self.interface.bulk_out_queue(self.out_endpoint);
-        queue.submit(data.to_vec());
+        let mut out_ep: Endpoint<Bulk, Out> = self
+            .interface
+            .endpoint(self.out_endpoint)
+            .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
 
-        let completion = futures_lite::future::block_on(queue.next_complete());
+        let mut out_buf = Buffer::new(data.len());
+        out_buf.extend_from_slice(data);
+
+        let completion = out_ep.transfer_blocking(out_buf, Duration::from_secs(5));
         completion
-            .status
+            .into_result()
             .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
 
         Ok(())
@@ -619,19 +636,20 @@ impl Dediprog {
         while total_read < read_len {
             let to_read = (read_len - total_read).min(64);
 
-            let result = futures_lite::future::block_on(self.interface.control_in(
-                nusb::transfer::ControlIn {
-                    control_type: nusb::transfer::ControlType::Vendor,
-                    recipient: nusb::transfer::Recipient::Endpoint,
-                    request: Command::Transceive as u8,
-                    value: 0,
-                    index: 0,
-                    length: to_read as u16,
-                },
-            ));
-
-            let data = result
-                .into_result()
+            let data = self
+                .interface
+                .control_in(
+                    nusb::transfer::ControlIn {
+                        control_type: nusb::transfer::ControlType::Vendor,
+                        recipient: nusb::transfer::Recipient::Endpoint,
+                        request: Command::Transceive as u8,
+                        value: 0,
+                        index: 0,
+                        length: to_read as u16,
+                    },
+                    Duration::from_secs(5),
+                )
+                .wait()
                 .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
 
             let len = data.len().min(to_read);

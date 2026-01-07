@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
-use nusb::transfer::{Queue, RequestBuffer};
-use nusb::{Device, Interface};
+use nusb::transfer::{Buffer, Bulk, In, Out};
+use nusb::{Endpoint, MaybeFuture};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
@@ -19,10 +19,10 @@ use crate::protocol::*;
 /// This struct represents a connection to a CH341A USB device and implements
 /// the `SpiMaster` trait for communicating with SPI flash chips.
 pub struct Ch341a {
-    /// USB device handle
-    _device: Device,
-    /// USB interface
-    interface: Interface,
+    /// Bulk OUT endpoint for writes
+    out_ep: Endpoint<Bulk, Out>,
+    /// Bulk IN endpoint for reads
+    in_ep: Endpoint<Bulk, In>,
     /// Accumulated delay for CS handling
     stored_delay_us: u32,
 }
@@ -40,7 +40,9 @@ impl Ch341a {
     ///
     /// Useful when multiple CH341A devices are connected.
     pub fn open_nth(index: usize) -> Result<Self> {
-        let devices: Vec<_> = nusb::list_devices()?
+        let devices: Vec<_> = nusb::list_devices()
+            .wait()
+            .map_err(|e| Ch341aError::OpenFailed(e.to_string()))?
             .filter(|d| d.vendor_id() == CH341A_USB_VENDOR && d.product_id() == CH341A_USB_PRODUCT)
             .collect();
 
@@ -48,12 +50,13 @@ impl Ch341a {
 
         log::info!(
             "Opening CH341A device at bus {} address {}",
-            device_info.bus_number(),
+            device_info.busnum(),
             device_info.device_address()
         );
 
         let device = device_info
             .open()
+            .wait()
             .map_err(|e| Ch341aError::OpenFailed(e.to_string()))?;
 
         // Get device descriptor for version info
@@ -67,11 +70,20 @@ impl Ch341a {
         // Claim interface 0
         let interface = device
             .claim_interface(0)
+            .wait()
+            .map_err(|e| Ch341aError::ClaimFailed(e.to_string()))?;
+
+        // Open bulk endpoints
+        let out_ep = interface
+            .endpoint::<Bulk, Out>(WRITE_EP)
+            .map_err(|e| Ch341aError::ClaimFailed(e.to_string()))?;
+        let in_ep = interface
+            .endpoint::<Bulk, In>(READ_EP)
             .map_err(|e| Ch341aError::ClaimFailed(e.to_string()))?;
 
         let mut ch341a = Self {
-            _device: device,
-            interface,
+            out_ep,
+            in_ep,
             stored_delay_us: 0,
         };
 
@@ -83,10 +95,12 @@ impl Ch341a {
 
     /// List all connected CH341A devices
     pub fn list_devices() -> Result<Vec<Ch341aDeviceInfo>> {
-        let devices: Vec<_> = nusb::list_devices()?
+        let devices: Vec<_> = nusb::list_devices()
+            .wait()
+            .map_err(|e| Ch341aError::OpenFailed(e.to_string()))?
             .filter(|d| d.vendor_id() == CH341A_USB_VENDOR && d.product_id() == CH341A_USB_PRODUCT)
             .map(|d| Ch341aDeviceInfo {
-                bus: d.bus_number(),
+                bus: d.busnum(),
                 address: d.device_address(),
             })
             .collect();
@@ -238,14 +252,13 @@ impl Ch341a {
 
     /// Write data to USB endpoint (blocking)
     fn usb_write(&mut self, data: &[u8]) -> Result<()> {
-        let mut queue: Queue<Vec<u8>> = self.interface.bulk_out_queue(WRITE_EP);
-        queue.submit(data.to_vec());
+        let mut buf = Buffer::new(data.len());
+        buf.extend_from_slice(data);
 
-        // Block on the completion
-        let completion = futures_lite::future::block_on(queue.next_complete());
+        let completion = self.out_ep.transfer_blocking(buf, Duration::from_secs(5));
 
         completion
-            .status
+            .into_result()
             .map_err(|e| Ch341aError::TransferFailed(e.to_string()))?;
 
         log::trace!("USB write {} bytes", data.len());
@@ -257,46 +270,46 @@ impl Ch341a {
         // For the CH341A, we need to handle the quirky packet-based protocol
         // where each 32-byte write packet results in a 31-byte read response.
 
-        let mut out_queue: Queue<Vec<u8>> = self.interface.bulk_out_queue(WRITE_EP);
-        let mut in_queue: Queue<RequestBuffer> = self.interface.bulk_in_queue(READ_EP);
-
-        // Submit write
-        out_queue.submit(write_data.to_vec());
-
-        // Submit reads for expected data
-        // We need to submit enough read requests to cover all expected data
-        // Each read can return up to 31 bytes (packet_size - 1)
-        let num_read_requests = (read_len + CH341_PACKET_LENGTH - 2) / (CH341_PACKET_LENGTH - 1);
-        for _ in 0..num_read_requests {
-            in_queue.submit(RequestBuffer::new(CH341_PACKET_LENGTH - 1));
-        }
-
-        // Wait for write to complete (blocking)
-        let write_completion = futures_lite::future::block_on(out_queue.next_complete());
-
+        // First, write the data
+        let mut out_buf = Buffer::new(write_data.len());
+        out_buf.extend_from_slice(write_data);
+        let write_completion = self
+            .out_ep
+            .transfer_blocking(out_buf, Duration::from_secs(5));
         write_completion
-            .status
+            .into_result()
             .map_err(|e| Ch341aError::TransferFailed(e.to_string()))?;
 
         // Collect read responses (blocking)
         let mut result = Vec::with_capacity(read_len);
         let mut remaining = read_len;
+        let max_packet_size = self.in_ep.max_packet_size();
 
-        for _ in 0..num_read_requests {
-            if remaining == 0 {
-                break;
-            }
+        // We need to read enough data to cover all expected bytes
+        // Each read can return up to max_packet_size bytes
+        while remaining > 0 {
+            // Request length must be multiple of max packet size
+            let request_len =
+                ((std::cmp::min(remaining, CH341_PACKET_LENGTH - 1) + max_packet_size - 1)
+                    / max_packet_size)
+                    * max_packet_size;
+            let mut in_buf = Buffer::new(request_len);
+            in_buf.set_requested_len(request_len);
 
-            let read_completion = futures_lite::future::block_on(in_queue.next_complete());
+            let read_completion = self.in_ep.transfer_blocking(in_buf, Duration::from_secs(5));
 
-            read_completion
-                .status
+            let data = read_completion
+                .into_result()
                 .map_err(|e| Ch341aError::TransferFailed(e.to_string()))?;
 
-            let data = read_completion.data;
             let to_take = std::cmp::min(data.len(), remaining);
             result.extend_from_slice(&data[..to_take]);
             remaining -= to_take;
+
+            // If we got less than expected, stop
+            if data.len() < request_len {
+                break;
+            }
         }
 
         log::trace!(
