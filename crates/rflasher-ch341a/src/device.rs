@@ -289,10 +289,9 @@ impl Ch341a {
         // Each read can return up to max_packet_size bytes
         while remaining > 0 {
             // Request length must be multiple of max packet size
-            let request_len =
-                ((std::cmp::min(remaining, CH341_PACKET_LENGTH - 1) + max_packet_size - 1)
-                    / max_packet_size)
-                    * max_packet_size;
+            let request_len = std::cmp::min(remaining, CH341_PACKET_LENGTH - 1)
+                .div_ceil(max_packet_size)
+                * max_packet_size;
             let mut in_buf = Buffer::new(request_len);
             in_buf.set_requested_len(request_len);
 

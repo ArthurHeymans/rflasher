@@ -379,8 +379,7 @@ impl Ch347 {
     fn usb_read(&mut self, buffer: &mut [u8]) -> Result<usize> {
         let max_packet_size = self.in_ep.max_packet_size();
         // Request length must be multiple of max packet size
-        let request_len =
-            ((buffer.len() + max_packet_size - 1) / max_packet_size) * max_packet_size;
+        let request_len = buffer.len().div_ceil(max_packet_size) * max_packet_size;
         let mut in_buf = Buffer::new(request_len);
         in_buf.set_requested_len(request_len);
 

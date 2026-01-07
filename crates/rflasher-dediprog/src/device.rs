@@ -575,7 +575,7 @@ impl Dediprog {
             .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
 
         let max_packet_size = in_ep.max_packet_size();
-        let request_len = ((buf.len() + max_packet_size - 1) / max_packet_size) * max_packet_size;
+        let request_len = buf.len().div_ceil(max_packet_size) * max_packet_size;
         let mut in_buf = Buffer::new(request_len);
         in_buf.set_requested_len(request_len);
 

@@ -415,8 +415,7 @@ impl Ft4222 {
         while remaining > 0 {
             let request_len = std::cmp::min(remaining + MODEM_STATUS_SIZE, READ_BUFFER_SIZE);
             // Request length must be multiple of max packet size
-            let aligned_len =
-                ((request_len + max_packet_size - 1) / max_packet_size) * max_packet_size;
+            let aligned_len = request_len.div_ceil(max_packet_size) * max_packet_size;
 
             let mut in_buf = Buffer::new(aligned_len);
             in_buf.set_requested_len(aligned_len);
