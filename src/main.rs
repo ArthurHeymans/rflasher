@@ -24,12 +24,19 @@ use rflasher_flash::{open_flash, FlashHandle};
 use rflasher_core::layout::Layout;
 use std::path::{Path, PathBuf};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
     // Initialize logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let cli = Cli::parse();
 
+    if let Err(e) = run(cli) {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // Set log level based on verbosity
     match cli.verbose {
         0 => {} // default (info)
