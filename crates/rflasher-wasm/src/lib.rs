@@ -30,9 +30,11 @@ pub fn main() {
     let web_options = eframe::WebOptions::default();
 
     wasm_bindgen_futures::spawn_local(async {
-        let canvas = web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.get_element_by_id("rflasher_canvas"))
+        let window = web_sys::window().expect("No window");
+        let document = window.document().expect("No document");
+
+        let canvas = document
+            .get_element_by_id("rflasher_canvas")
             .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
             .expect("Failed to find canvas element 'rflasher_canvas'");
 
@@ -44,8 +46,26 @@ pub fn main() {
             )
             .await;
 
-        if let Err(e) = result {
-            log::error!("Failed to start eframe: {:?}", e);
+        match result {
+            Ok(()) => {
+                // Hide the loading screen now that the app is ready
+                if let Some(loading) = document.get_element_by_id("loading") {
+                    if let Some(style) = loading.dyn_ref::<web_sys::HtmlElement>() {
+                        let _ = style.style().set_property("display", "none");
+                    }
+                }
+                log::info!("rflasher-wasm started successfully");
+            }
+            Err(e) => {
+                log::error!("Failed to start eframe: {:?}", e);
+                // Show error in the loading screen
+                if let Some(loading) = document.get_element_by_id("loading") {
+                    loading.set_inner_html(&format!(
+                        "<h1>rflasher</h1><div class=\"error\"><strong>Failed to start</strong><p>{:?}</p></div>",
+                        e
+                    ));
+                }
+            }
         }
     });
 }
