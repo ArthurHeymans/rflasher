@@ -204,14 +204,13 @@ impl<T: Transport> Serprog<T> {
     #[maybe_async]
     pub async fn shutdown(&mut self) {
         // Disable output drivers if supported
-        if self.info.supports_cmd(S_CMD_S_PIN_STATE) {
-            if self
+        if self.info.supports_cmd(S_CMD_S_PIN_STATE)
+            && self
                 .do_command(S_CMD_S_PIN_STATE, &[0], &mut [])
                 .await
                 .is_ok()
-            {
-                log::debug!("serprog: Output drivers disabled");
-            }
+        {
+            log::debug!("serprog: Output drivers disabled");
         }
     }
 

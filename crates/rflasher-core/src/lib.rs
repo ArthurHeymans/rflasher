@@ -28,6 +28,8 @@
 #![no_std]
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
+// Allow async fn in traits - we use maybe-async for dual sync/async support
+#![allow(async_fn_in_trait)]
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

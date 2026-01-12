@@ -3,7 +3,9 @@
 //! This module provides a unified interface for serial and TCP transports.
 //! Uses `maybe_async` to support both sync and async modes.
 
-use crate::error::{Result, SerprogError};
+use crate::error::Result;
+#[cfg(feature = "is_sync")]
+use crate::error::SerprogError;
 use maybe_async::maybe_async;
 
 /// Transport trait for reading and writing bytes

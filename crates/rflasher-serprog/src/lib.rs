@@ -42,6 +42,8 @@
 //! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
+// Allow async fn in traits - we use maybe-async for dual sync/async support
+#![allow(async_fn_in_trait)]
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;

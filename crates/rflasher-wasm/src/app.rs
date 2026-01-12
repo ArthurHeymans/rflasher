@@ -19,8 +19,6 @@ use crate::transport::WebSerialTransport;
 /// This is important in WASM to prevent the async runtime from starving
 /// the browser's event handling (which WebSerial depends on).
 async fn yield_to_browser() {
-    use wasm_bindgen::prelude::*;
-
     let promise = js_sys::Promise::new(&mut |resolve, _| {
         // setTimeout(resolve, 0) yields to the event loop
         let window = web_sys::window().unwrap();
@@ -80,6 +78,7 @@ enum ProgressUpdate {
 }
 
 /// Shared state between UI and async tasks
+#[derive(Default)]
 struct SharedState {
     /// Messages from async tasks
     messages: Vec<AsyncMessage>,
@@ -87,16 +86,6 @@ struct SharedState {
     serprog: Option<Serprog<WebSerialTransport>>,
     /// Whether an async operation is running
     busy: bool,
-}
-
-impl Default for SharedState {
-    fn default() -> Self {
-        Self {
-            messages: Vec::new(),
-            serprog: None,
-            busy: false,
-        }
-    }
 }
 
 type SharedStateRef = Rc<RefCell<SharedState>>;
@@ -259,6 +248,7 @@ pub struct RflasherApp {
 struct ChipInfo {
     chip: FlashChip,
     size: u32,
+    #[allow(dead_code)]
     from_database: bool,
 }
 
@@ -1396,8 +1386,8 @@ async fn save_file_dialog(data: &[u8], filename: &str) -> Result<(), String> {
     let blob_parts = js_sys::Array::new();
     blob_parts.push(&array);
 
-    let mut options = web_sys::BlobPropertyBag::new();
-    options.type_("application/octet-stream");
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type("application/octet-stream");
 
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&blob_parts, &options)
         .map_err(|_| "Failed to create blob")?;

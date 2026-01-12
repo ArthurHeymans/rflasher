@@ -3,6 +3,9 @@
 //! This module provides a WebSerial-based transport that implements the
 //! `Transport` trait from rflasher-serprog for async mode.
 
+// Allow deprecated JsStatic - single-threaded WASM doesn't need thread_local_v2
+#![allow(deprecated)]
+
 use js_sys::Reflect;
 use maybe_async::maybe_async;
 use rflasher_serprog::error::{Result, SerprogError};
