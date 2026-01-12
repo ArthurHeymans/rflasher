@@ -119,14 +119,6 @@ pub struct FeaturesDef {
     /// Supports AAI (Auto Address Increment) word program
     pub aai_word: bool,
 
-    // Erase behavior
-    /// Has 4KB sector erase
-    pub erase_4k: bool,
-    /// Has 32KB block erase
-    pub erase_32k: bool,
-    /// Has 64KB block erase
-    pub erase_64k: bool,
-
     // Status register features
     /// Has status register 2
     pub status_reg_2: bool,
@@ -200,15 +192,6 @@ impl FeaturesDef {
         }
         if self.aai_word {
             flags.push(quote!(Features::AAI_WORD));
-        }
-        if self.erase_4k {
-            flags.push(quote!(Features::ERASE_4K));
-        }
-        if self.erase_32k {
-            flags.push(quote!(Features::ERASE_32K));
-        }
-        if self.erase_64k {
-            flags.push(quote!(Features::ERASE_64K));
         }
         if self.status_reg_2 {
             flags.push(quote!(Features::STATUS_REG_2));

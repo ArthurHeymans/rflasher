@@ -9,7 +9,7 @@
             name: "Pm25LD010(C)",
             device_id: 0x0021,
             total_size: KiB(128),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
@@ -24,7 +24,7 @@
             name: "Pm25LD020(C)",
             device_id: 0x0022,
             total_size: KiB(256),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -39,7 +39,7 @@
             name: "Pm25LD040(C)",
             device_id: 0x007E,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -54,7 +54,7 @@
             name: "Pm25LD256C",
             device_id: 0x002F,
             total_size: KiB(32),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8)]),
@@ -68,7 +68,7 @@
             name: "Pm25LD512(C)",
             device_id: 0x0020,
             total_size: KiB(64),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
@@ -83,7 +83,7 @@
             name: "Pm25LQ016",
             device_id: 0x0045,
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -97,7 +97,7 @@
             name: "Pm25LQ020",
             device_id: 0x0042,
             total_size: KiB(256),
-            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -111,7 +111,7 @@
             name: "Pm25LQ032C",
             device_id: 0x0046,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -126,7 +126,7 @@
             name: "Pm25LQ040",
             device_id: 0x0043,
             total_size: KiB(512),
-            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -140,7 +140,7 @@
             name: "Pm25LQ080",
             device_id: 0x0044,
             total_size: MiB(1),
-            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -154,7 +154,7 @@
             name: "Pm25LV010",
             device_id: 0x007C,
             total_size: KiB(128),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 32)]),
@@ -167,7 +167,7 @@
             name: "Pm25LV010A",
             device_id: 0x007C,
             total_size: KiB(128),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 32)]),
@@ -180,7 +180,7 @@
             name: "Pm25LV016B",
             device_id: 0x0014,
             total_size: MiB(2),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 512)]),
@@ -192,7 +192,7 @@
             name: "Pm25LV020",
             device_id: 0x007D,
             total_size: KiB(256),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 64)]),
@@ -204,7 +204,7 @@
             name: "Pm25LV040",
             device_id: 0x007E,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 128)]),
@@ -217,7 +217,7 @@
             name: "Pm25LV080B",
             device_id: 0x0013,
             total_size: MiB(1),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 256)]),
@@ -231,7 +231,7 @@
             name: "Pm25LV512(A)",
             device_id: 0x007B,
             total_size: KiB(64),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 16)]),

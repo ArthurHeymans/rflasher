@@ -10,7 +10,7 @@
             name: "W25Q16.V",
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -25,7 +25,7 @@
             name: "W25Q32.V",
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -40,7 +40,7 @@
             name: "W25Q64.V",
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -55,7 +55,7 @@
             name: "W25Q128.V",
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -70,7 +70,7 @@
             name: "W25Q256JV_Q",
             device_id: 0x4019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -87,7 +87,7 @@
             name: "W25Q512JV",
             device_id: 0x4020,
             total_size: MiB(64),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -106,7 +106,7 @@
             name: "W25Q16.W",
             device_id: 0x6015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -121,7 +121,7 @@
             name: "W25Q32.W",
             device_id: 0x6016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -136,7 +136,7 @@
             name: "W25Q64.W",
             device_id: 0x6017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -151,7 +151,7 @@
             name: "W25Q128.W",
             device_id: 0x6018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -166,7 +166,7 @@
             name: "W25Q256JW",
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -185,7 +185,7 @@
             name: "W25Q32JV_M",
             device_id: 0x7016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -200,7 +200,7 @@
             name: "W25Q64JV_M",
             device_id: 0x7017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -215,7 +215,7 @@
             name: "W25Q128JV_M",
             device_id: 0x7018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -230,7 +230,7 @@
             name: "W25Q256JV_M",
             device_id: 0x7019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -249,7 +249,7 @@
             name: "W25X10",
             device_id: 0x3011,
             total_size: KiB(128),
-            features: (wrsr_wren: true, fast_read: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
@@ -262,7 +262,7 @@
             name: "W25X20",
             device_id: 0x3012,
             total_size: KiB(256),
-            features: (wrsr_wren: true, fast_read: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -275,7 +275,7 @@
             name: "W25X40",
             device_id: 0x3013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, fast_read: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -288,7 +288,7 @@
             name: "W25X80",
             device_id: 0x3014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, fast_read: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -301,7 +301,7 @@
             name: "W25X16",
             device_id: 0x3015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, fast_read: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -314,7 +314,7 @@
             name: "W25X32",
             device_id: 0x3016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -327,7 +327,7 @@
             name: "W25X64",
             device_id: 0x3017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -340,7 +340,7 @@
             name: "W25P16",
             device_id: 0x2015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 32)]),
@@ -351,7 +351,7 @@
             name: "W25P32",
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 64)]),
@@ -362,7 +362,7 @@
             name: "W25P80",
             device_id: 0x2014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 16)]),
@@ -373,7 +373,7 @@
             name: "W25Q128.V..M",
             device_id: 0x7018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, qpi: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -386,7 +386,7 @@
             name: "W25Q128.JW.DTR",
             device_id: 0x8018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, qpi: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -399,7 +399,7 @@
             name: "W25Q16JV_M",
             device_id: 0x7015,
             total_size: MiB(2),
-            features: (otp: true, qpi: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -413,7 +413,7 @@
             name: "W25Q20.W",
             device_id: 0x5012,
             total_size: KiB(256),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -427,7 +427,7 @@
             name: "W25Q256FV",
             device_id: 0x4019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8192)]),
@@ -440,7 +440,7 @@
             name: "W25Q256JW_DTR",
             device_id: 0x8019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -455,7 +455,7 @@
             name: "W25Q32BV/W25Q32CV/W25Q32DV",
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -468,7 +468,7 @@
             name: "W25Q32FV",
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -481,7 +481,7 @@
             name: "W25Q32JV",
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -494,7 +494,7 @@
             name: "W25Q32JV-.M",
             device_id: 0x7016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -507,7 +507,7 @@
             name: "W25Q32BW/W25Q32CW/W25Q32DW",
             device_id: 0x6016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -520,7 +520,7 @@
             name: "W25Q32FW",
             device_id: 0x6016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -533,7 +533,7 @@
             name: "W25Q32JW...Q",
             device_id: 0x6016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -546,7 +546,7 @@
             name: "W25Q32JW...M",
             device_id: 0x8016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -559,7 +559,7 @@
             name: "W25Q40.V",
             device_id: 0x4013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -574,7 +574,7 @@
             name: "W25Q40BW",
             device_id: 0x5013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -589,7 +589,7 @@
             name: "W25Q40EW",
             device_id: 0x6013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -604,7 +604,7 @@
             name: "W25R512NW/W74M51NW",
             device_id: 0x6020,
             total_size: MiB(64),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -619,7 +619,7 @@
             name: "W25Q512NW-IM",
             device_id: 0x8020,
             total_size: MiB(64),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -634,7 +634,7 @@
             name: "W25Q64BV/W25Q64CV/W25Q64FV",
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -647,7 +647,7 @@
             name: "W25Q64JV-.Q",
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -660,7 +660,7 @@
             name: "W25Q64JV-.M",
             device_id: 0x7017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -673,7 +673,7 @@
             name: "W25Q64DW",
             device_id: 0x6017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -686,7 +686,7 @@
             name: "W25Q64FW/W25Q64JW...Q",
             device_id: 0x6017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, qpi: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -699,7 +699,7 @@
             name: "W25Q64JW...M",
             device_id: 0x8017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, qpi: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -712,7 +712,7 @@
             name: "W25Q80.V",
             device_id: 0x4014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -727,7 +727,7 @@
             name: "W25Q80BW",
             device_id: 0x5014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -740,7 +740,7 @@
             name: "W25Q80EW",
             device_id: 0x6014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -753,7 +753,7 @@
             name: "W25X05",
             device_id: 0x3010,
             total_size: KiB(64),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),

@@ -52,14 +52,6 @@ bitflags! {
         /// Supports AAI (Auto Address Increment) word program
         const AAI_WORD        = 1 << 15;
 
-        // Erase behavior
-        /// Has 4KB sector erase
-        const ERASE_4K        = 1 << 16;
-        /// Has 32KB block erase
-        const ERASE_32K       = 1 << 17;
-        /// Has 64KB block erase
-        const ERASE_64K       = 1 << 18;
-
         // Status register features
         /// Has status register 2
         const STATUS_REG_2    = 1 << 19;

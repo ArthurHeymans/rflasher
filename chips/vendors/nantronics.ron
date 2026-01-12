@@ -9,7 +9,7 @@
             name: "N25S10",
             device_id: 0x3011,
             total_size: KiB(128),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
@@ -24,7 +24,7 @@
             name: "N25S16",
             device_id: 0x3015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -37,7 +37,7 @@
             name: "N25S20",
             device_id: 0x3012,
             total_size: KiB(256),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -52,7 +52,7 @@
             name: "N25S40",
             device_id: 0x3013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -67,7 +67,7 @@
             name: "N25S80",
             device_id: 0x3014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),

@@ -516,16 +516,6 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     // Sort by size (smallest first)
     erase_blocks.sort_by_key(|eb| eb.min_block_size());
 
-    // Set erase feature flags
-    for eb in &erase_blocks {
-        match eb.uniform_size() {
-            Some(4096) => features |= Features::ERASE_4K,
-            Some(32768) => features |= Features::ERASE_32K,
-            Some(65536) => features |= Features::ERASE_64K,
-            _ => {}
-        }
-    }
-
     // Determine write granularity
     let write_granularity = if params.write_granularity_64 {
         WriteGranularity::Page

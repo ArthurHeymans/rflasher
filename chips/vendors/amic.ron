@@ -220,7 +220,7 @@
             name: "A25LQ032/A25LQ32A",
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -234,7 +234,7 @@
             name: "A25LQ16",
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -248,7 +248,7 @@
             name: "A25LQ64",
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, quad_io: true),
+            features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -261,7 +261,7 @@
             name: "A25L010",
             device_id: 0x3011,
             total_size: KiB(128),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
@@ -273,7 +273,7 @@
             name: "A25L016",
             device_id: 0x3015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -285,7 +285,7 @@
             name: "A25L020",
             device_id: 0x3012,
             total_size: KiB(256),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -297,7 +297,7 @@
             name: "A25L032",
             device_id: 0x3016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -312,7 +312,7 @@
             name: "A25L040",
             device_id: 0x3013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -324,7 +324,7 @@
             name: "A25L080",
             device_id: 0x3014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -336,7 +336,7 @@
             name: "A25L512",
             device_id: 0x3010,
             total_size: KiB(64),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
