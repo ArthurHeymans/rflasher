@@ -8,6 +8,7 @@ use crate::error::{Error, Result};
 use crate::flash::device::FlashDevice;
 use crate::programmer::OpaqueMaster;
 use crate::spi::opcodes;
+use maybe_async::maybe_async;
 
 /// Default erase block size for opaque programmers (4KB)
 ///
@@ -75,6 +76,7 @@ impl<M: OpaqueMaster> OpaqueFlashDevice<M> {
     }
 }
 
+#[maybe_async(AFIT)]
 impl<M: OpaqueMaster> FlashDevice for OpaqueFlashDevice<M> {
     fn size(&self) -> u32 {
         self.size
@@ -94,26 +96,26 @@ impl<M: OpaqueMaster> FlashDevice for OpaqueFlashDevice<M> {
         &self.erase_blocks
     }
 
-    fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
+    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
         if !self.is_valid_range(addr, buf.len()) {
             return Err(Error::AddressOutOfBounds);
         }
-        self.master.read(addr, buf)
+        self.master.read(addr, buf).await
     }
 
-    fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+    async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
         if !self.is_valid_range(addr, data.len()) {
             return Err(Error::AddressOutOfBounds);
         }
-        self.master.write(addr, data)
+        self.master.write(addr, data).await
     }
 
-    fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
+    async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
         if !self.is_valid_range(addr, len as usize) {
             return Err(Error::AddressOutOfBounds);
         }
         // Note: We don't check alignment here because the opaque master
         // may handle unaligned erases internally (or return an error)
-        self.master.erase(addr, len)
+        self.master.erase(addr, len).await
     }
 }

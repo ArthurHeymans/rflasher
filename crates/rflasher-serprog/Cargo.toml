@@ -8,12 +8,15 @@ description = "Serial Flasher Protocol (serprog) support for rflasher"
 [features]
 default = ["std"]
 std = ["rflasher-core/std", "serialport", "thiserror"]
+# Sync mode - when enabled, async code is compiled as sync
+is_sync = ["rflasher-core/is_sync", "maybe-async/is_sync"]
 
 [dependencies]
 rflasher-core.workspace = true
 embedded-io.workspace = true
 embedded-io-async.workspace = true
 log.workspace = true
+maybe-async.workspace = true
 
 # std-only dependencies
 serialport = { version = "4.5", optional = true }

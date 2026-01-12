@@ -11,6 +11,8 @@ std = ["alloc", "thiserror", "serde", "ron", "toml", "once_cell/std"]
 alloc = []
 # Static chip database compiled at build time (optional, for no_std or embedded)
 static-chips = ["dep:rflasher-chips-codegen"]
+# Sync mode - when enabled, async code is compiled as sync
+is_sync = ["maybe-async/is_sync"]
 
 [dependencies]
 bitflags.workspace = true
@@ -24,6 +26,7 @@ zerocopy = { version = "0.8", features = ["derive"] }
 log.workspace = true
 heapless.workspace = true
 once_cell.workspace = true
+maybe-async.workspace = true
 
 [build-dependencies]
 rflasher-chips-codegen = { path = "../rflasher-chips-codegen", optional = true }

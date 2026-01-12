@@ -7,6 +7,7 @@ use std::vec;
 
 use crate::flash::{self, FlashContext};
 use crate::programmer::SpiMaster;
+use maybe_async::maybe_async;
 
 use super::{fmap, has_fmap, has_ifd, ifd, is_valid_fmap_header, Layout, LayoutError};
 
@@ -40,14 +41,17 @@ const FMAP_AREA_SIZE: usize = 42;
 /// let layout = read_ifd_from_flash(master, &ctx)?;
 /// println!("Found {} regions", layout.len());
 /// ```
-pub fn read_ifd_from_flash<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn read_ifd_from_flash<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
 ) -> std::result::Result<Layout, LayoutError> {
     // IFD is always at the start - read first 4KB
     let mut buf = vec![0u8; IFD_SIZE];
 
-    flash::read(master, ctx, 0, &mut buf).map_err(|_| LayoutError::IoError)?;
+    flash::read(master, ctx, 0, &mut buf)
+        .await
+        .map_err(|_| LayoutError::IoError)?;
 
     if !has_ifd(&buf) {
         return Err(LayoutError::InvalidIfdSignature);
@@ -75,27 +79,29 @@ pub fn read_ifd_from_flash<M: SpiMaster + ?Sized>(
 /// let layout = read_fmap_from_flash(master, &ctx)?;
 /// println!("Found {} regions", layout.len());
 /// ```
-pub fn read_fmap_from_flash<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn read_fmap_from_flash<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
 ) -> std::result::Result<Layout, LayoutError> {
     let chip_size = ctx.total_size() as u32;
 
     // Try binary search first (common locations at power-of-2 offsets)
-    if let Some(layout) = fmap_bsearch_rom(master, ctx, 0, chip_size, 256)? {
+    if let Some(layout) = fmap_bsearch_rom(master, ctx, 0, chip_size, 256).await? {
         return Ok(layout);
     }
 
     // Fallback to linear search - read the entire flash
     // This is expensive but ensures we find the FMAP if it exists
-    fmap_lsearch_rom(master, ctx, 0, chip_size)
+    fmap_lsearch_rom(master, ctx, 0, chip_size).await
 }
 
 /// Binary search for FMAP at common power-of-2 offsets
 ///
 /// This follows flashprog's approach of checking aligned locations first
 /// since FMAPs are commonly placed at power-of-2 boundaries.
-fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
+#[maybe_async]
+async fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     rom_offset: u32,
@@ -143,7 +149,10 @@ fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
             }
 
             // Read the signature
-            if flash::read(master, ctx, offset, &mut sig_buf).is_err() {
+            if flash::read(master, ctx, offset, &mut sig_buf)
+                .await
+                .is_err()
+            {
                 offset += stride;
                 continue;
             }
@@ -156,7 +165,10 @@ fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
 
             // Found potential FMAP - read and validate the header
             let mut header_buf = vec![0u8; FMAP_HEADER_SIZE];
-            if flash::read(master, ctx, offset, &mut header_buf).is_err() {
+            if flash::read(master, ctx, offset, &mut header_buf)
+                .await
+                .is_err()
+            {
                 offset += stride;
                 continue;
             }
@@ -164,7 +176,7 @@ fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
             // Validate the header
             if is_valid_fmap_header(&header_buf) {
                 // Read the full FMAP including areas
-                if let Ok(layout) = read_fmap_at_offset(master, ctx, offset) {
+                if let Ok(layout) = read_fmap_at_offset(master, ctx, offset).await {
                     return Ok(Some(layout));
                 }
             }
@@ -179,7 +191,8 @@ fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
 }
 
 /// Linear search for FMAP by reading the entire region
-fn fmap_lsearch_rom<M: SpiMaster + ?Sized>(
+#[maybe_async]
+async fn fmap_lsearch_rom<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     rom_offset: u32,
@@ -189,7 +202,9 @@ fn fmap_lsearch_rom<M: SpiMaster + ?Sized>(
     // This is expensive for large chips but necessary as a fallback
     let mut buf = vec![0u8; len as usize];
 
-    flash::read(master, ctx, rom_offset, &mut buf).map_err(|_| LayoutError::IoError)?;
+    flash::read(master, ctx, rom_offset, &mut buf)
+        .await
+        .map_err(|_| LayoutError::IoError)?;
 
     if !has_fmap(&buf) {
         return Err(LayoutError::InvalidFmapSignature);
@@ -199,14 +214,17 @@ fn fmap_lsearch_rom<M: SpiMaster + ?Sized>(
 }
 
 /// Read FMAP from a specific offset in flash
-fn read_fmap_at_offset<M: SpiMaster + ?Sized>(
+#[maybe_async]
+async fn read_fmap_at_offset<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     offset: u32,
 ) -> std::result::Result<Layout, LayoutError> {
     // First read just the header to get the number of areas
     let mut header = vec![0u8; FMAP_HEADER_SIZE];
-    flash::read(master, ctx, offset, &mut header).map_err(|_| LayoutError::IoError)?;
+    flash::read(master, ctx, offset, &mut header)
+        .await
+        .map_err(|_| LayoutError::IoError)?;
 
     if !is_valid_fmap_header(&header) {
         return Err(LayoutError::InvalidFmapSignature);
@@ -217,7 +235,9 @@ fn read_fmap_at_offset<M: SpiMaster + ?Sized>(
 
     // Now read the full FMAP
     let mut fmap_data = vec![0u8; total_size];
-    flash::read(master, ctx, offset, &mut fmap_data).map_err(|_| LayoutError::IoError)?;
+    flash::read(master, ctx, offset, &mut fmap_data)
+        .await
+        .map_err(|_| LayoutError::IoError)?;
 
     fmap::parse_fmap_at(&fmap_data, 0)
 }
@@ -234,17 +254,18 @@ fn read_fmap_at_offset<M: SpiMaster + ?Sized>(
 ///
 /// # Returns
 /// A Layout from either IFD or FMAP, or an error if neither is found.
-pub fn read_layout_from_flash<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn read_layout_from_flash<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
 ) -> std::result::Result<Layout, LayoutError> {
     // Try IFD first (it's at offset 0, so quick to check)
-    if let Ok(layout) = read_ifd_from_flash(master, ctx) {
+    if let Ok(layout) = read_ifd_from_flash(master, ctx).await {
         return Ok(layout);
     }
 
     // Try FMAP
-    read_fmap_from_flash(master, ctx)
+    read_fmap_from_flash(master, ctx).await
 }
 
 #[cfg(test)]

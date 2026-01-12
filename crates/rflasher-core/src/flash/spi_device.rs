@@ -13,6 +13,7 @@ use crate::protocol;
 use crate::wp::{
     self, RangeDecoder, WpBits, WpConfig, WpMode, WpRange, WpRegBitMap, WpResult, WriteOptions,
 };
+use maybe_async::maybe_async;
 
 /// Flash device adapter for SPI-based programmers
 ///
@@ -71,6 +72,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     }
 }
 
+#[maybe_async(AFIT)]
 impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     fn size(&self) -> u32 {
         self.context().total_size() as u32
@@ -95,28 +97,28 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     #[cfg(feature = "alloc")]
-    fn read_wp_config(&mut self) -> WpResult<WpConfig> {
-        SpiFlashDevice::read_wp_config(self)
+    async fn read_wp_config(&mut self) -> WpResult<WpConfig> {
+        SpiFlashDevice::read_wp_config(self).await
     }
 
     #[cfg(feature = "alloc")]
-    fn write_wp_config(&mut self, config: &WpConfig, options: WriteOptions) -> WpResult<()> {
-        SpiFlashDevice::write_wp_config(self, config, options)
+    async fn write_wp_config(&mut self, config: &WpConfig, options: WriteOptions) -> WpResult<()> {
+        SpiFlashDevice::write_wp_config(self, config, options).await
     }
 
     #[cfg(feature = "alloc")]
-    fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
-        SpiFlashDevice::set_wp_mode(self, mode, options)
+    async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
+        SpiFlashDevice::set_wp_mode(self, mode, options).await
     }
 
     #[cfg(feature = "alloc")]
-    fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
-        SpiFlashDevice::set_wp_range(self, range, options)
+    async fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
+        SpiFlashDevice::set_wp_range(self, range, options).await
     }
 
     #[cfg(feature = "alloc")]
-    fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
-        SpiFlashDevice::disable_wp(self, options)
+    async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
+        SpiFlashDevice::disable_wp(self, options).await
     }
 
     #[cfg(feature = "alloc")]
@@ -124,29 +126,29 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         SpiFlashDevice::get_available_wp_ranges(self)
     }
 
-    fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
+    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
         let ctx = self.context();
         if !ctx.is_valid_range(addr, buf.len()) {
             return Err(Error::AddressOutOfBounds);
         }
 
         match ctx.address_mode {
-            AddressMode::ThreeByte => protocol::read_3b(self.master(), addr, buf),
+            AddressMode::ThreeByte => protocol::read_3b(self.master(), addr, buf).await,
             AddressMode::FourByte => {
                 if ctx.use_native_4byte {
-                    protocol::read_4b(self.master(), addr, buf)
+                    protocol::read_4b(self.master(), addr, buf).await
                 } else {
                     // Enter 4-byte mode, read, exit
-                    protocol::enter_4byte_mode(self.master())?;
-                    let result = protocol::read_3b(self.master(), addr, buf);
-                    let _ = protocol::exit_4byte_mode(self.master());
+                    protocol::enter_4byte_mode(self.master()).await?;
+                    let result = protocol::read_3b(self.master(), addr, buf).await;
+                    let _ = protocol::exit_4byte_mode(self.master()).await;
                     result
                 }
             }
         }
     }
 
-    fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+    async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
         let ctx = self.context();
         if !ctx.is_valid_range(addr, data.len()) {
             return Err(Error::AddressOutOfBounds);
@@ -162,7 +164,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
         // Enter 4-byte mode if needed and not using native commands
         if use_4byte && !use_native {
-            protocol::enter_4byte_mode(self.master())?;
+            protocol::enter_4byte_mode(self.master()).await?;
         }
 
         let mut offset = 0usize;
@@ -180,15 +182,15 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             let chunk = &data[offset..offset + chunk_size];
 
             let result = if use_4byte && use_native {
-                protocol::program_page_4b(self.master(), current_addr, chunk)
+                protocol::program_page_4b(self.master(), current_addr, chunk).await
             } else {
-                protocol::program_page_3b(self.master(), current_addr, chunk)
+                protocol::program_page_3b(self.master(), current_addr, chunk).await
             };
 
             if result.is_err() {
                 // Try to exit 4-byte mode before returning error
                 if use_4byte && !use_native {
-                    let _ = protocol::exit_4byte_mode(self.master());
+                    let _ = protocol::exit_4byte_mode(self.master()).await;
                 }
                 return result;
             }
@@ -199,13 +201,13 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
         // Exit 4-byte mode if we entered it
         if use_4byte && !use_native {
-            protocol::exit_4byte_mode(self.master())?;
+            protocol::exit_4byte_mode(self.master()).await?;
         }
 
         Ok(())
     }
 
-    fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
+    async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
         let ctx = self.context();
         if !ctx.is_valid_range(addr, len as usize) {
             return Err(Error::AddressOutOfBounds);
@@ -227,7 +229,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
         // Enter 4-byte mode if needed
         if use_4byte && !use_native {
-            protocol::enter_4byte_mode(self.master())?;
+            protocol::enter_4byte_mode(self.master()).await?;
         }
 
         let mut current_addr = addr;
@@ -258,19 +260,20 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
                 use_4byte && use_native,
                 poll_delay_us,
                 timeout_us,
-            );
+            )
+            .await;
 
             if result.is_err() {
                 if use_4byte && !use_native {
-                    let _ = protocol::exit_4byte_mode(self.master());
+                    let _ = protocol::exit_4byte_mode(self.master()).await;
                 }
                 return result;
             }
 
             // Verify the block was erased
-            if let Err(e) = self.check_erased_range(current_addr, block_size) {
+            if let Err(e) = self.check_erased_range(current_addr, block_size).await {
                 if use_4byte && !use_native {
-                    let _ = protocol::exit_4byte_mode(self.master());
+                    let _ = protocol::exit_4byte_mode(self.master()).await;
                 }
                 return Err(e);
             }
@@ -280,7 +283,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
         // Exit 4-byte mode
         if use_4byte && !use_native {
-            protocol::exit_4byte_mode(self.master())?;
+            protocol::exit_4byte_mode(self.master()).await?;
         }
 
         Ok(())
@@ -292,7 +295,8 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     ///
     /// Uses the `FlashDevice::read` trait method, which differs from
     /// `operations::check_erased_range` that uses the free function `read()`.
-    fn check_erased_range(&mut self, addr: u32, len: u32) -> Result<()> {
+    #[maybe_async]
+    async fn check_erased_range(&mut self, addr: u32, len: u32) -> Result<()> {
         const ERASED_VALUE: u8 = 0xFF;
         const CHUNK_SIZE: usize = 4096;
         let mut buf = [0u8; CHUNK_SIZE];
@@ -302,7 +306,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
             let chunk_len = core::cmp::min(CHUNK_SIZE as u32, len - offset) as usize;
             let chunk_buf = &mut buf[..chunk_len];
 
-            self.read(addr + offset, chunk_buf)?;
+            FlashDevice::read(self, addr + offset, chunk_buf).await?;
 
             if let Some((idx, &found)) = chunk_buf
                 .iter()
@@ -349,27 +353,35 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     }
 
     /// Read current write protection bits
-    pub fn read_wp_bits(&mut self) -> WpResult<WpBits> {
+    #[maybe_async]
+    pub async fn read_wp_bits(&mut self) -> WpResult<WpBits> {
         let bit_map = self.wp_bit_map();
-        wp::read_wp_bits(&mut self.master, &bit_map)
+        wp::read_wp_bits(&mut self.master, &bit_map).await
     }
 
     /// Read current write protection configuration
-    pub fn read_wp_config(&mut self) -> WpResult<WpConfig> {
+    #[maybe_async]
+    pub async fn read_wp_config(&mut self) -> WpResult<WpConfig> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
-        wp::read_wp_config(&mut self.master, &bit_map, total_size, decoder)
+        wp::read_wp_config(&mut self.master, &bit_map, total_size, decoder).await
     }
 
     /// Write write protection bits
-    pub fn write_wp_bits(&mut self, bits: &WpBits, options: WriteOptions) -> WpResult<()> {
+    #[maybe_async]
+    pub async fn write_wp_bits(&mut self, bits: &WpBits, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
-        wp::write_wp_bits(&mut self.master, bits, &bit_map, options)
+        wp::write_wp_bits(&mut self.master, bits, &bit_map, options).await
     }
 
     /// Write write protection configuration
-    pub fn write_wp_config(&mut self, config: &WpConfig, options: WriteOptions) -> WpResult<()> {
+    #[maybe_async]
+    pub async fn write_wp_config(
+        &mut self,
+        config: &WpConfig,
+        options: WriteOptions,
+    ) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
@@ -381,16 +393,19 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
             decoder,
             options,
         )
+        .await
     }
 
     /// Set write protection mode
-    pub fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
+    #[maybe_async]
+    pub async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
-        wp::set_wp_mode(&mut self.master, mode, &bit_map, options)
+        wp::set_wp_mode(&mut self.master, mode, &bit_map, options).await
     }
 
     /// Set protected range
-    pub fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
+    #[maybe_async]
+    pub async fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
@@ -402,12 +417,14 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
             decoder,
             options,
         )
+        .await
     }
 
     /// Disable write protection
-    pub fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
+    #[maybe_async]
+    pub async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
-        wp::disable_wp(&mut self.master, &bit_map, options)
+        wp::disable_wp(&mut self.master, &bit_map, options).await
     }
 
     /// Get all available protection ranges

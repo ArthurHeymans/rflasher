@@ -27,7 +27,7 @@ repository = "https://github.com/user/rflasher"
 
 [workspace.dependencies]
 # Internal crates
-rflasher-core = { path = "crates/rflasher-core", default-features = false }
+rflasher-core = { path = "crates/rflasher-core", default-features = false, features = ["is_sync"] }
 
 # Core
 bitflags = "2"
@@ -54,6 +54,7 @@ prettyplease = "0.2"
 # no_std compatible
 heapless = { version = "0.8", features = ["serde"] }
 once_cell = { version = "1.21", default-features = false }
+maybe-async = "0.2"
 
 [package]
 name = "rflasher"

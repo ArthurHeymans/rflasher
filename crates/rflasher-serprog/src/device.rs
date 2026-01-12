@@ -2,11 +2,13 @@
 //!
 //! This module provides the main `Serprog` struct that implements the
 //! serprog protocol and the `SpiMaster` trait.
+//! Uses `maybe_async` to support both sync and async modes.
 
 use crate::error::{Result, SerprogError};
 use crate::protocol::*;
 use crate::transport::Transport;
 
+use maybe_async::maybe_async;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
@@ -32,7 +34,8 @@ impl<T: Transport> Serprog<T> {
     /// 2. Query interface version
     /// 3. Query command map
     /// 4. Query programmer capabilities
-    pub fn new(transport: T) -> Result<Self> {
+    #[maybe_async]
+    pub async fn new(transport: T) -> Result<Self> {
         let mut serprog = Self {
             transport,
             info: ProgrammerInfo::default(),
@@ -40,22 +43,22 @@ impl<T: Transport> Serprog<T> {
         };
 
         // Synchronize protocol
-        serprog.synchronize()?;
+        serprog.synchronize().await?;
         log::debug!("serprog: Synchronized");
 
         // Query interface version
-        let version = serprog.query_iface()?;
+        let version = serprog.query_iface().await?;
         if version != SERPROG_PROTOCOL_VERSION {
             return Err(SerprogError::UnsupportedVersion(version));
         }
         log::debug!("serprog: Interface version OK ({})", version);
 
         // Query command map
-        serprog.info.cmdmap = serprog.query_cmdmap()?;
+        serprog.info.cmdmap = serprog.query_cmdmap().await?;
         serprog.auto_check = true;
 
         // Query bus types
-        serprog.info.bustypes = serprog.query_bustype().unwrap_or(bus::NONSPI);
+        serprog.info.bustypes = serprog.query_bustype().await.unwrap_or(bus::NONSPI);
         log::debug!(
             "serprog: Bus support: parallel={}, LPC={}, FWH={}, SPI={}",
             (serprog.info.bustypes & bus::PARALLEL) != 0,
@@ -77,10 +80,10 @@ impl<T: Transport> Serprog<T> {
 
         // Set bus type to SPI
         let bt = bus::SPI;
-        serprog.do_command(S_CMD_S_BUSTYPE, &[bt], &mut [])?;
+        serprog.do_command(S_CMD_S_BUSTYPE, &[bt], &mut []).await?;
 
         // Query optional parameters
-        if let Ok(buf) = serprog.do_command_ret::<3>(S_CMD_Q_WRNMAXLEN) {
+        if let Ok(buf) = serprog.do_command_ret::<3>(S_CMD_Q_WRNMAXLEN).await {
             serprog.info.max_write_n = u24_to_u32(&buf);
             log::debug!(
                 "serprog: Maximum write-n length is {}",
@@ -88,7 +91,7 @@ impl<T: Transport> Serprog<T> {
             );
         }
 
-        if let Ok(buf) = serprog.do_command_ret::<3>(S_CMD_Q_RDNMAXLEN) {
+        if let Ok(buf) = serprog.do_command_ret::<3>(S_CMD_Q_RDNMAXLEN).await {
             serprog.info.max_read_n = u24_to_u32(&buf);
             log::debug!(
                 "serprog: Maximum read-n length is {}",
@@ -97,7 +100,7 @@ impl<T: Transport> Serprog<T> {
         }
 
         // Query programmer name
-        if let Ok(name) = serprog.do_command_ret::<16>(S_CMD_Q_PGMNAME) {
+        if let Ok(name) = serprog.do_command_ret::<16>(S_CMD_Q_PGMNAME).await {
             serprog.info.name = name;
             log::info!(
                 "serprog: Programmer name is \"{}\"",
@@ -106,7 +109,7 @@ impl<T: Transport> Serprog<T> {
         }
 
         // Query serial buffer size
-        if let Ok(buf) = serprog.do_command_ret::<2>(S_CMD_Q_SERBUF) {
+        if let Ok(buf) = serprog.do_command_ret::<2>(S_CMD_Q_SERBUF).await {
             serprog.info.serbuf_size = u16::from_le_bytes(buf);
             log::debug!(
                 "serprog: Serial buffer size is {}",
@@ -116,14 +119,17 @@ impl<T: Transport> Serprog<T> {
 
         // Enable output drivers if supported
         if serprog.info.supports_cmd(S_CMD_S_PIN_STATE)
-            && serprog.do_command(S_CMD_S_PIN_STATE, &[1], &mut []).is_ok()
+            && serprog
+                .do_command(S_CMD_S_PIN_STATE, &[1], &mut [])
+                .await
+                .is_ok()
         {
             log::debug!("serprog: Output drivers enabled");
         }
 
         // Set bus type to all supported types
         let bt = serprog.info.bustypes;
-        let _ = serprog.do_command(S_CMD_S_BUSTYPE, &[bt], &mut []);
+        let _ = serprog.do_command(S_CMD_S_BUSTYPE, &[bt], &mut []).await;
 
         Ok(serprog)
     }
@@ -131,7 +137,8 @@ impl<T: Transport> Serprog<T> {
     /// Set the SPI clock frequency in Hz
     ///
     /// Returns the actual frequency set by the programmer.
-    pub fn set_spi_speed(&mut self, freq_hz: u32) -> Result<u32> {
+    #[maybe_async]
+    pub async fn set_spi_speed(&mut self, freq_hz: u32) -> Result<u32> {
         if !self.info.supports_cmd(S_CMD_S_SPI_FREQ) {
             log::warn!("serprog: Setting SPI clock rate is not supported");
             return Err(SerprogError::CommandNotSupported(S_CMD_S_SPI_FREQ));
@@ -139,7 +146,8 @@ impl<T: Transport> Serprog<T> {
 
         let freq_bytes = freq_hz.to_le_bytes();
         let mut ret_buf = [0u8; 4];
-        self.do_command(S_CMD_S_SPI_FREQ, &freq_bytes, &mut ret_buf)?;
+        self.do_command(S_CMD_S_SPI_FREQ, &freq_bytes, &mut ret_buf)
+            .await?;
 
         let actual_freq = u32::from_le_bytes(ret_buf);
         log::info!(
@@ -152,12 +160,13 @@ impl<T: Transport> Serprog<T> {
     }
 
     /// Set which SPI chip select to use (0-255)
-    pub fn set_spi_cs(&mut self, cs: u8) -> Result<()> {
+    #[maybe_async]
+    pub async fn set_spi_cs(&mut self, cs: u8) -> Result<()> {
         if !self.info.supports_cmd(S_CMD_S_SPI_CS) {
             return Err(SerprogError::CommandNotSupported(S_CMD_S_SPI_CS));
         }
 
-        self.do_command(S_CMD_S_SPI_CS, &[cs], &mut [])?;
+        self.do_command(S_CMD_S_SPI_CS, &[cs], &mut []).await?;
         log::debug!("serprog: Using chip select {}", cs);
 
         Ok(())
@@ -171,7 +180,8 @@ impl<T: Transport> Serprog<T> {
     /// Perform an SPI operation
     ///
     /// This is the core function for SPI communication, implementing S_CMD_O_SPIOP.
-    pub fn spi_op(&mut self, write_data: &[u8], read_buf: &mut [u8]) -> Result<()> {
+    #[maybe_async]
+    pub async fn spi_op(&mut self, write_data: &[u8], read_buf: &mut [u8]) -> Result<()> {
         let writecnt = write_data.len();
         let readcnt = read_buf.len();
 
@@ -185,9 +195,24 @@ impl<T: Transport> Serprog<T> {
         params.push(((readcnt >> 16) & 0xFF) as u8);
         params.extend_from_slice(write_data);
 
-        self.do_command(S_CMD_O_SPIOP, &params, read_buf)?;
+        self.do_command(S_CMD_O_SPIOP, &params, read_buf).await?;
 
         Ok(())
+    }
+
+    /// Disable output drivers (called on drop in sync mode)
+    #[maybe_async]
+    pub async fn shutdown(&mut self) {
+        // Disable output drivers if supported
+        if self.info.supports_cmd(S_CMD_S_PIN_STATE) {
+            if self
+                .do_command(S_CMD_S_PIN_STATE, &[0], &mut [])
+                .await
+                .is_ok()
+            {
+                log::debug!("serprog: Output drivers disabled");
+            }
+        }
     }
 
     // ---- Protocol implementation ----
@@ -195,9 +220,10 @@ impl<T: Transport> Serprog<T> {
     /// Synchronize the protocol
     ///
     /// This brings the serial protocol to a known waiting-for-command state.
-    fn synchronize(&mut self) -> Result<()> {
+    #[maybe_async]
+    async fn synchronize(&mut self) -> Result<()> {
         // Try a simple test first
-        if self.test_sync()? {
+        if self.test_sync().await? {
             return Ok(());
         }
 
@@ -205,14 +231,14 @@ impl<T: Transport> Serprog<T> {
 
         // Send 8 NOPs to reset the parser state
         let nops = [S_CMD_NOP; 8];
-        if !self.transport.write_nonblock(&nops, 1)? {
+        if !self.transport.write_nonblock(&nops, 1).await? {
             return Err(SerprogError::SyncFailed);
         }
 
         // Drain any pending data
         let mut buf = [0u8; 512];
         for _ in 0..1024 {
-            let n = self.transport.read_nonblock(&mut buf, 10)?;
+            let n = self.transport.read_nonblock(&mut buf, 10).await?;
             if n == 0 {
                 break;
             }
@@ -220,7 +246,7 @@ impl<T: Transport> Serprog<T> {
 
         // Try sync again up to 8 times
         for _ in 0..8 {
-            if self.test_sync()? {
+            if self.test_sync().await? {
                 return Ok(());
             }
         }
@@ -231,37 +257,38 @@ impl<T: Transport> Serprog<T> {
     /// Test synchronization by sending SYNCNOP
     ///
     /// Returns true if synchronized, false if not.
-    fn test_sync(&mut self) -> Result<bool> {
+    #[maybe_async]
+    async fn test_sync(&mut self) -> Result<bool> {
         // Send SYNCNOP
-        if !self.transport.write_nonblock(&[S_CMD_SYNCNOP], 1)? {
+        if !self.transport.write_nonblock(&[S_CMD_SYNCNOP], 1).await? {
             return Err(SerprogError::IoError("Write failed".into()));
         }
 
         // Try to read NAK
         let mut c = [0u8];
         for _ in 0..10 {
-            let n = self.transport.read_nonblock(&mut c, 50)?;
+            let n = self.transport.read_nonblock(&mut c, 50).await?;
             if n == 0 || c[0] != S_NAK {
                 continue;
             }
 
             // Got NAK, now expect ACK
-            let n = self.transport.read_nonblock(&mut c, 20)?;
+            let n = self.transport.read_nonblock(&mut c, 20).await?;
             if n == 0 || c[0] != S_ACK {
                 continue;
             }
 
             // Send another SYNCNOP to confirm
-            if !self.transport.write_nonblock(&[S_CMD_SYNCNOP], 1)? {
+            if !self.transport.write_nonblock(&[S_CMD_SYNCNOP], 1).await? {
                 return Err(SerprogError::IoError("Write failed".into()));
             }
 
-            let n = self.transport.read_nonblock(&mut c, 500)?;
+            let n = self.transport.read_nonblock(&mut c, 500).await?;
             if n == 0 || c[0] != S_NAK {
                 return Ok(false);
             }
 
-            let n = self.transport.read_nonblock(&mut c, 100)?;
+            let n = self.transport.read_nonblock(&mut c, 100).await?;
             if n == 0 || c[0] != S_ACK {
                 return Ok(false);
             }
@@ -273,7 +300,8 @@ impl<T: Transport> Serprog<T> {
     }
 
     /// Execute a serprog command
-    fn do_command(&mut self, cmd: u8, params: &[u8], ret_buf: &mut [u8]) -> Result<()> {
+    #[maybe_async]
+    async fn do_command(&mut self, cmd: u8, params: &[u8], ret_buf: &mut [u8]) -> Result<()> {
         // Check command availability
         if self.auto_check && !self.info.supports_cmd(cmd) {
             log::debug!("serprog: Command 0x{:02X} not supported", cmd);
@@ -281,16 +309,16 @@ impl<T: Transport> Serprog<T> {
         }
 
         // Send command
-        self.transport.write(&[cmd])?;
+        self.transport.write(&[cmd]).await?;
 
         // Send parameters
         if !params.is_empty() {
-            self.transport.write(params)?;
+            self.transport.write(params).await?;
         }
 
         // Read response
         let mut response = [0u8];
-        self.transport.read(&mut response)?;
+        self.transport.read(&mut response).await?;
 
         if response[0] == S_NAK {
             return Err(SerprogError::Nak(cmd));
@@ -305,49 +333,56 @@ impl<T: Transport> Serprog<T> {
 
         // Read return data
         if !ret_buf.is_empty() {
-            self.transport.read(ret_buf)?;
+            self.transport.read(ret_buf).await?;
         }
 
         Ok(())
     }
 
     /// Execute a command and return the result in a fixed-size array
-    fn do_command_ret<const N: usize>(&mut self, cmd: u8) -> Result<[u8; N]> {
+    #[maybe_async]
+    async fn do_command_ret<const N: usize>(&mut self, cmd: u8) -> Result<[u8; N]> {
         let mut buf = [0u8; N];
-        self.do_command(cmd, &[], &mut buf)?;
+        self.do_command(cmd, &[], &mut buf).await?;
         Ok(buf)
     }
 
     /// Query interface version
-    fn query_iface(&mut self) -> Result<u16> {
+    #[maybe_async]
+    async fn query_iface(&mut self) -> Result<u16> {
         let mut buf = [0u8; 2];
         // Don't use auto_check for Q_IFACE
         let saved = self.auto_check;
         self.auto_check = false;
-        let result = self.do_command(S_CMD_Q_IFACE, &[], &mut buf);
+        let result = self.do_command(S_CMD_Q_IFACE, &[], &mut buf).await;
         self.auto_check = saved;
         result?;
         Ok(u16::from_le_bytes(buf))
     }
 
     /// Query command map
-    fn query_cmdmap(&mut self) -> Result<CommandMap> {
+    #[maybe_async]
+    async fn query_cmdmap(&mut self) -> Result<CommandMap> {
         let mut cmdmap = CommandMap::new();
         // Don't use auto_check for Q_CMDMAP
         let saved = self.auto_check;
         self.auto_check = false;
-        self.do_command(S_CMD_Q_CMDMAP, &[], &mut cmdmap.bitmap)?;
+        self.do_command(S_CMD_Q_CMDMAP, &[], &mut cmdmap.bitmap)
+            .await?;
         self.auto_check = saved;
         Ok(cmdmap)
     }
 
     /// Query bus type
-    fn query_bustype(&mut self) -> Result<u8> {
-        let buf = self.do_command_ret::<1>(S_CMD_Q_BUSTYPE)?;
+    #[maybe_async]
+    async fn query_bustype(&mut self) -> Result<u8> {
+        let buf = self.do_command_ret::<1>(S_CMD_Q_BUSTYPE).await?;
         Ok(buf[0])
     }
 }
 
+// Drop implementation only for sync mode (async requires explicit shutdown)
+#[cfg(feature = "is_sync")]
 impl<T: Transport> Drop for Serprog<T> {
     fn drop(&mut self) {
         // Disable output drivers if supported
@@ -359,6 +394,7 @@ impl<T: Transport> Drop for Serprog<T> {
     }
 }
 
+#[maybe_async(AFIT)]
 impl<T: Transport> SpiMaster for Serprog<T> {
     fn features(&self) -> SpiFeatures {
         // Serprog supports 4-byte addressing (handled in software)
@@ -373,7 +409,7 @@ impl<T: Transport> SpiMaster for Serprog<T> {
         self.info.effective_max_write()
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         // Check that the requested I/O mode is supported
         check_io_mode_supported(cmd.io_mode, self.features())?;
 
@@ -389,16 +425,29 @@ impl<T: Transport> SpiMaster for Serprog<T> {
 
         // Perform SPI operation
         self.spi_op(&write_data, cmd.read_buf)
+            .await
             .map_err(|_| CoreError::ProgrammerError)?;
 
         Ok(())
     }
 
-    fn delay_us(&mut self, us: u32) {
+    async fn delay_us(&mut self, us: u32) {
         // For serprog, we just use a standard delay
         // The protocol has O_DELAY but it's for the operation buffer (non-SPI)
-        #[cfg(feature = "std")]
-        std::thread::sleep(std::time::Duration::from_micros(us as u64));
+        #[cfg(feature = "is_sync")]
+        {
+            #[cfg(feature = "std")]
+            std::thread::sleep(std::time::Duration::from_micros(us as u64));
+        }
+
+        #[cfg(not(feature = "is_sync"))]
+        {
+            // In async mode, we need an async sleep
+            // This will be provided by the runtime (tokio, wasm, etc.)
+            // For now, just a no-op placeholder - actual implementations
+            // should provide a proper async delay
+            let _ = us;
+        }
     }
 }
 

@@ -1,4 +1,6 @@
 //! High-level flash operations
+//!
+//! Uses `maybe_async` to support both sync and async modes.
 
 #[cfg(feature = "alloc")]
 use alloc::vec;
@@ -13,6 +15,7 @@ use crate::chip::WriteGranularity;
 use crate::error::{Error, Result};
 use crate::programmer::SpiMaster;
 use crate::protocol;
+use maybe_async::maybe_async;
 
 use super::context::{AddressMode, FlashContext};
 
@@ -607,11 +610,12 @@ impl ProbeResult {
 /// Returns detailed information about what was found, allowing the caller
 /// to decide how to handle mismatches or unknown chips.
 #[cfg(feature = "std")]
-pub fn probe_detailed<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn probe_detailed<M: SpiMaster + ?Sized>(
     master: &mut M,
     db: &ChipDatabase,
 ) -> Result<ProbeResult> {
-    let (jedec_manufacturer, jedec_device) = protocol::read_jedec_id(master)?;
+    let (jedec_manufacturer, jedec_device) = protocol::read_jedec_id(master).await?;
 
     log::info!(
         "JEDEC ID: manufacturer=0x{:02X}, device=0x{:04X}",
@@ -622,7 +626,7 @@ pub fn probe_detailed<M: SpiMaster + ?Sized>(
     // Try SFDP probing
     log::debug!("Attempting SFDP probe...");
 
-    let sfdp = match crate::sfdp::probe(master) {
+    let sfdp = match crate::sfdp::probe(master).await {
         Ok(info) => {
             log::info!(
                 "SFDP probe successful: {} bytes, page size {} bytes",
@@ -677,7 +681,8 @@ pub fn probe_detailed<M: SpiMaster + ?Sized>(
 ///
 /// Automatically selects the best I/O mode based on programmer and chip capabilities.
 /// Uses dual or quad I/O when both the programmer and chip support it.
-pub fn read<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn read<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
@@ -702,59 +707,59 @@ pub fn read<M: SpiMaster + ?Sized>(
     // Enter 4-byte mode if needed and not using native commands
     let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !ctx.use_native_4byte;
     if enter_exit_4byte {
-        protocol::enter_4byte_mode(master)?;
+        protocol::enter_4byte_mode(master).await?;
     }
 
     let result = match io_mode {
         IoMode::Single => {
             if use_4byte {
-                protocol::read_4b(master, addr, buf)
+                protocol::read_4b(master, addr, buf).await
             } else {
-                protocol::read_3b(master, addr, buf)
+                protocol::read_3b(master, addr, buf).await
             }
         }
         IoMode::DualOut => {
             if use_4byte {
-                protocol::read_dual_out_4b(master, addr, buf)
+                protocol::read_dual_out_4b(master, addr, buf).await
             } else {
-                protocol::read_dual_out_3b(master, addr, buf)
+                protocol::read_dual_out_3b(master, addr, buf).await
             }
         }
         IoMode::DualIo => {
             if use_4byte {
-                protocol::read_dual_io_4b(master, addr, buf)
+                protocol::read_dual_io_4b(master, addr, buf).await
             } else {
-                protocol::read_dual_io_3b(master, addr, buf)
+                protocol::read_dual_io_3b(master, addr, buf).await
             }
         }
         IoMode::QuadOut => {
             if use_4byte {
-                protocol::read_quad_out_4b(master, addr, buf)
+                protocol::read_quad_out_4b(master, addr, buf).await
             } else {
-                protocol::read_quad_out_3b(master, addr, buf)
+                protocol::read_quad_out_3b(master, addr, buf).await
             }
         }
         IoMode::QuadIo => {
             if use_4byte {
-                protocol::read_quad_io_4b(master, addr, buf)
+                protocol::read_quad_io_4b(master, addr, buf).await
             } else {
-                protocol::read_quad_io_3b(master, addr, buf)
+                protocol::read_quad_io_3b(master, addr, buf).await
             }
         }
         IoMode::Qpi => {
             // QPI mode requires special handling - fall back to single for now
             // TODO: Implement QPI read when needed
             if use_4byte {
-                protocol::read_4b(master, addr, buf)
+                protocol::read_4b(master, addr, buf).await
             } else {
-                protocol::read_3b(master, addr, buf)
+                protocol::read_3b(master, addr, buf).await
             }
         }
     };
 
     // Exit 4-byte mode if we entered it
     if enter_exit_4byte {
-        let _ = protocol::exit_4byte_mode(master);
+        let _ = protocol::exit_4byte_mode(master).await;
     }
 
     result
@@ -764,7 +769,8 @@ pub fn read<M: SpiMaster + ?Sized>(
 ///
 /// This function handles page alignment and splitting large writes
 /// into page-sized chunks. The target region must be erased first.
-pub fn write<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn write<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
@@ -780,7 +786,7 @@ pub fn write<M: SpiMaster + ?Sized>(
 
     // Enter 4-byte mode if needed and not using native commands
     if use_4byte && !use_native {
-        protocol::enter_4byte_mode(master)?;
+        protocol::enter_4byte_mode(master).await?;
     }
 
     let mut offset = 0usize;
@@ -796,15 +802,15 @@ pub fn write<M: SpiMaster + ?Sized>(
         let chunk = &data[offset..offset + chunk_size];
 
         let result = if use_4byte && use_native {
-            protocol::program_page_4b(master, current_addr, chunk)
+            protocol::program_page_4b(master, current_addr, chunk).await
         } else {
-            protocol::program_page_3b(master, current_addr, chunk)
+            protocol::program_page_3b(master, current_addr, chunk).await
         };
 
         if result.is_err() {
             // Try to exit 4-byte mode before returning error
             if use_4byte && !use_native {
-                let _ = protocol::exit_4byte_mode(master);
+                let _ = protocol::exit_4byte_mode(master).await;
             }
             return result;
         }
@@ -815,7 +821,7 @@ pub fn write<M: SpiMaster + ?Sized>(
 
     // Exit 4-byte mode if we entered it
     if use_4byte && !use_native {
-        protocol::exit_4byte_mode(master)?;
+        protocol::exit_4byte_mode(master).await?;
     }
 
     Ok(())
