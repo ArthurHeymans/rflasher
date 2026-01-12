@@ -22,8 +22,7 @@ pub fn main() {
     console_error_panic_hook::set_once();
 
     // Initialize logging
-    // TODO: Change to Debug after verifying the backpressure fix works
-    console_log::init_with_level(log::Level::Trace).expect("Failed to initialize logger");
+    console_log::init_with_level(log::Level::Debug).expect("Failed to initialize logger");
 
     log::info!("rflasher-wasm starting...");
 
