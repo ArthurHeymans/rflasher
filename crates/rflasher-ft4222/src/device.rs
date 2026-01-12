@@ -154,11 +154,22 @@ impl Ft4222 {
         // Calculate clock configuration
         let clock_config = find_clock_config(config.speed_khz);
 
+        // Determine control index based on number of interfaces (matching flashprog)
+        // LibFT4222 sets control_index = 1 if there are multiple interfaces, 0 otherwise
+        let num_interfaces = config_desc.num_interfaces();
+        let control_index = if num_interfaces > 1 { 1 } else { 0 };
+
+        log::debug!(
+            "Number of interfaces: {}, control_index: {}",
+            num_interfaces,
+            control_index
+        );
+
         let mut ft4222 = Self {
             interface,
             config,
             clock_config,
-            control_index: iface_num + 1, // Control index is interface + 1
+            control_index,
             in_ep,
             out_ep,
             io_lines: 1, // Start with single I/O
@@ -173,11 +184,12 @@ impl Ft4222 {
     /// Initialize the FT4222H for SPI master mode
     fn init(&mut self) -> Result<()> {
         // Query version info
-        let version = self.get_version()?;
+        let (chip_version, version2, version3) = self.get_version()?;
         log::info!(
-            "FT4222H version: chip=0x{:08X}, dll=0x{:08X}",
-            version.0,
-            version.1
+            "FT4222H version: chip=0x{:08X} (0x{:08X} 0x{:08X})",
+            chip_version,
+            version2,
+            version3
         );
 
         // Query number of channels
@@ -211,10 +223,10 @@ impl Ft4222 {
         Ok(())
     }
 
-    /// Get device version information
-    fn get_version(&self) -> Result<(u32, u32)> {
-        let mut buf = [0u8; 8];
-
+    /// Get device version information (matching flashprog's ft4222_get_version)
+    ///
+    /// Returns (chip_version, version2, version3) - flashprog reads 12 bytes
+    fn get_version(&self) -> Result<(u32, u32, u32)> {
         let data = self
             .interface
             .control_in(
@@ -224,27 +236,31 @@ impl Ft4222 {
                     request: FT4222_INFO_REQUEST,
                     value: FT4222_GET_VERSION,
                     index: self.control_index as u16,
-                    length: 8,
+                    length: 12, // flashprog requests 12 bytes
                 },
                 Duration::from_secs(5),
             )
             .wait()
             .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get version: {}", e)))?;
 
-        if data.len() < 8 {
-            return Err(Ft4222Error::InvalidResponse(
-                "Version response too short".into(),
-            ));
+        if data.len() < 12 {
+            return Err(Ft4222Error::InvalidResponse(format!(
+                "Version response too short: {} < 12",
+                data.len()
+            )));
         }
-        buf.copy_from_slice(&data[..8]);
 
-        let chip_version = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-        let dll_version = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        // flashprog reads these as big-endian
+        let chip_version = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let version2 = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+        let version3 = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
 
-        Ok((chip_version, dll_version))
+        Ok((chip_version, version2, version3))
     }
 
-    /// Get number of CS channels available
+    /// Get number of CS channels available (matching flashprog's ft4222_get_num_channels)
+    ///
+    /// This queries GET_CONFIG and parses the mode byte to determine channel count.
     fn get_num_channels(&self) -> Result<u8> {
         let data = self
             .interface
@@ -253,96 +269,136 @@ impl Ft4222 {
                     control_type: ControlType::Vendor,
                     recipient: Recipient::Device,
                     request: FT4222_INFO_REQUEST,
-                    value: FT4222_GET_NUM_CHANNELS,
+                    value: FT4222_GET_CONFIG,
                     index: self.control_index as u16,
-                    length: 1,
+                    length: 13,
                 },
                 Duration::from_secs(5),
             )
             .wait()
-            .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get channels: {}", e)))?;
+            .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get config: {}", e)))?;
 
         if data.is_empty() {
             return Err(Ft4222Error::InvalidResponse(
-                "Empty response for channel count".into(),
+                "Empty response for config".into(),
             ));
         }
 
-        Ok(data[0])
+        // Parse mode byte to determine number of channels (matching flashprog)
+        let channels = match data[0] {
+            0 => 1, // Mode 0
+            1 => 3, // Mode 1
+            2 => 4, // Mode 2
+            3 => 1, // Mode 3
+            mode => {
+                return Err(Ft4222Error::InvalidResponse(format!(
+                    "Unknown mode byte: 0x{:02x}",
+                    mode
+                )))
+            }
+        };
+
+        log::debug!("FT4222H mode: {}, channels: {}", data[0], channels);
+        Ok(channels)
     }
 
-    /// Reset the device
+    /// Reset the device (matching flashprog's ft4222_reset)
     fn reset(&self) -> Result<()> {
-        // Reset SIO
-        self.control_out(FT4222_RESET_REQUEST, FT4222_RESET_SIO, &[])?;
+        // Reset SIO - note: wIndex = 0, not control_index
+        self.control_out_with_index(FT4222_RESET_REQUEST, FT4222_RESET_SIO, 0, &[])?;
 
-        // Flush buffers
-        self.control_out(FT4222_RESET_REQUEST, FT4222_OUTPUT_FLUSH, &[])?;
-        self.control_out(FT4222_RESET_REQUEST, FT4222_INPUT_FLUSH, &[])?;
+        // Flush output buffer multiple times (flashprog does this 6 times)
+        self.flush()?;
 
         log::debug!("FT4222H reset complete");
         Ok(())
     }
 
+    /// Flush buffers (matching flashprog's ft4222_flush)
+    fn flush(&self) -> Result<()> {
+        // Flush output buffer 6 times (as flashprog does)
+        for _ in 0..6 {
+            if let Err(e) = self.control_out(FT4222_RESET_REQUEST, FT4222_OUTPUT_FLUSH, &[]) {
+                log::warn!("FT4222 output flush failed: {}", e);
+                break;
+            }
+        }
+
+        // Flush input buffer once
+        if let Err(e) = self.control_out(FT4222_RESET_REQUEST, FT4222_INPUT_FLUSH, &[]) {
+            log::warn!("FT4222 input flush failed: {}", e);
+        }
+
+        Ok(())
+    }
+
     /// Set system clock
     fn set_sys_clock(&self, clock: SystemClock) -> Result<()> {
-        self.control_out(
-            FT4222_CONFIG_REQUEST,
-            FT4222_SET_CLOCK,
-            &[clock.index() as u8],
-        )?;
+        self.config_request(FT4222_SET_CLOCK, clock.index() as u8)?;
         log::debug!("Set system clock to {} MHz", clock.to_khz() / 1000);
         Ok(())
     }
 
-    /// Configure SPI master mode
+    /// Configure SPI master mode (matching flashprog's ft4222_configure_spi_master)
     fn configure_spi_master(&mut self) -> Result<()> {
         let cs = self.config.cs;
 
-        // Reset transaction for this CS
-        self.control_out_indexed(FT4222_SPI_RESET_TRANSACTION, cs as u16)?;
+        // Reset transaction for this CS (idx => cs)
+        self.config_request(FT4222_SPI_RESET_TRANSACTION, cs)?;
 
         // Set I/O lines (start with single)
         self.io_lines = 1;
-        self.control_out_indexed(FT4222_SPI_SET_IO_LINES, 1)?;
+        self.config_request(FT4222_SPI_SET_IO_LINES, 1)?;
 
         // Set clock divisor
-        self.control_out_indexed(FT4222_SPI_SET_CLK_DIV, self.clock_config.divisor.value())?;
+        self.config_request(
+            FT4222_SPI_SET_CLK_DIV,
+            self.clock_config.divisor.value() as u8,
+        )?;
 
         // Set clock polarity (idle low for SPI mode 0)
-        self.control_out_indexed(FT4222_SPI_SET_CLK_IDLE, FT4222_CLK_IDLE_LOW)?;
+        self.config_request(FT4222_SPI_SET_CLK_IDLE, FT4222_CLK_IDLE_LOW)?;
 
         // Set clock phase (capture on leading edge for SPI mode 0)
-        self.control_out_indexed(FT4222_SPI_SET_CAPTURE, FT4222_CLK_CAPTURE_LEADING)?;
+        self.config_request(FT4222_SPI_SET_CAPTURE, FT4222_CLK_CAPTURE_LEADING)?;
 
         // Set CS polarity (active low)
-        self.control_out_indexed(FT4222_SPI_SET_CS_ACTIVE, FT4222_CS_ACTIVE_LOW)?;
+        self.config_request(FT4222_SPI_SET_CS_ACTIVE, FT4222_CS_ACTIVE_LOW)?;
 
         // Set CS mask for selected chip select
-        self.control_out_indexed(FT4222_SPI_SET_CS_MASK, 1 << cs)?;
+        self.config_request(FT4222_SPI_SET_CS_MASK, 1 << cs)?;
 
         // Set mode to SPI Master
-        self.control_out(
-            FT4222_CONFIG_REQUEST,
-            FT4222_SET_MODE,
-            &[FT4222_MODE_SPI_MASTER as u8, 0],
-        )?;
+        self.config_request(FT4222_SET_MODE, FT4222_MODE_SPI_MASTER)?;
 
         Ok(())
     }
 
-    /// Set I/O lines mode
+    /// Set I/O lines mode (matching flashprog's ft4222_spi_set_io_lines)
     fn set_io_lines(&mut self, lines: u8) -> Result<()> {
         if lines != self.io_lines {
-            self.control_out_indexed(FT4222_SPI_SET_IO_LINES, lines as u16)?;
+            self.config_request(FT4222_SPI_SET_IO_LINES, lines)?;
+            // Reset line number after changing I/O lines
+            self.config_request(FT4222_SPI_RESET, FT4222_SPI_RESET_LINE_NUM)?;
             self.io_lines = lines;
             log::trace!("Set I/O lines to {}", lines);
         }
         Ok(())
     }
 
-    /// Send a control OUT transfer
+    /// Send a control OUT transfer with default control_index
     fn control_out(&self, request: u8, value: u16, data: &[u8]) -> Result<()> {
+        self.control_out_with_index(request, value, self.control_index as u16, data)
+    }
+
+    /// Send a control OUT transfer with explicit index
+    fn control_out_with_index(
+        &self,
+        request: u8,
+        value: u16,
+        index: u16,
+        data: &[u8],
+    ) -> Result<()> {
         self.interface
             .control_out(
                 ControlOut {
@@ -350,7 +406,7 @@ impl Ft4222 {
                     recipient: Recipient::Device,
                     request,
                     value,
-                    index: self.control_index as u16,
+                    index,
                     data,
                 },
                 Duration::from_secs(5),
@@ -361,16 +417,21 @@ impl Ft4222 {
         Ok(())
     }
 
-    /// Send a control OUT transfer with value in wIndex (for SPI config commands)
-    fn control_out_indexed(&self, command: u16, value: u16) -> Result<()> {
+    /// Send a config request (matching flashprog's ft4222_config_request)
+    ///
+    /// The FT4222H encodes config commands with:
+    /// - wValue = (data << 8) | cmd
+    /// - wIndex = control_index
+    fn config_request(&self, cmd: u8, data: u8) -> Result<()> {
+        let value = ((data as u16) << 8) | (cmd as u16);
         self.interface
             .control_out(
                 ControlOut {
                     control_type: ControlType::Vendor,
                     recipient: Recipient::Device,
                     request: FT4222_CONFIG_REQUEST,
-                    value: command,
-                    index: value,
+                    value,
+                    index: self.control_index as u16,
                     data: &[],
                 },
                 Duration::from_secs(5),
@@ -382,20 +443,48 @@ impl Ft4222 {
     }
 
     /// Write data to bulk OUT endpoint
+    ///
+    /// For large transfers, we split into smaller chunks to avoid USB stalls.
     fn bulk_write(&mut self, data: &[u8]) -> Result<()> {
         let mut out_ep: Endpoint<Bulk, Out> = self
             .interface
             .endpoint(self.out_ep)
             .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
 
-        let mut out_buf = Buffer::new(data.len());
-        out_buf.extend_from_slice(data);
+        // For empty packet (CS deassert), just send it directly
+        if data.is_empty() {
+            let out_buf = Buffer::new(0);
+            let completion = out_ep.transfer_blocking(out_buf, Duration::from_secs(30));
+            completion
+                .into_result()
+                .map_err(|e| Ft4222Error::TransferFailed(format!("Empty packet failed: {}", e)))?;
+            log::trace!("Bulk write empty packet (CS deassert)");
+            return Ok(());
+        }
 
-        let completion = out_ep.transfer_blocking(out_buf, Duration::from_secs(5));
+        // Split large transfers into chunks (max 2048 bytes per transfer)
+        const MAX_CHUNK: usize = 2048;
+        let mut offset = 0;
 
-        completion
-            .into_result()
-            .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
+        while offset < data.len() {
+            let chunk_len = std::cmp::min(MAX_CHUNK, data.len() - offset);
+            let chunk = &data[offset..offset + chunk_len];
+
+            let mut out_buf = Buffer::new(chunk_len);
+            out_buf.extend_from_slice(chunk);
+
+            // Use longer timeout (matching flashprog's 16*2000ms = 32s)
+            let completion = out_ep.transfer_blocking(out_buf, Duration::from_secs(30));
+
+            completion.into_result().map_err(|e| {
+                Ft4222Error::TransferFailed(format!(
+                    "Bulk write failed at offset {}: {}",
+                    offset, e
+                ))
+            })?;
+
+            offset += chunk_len;
+        }
 
         log::trace!("Bulk write {} bytes", data.len());
         Ok(())
@@ -420,11 +509,12 @@ impl Ft4222 {
             let mut in_buf = Buffer::new(aligned_len);
             in_buf.set_requested_len(aligned_len);
 
-            let completion = in_ep.transfer_blocking(in_buf, Duration::from_secs(5));
+            // Use longer timeout (matching flashprog's approach)
+            let completion = in_ep.transfer_blocking(in_buf, Duration::from_secs(30));
 
             let data = completion
                 .into_result()
-                .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
+                .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk read failed: {}", e)))?;
 
             if data.len() < MODEM_STATUS_SIZE {
                 return Err(Ft4222Error::InvalidResponse("Response too short".into()));
@@ -582,14 +672,18 @@ impl SpiMaster for Ft4222 {
     }
 
     fn max_read_len(&self) -> usize {
-        // FT4222 can handle large transfers
-        // Limited by multi-I/O header format (16-bit length)
-        64 * 1024
+        // Limit to smaller chunks to avoid buffer overflow in single-I/O mode.
+        // In single-I/O (full-duplex), every byte sent also receives a byte.
+        // The FT4222's internal RX buffer can overflow if we send too much
+        // without reading. Using smaller transfers works around this.
+        // flashprog uses async transfers to interleave read/write, but we
+        // use blocking transfers, so we need smaller chunks.
+        256
     }
 
     fn max_write_len(&self) -> usize {
-        // Same limit applies
-        64 * 1024
+        // For writes (like page program), we also need smaller chunks
+        256
     }
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {

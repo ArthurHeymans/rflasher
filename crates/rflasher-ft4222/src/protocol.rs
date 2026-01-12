@@ -39,32 +39,37 @@ pub const FT4222_INPUT_FLUSH: u16 = 0x0002;
 
 /// Info command values (wValue for INFO_REQUEST)
 pub const FT4222_GET_VERSION: u16 = 0x0000;
-pub const FT4222_GET_NUM_CHANNELS: u16 = 0x0005;
+pub const FT4222_GET_CONFIG: u16 = 0x0001;
 
-/// Config command values (wValue for CONFIG_REQUEST)
-pub const FT4222_SET_CLOCK: u16 = 0x0004;
-pub const FT4222_SET_MODE: u16 = 0x0005;
-pub const FT4222_SPI_SET_IO_LINES: u16 = 0x0042;
-pub const FT4222_SPI_SET_CS_ACTIVE: u16 = 0x0043;
-pub const FT4222_SPI_SET_CLK_DIV: u16 = 0x0044;
-pub const FT4222_SPI_SET_CLK_IDLE: u16 = 0x0045;
-pub const FT4222_SPI_SET_CAPTURE: u16 = 0x0046;
-pub const FT4222_SPI_SET_CS_MASK: u16 = 0x0048;
-pub const FT4222_SPI_RESET_TRANSACTION: u16 = 0x0049;
-pub const FT4222_SPI_RESET: u16 = 0x004A;
+/// Config command codes (lower byte of wValue for CONFIG_REQUEST)
+/// The data byte goes in the upper byte: wValue = (data << 8) | cmd
+pub const FT4222_SET_CLOCK: u8 = 0x04;
+pub const FT4222_SET_MODE: u8 = 0x05;
+pub const FT4222_SPI_SET_IO_LINES: u8 = 0x42;
+pub const FT4222_SPI_SET_CS_ACTIVE: u8 = 0x43;
+pub const FT4222_SPI_SET_CLK_DIV: u8 = 0x44;
+pub const FT4222_SPI_SET_CLK_IDLE: u8 = 0x45;
+pub const FT4222_SPI_SET_CAPTURE: u8 = 0x46;
+pub const FT4222_SPI_SET_CS_MASK: u8 = 0x48;
+pub const FT4222_SPI_RESET_TRANSACTION: u8 = 0x49;
+pub const FT4222_SPI_RESET: u8 = 0x4A;
 
-/// Mode values (wIndex for SET_MODE)
-pub const FT4222_MODE_SPI_MASTER: u16 = 0x0003;
+/// SPI reset types (data byte for FT4222_SPI_RESET)
+pub const FT4222_SPI_RESET_FULL: u8 = 0;
+pub const FT4222_SPI_RESET_LINE_NUM: u8 = 1;
 
-/// Clock polarity and phase
-pub const FT4222_CLK_IDLE_LOW: u16 = 0x0000;
-pub const FT4222_CLK_IDLE_HIGH: u16 = 0x0001;
-pub const FT4222_CLK_CAPTURE_LEADING: u16 = 0x0000;
-pub const FT4222_CLK_CAPTURE_TRAILING: u16 = 0x0001;
+/// Mode values (data byte for SET_MODE)
+pub const FT4222_MODE_SPI_MASTER: u8 = 3;
 
-/// CS polarity (active low is standard for SPI flash)
-pub const FT4222_CS_ACTIVE_LOW: u16 = 0x0000;
-pub const FT4222_CS_ACTIVE_HIGH: u16 = 0x0080;
+/// Clock polarity and phase (data bytes)
+pub const FT4222_CLK_IDLE_LOW: u8 = 0;
+pub const FT4222_CLK_IDLE_HIGH: u8 = 1;
+pub const FT4222_CLK_CAPTURE_LEADING: u8 = 0;
+pub const FT4222_CLK_CAPTURE_TRAILING: u8 = 1;
+
+/// CS polarity (data byte for SPI_SET_CS_ACTIVE)
+pub const FT4222_CS_ACTIVE_LOW: u8 = 0;
+pub const FT4222_CS_ACTIVE_HIGH: u8 = 1;
 
 // ============================================================================
 // Buffer and transfer sizes
