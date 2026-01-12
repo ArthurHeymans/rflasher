@@ -1,0 +1,55 @@
+[package]
+name = "rflasher-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Web interface for rflasher using egui and WebSerial"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+
+[dependencies]
+# Internal crates (async mode - explicitly NO is_sync feature)
+# We override the workspace dependency to ensure async mode for WASM
+rflasher-core = { path = "../rflasher-core", default-features = false, features = ["std", "alloc"] }
+rflasher-serprog = { path = "../rflasher-serprog", default-features = false, features = ["std"] }
+
+# GUI
+eframe = { version = "0.33", default-features = false, features = [
+    "glow",
+    "web_screen_reader",
+] }
+egui = "0.33"
+egui_extras = "0.33"
+
+# Async runtime for WASM
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+
+# Web API bindings
+web-sys = { version = "0.3", features = [
+    "Navigator",
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "ReadableStream",
+    "WritableStream",
+    "WritableStreamDefaultWriter",
+    "console",
+] }
+
+# maybe-async for Transport trait
+maybe-async.workspace = true
+
+# Logging
+log = { workspace = true }
+console_log = "1"
+console_error_panic_hook = "0.1"
+
+# Async utilities
+futures = "0.3"

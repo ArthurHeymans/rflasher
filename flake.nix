@@ -10,8 +10,16 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      rust-overlay,
+      flake-utils,
+      ...
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
@@ -39,37 +47,52 @@
         };
 
         # Generate cross pkgs for each target
-        mkCrossPkgs = target: import nixpkgs {
-          inherit system overlays;
-          crossSystem.config = target.config;
-        };
+        mkCrossPkgs =
+          target:
+          import nixpkgs {
+            inherit system overlays;
+            crossSystem.config = target.config;
+          };
 
         # Build inputs as a function of pkgs
-        mkBuildInputs = p: with p; [
-          udev
-          libftdi1
-          pciutils
-        ];
+        mkBuildInputs =
+          p: with p; [
+            udev
+            libftdi1
+            pciutils
+          ];
 
-        # Base rust toolchain
+        # Base rust toolchain with WASM target for web builds
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [ "rust-src" "rust-analyzer" ];
+          extensions = [
+            "rust-src"
+            "rust-analyzer"
+          ];
+          targets = [ "wasm32-unknown-unknown" ];
         };
 
         # Rust toolchain with cross targets
         rustToolchainCross = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [ "rust-src" "rust-analyzer" ];
+          extensions = [
+            "rust-src"
+            "rust-analyzer"
+          ];
           targets = lib.mapAttrsToList (_: t: t.rustTarget) crossTargets;
         };
 
         # Create a cross-compilation dev shell for a given target
-        mkCrossDevShell = name: target:
+        mkCrossDevShell =
+          name: target:
           let
             crossPkgs = mkCrossPkgs target;
             crossBuildInputs = mkBuildInputs crossPkgs;
-          in pkgs.mkShell {
+          in
+          pkgs.mkShell {
             buildInputs = crossBuildInputs;
-            nativeBuildInputs = [ pkgs.pkg-config rustToolchainCross ];
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              rustToolchainCross
+            ];
 
             PKG_CONFIG_PATH = lib.makeSearchPath "lib/pkgconfig" crossBuildInputs;
             PKG_CONFIG_SYSROOT_DIR = "${crossPkgs.stdenv.cc.libc}";
@@ -88,10 +111,12 @@
           };
 
         # Create a cross-compiled package for a given target
-        mkCrossPackage = name: target:
+        mkCrossPackage =
+          name: target:
           let
             crossPkgs = mkCrossPkgs target;
-          in crossPkgs.rustPlatform.buildRustPackage {
+          in
+          crossPkgs.rustPlatform.buildRustPackage {
             pname = "rflasher";
             version = "0.1.0";
             src = ./.;
@@ -99,7 +124,10 @@
             cargoLock.lockFile = ./Cargo.lock;
 
             buildInputs = mkBuildInputs crossPkgs;
-            nativeBuildInputs = [ pkgs.pkg-config rustToolchainCross ];
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              rustToolchainCross
+            ];
 
             CARGO_BUILD_TARGET = target.rustTarget;
 
@@ -111,19 +139,25 @@
           };
 
         # Generate all cross dev shells and packages
-        crossDevShells = lib.mapAttrs' (name: target:
-          lib.nameValuePair "cross-${name}" (mkCrossDevShell name target)
+        crossDevShells = lib.mapAttrs' (
+          name: target: lib.nameValuePair "cross-${name}" (mkCrossDevShell name target)
         ) crossTargets;
 
-        crossPackages = lib.mapAttrs' (name: target:
-          lib.nameValuePair "cross-${name}" (mkCrossPackage name target)
+        crossPackages = lib.mapAttrs' (
+          name: target: lib.nameValuePair "cross-${name}" (mkCrossPackage name target)
         ) crossTargets;
 
-      in {
+      in
+      {
         devShells = {
           default = pkgs.mkShell {
             buildInputs = mkBuildInputs pkgs;
-            nativeBuildInputs = [ pkgs.pkg-config rustToolchain pkgs.cargo ];
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              rustToolchain
+              pkgs.cargo
+              pkgs.trunk
+            ];
 
             PKG_CONFIG_PATH = lib.makeSearchPath "lib/pkgconfig" (mkBuildInputs pkgs);
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
@@ -137,6 +171,10 @@
               echo "  cargo test               - Run tests"
               echo "  cargo run -- --help      - Show CLI help"
               echo ""
+              echo "Web build (WASM):"
+              echo "  cd crates/rflasher-wasm && trunk serve  - Dev server"
+              echo "  cd crates/rflasher-wasm && trunk build  - Production build"
+              echo ""
               echo "Cross-compilation shells:"
               echo "  nix develop .#cross-i686    - i686-unknown-linux-gnu"
               echo "  nix develop .#cross-aarch64 - aarch64-unknown-linux-gnu"
@@ -144,7 +182,8 @@
               echo ""
             '';
           };
-        } // crossDevShells;
+        }
+        // crossDevShells;
 
         packages = {
           default = pkgs.rustPlatform.buildRustPackage {
@@ -155,7 +194,11 @@
             cargoLock.lockFile = ./Cargo.lock;
 
             buildInputs = mkBuildInputs pkgs;
-            nativeBuildInputs = [ pkgs.pkg-config rustToolchain pkgs.cargo ];
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              rustToolchain
+              pkgs.cargo
+            ];
 
             meta = with lib; {
               description = "A modern Rust port of flashprog for reading, writing, and erasing flash chips";
@@ -163,7 +206,8 @@
               license = licenses.gpl2Plus;
             };
           };
-        } // crossPackages;
+        }
+        // crossPackages;
       }
     );
 }

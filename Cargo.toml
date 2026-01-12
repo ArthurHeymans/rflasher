@@ -17,6 +17,26 @@ members = [
     "crates/rflasher-dummy",
     "crates/rflasher-raiden",
     "crates/rflasher-repl",
+    "crates/rflasher-wasm",
+]
+# Exclude WASM crate from default build (requires wasm32 target)
+default-members = [
+    "crates/rflasher-core",
+    "crates/rflasher-flash",
+    "crates/rflasher-chips-codegen",
+    "crates/rflasher-ch341a",
+    "crates/rflasher-ch347",
+    "crates/rflasher-dediprog",
+    "crates/rflasher-serprog",
+    "crates/rflasher-ftdi",
+    "crates/rflasher-ft4222",
+    "crates/rflasher-internal",
+    "crates/rflasher-linux-spi",
+    "crates/rflasher-linux-mtd",
+    "crates/rflasher-linux-gpio",
+    "crates/rflasher-dummy",
+    "crates/rflasher-raiden",
+    "crates/rflasher-repl",
 ]
 
 [workspace.package]
@@ -26,8 +46,9 @@ license = "GPL-2.0-or-later"
 repository = "https://github.com/user/rflasher"
 
 [workspace.dependencies]
-# Internal crates
-rflasher-core = { path = "crates/rflasher-core", default-features = false, features = ["is_sync"] }
+# Internal crates - NOTE: is_sync is NOT included here to allow async builds (WASM)
+# Crates that need sync mode should add `features = ["is_sync"]` explicitly
+rflasher-core = { path = "crates/rflasher-core", default-features = false }
 
 # Core
 bitflags = "2"
@@ -86,8 +107,8 @@ repl = ["dep:rflasher-repl"]
 all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden"]
 
 [dependencies]
-rflasher-core = { workspace = true, features = ["std"] }
-rflasher-flash = { path = "crates/rflasher-flash", features = ["std"] }
+rflasher-core = { workspace = true, features = ["std", "is_sync"] }
+rflasher-flash = { path = "crates/rflasher-flash", features = ["std", "is_sync"] }
 rflasher-repl = { path = "crates/rflasher-repl", optional = true }
 clap.workspace = true
 clap_mangen = "0.2"

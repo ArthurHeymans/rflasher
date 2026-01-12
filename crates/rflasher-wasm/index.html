@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>rflasher - Web Flash Programmer</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1a1a1a;
+        }
+        
+        #rflasher_canvas {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            text-align: center;
+        }
+        
+        .loading h1 {
+            margin-bottom: 10px;
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            margin: 20px auto;
+            border: 4px solid #333;
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .error {
+            color: #ff6b6b;
+            padding: 20px;
+            background: #2a2a2a;
+            border-radius: 8px;
+            margin-top: 20px;
+            max-width: 400px;
+        }
+        
+        .browser-warning {
+            color: #ffd93d;
+            padding: 15px;
+            background: #2a2a2a;
+            border-radius: 8px;
+            margin-top: 20px;
+            max-width: 500px;
+        }
+    </style>
+    <link data-trunk rel="rust" data-wasm-opt="z" />
+</head>
+<body>
+    <div class="loading" id="loading">
+        <h1>rflasher</h1>
+        <p>Loading web flash programmer...</p>
+        <div class="spinner"></div>
+        <noscript>
+            <div class="error">
+                <strong>JavaScript Required</strong>
+                <p>Please enable JavaScript to use rflasher.</p>
+            </div>
+        </noscript>
+        <div class="browser-warning" id="browser-warning" style="display: none;">
+            <strong>WebSerial Not Supported</strong>
+            <p>Your browser doesn't support the WebSerial API.</p>
+            <p>Please use Chrome, Edge, or Opera on desktop.</p>
+        </div>
+    </div>
+    
+    <canvas id="rflasher_canvas"></canvas>
+    
+    <script>
+        // Check for WebSerial support
+        if (!('serial' in navigator)) {
+            document.getElementById('browser-warning').style.display = 'block';
+        }
+        
+        // Hide loading screen once WASM is loaded
+        // The WASM module will handle this
+    </script>
+</body>
+</html>
