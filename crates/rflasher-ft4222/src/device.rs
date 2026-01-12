@@ -531,9 +531,11 @@ impl Ft4222 {
         Ok(result)
     }
 
-    /// Perform a single-I/O SPI transfer (full duplex)
+    /// Perform a single-I/O SPI transfer (full duplex) with pipelined USB transfers
     ///
-    /// This is used for standard 1-1-1 mode transfers.
+    /// This is used for standard 1-1-1 mode transfers. Uses pipelining to submit
+    /// all USB transfers before waiting, which prevents RX buffer overflow and
+    /// maximizes throughput.
     fn spi_transfer_single(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         // Set to single I/O mode
         self.set_io_lines(1)?;
@@ -545,28 +547,103 @@ impl Ft4222 {
             return Ok(Vec::new());
         }
 
+        // Get endpoints for pipelined transfers
+        let mut out_ep: Endpoint<Bulk, Out> = self
+            .interface
+            .endpoint(self.out_ep)
+            .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
+
+        let mut in_ep: Endpoint<Bulk, In> = self
+            .interface
+            .endpoint(self.in_ep)
+            .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
+
+        let max_packet_size = in_ep.max_packet_size();
+
         // Build output buffer: write data + dummy bytes for read
-        let mut out_buf = Vec::with_capacity(total_len);
+        let mut out_buf = Buffer::new(total_len);
         out_buf.extend_from_slice(write_data);
-        out_buf.resize(total_len, 0x00); // Dummy bytes for read phase
+        out_buf.extend_fill(read_len, 0x00);
 
-        // Write data
-        self.bulk_write(&out_buf)?;
+        // Calculate read buffer size (must be multiple of max packet size)
+        // Each USB packet has a 2-byte modem status header
+        let bytes_per_packet = max_packet_size - MODEM_STATUS_SIZE;
+        let packets_needed = total_len.div_ceil(bytes_per_packet);
+        let total_read_size = packets_needed * max_packet_size;
 
-        // Send empty packet to deassert CS
-        self.bulk_write(&[])?;
+        // Prepare read buffer
+        let mut in_buf = Buffer::new(total_read_size);
+        in_buf.set_requested_len(total_read_size);
 
-        // Read response (includes bytes shifted during write phase)
-        let response = self.bulk_read(total_len)?;
+        // === PIPELINED TRANSFER SUBMISSION ===
+        // Submit all transfers before waiting - this is the key to performance!
+        // The USB bus stays busy instead of waiting for each operation.
+
+        // 1. Submit write transfer
+        out_ep.submit(out_buf);
+
+        // 2. Submit read transfer (pipelined - submitted before write completes!)
+        in_ep.submit(in_buf);
+
+        // 3. Prepare and submit CS deassert (empty packet)
+        let cs_buf = Buffer::new(0);
+        out_ep.submit(cs_buf);
+
+        // === WAIT FOR COMPLETIONS ===
+        // Now wait for all transfers to complete
+
+        // Wait for write
+        let write_completion = out_ep
+            .wait_next_complete(Duration::from_secs(30))
+            .ok_or(Ft4222Error::Timeout)?;
+        write_completion
+            .status
+            .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk write failed: {e}")))?;
+
+        // Wait for CS deassert
+        let cs_completion = out_ep
+            .wait_next_complete(Duration::from_secs(30))
+            .ok_or(Ft4222Error::Timeout)?;
+        cs_completion
+            .status
+            .map_err(|e| Ft4222Error::TransferFailed(format!("CS deassert failed: {e}")))?;
+
+        // Wait for read
+        let read_completion = in_ep
+            .wait_next_complete(Duration::from_secs(30))
+            .ok_or(Ft4222Error::Timeout)?;
+        read_completion
+            .status
+            .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk read failed: {e}")))?;
+
+        // Parse response: skip modem status bytes from each packet
+        let raw_data = &read_completion.buffer[..read_completion.actual_len];
+        let mut result = Vec::with_capacity(total_len);
+
+        for chunk in raw_data.chunks(max_packet_size) {
+            if chunk.len() > MODEM_STATUS_SIZE {
+                let payload = &chunk[MODEM_STATUS_SIZE..];
+                let remaining = total_len.saturating_sub(result.len());
+                let to_copy = std::cmp::min(payload.len(), remaining);
+                result.extend_from_slice(&payload[..to_copy]);
+            }
+        }
+
+        log::trace!(
+            "SPI transfer: wrote {} bytes, read {} bytes (got {} payload bytes)",
+            write_data.len(),
+            read_len,
+            result.len()
+        );
 
         // Skip bytes received during write phase, return only read data
-        if response.len() >= total_len {
-            Ok(response[write_data.len()..].to_vec())
+        if result.len() >= total_len {
+            Ok(result[write_data.len()..].to_vec())
         } else {
             Err(Ft4222Error::InvalidResponse(format!(
                 "Expected {} bytes, got {}",
                 total_len,
-                response.len()
+                result.len()
             )))
         }
     }
@@ -672,18 +749,15 @@ impl SpiMaster for Ft4222 {
     }
 
     fn max_read_len(&self) -> usize {
-        // Limit to smaller chunks to avoid buffer overflow in single-I/O mode.
-        // In single-I/O (full-duplex), every byte sent also receives a byte.
-        // The FT4222's internal RX buffer can overflow if we send too much
-        // without reading. Using smaller transfers works around this.
-        // flashprog uses async transfers to interleave read/write, but we
-        // use blocking transfers, so we need smaller chunks.
-        256
+        // With pipelined transfers, we can use much larger chunks since
+        // read and write happen concurrently, preventing RX buffer overflow.
+        // flashprog uses 65530, we use a similar large value.
+        65535
     }
 
     fn max_write_len(&self) -> usize {
-        // For writes (like page program), we also need smaller chunks
-        256
+        // With pipelined transfers, writes can also be much larger
+        65535
     }
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
