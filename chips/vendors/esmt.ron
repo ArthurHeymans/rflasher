@@ -10,7 +10,7 @@
             name: "F25L004A",
             device_id: 0x2013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -23,7 +23,7 @@
             name: "F25L008A",
             device_id: 0x2014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -36,7 +36,7 @@
             name: "F25L016A",
             device_id: 0x2015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -49,7 +49,7 @@
             name: "F25L032A",
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -63,7 +63,7 @@
             name: "F25D08QA",
             device_id: 0x3214,
             total_size: MiB(1),
-            features: (wrsr_wren: true, erase_4k: true, erase_32k: true, erase_64k: true, dual_io: true),
+            features: (wrsr_wren: true, dual_io: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -77,7 +77,7 @@
             name: "F49L004UA",
             device_id: 0x4013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true, quad_io: true),
+            features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -90,7 +90,7 @@
             name: "F25L32PA",
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (otp: true, erase_4k: true, erase_64k: true),
+            features: (otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),

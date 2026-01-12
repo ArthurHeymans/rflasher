@@ -9,7 +9,7 @@
             name: "LE25FU106B",
             device_id: 0x001D,
             total_size: KiB(128),
-            features: (wrsr_wren: true, erase_32k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(2), count: 64)]),
@@ -21,7 +21,7 @@
             name: "LE25FU206",
             device_id: 0x0044,
             total_size: KiB(256),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 64)]),
@@ -33,7 +33,7 @@
             name: "LE25FU206A",
             device_id: 0x0612,
             total_size: KiB(256),
-            features: (erase_4k: true, erase_64k: true),
+            features: (),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -47,7 +47,7 @@
             name: "LE25FU406B",
             device_id: 0x001E,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 128)]),
@@ -60,7 +60,7 @@
             name: "LE25FU406C/LE25U40CMC",
             device_id: 0x0613,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -75,7 +75,7 @@
             name: "LE25FW106",
             device_id: 0x0015,
             total_size: KiB(128),
-            features: (wrsr_wren: true, erase_32k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(2), count: 64)]),
@@ -88,7 +88,7 @@
             name: "LE25FW203A",
             device_id: 0x1600,
             total_size: KiB(256),
-            features: (erase_64k: true),
+            features: (),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 4)]),
@@ -99,7 +99,7 @@
             name: "LE25FW403A",
             device_id: 0x1100,
             total_size: KiB(512),
-            features: (erase_64k: true),
+            features: (),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 8)]),
@@ -110,7 +110,7 @@
             name: "LE25FW406A",
             device_id: 0x001A,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 128)]),
@@ -123,7 +123,7 @@
             name: "LE25FW418A",
             device_id: 0x0010,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 128)]),
@@ -135,7 +135,7 @@
             name: "LE25FW806",
             device_id: 0x0026,
             total_size: MiB(1),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -148,7 +148,7 @@
             name: "LE25FW808",
             device_id: 0x0020,
             total_size: MiB(1),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(8), count: 128)]),

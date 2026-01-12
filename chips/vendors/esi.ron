@@ -9,7 +9,7 @@
             name: "ES25P16",
             device_id: 0x2015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 32)]),
@@ -20,7 +20,7 @@
             name: "ES25P40",
             device_id: 0x2013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 8)]),
@@ -31,7 +31,7 @@
             name: "ES25P80",
             device_id: 0x2014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 16)]),

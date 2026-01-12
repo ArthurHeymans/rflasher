@@ -422,8 +422,6 @@ Example chip definition:
         wrsr_wren: true,
         fast_read: true,
         quad_io: true,
-        erase_4k: true,
-        erase_64k: true,
     ),
     voltage: (min: 2700, max: 3600),
     erase_blocks: [

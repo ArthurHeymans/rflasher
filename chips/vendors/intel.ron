@@ -9,7 +9,7 @@
             name: "25F160S33B8",
             device_id: 0x8911,
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 32)]),
@@ -19,7 +19,7 @@
             name: "25F160S33T8",
             device_id: 0x8915,
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 32)]),
@@ -29,7 +29,7 @@
             name: "25F320S33B8",
             device_id: 0x8912,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 64)]),
@@ -39,7 +39,7 @@
             name: "25F320S33T8",
             device_id: 0x8916,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 64)]),
@@ -49,7 +49,7 @@
             name: "25F640S33B8",
             device_id: 0x8913,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 128)]),
@@ -60,7 +60,7 @@
             name: "25F640S33T8",
             device_id: 0x8917,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 128)]),

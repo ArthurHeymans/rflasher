@@ -10,7 +10,7 @@
             name: "S25FL004A",
             device_id: 0x0212,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 8)]),
@@ -22,7 +22,7 @@
             name: "S25FL008A",
             device_id: 0x0213,
             total_size: MiB(1),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 16)]),
@@ -34,7 +34,7 @@
             name: "S25FL016A",
             device_id: 0x0214,
             total_size: MiB(2),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 32)]),
@@ -46,7 +46,7 @@
             name: "S25FL032A",
             device_id: 0x0215,
             total_size: MiB(4),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 64)]),
@@ -58,7 +58,7 @@
             name: "S25FL064A",
             device_id: 0x0216,
             total_size: MiB(8),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 128)]),
@@ -70,7 +70,7 @@
             name: "S25FL128S",
             device_id: 0x2018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 256)]),
@@ -83,7 +83,7 @@
             name: "S25FL256",
             device_id: 0x0219,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8192)]),
@@ -98,7 +98,7 @@
             name: "S25FL128L",
             device_id: 0x6018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -112,7 +112,7 @@
             name: "S25FL256L",
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -131,7 +131,7 @@
             name: "S25FL116K",
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true, quad_io: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -145,7 +145,7 @@
             name: "S25FL132K",
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, quad_io: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -159,7 +159,7 @@
             name: "S25FL164K",
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, quad_io: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -173,7 +173,7 @@
             name: "S25FL032A/P",
             device_id: 0x0215,
             total_size: MiB(4),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 64)]),
@@ -184,7 +184,7 @@
             name: "S25FL064A/P",
             device_id: 0x0216,
             total_size: MiB(8),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 128)]),
@@ -195,7 +195,7 @@
             name: "S25FL116K/S25FL216K",
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -220,7 +220,7 @@
             name: "S25FL127S-64kB",
             device_id: 0x2018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 256)]),
@@ -233,7 +233,7 @@
             name: "S25FL128P......0",
             device_id: 0x2018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(64), count: 256)]),
@@ -258,7 +258,7 @@
             name: "S25FL128S......0",
             device_id: 0x2018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 256)]),
@@ -283,7 +283,7 @@
             name: "S25FL129P......0",
             device_id: 0x2018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 256)]),
@@ -308,7 +308,7 @@
             name: "S25FL204K",
             device_id: 0x4013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -322,7 +322,7 @@
             name: "S25FL208K",
             device_id: 0x4014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, erase_4k: true, erase_64k: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -336,7 +336,7 @@
             name: "S25FL256S......0",
             device_id: 0x0219,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, erase_64k: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 512)]),

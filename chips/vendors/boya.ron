@@ -9,7 +9,7 @@
             name: "BY25Q128FS",
             device_id: 0x4118,
             total_size: MiB(16),
-            features: (otp: true, erase_4k: true, erase_32k: true, erase_64k: true),
+            features: (otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),

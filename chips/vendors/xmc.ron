@@ -10,7 +10,7 @@
             name: "XM25QH64C",
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -24,7 +24,7 @@
             name: "XM25QH128C",
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true),
+            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -38,7 +38,7 @@
             name: "XM25QH256C",
             device_id: 0x4019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true),
+            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8192)]),
@@ -54,7 +54,7 @@
             name: "XM25QU64C",
             device_id: 0x4117,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -68,7 +68,7 @@
             name: "XM25QU128C",
             device_id: 0x4118,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -82,7 +82,7 @@
             name: "XM25QU256C",
             device_id: 0x4119,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, erase_4k: true, erase_32k: true, erase_64k: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8192)]),

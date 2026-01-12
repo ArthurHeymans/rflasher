@@ -94,9 +94,6 @@ struct FeaturesDef {
     sfdp: bool,
     write_byte: bool,
     aai_word: bool,
-    erase_4k: bool,
-    erase_32k: bool,
-    erase_64k: bool,
     status_reg_2: bool,
     status_reg_3: bool,
     qe_sr2: bool,
@@ -156,15 +153,6 @@ impl From<FeaturesDef> for Features {
         }
         if def.aai_word {
             f |= Features::AAI_WORD;
-        }
-        if def.erase_4k {
-            f |= Features::ERASE_4K;
-        }
-        if def.erase_32k {
-            f |= Features::ERASE_32K;
-        }
-        if def.erase_64k {
-            f |= Features::ERASE_64K;
         }
         if def.status_reg_2 {
             f |= Features::STATUS_REG_2;
