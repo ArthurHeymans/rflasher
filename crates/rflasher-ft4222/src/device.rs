@@ -9,8 +9,8 @@
 
 use std::time::Duration;
 
-use nusb::transfer::{ControlIn, ControlOut, ControlType, Queue, Recipient, RequestBuffer};
-use nusb::{Device, Interface};
+use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Out, Recipient};
+use nusb::{Endpoint, Interface, MaybeFuture};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
@@ -36,8 +36,6 @@ use crate::protocol::*;
 /// - Multiple I/O modes: single (1-1-1), dual (1-1-2, 1-2-2), quad (1-1-4, 1-4-4, 4-4-4)
 /// - Pure USB implementation (no vendor library required)
 pub struct Ft4222 {
-    /// USB device handle
-    _device: Device,
     /// USB interface
     interface: Interface,
     /// Current SPI configuration
@@ -78,7 +76,9 @@ impl Ft4222 {
     /// Open the nth FT4222H device with custom configuration
     pub fn open_nth_with_config(index: usize, config: SpiConfig) -> Result<Self> {
         // Find FT4222H devices
-        let devices: Vec<_> = nusb::list_devices()?
+        let devices: Vec<_> = nusb::list_devices()
+            .wait()
+            .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?
             .filter(|d| d.vendor_id() == FTDI_VID && d.product_id() == FT4222H_PID)
             .collect();
 
@@ -86,12 +86,13 @@ impl Ft4222 {
 
         log::info!(
             "Opening FT4222H device at bus {} address {}",
-            device_info.bus_number(),
+            device_info.busnum(),
             device_info.device_address()
         );
 
         let device = device_info
             .open()
+            .wait()
             .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?;
 
         log::debug!(
@@ -110,27 +111,22 @@ impl Ft4222 {
         let mut in_ep: Option<u8> = None;
         let mut out_ep: Option<u8> = None;
 
-        for iface in config_desc.interfaces() {
-            for alt in iface.alt_settings() {
-                // Look for vendor-specific class (0xFF) or interface 0
-                if alt.class() == 0xFF || iface.interface_number() == 0 {
-                    for ep in alt.endpoints() {
-                        if ep.transfer_type() == nusb::transfer::EndpointType::Bulk {
-                            if ep.direction() == nusb::transfer::Direction::In {
-                                in_ep = Some(ep.address());
-                            } else {
-                                out_ep = Some(ep.address());
-                            }
+        for iface in config_desc.interface_alt_settings() {
+            // Look for vendor-specific class (0xFF) or interface 0
+            if iface.class() == 0xFF || iface.interface_number() == 0 {
+                for ep in iface.endpoints() {
+                    if ep.transfer_type() == nusb::descriptors::TransferType::Bulk {
+                        if ep.direction() == nusb::transfer::Direction::In {
+                            in_ep = Some(ep.address());
+                        } else {
+                            out_ep = Some(ep.address());
                         }
                     }
-                    if in_ep.is_some() && out_ep.is_some() {
-                        spi_interface = Some(iface.interface_number());
-                        break;
-                    }
                 }
-            }
-            if spi_interface.is_some() {
-                break;
+                if in_ep.is_some() && out_ep.is_some() {
+                    spi_interface = Some(iface.interface_number());
+                    break;
+                }
             }
         }
 
@@ -152,13 +148,13 @@ impl Ft4222 {
         // Claim interface
         let interface = device
             .claim_interface(iface_num)
+            .wait()
             .map_err(|e| Ft4222Error::ClaimFailed(e.to_string()))?;
 
         // Calculate clock configuration
         let clock_config = find_clock_config(config.speed_khz);
 
         let mut ft4222 = Self {
-            _device: device,
             interface,
             config,
             clock_config,
@@ -219,17 +215,20 @@ impl Ft4222 {
     fn get_version(&self) -> Result<(u32, u32)> {
         let mut buf = [0u8; 8];
 
-        let result = futures_lite::future::block_on(self.interface.control_in(ControlIn {
-            control_type: ControlType::Vendor,
-            recipient: Recipient::Device,
-            request: FT4222_INFO_REQUEST,
-            value: FT4222_GET_VERSION,
-            index: self.control_index as u16,
-            length: 8,
-        }));
-
-        let data = result
-            .into_result()
+        let data = self
+            .interface
+            .control_in(
+                ControlIn {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request: FT4222_INFO_REQUEST,
+                    value: FT4222_GET_VERSION,
+                    index: self.control_index as u16,
+                    length: 8,
+                },
+                Duration::from_secs(5),
+            )
+            .wait()
             .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get version: {}", e)))?;
 
         if data.len() < 8 {
@@ -247,17 +246,20 @@ impl Ft4222 {
 
     /// Get number of CS channels available
     fn get_num_channels(&self) -> Result<u8> {
-        let result = futures_lite::future::block_on(self.interface.control_in(ControlIn {
-            control_type: ControlType::Vendor,
-            recipient: Recipient::Device,
-            request: FT4222_INFO_REQUEST,
-            value: FT4222_GET_NUM_CHANNELS,
-            index: self.control_index as u16,
-            length: 1,
-        }));
-
-        let data = result
-            .into_result()
+        let data = self
+            .interface
+            .control_in(
+                ControlIn {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request: FT4222_INFO_REQUEST,
+                    value: FT4222_GET_NUM_CHANNELS,
+                    index: self.control_index as u16,
+                    length: 1,
+                },
+                Duration::from_secs(5),
+            )
+            .wait()
             .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get channels: {}", e)))?;
 
         if data.is_empty() {
@@ -341,17 +343,19 @@ impl Ft4222 {
 
     /// Send a control OUT transfer
     fn control_out(&self, request: u8, value: u16, data: &[u8]) -> Result<()> {
-        let result = futures_lite::future::block_on(self.interface.control_out(ControlOut {
-            control_type: ControlType::Vendor,
-            recipient: Recipient::Device,
-            request,
-            value,
-            index: self.control_index as u16,
-            data,
-        }));
-
-        result
-            .into_result()
+        self.interface
+            .control_out(
+                ControlOut {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request,
+                    value,
+                    index: self.control_index as u16,
+                    data,
+                },
+                Duration::from_secs(5),
+            )
+            .wait()
             .map_err(|e| Ft4222Error::TransferFailed(format!("Control transfer failed: {}", e)))?;
 
         Ok(())
@@ -359,17 +363,19 @@ impl Ft4222 {
 
     /// Send a control OUT transfer with value in wIndex (for SPI config commands)
     fn control_out_indexed(&self, command: u16, value: u16) -> Result<()> {
-        let result = futures_lite::future::block_on(self.interface.control_out(ControlOut {
-            control_type: ControlType::Vendor,
-            recipient: Recipient::Device,
-            request: FT4222_CONFIG_REQUEST,
-            value: command,
-            index: value,
-            data: &[],
-        }));
-
-        result
-            .into_result()
+        self.interface
+            .control_out(
+                ControlOut {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request: FT4222_CONFIG_REQUEST,
+                    value: command,
+                    index: value,
+                    data: &[],
+                },
+                Duration::from_secs(5),
+            )
+            .wait()
             .map_err(|e| Ft4222Error::TransferFailed(format!("Control transfer failed: {}", e)))?;
 
         Ok(())
@@ -377,13 +383,18 @@ impl Ft4222 {
 
     /// Write data to bulk OUT endpoint
     fn bulk_write(&mut self, data: &[u8]) -> Result<()> {
-        let mut queue: Queue<Vec<u8>> = self.interface.bulk_out_queue(self.out_ep);
-        queue.submit(data.to_vec());
+        let mut out_ep: Endpoint<Bulk, Out> = self
+            .interface
+            .endpoint(self.out_ep)
+            .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
 
-        let completion = futures_lite::future::block_on(queue.next_complete());
+        let mut out_buf = Buffer::new(data.len());
+        out_buf.extend_from_slice(data);
+
+        let completion = out_ep.transfer_blocking(out_buf, Duration::from_secs(5));
 
         completion
-            .status
+            .into_result()
             .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
 
         log::trace!("Bulk write {} bytes", data.len());
@@ -392,22 +403,29 @@ impl Ft4222 {
 
     /// Read data from bulk IN endpoint
     fn bulk_read(&mut self, len: usize) -> Result<Vec<u8>> {
+        let mut in_ep: Endpoint<Bulk, In> = self
+            .interface
+            .endpoint(self.in_ep)
+            .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
+
+        let max_packet_size = in_ep.max_packet_size();
         let mut result = Vec::new();
         let mut remaining = len;
 
         while remaining > 0 {
             let request_len = std::cmp::min(remaining + MODEM_STATUS_SIZE, READ_BUFFER_SIZE);
+            // Request length must be multiple of max packet size
+            let aligned_len = request_len.div_ceil(max_packet_size) * max_packet_size;
 
-            let mut queue: Queue<RequestBuffer> = self.interface.bulk_in_queue(self.in_ep);
-            queue.submit(RequestBuffer::new(request_len));
+            let mut in_buf = Buffer::new(aligned_len);
+            in_buf.set_requested_len(aligned_len);
 
-            let completion = futures_lite::future::block_on(queue.next_complete());
+            let completion = in_ep.transfer_blocking(in_buf, Duration::from_secs(5));
 
-            completion
-                .status
+            let data = completion
+                .into_result()
                 .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
 
-            let data = &completion.data;
             if data.len() < MODEM_STATUS_SIZE {
                 return Err(Ft4222Error::InvalidResponse("Response too short".into()));
             }
@@ -532,10 +550,12 @@ impl Ft4222 {
 
     /// List all connected FT4222H devices
     pub fn list_devices() -> Result<Vec<Ft4222DeviceInfo>> {
-        let devices: Vec<_> = nusb::list_devices()?
+        let devices: Vec<_> = nusb::list_devices()
+            .wait()
+            .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?
             .filter(|d| d.vendor_id() == FTDI_VID && d.product_id() == FT4222H_PID)
             .map(|d| Ft4222DeviceInfo {
-                bus: d.bus_number(),
+                bus: d.busnum(),
                 address: d.device_address(),
             })
             .collect();

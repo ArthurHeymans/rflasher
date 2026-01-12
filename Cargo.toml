@@ -39,7 +39,7 @@ log = "0.4"
 thiserror = "2"
 env_logger = "0.11"
 tokio = { version = "1", features = ["full"] }
-nusb = "0.1"
+nusb = "0.2.1"
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.17"
 
@@ -62,7 +62,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "linux-spi", "linux-mtd", "internal", "raiden"]
+default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden"]
 
 # Programmer features (passed through to rflasher-flash)
 dummy = ["rflasher-flash/dummy"]

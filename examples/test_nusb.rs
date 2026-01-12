@@ -1,9 +1,11 @@
 //! Quick test to see what nusb finds
 
+use nusb::MaybeFuture;
+
 fn main() {
     println!("Listing all USB devices with VID 0x18D1 (Google)...\n");
 
-    for dev_info in nusb::list_devices().unwrap() {
+    for dev_info in nusb::list_devices().wait().unwrap() {
         if dev_info.vendor_id() != 0x18D1 {
             continue;
         }
@@ -15,7 +17,7 @@ fn main() {
         );
         println!(
             "  Bus: {}, Address: {}",
-            dev_info.bus_number(),
+            dev_info.busnum(),
             dev_info.device_address()
         );
         println!("  Product: {:?}", dev_info.product_string());
@@ -42,7 +44,7 @@ fn main() {
 
         // Try to open and get config descriptor
         println!("  Interfaces from active_configuration():");
-        match dev_info.open() {
+        match dev_info.open().wait() {
             Ok(device) => match device.active_configuration() {
                 Ok(config) => {
                     for iface in config.interface_alt_settings() {
