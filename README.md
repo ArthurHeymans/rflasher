@@ -41,21 +41,30 @@ Currently, rflasher supports the following programmers:
 
 ## Supported Flash Chips
 
-Currently includes **215 flash chips** from:
+Currently includes **482 flash chips** from:
 
-- **AMIC** - A25L series (14 chips)
-- **Atmel** - AT25DF and AT26DF series (25 chips)
-- **EON** - EN25 series (10 chips)
-- **ESMT** - F25L series (6 chips)
-- **GigaDevice** - GD25Q, GD25LQ, and GD25WQ series (30 chips)
+- **AMIC** - A25L and A25LQ series (21 chips)
+- **Atmel** - AT25DF and AT26DF series (31 chips)
+- **Boya** - BY25Q series (10 chips)
+- **Eon** - EN25F, EN25Q, EN25QH, EN25B, EN25P, and EN25S series (47 chips)
+- **ESI** - ES25P series (3 chips)
+- **ESMT** - F25L series (7 chips)
+- **Fudan** - FM25F and FM25Q series (12 chips)
+- **GigaDevice** - GD25Q, GD25LQ, GD25WQ, GD25VQ, GD25B, GD25LB, GD25LE, and GD25LR series (61 chips)
+- **Intel** - 25F series (6 chips)
 - **ISSI** - IS25LP and IS25WP series (10 chips)
-- **Macronix** - MX25L, MX25U, MX25R, and MX66 series (35 chips)
-- **Micron/Numonyx** - N25Q, MT25Q, and M25P series (23 chips)
-- **Spansion** - S25FL series (12 chips)
-- **SST** - SST25VF series (15 chips)
-- **Winbond** - W25Q and W25X series (22 chips)
-- **XMC** - XM25QH series (6 chips)
-- **XTX** - XT25F series (7 chips)
+- **Macronix** - MX25L, MX25U, MX25R, and MX66 series (53 chips)
+- **Micron/Numonyx** - N25Q, MT25Q, MT25QL, MT25QU, and M25P series (55 chips)
+- **Nantronics** - N25S series (5 chips)
+- **PMC** - Pm25L series (17 chips)
+- **Puya** - P25Q and PY25Q/PY25F/PY25R series (30 chips)
+- **Sanyo** - LE25FU and LE25FW series (12 chips)
+- **Spansion** - S25FL series (27 chips)
+- **SST** - SST25VF, SST25LF, SST25WF, and SST26VF series (34 chips)
+- **Winbond** - W25Q, W25X, W25P, and W25R series (54 chips)
+- **XMC** - XM25QH and XM25QU series (6 chips)
+- **XTX** - XT25F series (11 chips)
+- **Zetta** - ZD25D and ZD25LQ series (4 chips)
 
 Chip definitions are stored as RON files in `chips/vendors/` and can be easily extended. See the [chip database structure](chips/vendors/) for examples.
 
@@ -441,7 +450,7 @@ See existing programmer crates for examples.
 
 The following features are planned for future development:
 
-- [ ] **Port more flash chips** - The original flashprog has ~600 chip definitions; we currently have 215
+- [x] **Port more flash chips** - Ported 482 out of ~495 SPI flash chips from flashprog (97% coverage)
 - [ ] **Add more SPI programmers** - Port remaining SPI programmers from flashprog
 - [x] **Intel/AMD Internal Programmer** - Support for reading/writing via chipset SPI controllers
 - [x] **Optimal erase algorithm** - Minimize erase operations by using largest possible erase blocks
