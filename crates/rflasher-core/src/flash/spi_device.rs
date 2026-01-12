@@ -70,6 +70,11 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     pub fn into_context(self) -> FlashContext {
         self.ctx
     }
+
+    /// Consume the adapter and return both the SPI master and flash context
+    pub fn into_parts(self) -> (M, FlashContext) {
+        (self.master, self.ctx)
+    }
 }
 
 #[maybe_async(AFIT)]

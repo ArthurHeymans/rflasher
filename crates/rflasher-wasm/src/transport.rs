@@ -3,12 +3,11 @@
 //! This module provides a WebSerial-based transport that implements the
 //! `Transport` trait from rflasher-serprog for async mode.
 
-use js_sys::{Object, Reflect, Uint8Array};
+use js_sys::Reflect;
 use maybe_async::maybe_async;
 use rflasher_serprog::error::{Result, SerprogError};
 use rflasher_serprog::Transport;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::JsFuture;
 
 // WebSerial API bindings (not yet in stable web-sys)
 #[wasm_bindgen]
@@ -56,6 +55,9 @@ extern "C" {
         chunk: &JsValue,
     ) -> std::result::Result<(), JsValue>;
 
+    #[wasm_bindgen(method, getter)]
+    pub fn ready(this: &WritableStreamDefaultWriter) -> js_sys::Promise;
+
     #[wasm_bindgen(method, js_name = releaseLock)]
     pub fn release_lock_writer(this: &WritableStreamDefaultWriter);
 }
@@ -93,6 +95,19 @@ impl WebSerialTransport {
         let options = js_sys::Object::new();
         Reflect::set(&options, &"baudRate".into(), &baud_rate.into())
             .map_err(|_| SerprogError::ConnectionFailed("Failed to set baudRate".to_string()))?;
+
+        // Set a larger buffer size (default is 255 bytes, we want more for bulk transfers)
+        Reflect::set(&options, &"bufferSize".into(), &(64 * 1024u32).into())
+            .map_err(|_| SerprogError::ConnectionFailed("Failed to set bufferSize".to_string()))?;
+
+        // Use hardware flow control if the device supports it
+        Reflect::set(&options, &"flowControl".into(), &"hardware".into())
+            .map_err(|_| SerprogError::ConnectionFailed("Failed to set flowControl".to_string()))?;
+
+        log::info!(
+            "Opening port with baudRate={}, bufferSize=64KB, flowControl=hardware",
+            baud_rate
+        );
 
         // Open the port
         port.open(&options.into())
@@ -165,7 +180,7 @@ impl WebSerialTransport {
         let value = Reflect::get(&result, &JsValue::from_str("value"))
             .map_err(|_| SerprogError::IoError("Failed to get value".to_string()))?;
 
-        let array: Uint8Array = value
+        let array: js_sys::Uint8Array = value
             .dyn_into()
             .map_err(|_| SerprogError::IoError("Value is not Uint8Array".to_string()))?;
 
@@ -176,7 +191,14 @@ impl WebSerialTransport {
 #[maybe_async(AFIT)]
 impl Transport for WebSerialTransport {
     async fn write(&mut self, data: &[u8]) -> Result<()> {
-        let array = Uint8Array::from(data);
+        log::trace!("transport write: {} bytes", data.len());
+
+        // Wait for writer to be ready (handles backpressure)
+        wasm_bindgen_futures::JsFuture::from(self.writer.ready())
+            .await
+            .map_err(|e| SerprogError::IoError(format!("Writer not ready: {:?}", e)))?;
+
+        let array = js_sys::Uint8Array::from(data);
         self.writer
             .write_chunk(&array.into())
             .await
@@ -185,6 +207,7 @@ impl Transport for WebSerialTransport {
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> Result<()> {
+        log::trace!("transport read: requesting {} bytes", buf.len());
         let mut offset = 0;
 
         // First, drain any buffered data
@@ -193,11 +216,14 @@ impl Transport for WebSerialTransport {
             buf[..to_copy].copy_from_slice(&self.read_buffer[..to_copy]);
             self.read_buffer.drain(..to_copy);
             offset = to_copy;
+            log::trace!("  drained {} bytes from buffer", to_copy);
         }
 
         // Read more chunks until we have enough
         while offset < buf.len() {
+            log::trace!("  reading chunk, have {}/{} bytes", offset, buf.len());
             let chunk = self.read_chunk().await?;
+            log::trace!("  got chunk of {} bytes", chunk.len());
             let remaining = buf.len() - offset;
 
             if chunk.len() <= remaining {
@@ -211,6 +237,7 @@ impl Transport for WebSerialTransport {
             }
         }
 
+        log::trace!("transport read: complete");
         Ok(())
     }
 
