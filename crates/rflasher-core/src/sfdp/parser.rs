@@ -708,8 +708,13 @@ pub fn compare_with_chip(info: &SfdpInfo, chip: &FlashChip) -> Vec<SfdpMismatch>
         }
     }
 
-    // Check for database erase types not in SFDP (only uniform blocks)
-    for db_eb in chip.erase_blocks().iter().filter(|eb| eb.is_uniform()) {
+    // Check for database erase types not in SFDP (only uniform sector/block erase, not chip erase)
+    // SFDP BFPT only defines 4 erase types for sector/block erase; chip erase (0x60/0xC7) is not encoded
+    for db_eb in chip
+        .erase_blocks()
+        .iter()
+        .filter(|eb| eb.is_uniform() && !eb.is_chip_erase())
+    {
         if let Some(size) = db_eb.uniform_size() {
             if !sfdp_erase.iter().any(|e| e.size == size) {
                 mismatches.push(SfdpMismatch::ExtraEraseBlock {
