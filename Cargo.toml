@@ -21,6 +21,7 @@ members = [
 ]
 # Exclude WASM crate from default build (requires wasm32 target)
 default-members = [
+    ".",
     "crates/rflasher-core",
     "crates/rflasher-flash",
     "crates/rflasher-chips-codegen",
