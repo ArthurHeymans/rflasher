@@ -8,15 +8,14 @@
 // Allow deprecated JsStatic - single-threaded WASM doesn't need thread_local_v2
 #![allow(deprecated)]
 
-use js_sys::Reflect;
 use maybe_async::maybe_async;
 use rflasher_serprog::error::{Result, SerprogError};
 use rflasher_serprog::Transport;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    FlowControlType, ReadableStreamDefaultReader, SerialOptions, SerialPort,
-    WritableStreamDefaultWriter,
+    FlowControlType, ReadableStream, ReadableStreamDefaultReader, ReadableStreamReadResult,
+    SerialOptions, SerialPort, WritableStreamDefaultWriter,
 };
 
 // Minimal binding to access navigator.serial (not directly exposed in web-sys Navigator)
@@ -59,7 +58,7 @@ impl WebSerialTransport {
         let options = SerialOptions::new(baud_rate);
 
         // Set a larger buffer size (default is 255 bytes, we want more for bulk transfers)
-        options.set_buffer_size(64 * 1024);
+        //options.set_buffer_size(64 * 1024);
 
         // Use hardware flow control if the device supports it
         options.set_flow_control(FlowControlType::Hardware);
@@ -75,9 +74,11 @@ impl WebSerialTransport {
             .await
             .map_err(|e| SerprogError::ConnectionFailed(format!("Failed to open port: {:?}", e)))?;
 
-        // Get reader from readable stream
-        let readable = port.readable();
-        let reader: ReadableStreamDefaultReader = readable.get_reader().unchecked_into();
+        // Get reader from readable stream using web-sys constructor
+        let readable: ReadableStream = port.readable();
+        let reader = ReadableStreamDefaultReader::new(&readable).map_err(|e| {
+            SerprogError::ConnectionFailed(format!("Failed to get reader: {:?}", e))
+        })?;
 
         // Get writer from writable stream
         let writable = port.writable();
@@ -113,27 +114,25 @@ impl WebSerialTransport {
         Ok(())
     }
 
-    /// Read a chunk from the stream
+    /// Read a chunk from the stream using web-sys ReadableStreamReadResult
     async fn read_chunk(&mut self) -> Result<Vec<u8>> {
-        // ReadableStreamDefaultReader::read returns a Promise
+        // ReadableStreamDefaultReader::read returns a Promise<ReadableStreamReadResult>
         let read_promise = self.reader.read();
-        let result = JsFuture::from(read_promise)
+        let result: ReadableStreamReadResult = JsFuture::from(read_promise)
             .await
-            .map_err(|e| SerprogError::IoError(format!("Read failed: {:?}", e)))?;
+            .map_err(|e| SerprogError::IoError(format!("Read failed: {:?}", e)))?
+            .unchecked_into();
 
-        // Check if stream is done
-        let done = Reflect::get(&result, &JsValue::from_str("done"))
-            .map_err(|_| SerprogError::IoError("Failed to get done flag".to_string()))?
-            .as_bool()
-            .unwrap_or(false);
-
-        if done {
+        // Check if stream is done using typed accessor
+        if result.get_done().unwrap_or(false) {
             return Err(SerprogError::IoError("Stream ended".to_string()));
         }
 
-        // Get the value (Uint8Array)
-        let value = Reflect::get(&result, &JsValue::from_str("value"))
-            .map_err(|_| SerprogError::IoError("Failed to get value".to_string()))?;
+        // Get the value (Uint8Array) using typed accessor
+        let value = result.get_value();
+        if value.is_undefined() {
+            return Err(SerprogError::IoError("No value in read result".to_string()));
+        }
 
         let array: js_sys::Uint8Array = value
             .dyn_into()
