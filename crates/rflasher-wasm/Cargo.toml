@@ -15,7 +15,7 @@ default = []
 # Internal crates (async mode - explicitly NO is_sync feature)
 # We override the workspace dependency to ensure async mode for WASM
 rflasher-core = { path = "../rflasher-core", default-features = false, features = ["std", "alloc", "static-chips"] }
-rflasher-serprog = { path = "../rflasher-serprog", default-features = false, features = ["std"] }
+rflasher-serprog = { path = "../rflasher-serprog", default-features = false, features = ["std", "wasm"] }
 
 # GUI
 eframe = { version = "0.33", default-features = false, features = [
@@ -39,7 +39,10 @@ web-sys = { version = "0.3", features = [
     "HtmlCanvasElement",
     "HtmlInputElement",
     "HtmlAnchorElement",
+    "HtmlElement",
     "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "ReadableStreamReadResult",
     "WritableStream",
     "WritableStreamDefaultWriter",
     "File",
@@ -49,6 +52,13 @@ web-sys = { version = "0.3", features = [
     "BlobPropertyBag",
     "Url",
     "console",
+    # WebSerial API (unstable - requires --cfg=web_sys_unstable_apis)
+    "Serial",
+    "SerialPort",
+    "SerialOptions",
+    "SerialPortInfo",
+    "FlowControlType",
+    "ParityType",
 ] }
 
 # maybe-async for Transport trait

@@ -10,6 +10,8 @@ default = ["std"]
 std = ["rflasher-core/std", "serialport", "thiserror"]
 # Sync mode - when enabled, async code is compiled as sync
 is_sync = ["rflasher-core/is_sync", "maybe-async/is_sync"]
+# WASM support - enables async delays using JS timers
+wasm = ["wasm-bindgen", "wasm-bindgen-futures", "js-sys", "gloo-timers"]
 
 [dependencies]
 rflasher-core.workspace = true
@@ -21,3 +23,9 @@ maybe-async.workspace = true
 # std-only dependencies
 serialport = { version = "4.5", optional = true }
 thiserror = { workspace = true, optional = true }
+
+# wasm-only dependencies
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+gloo-timers = { version = "0.3", features = ["futures"], optional = true }

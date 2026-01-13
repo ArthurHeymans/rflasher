@@ -2,6 +2,8 @@
 //!
 //! This module provides a WebSerial-based transport that implements the
 //! `Transport` trait from rflasher-serprog for async mode.
+//!
+//! Uses web-sys bindings for the WebSerial API types.
 
 // Allow deprecated JsStatic - single-threaded WASM doesn't need thread_local_v2
 #![allow(deprecated)]
@@ -11,63 +13,22 @@ use maybe_async::maybe_async;
 use rflasher_serprog::error::{Result, SerprogError};
 use rflasher_serprog::Transport;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{
+    FlowControlType, ReadableStreamDefaultReader, SerialOptions, SerialPort,
+    WritableStreamDefaultWriter,
+};
 
-// WebSerial API bindings (not yet in stable web-sys)
+// Minimal binding to access navigator.serial (not directly exposed in web-sys Navigator)
 #[wasm_bindgen]
 extern "C" {
-    /// Navigator.serial
+    /// Navigator.serial - the Serial interface from the WebSerial API
     #[wasm_bindgen(js_namespace = navigator, js_name = serial)]
-    pub static SERIAL: Serial;
-
-    /// Serial interface
-    pub type Serial;
-
-    #[wasm_bindgen(method, catch, js_name = requestPort)]
-    pub async fn request_port(this: &Serial) -> std::result::Result<JsValue, JsValue>;
-
-    /// SerialPort interface
-    pub type SerialPort;
-
-    #[wasm_bindgen(method, catch)]
-    pub async fn open(this: &SerialPort, options: &JsValue) -> std::result::Result<(), JsValue>;
-
-    #[wasm_bindgen(method, catch)]
-    pub async fn close(this: &SerialPort) -> std::result::Result<(), JsValue>;
-
-    #[wasm_bindgen(method, getter)]
-    pub fn readable(this: &SerialPort) -> Option<web_sys::ReadableStream>;
-
-    #[wasm_bindgen(method, getter)]
-    pub fn writable(this: &SerialPort) -> Option<web_sys::WritableStream>;
-
-    /// ReadableStreamDefaultReader
-    pub type ReadableStreamDefaultReader;
-
-    #[wasm_bindgen(method, catch)]
-    pub async fn read(this: &ReadableStreamDefaultReader) -> std::result::Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(method, js_name = releaseLock)]
-    pub fn release_lock(this: &ReadableStreamDefaultReader);
-
-    /// WritableStreamDefaultWriter
-    pub type WritableStreamDefaultWriter;
-
-    #[wasm_bindgen(method, catch, js_name = write)]
-    pub async fn write_chunk(
-        this: &WritableStreamDefaultWriter,
-        chunk: &JsValue,
-    ) -> std::result::Result<(), JsValue>;
-
-    #[wasm_bindgen(method, getter)]
-    pub fn ready(this: &WritableStreamDefaultWriter) -> js_sys::Promise;
-
-    #[wasm_bindgen(method, js_name = releaseLock)]
-    pub fn release_lock_writer(this: &WritableStreamDefaultWriter);
+    pub static SERIAL: web_sys::Serial;
 }
 
 /// WebSerial transport for browser-based serprog communication
 pub struct WebSerialTransport {
-    #[allow(dead_code)]
     port: SerialPort,
     reader: ReadableStreamDefaultReader,
     writer: WritableStreamDefaultWriter,
@@ -80,9 +41,9 @@ impl WebSerialTransport {
     ///
     /// This will show a browser dialog for the user to select a serial device.
     pub async fn request_and_open(baud_rate: u32) -> Result<Self> {
-        // Request a port from the user
-        let port: SerialPort = SERIAL
-            .request_port()
+        // Request a port from the user using web-sys Serial
+        let port_promise = SERIAL.request_port();
+        let port: SerialPort = JsFuture::from(port_promise)
             .await
             .map_err(|e| {
                 SerprogError::ConnectionFailed(format!("Failed to request port: {:?}", e))
@@ -94,38 +55,32 @@ impl WebSerialTransport {
 
     /// Open an already-selected serial port
     pub async fn open_port(port: SerialPort, baud_rate: u32) -> Result<Self> {
-        // Configure port options
-        let options = js_sys::Object::new();
-        Reflect::set(&options, &"baudRate".into(), &baud_rate.into())
-            .map_err(|_| SerprogError::ConnectionFailed("Failed to set baudRate".to_string()))?;
+        // Configure port options using web-sys SerialOptions
+        let options = SerialOptions::new(baud_rate);
 
         // Set a larger buffer size (default is 255 bytes, we want more for bulk transfers)
-        Reflect::set(&options, &"bufferSize".into(), &(64 * 1024u32).into())
-            .map_err(|_| SerprogError::ConnectionFailed("Failed to set bufferSize".to_string()))?;
+        options.set_buffer_size(64 * 1024);
 
         // Use hardware flow control if the device supports it
-        Reflect::set(&options, &"flowControl".into(), &"hardware".into())
-            .map_err(|_| SerprogError::ConnectionFailed("Failed to set flowControl".to_string()))?;
+        options.set_flow_control(FlowControlType::Hardware);
 
         log::info!(
             "Opening port with baudRate={}, bufferSize=64KB, flowControl=hardware",
             baud_rate
         );
 
-        // Open the port
-        port.open(&options.into())
+        // Open the port - SerialPort::open returns a Promise
+        let open_promise = port.open(&options);
+        JsFuture::from(open_promise)
             .await
             .map_err(|e| SerprogError::ConnectionFailed(format!("Failed to open port: {:?}", e)))?;
 
-        // Get reader and writer
-        let readable = port
-            .readable()
-            .ok_or_else(|| SerprogError::ConnectionFailed("Port not readable".to_string()))?;
+        // Get reader from readable stream
+        let readable = port.readable();
         let reader: ReadableStreamDefaultReader = readable.get_reader().unchecked_into();
 
-        let writable = port
-            .writable()
-            .ok_or_else(|| SerprogError::ConnectionFailed("Port not writable".to_string()))?;
+        // Get writer from writable stream
+        let writable = port.writable();
         let writer: WritableStreamDefaultWriter = writable
             .get_writer()
             .map_err(|e| SerprogError::ConnectionFailed(format!("Failed to get writer: {:?}", e)))?
@@ -146,10 +101,11 @@ impl WebSerialTransport {
     pub async fn close(&self) -> Result<()> {
         // Release the reader and writer first
         self.reader.release_lock();
-        self.release_writer_lock();
+        self.writer.release_lock();
 
-        // Close the port
-        self.port.close().await.map_err(|e| {
+        // Close the port - returns a Promise
+        let close_promise = self.port.close();
+        JsFuture::from(close_promise).await.map_err(|e| {
             SerprogError::ConnectionFailed(format!("Failed to close port: {:?}", e))
         })?;
 
@@ -157,15 +113,11 @@ impl WebSerialTransport {
         Ok(())
     }
 
-    fn release_writer_lock(&self) {
-        self.writer.release_lock_writer();
-    }
-
     /// Read a chunk from the stream
     async fn read_chunk(&mut self) -> Result<Vec<u8>> {
-        let result = self
-            .reader
-            .read()
+        // ReadableStreamDefaultReader::read returns a Promise
+        let read_promise = self.reader.read();
+        let result = JsFuture::from(read_promise)
             .await
             .map_err(|e| SerprogError::IoError(format!("Read failed: {:?}", e)))?;
 
@@ -197,15 +149,17 @@ impl Transport for WebSerialTransport {
         log::trace!("transport write: {} bytes", data.len());
 
         // Wait for writer to be ready (handles backpressure)
-        wasm_bindgen_futures::JsFuture::from(self.writer.ready())
+        JsFuture::from(self.writer.ready())
             .await
             .map_err(|e| SerprogError::IoError(format!("Writer not ready: {:?}", e)))?;
 
+        // Write the data
         let array = js_sys::Uint8Array::from(data);
-        self.writer
-            .write_chunk(&array.into())
+        let write_promise = self.writer.write_with_chunk(&array);
+        JsFuture::from(write_promise)
             .await
             .map_err(|e| SerprogError::IoError(format!("Write failed: {:?}", e)))?;
+
         Ok(())
     }
 
