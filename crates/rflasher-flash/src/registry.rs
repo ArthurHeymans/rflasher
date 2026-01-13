@@ -378,6 +378,26 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
             Ok(Box::new(master))
         }
 
+        #[cfg(feature = "postcard-spi")]
+        "postcard_spi" | "postcard-spi" | "pico_spi" => {
+            use rflasher_postcard_spi::{parse_options, open_with_options};
+            log::info!("Opening postcard-spi programmer for REPL...");
+            let options: Vec<(&str, &str)> = params
+                .params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let config = parse_options(&options).map_err(|e| format!("Invalid postcard-spi parameters: {}", e))?;
+            let master = open_with_options(&config).map_err(|e| {
+                format!(
+                    "Failed to open postcard-spi device: {}\n\
+                     Make sure the device is connected and you have USB permissions.",
+                    e
+                )
+            })?;
+            Ok(Box::new(master))
+        }
+
         // Internal and MTD are opaque-only or not SPI-based
         #[cfg(feature = "internal")]
         "internal" => {
@@ -464,6 +484,9 @@ pub fn open_flash(
 
         #[cfg(feature = "raiden")]
         "raiden_debug_spi" | "raiden" | "raiden_spi" => open_raiden(&params, db),
+
+        #[cfg(feature = "postcard-spi")]
+        "postcard_spi" | "postcard-spi" | "pico_spi" => open_postcard_spi(&params, db),
 
         _ => Err(format!("Unknown programmer: {}", params.name).into()),
     }
@@ -905,6 +928,42 @@ fn open_raiden(
     probe_and_create_handle(master, db)
 }
 
+#[cfg(feature = "postcard-spi")]
+fn open_postcard_spi(
+    params: &ProgrammerParams,
+    db: &ChipDatabase,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    use rflasher_postcard_spi::{open_with_options, parse_options};
+
+    log::info!("Opening postcard-spi programmer...");
+
+    let options: Vec<(&str, &str)> = params
+        .params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let config =
+        parse_options(&options).map_err(|e| format!("Invalid postcard-spi parameters: {}", e))?;
+
+    let master = open_with_options(&config).map_err(|e| {
+        format!(
+            "Failed to open postcard-spi device: {}\n\
+             Make sure the device is connected and you have USB permissions.",
+            e
+        )
+    })?;
+
+    log::info!(
+        "postcard-spi: {} (CS{}, {} Hz)",
+        master.info().name_str(),
+        master.info().current_cs,
+        master.info().current_speed_hz
+    );
+
+    probe_and_create_handle(master, db)
+}
+
 // Programmer information and listing
 /// Information about a programmer
 pub struct ProgrammerInfo {
@@ -1005,6 +1064,14 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "raiden_debug_spi",
         aliases: &["raiden", "raiden_spi"],
         description: "Chrome OS EC USB SPI (serial=<sn>,target=<ap|ec|h1>)",
+    });
+
+    #[cfg(feature = "postcard-spi")]
+    programmers.push(ProgrammerInfo {
+        name: "postcard_spi",
+        aliases: &["postcard-spi", "pico_spi"],
+        description:
+            "Postcard-RPC USB SPI with multi-I/O support (serial=<sn>,spispeed=<hz>,cs=<n>)",
     });
 
     programmers

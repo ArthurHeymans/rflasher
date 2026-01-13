@@ -80,6 +80,16 @@
           targets = lib.mapAttrsToList (_: t: t.rustTarget) crossTargets;
         };
 
+        # Rust toolchain for embedded development (Pico firmware)
+        rustToolchainEmbedded = pkgs.rust-bin.stable.latest.default.override {
+          extensions = [
+            "rust-src"
+            "rust-analyzer"
+            "llvm-tools-preview"
+          ];
+          targets = [ "thumbv6m-none-eabi" ];
+        };
+
         # Create a cross-compilation dev shell for a given target
         mkCrossDevShell =
           name: target:
@@ -179,6 +189,34 @@
               echo "  nix develop .#cross-i686    - i686-unknown-linux-gnu"
               echo "  nix develop .#cross-aarch64 - aarch64-unknown-linux-gnu"
               echo "  nix develop .#cross-armv7   - armv7-unknown-linux-gnueabihf"
+              echo ""
+              echo "Embedded development:"
+              echo "  nix develop .#embedded      - Pico firmware (thumbv6m-none-eabi)"
+              echo ""
+            '';
+          };
+
+          # Embedded development shell for Pico firmware
+          embedded = pkgs.mkShell {
+            nativeBuildInputs = [
+              rustToolchainEmbedded
+              pkgs.flip-link
+              pkgs.probe-rs-tools
+              pkgs.elf2uf2-rs
+            ];
+
+            shellHook = ''
+              echo "rflasher embedded development environment"
+              echo "Rust version: $(rustc --version)"
+              echo "Target: thumbv6m-none-eabi (RP2040/Pico)"
+              echo ""
+              echo "Build firmware:"
+              echo "  cd firmware/pico-postcard-spi"
+              echo "  cargo build --release"
+              echo ""
+              echo "Flash firmware:"
+              echo "  cargo run --release          # via probe-rs"
+              echo "  elf2uf2-rs target/thumbv6m-none-eabi/release/pico-postcard-spi  # create UF2"
               echo ""
             '';
           };

@@ -1,0 +1,17 @@
+[package]
+name = "rflasher-postcard-spi"
+version = "0.1.0"
+edition = "2021"
+description = "postcard-rpc based SPI programmer for rflasher"
+license = "GPL-2.0-or-later"
+
+[dependencies]
+rflasher-core = { path = "../rflasher-core" }
+postcard-spi-icd = { path = "../postcard-spi-icd", features = ["std"] }
+postcard-rpc = { version = "0.12", features = ["raw-nusb"] }
+postcard = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync"] }
+nusb = "0.1"
+thiserror = "1"
+log = "0.4"
+heapless = "0.8"
