@@ -34,10 +34,14 @@
 mod device;
 mod error;
 
-pub use device::{open_with_options, parse_options, PostcardSpi, PostcardSpiOptions};
+pub use device::{
+    open_with_options, parse_options, BatchBuilder, BatchResult, PostcardSpi, PostcardSpiOptions,
+};
 pub use error::{Error, Result};
 
 // Re-export ICD types that users might need
 pub use postcard_spi_icd::{
-    AddressWidth, DeviceInfo, IoMode, IoModeFlags, SpiWireError, PROTOCOL_VERSION, USB_PID, USB_VID,
+    AddressWidth, BatchError, BatchOp, BatchOpResult, BatchRequest, BatchResponse, DeviceInfo,
+    IoMode, IoModeFlags, SpiTransaction, SpiWireError, MAX_BATCH_OPS, MAX_BATCH_READS,
+    MAX_BATCH_READ_SIZE, MAX_BATCH_TX_DATA, PROTOCOL_VERSION, USB_PID, USB_VID,
 };

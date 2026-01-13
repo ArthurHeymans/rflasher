@@ -28,7 +28,7 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_usb::UsbDevice;
 use postcard_rpc::{
     define_dispatch,
@@ -53,9 +53,9 @@ bind_interrupts!(struct Irqs {
 
 // USB and RPC type definitions
 type AppDriver = Driver<'static, USB>;
-type AppStorage = WireStorage<ThreadModeRawMutex, AppDriver, 256, 256, 64, 256>;
+type AppStorage = WireStorage<CriticalSectionRawMutex, AppDriver, 256, 256, 64, 256>;
 type BufStorage = PacketBuffers<2048, 2048>;
-type AppTx = WireTxImpl<ThreadModeRawMutex, AppDriver>;
+type AppTx = WireTxImpl<CriticalSectionRawMutex, AppDriver>;
 type AppRx = WireRxImpl<AppDriver>;
 type AppServer = Server<AppTx, AppRx, WireRxBuf, MyApp>;
 
@@ -137,10 +137,7 @@ define_dispatch! {
         | ----------                | ----      | -------                       |
         | GetInfoEndpoint           | blocking  | get_info_handler              |
         | SetSpeedEndpoint          | blocking  | set_speed_handler             |
-        | SetCsEndpoint             | blocking  | set_cs_handler                |
-        | DelayEndpoint             | blocking  | delay_handler                 |
-        | SpiTransferEndpoint       | blocking  | spi_transfer_handler          |
-        | SpiTransferDataEndpoint   | blocking  | spi_transfer_data_handler     |
+        | BatchEndpoint             | blocking  | batch_handler                 |
     };
     topics_in: {
         list: postcard_spi_icd::TOPICS_IN_LIST;

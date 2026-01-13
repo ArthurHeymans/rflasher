@@ -1,9 +1,13 @@
 //! RPC endpoint handlers for postcard-spi
 
 use crate::{Context, DEVICE_NAME, MAX_TRANSFER_SIZE, NUM_CS};
-use defmt::{debug, trace, warn};
+use defmt::{debug, trace};
 use postcard_rpc::header::VarHeader;
-use postcard_spi_icd::*;
+use postcard_spi_icd::{
+    AddressWidth, BatchError, BatchOp, BatchOpResult, BatchRequest, BatchResponse, DeviceInfo,
+    IoMode, IoModeFlags, SetSpeedReq, SetSpeedResp, SpiTransaction, MAX_BATCH_READS,
+    MAX_BATCH_READ_SIZE, PROTOCOL_VERSION,
+};
 
 /// Handler for GetInfo endpoint
 pub fn get_info_handler(context: &mut Context, _header: VarHeader, _req: ()) -> DeviceInfo {
@@ -56,119 +60,153 @@ pub fn set_speed_handler(
     SetSpeedResp { actual_hz }
 }
 
-/// Handler for SetCs endpoint
-pub fn set_cs_handler(context: &mut Context, _header: VarHeader, req: SetCsReq) {
-    debug!("SetCs request: CS{}", req.cs);
-
-    if req.cs >= NUM_CS {
-        warn!("Invalid CS: {} (max {})", req.cs, NUM_CS - 1);
-        return;
-    }
-
-    // Deassert current CS before switching
-    context.cs_deassert_all();
-    context.current_cs = req.cs;
-}
-
-/// Handler for Delay endpoint
-pub fn delay_handler(_context: &mut Context, _header: VarHeader, req: DelayReq) {
-    trace!("Delay request: {} us", req.us);
-
-    // Use blocking delay for short delays, async for longer ones
-    // Note: This is a blocking handler, so we can't use async directly
-    // For now, use cortex_m delay
-    let cycles = (req.us as u64 * 125) as u32; // 125 MHz clock
-    cortex_m::asm::delay(cycles);
-}
-
-/// Handler for SpiTransfer endpoint (no data, just parameters)
-pub fn spi_transfer_handler(
+/// Handler for batch operations
+///
+/// Executes multiple SPI transactions in sequence with minimal overhead.
+/// This is the primary interface for high-performance flash programming.
+///
+/// Each transaction is complete with automatic CS handling, making this
+/// compatible with hardware SPI controllers that don't support arbitrary
+/// CS manipulation.
+pub fn batch_handler(
     context: &mut Context,
     _header: VarHeader,
-    req: SpiTransferReq,
-) -> SpiTransferResp {
-    trace!(
-        "SpiTransfer: opcode={:#04x}, addr={:?}, mode={:?}, write={}, read={}",
-        req.opcode,
-        req.address,
-        req.io_mode,
-        req.write_len,
-        req.read_len
-    );
+    req: BatchRequest,
+) -> BatchResponse {
+    trace!("Batch request: {} ops", req.ops.len());
 
-    // For transfers without data, just send the opcode/address/dummy
-    // This is mainly for simple commands like WREN, WRDI, etc.
+    let mut results = heapless::Vec::<BatchOpResult, MAX_BATCH_READS>::new();
+    let mut ops_completed: u8 = 0;
 
-    context.cs_assert();
+    for op in req.ops.iter() {
+        let result = execute_batch_op(context, op);
 
-    // Send opcode
-    context.qspi.write_byte(req.opcode, req.io_mode);
+        // Track completion
+        ops_completed += 1;
 
-    // Send address if present
-    if let Some(addr) = req.address {
-        let addr_bytes = match req.address_width {
-            AddressWidth::ThreeByte => 3,
-            AddressWidth::FourByte => 4,
-            AddressWidth::None => 0,
-        };
+        // Only store results that return data or indicate special status
+        match &result {
+            BatchOpResult::Ok => {
+                // Don't store - no data to return
+            }
+            BatchOpResult::Data(_)
+            | BatchOpResult::PollOk(_)
+            | BatchOpResult::PollTimeout(_)
+            | BatchOpResult::Error(_) => {
+                if results.push(result.clone()).is_err() {
+                    // Results buffer full - return what we have
+                    return BatchResponse {
+                        results,
+                        ops_completed,
+                        success: false,
+                    };
+                }
+            }
+        }
 
-        for i in (0..addr_bytes).rev() {
-            let byte = ((addr >> (i * 8)) & 0xFF) as u8;
-            context.qspi.write_byte(byte, req.io_mode);
+        // Stop on error (but not on poll timeout - that's reported but not fatal)
+        if matches!(result, BatchOpResult::Error(_)) {
+            return BatchResponse {
+                results,
+                ops_completed,
+                success: false,
+            };
         }
     }
 
-    // Send dummy cycles
-    for _ in 0..req.dummy_cycles {
-        context.qspi.write_byte(0xFF, req.io_mode);
-    }
-
-    context.cs_deassert();
-
-    SpiTransferResp {
+    BatchResponse {
+        results,
+        ops_completed,
         success: true,
-        bytes_read: 0,
     }
 }
 
-/// Handler for SpiTransferData endpoint (with inline data)
-pub fn spi_transfer_data_handler(
-    context: &mut Context,
-    _header: VarHeader,
-    req: SpiTransferReqWithData,
-) -> SpiTransferRespWithData {
-    trace!(
-        "SpiTransferData: opcode={:#04x}, write={}, read={}",
-        req.req.opcode,
-        req.write_data.len(),
-        req.req.read_len
-    );
+/// Execute a single batch operation
+fn execute_batch_op(context: &mut Context, op: &BatchOp) -> BatchOpResult {
+    match op {
+        BatchOp::Transact(tx) => execute_transaction(context, tx),
 
-    let read_len = (req.req.read_len as usize).min(MAX_INLINE_DATA);
+        BatchOp::DelayUs(us) => {
+            let cycles = (*us as u64 * 125) as u32; // 125 MHz clock
+            cortex_m::asm::delay(cycles);
+            BatchOpResult::Ok
+        }
 
-    context.cs_assert();
+        BatchOp::Poll {
+            cmd,
+            mask,
+            expected,
+            timeout_ms,
+        } => {
+            // Poll by repeatedly sending command and reading status
+            // Use simple timing based on system clock
+            let timeout_cycles = (*timeout_ms as u64) * 125_000; // 125 MHz = 125k cycles/ms
+            let mut elapsed: u64 = 0;
+            let poll_interval = 100u32; // cycles between polls
 
-    // Determine I/O mode for each phase
-    let cmd_mode = match req.req.io_mode {
+            loop {
+                // Execute a complete transaction: CS assert, cmd, read, CS deassert
+                context.cs_assert();
+                context.qspi.write_byte(*cmd, IoMode::Single);
+                let status = context.qspi.read_byte(IoMode::Single);
+                context.cs_deassert();
+
+                // Check condition
+                if (status & mask) == *expected {
+                    return BatchOpResult::PollOk(status);
+                }
+
+                // Check timeout
+                elapsed += poll_interval as u64;
+                if elapsed >= timeout_cycles {
+                    return BatchOpResult::PollTimeout(status);
+                }
+
+                // Small delay between polls
+                cortex_m::asm::delay(poll_interval);
+            }
+        }
+
+        BatchOp::SetCs(cs) => {
+            if *cs >= NUM_CS {
+                return BatchOpResult::Error(BatchError::InvalidCs);
+            }
+            context.cs_deassert_all();
+            context.current_cs = *cs;
+            BatchOpResult::Ok
+        }
+    }
+}
+
+/// Execute a complete SPI transaction
+///
+/// This handles CS automatically and supports the full command structure:
+/// opcode -> address -> dummy -> write/read data
+fn execute_transaction(context: &mut Context, tx: &SpiTransaction) -> BatchOpResult {
+    // Determine I/O modes for each phase based on the transaction's io_mode
+    let cmd_mode = match tx.io_mode {
         IoMode::Qpi => IoMode::Qpi,
         _ => IoMode::Single, // Command is always single-line except in QPI
     };
 
-    let addr_mode = match req.req.io_mode {
+    let addr_mode = match tx.io_mode {
         IoMode::Single | IoMode::DualOut | IoMode::QuadOut => IoMode::Single,
         IoMode::DualIo => IoMode::DualIo,
         IoMode::QuadIo => IoMode::QuadIo,
         IoMode::Qpi => IoMode::Qpi,
     };
 
-    let data_mode = req.req.io_mode;
+    let data_mode = tx.io_mode;
 
-    // Send opcode (always single-line except QPI)
-    context.qspi.write_byte(req.req.opcode, cmd_mode);
+    // Start transaction
+    context.cs_assert();
+
+    // Send opcode
+    context.qspi.write_byte(tx.opcode, cmd_mode);
 
     // Send address if present
-    if let Some(addr) = req.req.address {
-        let addr_bytes = match req.req.address_width {
+    if let Some(addr) = tx.address {
+        let addr_bytes = match tx.address_width {
             AddressWidth::ThreeByte => 3,
             AddressWidth::FourByte => 4,
             AddressWidth::None => 0,
@@ -180,30 +218,33 @@ pub fn spi_transfer_data_handler(
         }
     }
 
-    // Send dummy cycles (in address mode width for multi-IO)
-    let dummy_bytes = req.req.dummy_cycles.div_ceil(8);
+    // Send dummy cycles (as bytes in the appropriate mode)
+    let dummy_bytes = tx.dummy_cycles.div_ceil(8);
     for _ in 0..dummy_bytes {
         context.qspi.write_byte(0xFF, addr_mode);
     }
 
-    // Write data
-    for byte in req.write_data.iter() {
+    // Write data phase (if any)
+    for byte in tx.write_data.iter() {
         context.qspi.write_byte(*byte, data_mode);
     }
 
-    // Read data into heapless::Vec
-    let mut read_data = heapless::Vec::<u8, MAX_INLINE_DATA>::new();
-    for _ in 0..read_len {
-        let _ = read_data.push(context.qspi.read_byte(data_mode));
-    }
+    // Read data phase (if any)
+    let result = if tx.read_len > 0 {
+        let mut data = heapless::Vec::<u8, MAX_BATCH_READ_SIZE>::new();
+        for _ in 0..tx.read_len {
+            if data.push(context.qspi.read_byte(data_mode)).is_err() {
+                context.cs_deassert();
+                return BatchOpResult::Error(BatchError::BufferOverflow);
+            }
+        }
+        BatchOpResult::Data(data)
+    } else {
+        BatchOpResult::Ok
+    };
 
+    // End transaction
     context.cs_deassert();
 
-    SpiTransferRespWithData {
-        resp: SpiTransferResp {
-            success: true,
-            bytes_read: read_data.len() as u16,
-        },
-        read_data,
-    }
+    result
 }

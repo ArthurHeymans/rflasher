@@ -39,14 +39,16 @@ portable-atomic = { version = "1", features = ["critical-section"] }
 # Logging
 defmt = "1.0"
 defmt-rtt = "0.4"
-panic-probe = { version = "0.3", features = ["print-defmt"] }
+panic-probe = { version = "1.0", features = ["print-defmt"] }
 
 [profile.release]
 debug = 2
 lto = true
 opt-level = "s"
+panic = "abort"
 
 [profile.dev]
 debug = 2
 lto = true
 opt-level = "s"
+panic = "abort"

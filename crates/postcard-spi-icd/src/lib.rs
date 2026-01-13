@@ -186,51 +186,6 @@ pub struct SetSpeedResp {
     pub actual_hz: u32,
 }
 
-/// Request to select a chip select line
-#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
-pub struct SetCsReq {
-    /// Chip select index (0-based)
-    pub cs: u8,
-}
-
-/// Request to delay for a specified time
-#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
-pub struct DelayReq {
-    /// Delay in microseconds
-    pub us: u32,
-}
-
-/// SPI transfer request
-///
-/// This defines a complete SPI transaction with optional address,
-/// dummy cycles, write data, and read data.
-#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
-pub struct SpiTransferReq {
-    /// SPI opcode byte
-    pub opcode: u8,
-    /// Optional address (None if no address phase)
-    pub address: Option<u32>,
-    /// Address width
-    pub address_width: AddressWidth,
-    /// I/O mode for the transaction
-    pub io_mode: IoMode,
-    /// Number of dummy clock cycles after address
-    pub dummy_cycles: u8,
-    /// Number of bytes to write (data follows in WriteData topic)
-    pub write_len: u16,
-    /// Number of bytes to read (data returned in ReadData topic)
-    pub read_len: u16,
-}
-
-/// SPI transfer response
-#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
-pub struct SpiTransferResp {
-    /// Whether the transfer completed successfully
-    pub success: bool,
-    /// Number of bytes actually read
-    pub bytes_read: u16,
-}
-
 /// Wire error type for failed RPC calls
 #[derive(Debug, Clone, Serialize, Deserialize, Schema)]
 pub enum SpiWireError {
@@ -262,31 +217,191 @@ endpoints! {
     | ----------              | ---------               | ----------              | ----                        |
     | GetInfoEndpoint         | ()                      | DeviceInfo              | "postcard_spi/info"         |
     | SetSpeedEndpoint        | SetSpeedReq             | SetSpeedResp            | "postcard_spi/set_speed"    |
-    | SetCsEndpoint           | SetCsReq                | ()                      | "postcard_spi/set_cs"       |
-    | DelayEndpoint           | DelayReq                | ()                      | "postcard_spi/delay"        |
-    | SpiTransferEndpoint     | SpiTransferReq          | SpiTransferResp         | "postcard_spi/transfer"     |
-    | SpiTransferDataEndpoint | SpiTransferReqWithData  | SpiTransferRespWithData | "postcard_spi/transfer_data"|
+    | BatchEndpoint           | BatchRequest            | BatchResponse           | "postcard_spi/batch"        |
 }
 
-/// Maximum data size for inline transfers (1KB)
-pub const MAX_INLINE_DATA: usize = 1024;
+// ============================================================================
+// BATCH OPERATIONS
+// ============================================================================
 
-/// SPI transfer request with inline write data
+/// Maximum number of operations in a batch
+pub const MAX_BATCH_OPS: usize = 32;
+
+/// Maximum read results we can return in a batch
+pub const MAX_BATCH_READS: usize = 16;
+
+/// Maximum bytes per read result in a batch
+pub const MAX_BATCH_READ_SIZE: usize = 64;
+
+/// Maximum write data per transaction in a batch (256 = typical flash page size)
+pub const MAX_BATCH_TX_DATA: usize = 256;
+
+/// A complete SPI transaction for use in batches
+///
+/// Each transaction is a complete command with automatic CS handling:
+/// 1. Assert CS
+/// 2. Send opcode (on cmd lines per io_mode)
+/// 3. Send address if present (on addr lines per io_mode)
+/// 4. Send dummy cycles
+/// 5. Write data OR read data (on data lines per io_mode)
+/// 6. Deassert CS
 #[derive(Debug, Clone, Serialize, Deserialize, Schema)]
-pub struct SpiTransferReqWithData {
-    /// The transfer parameters
-    pub req: SpiTransferReq,
-    /// Write data (can be empty, max MAX_INLINE_DATA bytes)
-    pub write_data: heapless::Vec<u8, MAX_INLINE_DATA>,
+pub struct SpiTransaction {
+    /// SPI opcode byte
+    pub opcode: u8,
+    /// Optional address (None = no address phase)
+    pub address: Option<u32>,
+    /// Address width (ignored if address is None)
+    pub address_width: AddressWidth,
+    /// I/O mode for the transaction (determines lines used for each phase)
+    pub io_mode: IoMode,
+    /// Number of dummy clock cycles after address (0 = none)
+    pub dummy_cycles: u8,
+    /// Data to write after opcode/address/dummy (empty for read-only commands)
+    pub write_data: heapless::Vec<u8, MAX_BATCH_TX_DATA>,
+    /// Number of bytes to read (0 for write-only commands)
+    /// Note: Most commands are either write OR read, not both
+    pub read_len: u8,
 }
 
-/// SPI transfer response with inline read data
+impl SpiTransaction {
+    /// Create a simple command with no address or data (e.g., WREN, WRDI)
+    pub fn cmd(opcode: u8) -> Self {
+        Self {
+            opcode,
+            address: None,
+            address_width: AddressWidth::None,
+            io_mode: IoMode::Single,
+            dummy_cycles: 0,
+            write_data: heapless::Vec::new(),
+            read_len: 0,
+        }
+    }
+
+    /// Create a read command (e.g., RDSR, RDID)
+    pub fn read(opcode: u8, len: u8) -> Self {
+        Self {
+            opcode,
+            address: None,
+            address_width: AddressWidth::None,
+            io_mode: IoMode::Single,
+            dummy_cycles: 0,
+            write_data: heapless::Vec::new(),
+            read_len: len,
+        }
+    }
+
+    /// Create a write command with data (e.g., WRSR)
+    pub fn write(opcode: u8, data: &[u8]) -> Self {
+        let mut write_data = heapless::Vec::new();
+        let _ = write_data.extend_from_slice(data);
+        Self {
+            opcode,
+            address: None,
+            address_width: AddressWidth::None,
+            io_mode: IoMode::Single,
+            dummy_cycles: 0,
+            write_data,
+            read_len: 0,
+        }
+    }
+
+    /// Set the I/O mode
+    pub fn with_mode(mut self, mode: IoMode) -> Self {
+        self.io_mode = mode;
+        self
+    }
+
+    /// Set address with specified width
+    pub fn with_addr(mut self, addr: u32, width: AddressWidth) -> Self {
+        self.address = Some(addr);
+        self.address_width = width;
+        self
+    }
+
+    /// Set dummy cycles
+    pub fn with_dummy(mut self, cycles: u8) -> Self {
+        self.dummy_cycles = cycles;
+        self
+    }
+}
+
+/// A single operation in a batch
+///
+/// Operations are executed sequentially. Each `Transact` operation
+/// handles CS automatically (assert before, deassert after).
 #[derive(Debug, Clone, Serialize, Deserialize, Schema)]
-pub struct SpiTransferRespWithData {
-    /// The transfer result
-    pub resp: SpiTransferResp,
-    /// Read data (can be empty, max MAX_INLINE_DATA bytes)
-    pub read_data: heapless::Vec<u8, MAX_INLINE_DATA>,
+pub enum BatchOp {
+    /// Execute a complete SPI transaction (CS is handled automatically)
+    Transact(SpiTransaction),
+
+    /// Delay for specified microseconds between transactions
+    DelayUs(u32),
+
+    /// Poll status register until condition met or timeout
+    ///
+    /// Executes: CS assert, write cmd, read 1 byte, CS deassert
+    /// Repeats until (read_value & mask) == expected, or timeout
+    Poll {
+        /// Command byte to send (usually 0x05 for RDSR)
+        cmd: u8,
+        /// Mask to apply to read value
+        mask: u8,
+        /// Expected value after masking (usually 0 to wait for WIP=0)
+        expected: u8,
+        /// Timeout in milliseconds
+        timeout_ms: u16,
+    },
+
+    /// Switch to a different chip select for subsequent operations
+    SetCs(u8),
+}
+
+/// Result of a single batch operation
+#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
+pub enum BatchOpResult {
+    /// Operation completed successfully (no data returned)
+    Ok,
+    /// Transaction completed, read data returned
+    Data(heapless::Vec<u8, MAX_BATCH_READ_SIZE>),
+    /// Poll completed successfully, returns final status byte
+    PollOk(u8),
+    /// Poll timed out, returns last status byte read
+    PollTimeout(u8),
+    /// Error occurred during operation
+    Error(BatchError),
+}
+
+/// Errors that can occur during batch operations
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Schema)]
+pub enum BatchError {
+    /// Invalid operation parameters
+    InvalidParams,
+    /// Buffer overflow (too much data to return)
+    BufferOverflow,
+    /// Hardware error during transaction
+    HardwareError,
+    /// Invalid chip select index
+    InvalidCs,
+}
+
+/// Request for batch operations
+#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
+pub struct BatchRequest {
+    /// List of operations to execute sequentially
+    pub ops: heapless::Vec<BatchOp, MAX_BATCH_OPS>,
+}
+
+/// Response from batch operations
+#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
+pub struct BatchResponse {
+    /// Results for each operation (same order as request)
+    /// Note: Only operations that return data will have entries here
+    pub results: heapless::Vec<BatchOpResult, MAX_BATCH_READS>,
+    /// Number of operations successfully completed
+    pub ops_completed: u8,
+    /// Whether all operations completed successfully
+    pub success: bool,
 }
 
 // ============================================================================

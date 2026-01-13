@@ -173,12 +173,10 @@ impl PostcardSpi {
             });
         }
 
-        block_on(async {
-            self.client
-                .send_resp::<SetCsEndpoint>(&SetCsReq { cs })
-                .await
-                .map_err(|e| Error::RpcError(format!("{:?}", e)))
-        })?;
+        // Use batch operation to set CS
+        let mut batch = BatchBuilder::new();
+        batch.set_cs(cs);
+        self.execute_batch(batch)?;
 
         self.info.current_cs = cs;
         log::debug!("Selected CS{}", cs);
@@ -186,52 +184,279 @@ impl PostcardSpi {
         Ok(())
     }
 
-    /// Execute an SPI transfer
-    fn do_transfer(
-        &mut self,
-        req: SpiTransferReq,
-        write_data: &[u8],
-        read_buf: &mut [u8],
-    ) -> Result<()> {
-        // Check transfer size
-        if write_data.len() > MAX_INLINE_DATA {
-            return Err(Error::TransferTooLarge {
-                requested: write_data.len(),
-                max: MAX_INLINE_DATA,
-            });
-        }
+    /// Execute a batch of SPI transactions
+    ///
+    /// This is the most efficient way to perform multiple SPI operations,
+    /// as it sends all operations in a single USB transfer and receives
+    /// all results in a single response.
+    ///
+    /// Each transaction in the batch is a complete SPI command with
+    /// automatic CS handling, making this compatible with hardware
+    /// controllers that don't support arbitrary CS manipulation.
+    ///
+    /// # Arguments
+    /// * `batch` - A `BatchBuilder` containing the operations to execute
+    ///
+    /// # Returns
+    /// A `BatchResult` containing the results of all operations
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Read JEDEC ID with a batch operation
+    /// let mut batch = BatchBuilder::new();
+    /// batch.cmd_read(0x9F, 3);  // RDID: read 3 bytes
+    ///
+    /// let result = programmer.execute_batch(batch)?;
+    /// let jedec_id = result.get_read(0).unwrap();
+    ///
+    /// // Page program with status polling
+    /// let mut batch = BatchBuilder::new();
+    /// batch.cmd(0x06)                           // WREN
+    ///      .cmd_write_addr3(0x02, addr, &data)  // Page Program
+    ///      .poll(0x05, 0x01, 0x00, 5000);       // Wait for WIP=0
+    ///
+    /// programmer.execute_batch(batch)?;
+    /// ```
+    pub fn execute_batch(&mut self, batch: BatchBuilder) -> Result<BatchResult> {
+        let request = batch.build();
 
-        // Convert write_data to heapless::Vec
-        let mut write_vec = heapless::Vec::<u8, MAX_INLINE_DATA>::new();
-        write_vec
-            .extend_from_slice(write_data)
-            .map_err(|_| Error::TransferTooLarge {
-                requested: write_data.len(),
-                max: MAX_INLINE_DATA,
-            })?;
-
-        // Use the transfer_data endpoint which includes inline data
-        let req_with_data = SpiTransferReqWithData {
-            req,
-            write_data: write_vec,
-        };
-
-        let resp: SpiTransferRespWithData = block_on(async {
+        let resp: BatchResponse = block_on(async {
             self.client
-                .send_resp::<SpiTransferDataEndpoint>(&req_with_data)
+                .send_resp::<BatchEndpoint>(&request)
                 .await
                 .map_err(|e| Error::RpcError(format!("{:?}", e)))
         })?;
 
-        if !resp.resp.success {
-            return Err(Error::RpcError("Transfer failed".into()));
+        Ok(BatchResult { inner: resp })
+    }
+
+    /// Execute a batch and wait for a status register condition
+    ///
+    /// This is a convenience method for common flash operations that
+    /// need to poll a status register until an operation completes.
+    ///
+    /// # Arguments
+    /// * `cmd` - Command byte to send (usually read status register)
+    /// * `mask` - Mask to apply to the status byte
+    /// * `expected` - Expected value after masking (e.g., 0 for WIP bit clear)
+    /// * `timeout_ms` - Maximum time to wait in milliseconds
+    ///
+    /// # Returns
+    /// The final status byte, or an error if timeout occurred
+    pub fn poll_status(&mut self, cmd: u8, mask: u8, expected: u8, timeout_ms: u16) -> Result<u8> {
+        let mut batch = BatchBuilder::new();
+        batch.poll(cmd, mask, expected, timeout_ms);
+
+        let result = self.execute_batch(batch)?;
+
+        match result.inner.results.first() {
+            Some(BatchOpResult::PollOk(status)) => Ok(*status),
+            Some(BatchOpResult::PollTimeout(status)) => Err(Error::RpcError(format!(
+                "Poll timeout, last status: 0x{:02x}",
+                status
+            ))),
+            _ => Err(Error::RpcError("Unexpected batch result".into())),
         }
+    }
+}
 
-        // Copy read data
-        let copy_len = resp.read_data.len().min(read_buf.len());
-        read_buf[..copy_len].copy_from_slice(&resp.read_data[..copy_len]);
+/// Builder for batch operations
+///
+/// Use this to construct a sequence of SPI transactions that will be
+/// executed efficiently in a single USB transfer. Each transaction is
+/// a complete SPI command with automatic CS handling.
+///
+/// # Example
+///
+/// ```ignore
+/// use rflasher_postcard_spi::{BatchBuilder, AddressWidth};
+///
+/// // Read JEDEC ID
+/// let mut batch = BatchBuilder::new();
+/// batch.cmd_read(0x9F, 3);  // RDID: opcode 0x9F, read 3 bytes
+///
+/// let result = programmer.execute_batch(batch)?;
+/// let jedec_id = result.get_read(0).unwrap();
+///
+/// // Page program with status polling (3-byte address mode)
+/// let mut batch = BatchBuilder::new();
+/// batch.cmd(0x06)                                              // WREN
+///      .cmd_write_addr(0x02, addr, AddressWidth::ThreeByte, &data)  // Page Program
+///      .poll(0x05, 0x01, 0x00, 5000);                          // Wait for WIP=0
+///
+/// programmer.execute_batch(batch)?;
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct BatchBuilder {
+    ops: heapless::Vec<BatchOp, MAX_BATCH_OPS>,
+}
 
-        Ok(())
+impl BatchBuilder {
+    /// Create a new batch builder
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a simple command (opcode only, no address or data)
+    ///
+    /// Examples: WREN (0x06), WRDI (0x04), chip erase (0xC7)
+    pub fn cmd(&mut self, opcode: u8) -> &mut Self {
+        let _ = self
+            .ops
+            .push(BatchOp::Transact(SpiTransaction::cmd(opcode)));
+        self
+    }
+
+    /// Add a read command (opcode + read data, no address)
+    ///
+    /// Examples: RDID (0x9F), RDSR (0x05)
+    pub fn cmd_read(&mut self, opcode: u8, len: u8) -> &mut Self {
+        let _ = self
+            .ops
+            .push(BatchOp::Transact(SpiTransaction::read(opcode, len)));
+        self
+    }
+
+    /// Add a write command (opcode + write data, no address)
+    ///
+    /// Examples: WRSR (0x01)
+    pub fn cmd_write(&mut self, opcode: u8, data: &[u8]) -> &mut Self {
+        let _ = self
+            .ops
+            .push(BatchOp::Transact(SpiTransaction::write(opcode, data)));
+        self
+    }
+
+    /// Add a command with address but no data (e.g., sector erase)
+    ///
+    /// Examples: Sector Erase (0x20), Block Erase (0xD8)
+    pub fn cmd_addr(&mut self, opcode: u8, addr: u32, width: AddressWidth) -> &mut Self {
+        let tx = SpiTransaction::cmd(opcode).with_addr(addr, width);
+        let _ = self.ops.push(BatchOp::Transact(tx));
+        self
+    }
+
+    /// Add a read command with address
+    ///
+    /// Examples: READ (0x03), FAST_READ (0x0B - use `transaction()` for dummy cycles)
+    pub fn cmd_read_addr(
+        &mut self,
+        opcode: u8,
+        addr: u32,
+        width: AddressWidth,
+        len: u8,
+    ) -> &mut Self {
+        let tx = SpiTransaction::read(opcode, len).with_addr(addr, width);
+        let _ = self.ops.push(BatchOp::Transact(tx));
+        self
+    }
+
+    /// Add a write command with address
+    ///
+    /// Examples: Page Program (0x02)
+    pub fn cmd_write_addr(
+        &mut self,
+        opcode: u8,
+        addr: u32,
+        width: AddressWidth,
+        data: &[u8],
+    ) -> &mut Self {
+        let tx = SpiTransaction::write(opcode, data).with_addr(addr, width);
+        let _ = self.ops.push(BatchOp::Transact(tx));
+        self
+    }
+
+    /// Add a custom transaction with full control
+    ///
+    /// Use this for commands that need dummy cycles, specific I/O modes, etc.
+    pub fn transaction(&mut self, tx: SpiTransaction) -> &mut Self {
+        let _ = self.ops.push(BatchOp::Transact(tx));
+        self
+    }
+
+    /// Add a delay between transactions (microseconds)
+    pub fn delay_us(&mut self, us: u32) -> &mut Self {
+        let _ = self.ops.push(BatchOp::DelayUs(us));
+        self
+    }
+
+    /// Poll status register until condition is met
+    ///
+    /// Executes complete transactions (with CS) repeatedly:
+    /// send `cmd`, read 1 byte, check if `(value & mask) == expected`.
+    /// Times out after `timeout_ms` milliseconds.
+    ///
+    /// Common usage: `poll(0x05, 0x01, 0x00, 5000)` waits for WIP bit to clear
+    pub fn poll(&mut self, cmd: u8, mask: u8, expected: u8, timeout_ms: u16) -> &mut Self {
+        let _ = self.ops.push(BatchOp::Poll {
+            cmd,
+            mask,
+            expected,
+            timeout_ms,
+        });
+        self
+    }
+
+    /// Switch to a different chip select for subsequent operations
+    pub fn set_cs(&mut self, cs: u8) -> &mut Self {
+        let _ = self.ops.push(BatchOp::SetCs(cs));
+        self
+    }
+
+    /// Build the batch request
+    pub fn build(self) -> BatchRequest {
+        BatchRequest { ops: self.ops }
+    }
+
+    /// Get the number of operations in the batch
+    pub fn len(&self) -> usize {
+        self.ops.len()
+    }
+
+    /// Check if the batch is empty
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+}
+
+/// Result of a batch operation
+#[derive(Debug)]
+pub struct BatchResult {
+    inner: BatchResponse,
+}
+
+impl BatchResult {
+    /// Check if all operations completed successfully
+    pub fn success(&self) -> bool {
+        self.inner.success
+    }
+
+    /// Get the number of operations that completed
+    pub fn ops_completed(&self) -> u8 {
+        self.inner.ops_completed
+    }
+
+    /// Get a specific read result by index
+    ///
+    /// Index refers to the nth result that returned data (not the nth operation).
+    pub fn get_read(&self, index: usize) -> Option<&[u8]> {
+        match self.inner.results.get(index)? {
+            BatchOpResult::Data(data) => Some(data.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// Get all results
+    pub fn results(&self) -> &[BatchOpResult] {
+        &self.inner.results
+    }
+
+    /// Iterate over all read data results
+    pub fn reads(&self) -> impl Iterator<Item = &[u8]> {
+        self.inner.results.iter().filter_map(|r| match r {
+            BatchOpResult::Data(data) => Some(data.as_slice()),
+            _ => None,
+        })
     }
 }
 
@@ -295,30 +520,43 @@ impl SpiMaster for PostcardSpi {
             return Err(CoreError::IoModeNotSupported);
         }
 
-        // Build the transfer request
-        let req = SpiTransferReq {
+        // Build a SpiTransaction
+        let mut write_data = heapless::Vec::<u8, MAX_BATCH_TX_DATA>::new();
+        write_data
+            .extend_from_slice(cmd.write_data)
+            .map_err(|_| CoreError::ProgrammerError)?;
+
+        let tx = SpiTransaction {
             opcode: cmd.opcode,
             address: cmd.address,
             address_width: core_addr_width_to_icd(cmd.address_width),
             io_mode: icd_mode,
             dummy_cycles: cmd.dummy_cycles,
-            write_len: cmd.write_data.len() as u16,
-            read_len: cmd.read_buf.len() as u16,
+            write_data,
+            read_len: cmd.read_buf.len() as u8,
         };
 
-        // Execute the transfer
-        self.do_transfer(req, cmd.write_data, cmd.read_buf)
+        // Execute via batch (single transaction)
+        let mut batch = BatchBuilder::new();
+        batch.transaction(tx);
+
+        let result = self
+            .execute_batch(batch)
             .map_err(|_| CoreError::ProgrammerError)?;
+
+        // Copy read data if any
+        if let Some(data) = result.get_read(0) {
+            let copy_len = data.len().min(cmd.read_buf.len());
+            cmd.read_buf[..copy_len].copy_from_slice(&data[..copy_len]);
+        }
 
         Ok(())
     }
 
     fn delay_us(&mut self, us: u32) {
-        let _ = block_on(async {
-            self.client
-                .send_resp::<DelayEndpoint>(&DelayReq { us })
-                .await
-        });
+        let mut batch = BatchBuilder::new();
+        batch.delay_us(us);
+        let _ = self.execute_batch(batch);
     }
 }
 
