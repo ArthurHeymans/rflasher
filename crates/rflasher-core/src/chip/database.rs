@@ -487,7 +487,7 @@ mod tests {
         )
         "#;
 
-        let mut db = ChipDatabase::new();
+        let mut db = ChipDatabase::empty();
         let count = db.load_ron(ron).unwrap();
 
         assert_eq!(count, 1);

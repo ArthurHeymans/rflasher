@@ -74,6 +74,8 @@ jobs:
   wasm:
     name: WASM Build
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: --cfg=web_sys_unstable_apis
     steps:
       - uses: actions/checkout@v4
         with:
