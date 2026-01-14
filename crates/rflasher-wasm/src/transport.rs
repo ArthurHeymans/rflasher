@@ -14,8 +14,8 @@ use rflasher_serprog::Transport;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    FlowControlType, ReadableStream, ReadableStreamDefaultReader, ReadableStreamReadResult,
-    SerialOptions, SerialPort, WritableStreamDefaultWriter,
+    FlowControlType, ReadableStream, ReadableStreamByobReader, ReadableStreamGetReaderOptions,
+    ReadableStreamReaderMode, SerialOptions, SerialPort, WritableStreamDefaultWriter,
 };
 
 // Minimal binding to access navigator.serial (not directly exposed in web-sys Navigator)
@@ -29,10 +29,14 @@ extern "C" {
 /// WebSerial transport for browser-based serprog communication
 pub struct WebSerialTransport {
     port: SerialPort,
-    reader: ReadableStreamDefaultReader,
+    reader: ReadableStreamByobReader,
     writer: WritableStreamDefaultWriter,
     /// Buffer for excess bytes read from the stream
     read_buffer: Vec<u8>,
+    /// Total bytes read (for debugging)
+    total_read: usize,
+    /// Total bytes written (for debugging)
+    total_written: usize,
 }
 
 impl WebSerialTransport {
@@ -57,14 +61,15 @@ impl WebSerialTransport {
         // Configure port options using web-sys SerialOptions
         let options = SerialOptions::new(baud_rate);
 
-        // Set a larger buffer size (default is 255 bytes, we want more for bulk transfers)
-        //options.set_buffer_size(64 * 1024);
+        // TODO the code hangs at some point with relationship to this size (around 16x bytes read)
+        // Set this very large so you're not so likely to encounter it
+        options.set_buffer_size(16 * 1024 * 1024);
 
         // Use hardware flow control if the device supports it
         options.set_flow_control(FlowControlType::Hardware);
 
         log::info!(
-            "Opening port with baudRate={}, bufferSize=64KB, flowControl=hardware",
+            "Opening port with baudRate={}, bufferSize=256, flowControl=hardware, BYOB reader",
             baud_rate
         );
 
@@ -74,11 +79,13 @@ impl WebSerialTransport {
             .await
             .map_err(|e| SerprogError::ConnectionFailed(format!("Failed to open port: {:?}", e)))?;
 
-        // Get reader from readable stream using web-sys constructor
+        // Get BYOB reader from readable stream for precise read control
         let readable: ReadableStream = port.readable();
-        let reader = ReadableStreamDefaultReader::new(&readable).map_err(|e| {
-            SerprogError::ConnectionFailed(format!("Failed to get reader: {:?}", e))
-        })?;
+        let reader_options = ReadableStreamGetReaderOptions::new();
+        reader_options.set_mode(ReadableStreamReaderMode::Byob);
+        let reader: ReadableStreamByobReader = readable
+            .get_reader_with_options(&reader_options)
+            .unchecked_into();
 
         // Get writer from writable stream
         let writable = port.writable();
@@ -94,6 +101,8 @@ impl WebSerialTransport {
             reader,
             writer,
             read_buffer: Vec::new(),
+            total_read: 0,
+            total_written: 0,
         })
     }
 
@@ -114,43 +123,62 @@ impl WebSerialTransport {
         Ok(())
     }
 
-    /// Read a chunk from the stream using web-sys ReadableStreamReadResult
-    async fn read_chunk(&mut self) -> Result<Vec<u8>> {
-        // ReadableStreamDefaultReader::read returns a Promise<ReadableStreamReadResult>
-        let read_promise = self.reader.read();
-        let result: ReadableStreamReadResult = JsFuture::from(read_promise)
+    /// Read into a buffer using BYOB reader
+    ///
+    /// Returns the number of bytes read and the new view (BYOB transfers ownership)
+    async fn read_byob(&mut self, view: js_sys::Uint8Array) -> Result<(usize, js_sys::Uint8Array)> {
+        // BYOB reader's read takes an ArrayBufferView and returns Promise<{value, done}>
+        let read_promise = self.reader.read_with_array_buffer_view(&view);
+        let result = JsFuture::from(read_promise)
             .await
-            .map_err(|e| SerprogError::IoError(format!("Read failed: {:?}", e)))?
-            .unchecked_into();
+            .map_err(|e| SerprogError::IoError(format!("BYOB read failed: {:?}", e)))?;
 
-        // Check if stream is done using typed accessor
-        if result.get_done().unwrap_or(false) {
+        // Get 'done' property
+        let done = js_sys::Reflect::get(&result, &"done".into())
+            .map_err(|_| SerprogError::IoError("Failed to get done property".to_string()))?
+            .as_bool()
+            .unwrap_or(false);
+
+        if done {
             return Err(SerprogError::IoError("Stream ended".to_string()));
         }
 
-        // Get the value (Uint8Array) using typed accessor
-        let value = result.get_value();
+        // Get 'value' property - this is the filled ArrayBufferView
+        let value = js_sys::Reflect::get(&result, &"value".into())
+            .map_err(|_| SerprogError::IoError("Failed to get value property".to_string()))?;
+
         if value.is_undefined() {
-            return Err(SerprogError::IoError("No value in read result".to_string()));
+            return Err(SerprogError::IoError(
+                "No value in BYOB read result".to_string(),
+            ));
         }
 
-        let array: js_sys::Uint8Array = value
+        let new_view: js_sys::Uint8Array = value
             .dyn_into()
             .map_err(|_| SerprogError::IoError("Value is not Uint8Array".to_string()))?;
 
-        Ok(array.to_vec())
+        // The returned view has byteLength set to actual bytes read
+        let bytes_read = new_view.byte_length() as usize;
+
+        Ok((bytes_read, new_view))
     }
 }
 
 #[maybe_async(AFIT)]
 impl Transport for WebSerialTransport {
     async fn write(&mut self, data: &[u8]) -> Result<()> {
-        log::trace!("transport write: {} bytes", data.len());
+        log::info!(
+            "transport write: {} bytes (total written: {})",
+            data.len(),
+            self.total_written
+        );
 
         // Wait for writer to be ready (handles backpressure)
+        log::trace!("  waiting for writer.ready()");
         JsFuture::from(self.writer.ready())
             .await
             .map_err(|e| SerprogError::IoError(format!("Writer not ready: {:?}", e)))?;
+        log::trace!("  writer ready, writing");
 
         // Write the data
         let array = js_sys::Uint8Array::from(data);
@@ -159,11 +187,17 @@ impl Transport for WebSerialTransport {
             .await
             .map_err(|e| SerprogError::IoError(format!("Write failed: {:?}", e)))?;
 
+        self.total_written += data.len();
+        log::trace!("  write complete");
         Ok(())
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> Result<()> {
-        log::trace!("transport read: requesting {} bytes", buf.len());
+        log::info!(
+            "transport read: requesting {} bytes (total read: {})",
+            buf.len(),
+            self.total_read
+        );
         let mut offset = 0;
 
         // First, drain any buffered data
@@ -175,50 +209,63 @@ impl Transport for WebSerialTransport {
             log::trace!("  drained {} bytes from buffer", to_copy);
         }
 
-        // Read more chunks until we have enough
+        // Read more data using BYOB reader until we have enough
         while offset < buf.len() {
-            log::trace!("  reading chunk, have {}/{} bytes", offset, buf.len());
-            let chunk = self.read_chunk().await?;
-            log::trace!("  got chunk of {} bytes", chunk.len());
             let remaining = buf.len() - offset;
+            log::trace!("  BYOB read, need {}/{} bytes", remaining, buf.len());
 
-            if chunk.len() <= remaining {
-                buf[offset..offset + chunk.len()].copy_from_slice(&chunk);
-                offset += chunk.len();
-            } else {
-                // Copy what we need, buffer the rest
-                buf[offset..].copy_from_slice(&chunk[..remaining]);
-                self.read_buffer.extend_from_slice(&chunk[remaining..]);
-                offset = buf.len();
+            // Create a view for exactly what we need
+            let view = js_sys::Uint8Array::new_with_length(remaining as u32);
+            log::trace!("  calling read_byob...");
+            let (bytes_read, filled_view) = self.read_byob(view).await?;
+            log::trace!("  BYOB got {} bytes", bytes_read);
+
+            if bytes_read == 0 {
+                return Err(SerprogError::IoError("Read returned 0 bytes".to_string()));
             }
+
+            // Copy from the filled view to our output buffer
+            filled_view.copy_to(&mut buf[offset..offset + bytes_read]);
+            offset += bytes_read;
         }
 
+        self.total_read += buf.len();
         log::trace!("transport read: complete");
         Ok(())
     }
 
     async fn read_nonblock(&mut self, buf: &mut [u8], _timeout_ms: u32) -> Result<usize> {
-        // For WebSerial, we don't have true non-blocking reads with timeout
-        // We'll try to read what's available in our buffer first
+        log::trace!("transport read_nonblock: requesting {} bytes", buf.len());
+        let mut offset = 0;
+
+        // First, drain any buffered data
         if !self.read_buffer.is_empty() {
             let to_copy = std::cmp::min(self.read_buffer.len(), buf.len());
             buf[..to_copy].copy_from_slice(&self.read_buffer[..to_copy]);
             self.read_buffer.drain(..to_copy);
-            return Ok(to_copy);
+            offset = to_copy;
+            log::trace!("  drained {} bytes from buffer", to_copy);
         }
 
-        // For now, do a blocking read - in the future we could use AbortController
-        // with a timeout to implement true non-blocking behavior
-        let chunk = self.read_chunk().await?;
-        let to_copy = std::cmp::min(chunk.len(), buf.len());
-        buf[..to_copy].copy_from_slice(&chunk[..to_copy]);
+        // If buffer is not full yet, do one BYOB read
+        if offset < buf.len() {
+            let remaining = buf.len() - offset;
+            log::trace!("  BYOB read_nonblock, need {} bytes", remaining);
 
-        // Buffer excess
-        if chunk.len() > to_copy {
-            self.read_buffer.extend_from_slice(&chunk[to_copy..]);
+            // Create a view for what we need
+            let view = js_sys::Uint8Array::new_with_length(remaining as u32);
+            let (bytes_read, filled_view) = self.read_byob(view).await?;
+            log::trace!("  BYOB got {} bytes", bytes_read);
+
+            // Copy from the filled view to our output buffer
+            if bytes_read > 0 {
+                filled_view.copy_to(&mut buf[offset..offset + bytes_read]);
+                offset += bytes_read;
+            }
         }
 
-        Ok(to_copy)
+        log::trace!("transport read_nonblock: complete, read {} bytes", offset);
+        Ok(offset)
     }
 
     async fn write_nonblock(&mut self, data: &[u8], _timeout_ms: u32) -> Result<bool> {
