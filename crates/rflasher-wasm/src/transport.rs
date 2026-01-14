@@ -63,14 +63,16 @@ impl WebSerialTransport {
 
         // TODO the code hangs at some point with relationship to this size (around 16x bytes read)
         // Set this very large so you're not so likely to encounter it
-        options.set_buffer_size(16 * 1024 * 1024);
+        let buffer_size = 16 * 1024 * 1024;
+        options.set_buffer_size(buffer_size);
 
         // Use hardware flow control if the device supports it
         options.set_flow_control(FlowControlType::Hardware);
 
         log::info!(
-            "Opening port with baudRate={}, bufferSize=256, flowControl=hardware, BYOB reader",
-            baud_rate
+            "Opening port with baudRate={}, bufferSize={}, flowControl=hardware, BYOB reader",
+            baud_rate,
+            buffer_size
         );
 
         // Open the port - SerialPort::open returns a Promise

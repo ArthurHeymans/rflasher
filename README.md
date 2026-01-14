@@ -9,6 +9,8 @@ A modern Rust implementation for reading, writing, and erasing SPI flash chips. 
 ## Features
 
 - **Modern Rust Architecture**: Clean separation of concerns with workspace organization
+- **Dual-Mode Support**: Synchronous CLI and asynchronous WASM/browser support from a single codebase
+- **Web Interface**: Browser-based UI using egui and WebSerial API for programming flash chips directly in Chrome/Edge
 - **`no_std` Compatible Core**: Designed for potential embedded and async use cases. WIP
 - **RON-based Chip Database**: Human-readable chip definitions with build-time code generation
 - **Trait-based Programmer Abstraction**: Extensible design for adding new programmers
@@ -364,17 +366,148 @@ Available functions include:
 
 Type `(rflasher-help)` in the REPL for the full list of commands.
 
+## Web Interface (WASM)
+
+rflasher includes a browser-based web interface that allows you to program flash chips directly from your web browser using the WebSerial API. This is useful for scenarios where installing native software is difficult or when you need a portable, cross-platform solution.
+
+### Features
+
+- **Browser-based UI**: Modern egui-based interface running entirely in the browser
+- **WebSerial Support**: Connect to serprog programmers via USB serial ports
+- **Full Flash Operations**: Read, write, erase, verify, and probe flash chips
+- **Progress Reporting**: Real-time progress updates for all operations
+- **File Handling**: Load firmware files and save flash dumps directly in the browser
+- **No Installation Required**: Run directly in a compatible web browser
+
+### Browser Requirements
+
+The web interface requires a browser with WebSerial API support:
+
+- **Chrome/Edge**: Version 89+ (full support)
+- **Opera**: Version 75+ (full support)
+- **Firefox**: Not yet supported (WebSerial behind flag)
+- **Safari**: Not yet supported
+
+**Note**: WebSerial is still an experimental API. Ensure your browser has the necessary permissions to access serial ports.
+
+### Building the Web Interface
+
+The web interface is built using [Trunk](https://trunkrs.dev/), a WASM web application bundler.
+
+```bash
+# Install trunk (if not already installed)
+cargo install trunk
+
+# Add the wasm32 target
+rustup target add wasm32-unknown-unknown
+
+# Build the web interface
+cd crates/rflasher-wasm
+trunk build --release
+
+# The output will be in the dist/ directory
+```
+
+For development with auto-reload:
+
+```bash
+cd crates/rflasher-wasm
+trunk serve
+# Open http://localhost:8080 in your browser
+```
+
+### Running Locally
+
+After building, you can serve the web interface locally:
+
+```bash
+# Using Python's built-in HTTP server
+cd crates/rflasher-wasm/dist
+python3 -m http.server 8080
+
+# Using any other static file server
+# cd crates/rflasher-wasm/dist
+# npx serve
+```
+
+Then open `http://localhost:8080` in a compatible browser.
+
+### Deploying to Production
+
+To deploy the web interface to a web server:
+
+1. Build the release version:
+   ```bash
+   cd crates/rflasher-wasm
+   trunk build --release
+   ```
+
+2. Copy the contents of `crates/rflasher-wasm/dist/` to your web server:
+   ```bash
+   rsync -av dist/ user@yourserver:/var/www/html/rflasher/
+   ```
+
+3. Ensure your web server is configured to:
+   - Serve the `index.html` file as the default page
+   - Set appropriate MIME types for `.wasm` files
+   - Use HTTPS (required for WebSerial API)
+
+**Important**: The WebSerial API requires a secure context (HTTPS). Local development on `localhost` works, but production deployments must use HTTPS.
+
+### Using the Web Interface
+
+1. Open the web interface in your browser
+2. Click **"Connect"** to select your serprog programmer from the serial port list
+3. Once connected, use the **Probe** button to detect the flash chip
+4. Choose an operation:
+   - **Read**: Download the current flash contents
+   - **Write**: Upload and write a firmware file to flash
+   - **Erase**: Erase the entire flash chip
+   - **Verify**: Verify flash contents against a file
+5. Monitor progress in the status panel
+
+### Nix Development Environment
+
+If you're using the provided Nix flake, the development environment includes all necessary tools:
+
+```bash
+# Enter the Nix development shell
+nix develop
+
+# The wasm32 target and trunk are already available
+cd crates/rflasher-wasm
+trunk serve
+```
+
+### Troubleshooting
+
+**"Serial port not found" or "WebSerial not supported"**
+- Ensure you're using a compatible browser (Chrome/Edge 89+)
+- Check that WebSerial is enabled in your browser settings
+- Try accessing via `chrome://flags` and enable "Experimental Web Platform features"
+
+**"Failed to open port"**
+- Ensure no other application is using the serial port
+- Check USB cable and connections
+- Verify the serprog device is properly configured
+
+**Reads hang or timeout**
+- This is a known issue being investigated (see transport.rs TODO)
+- Try using a different USB cable or port
+- Reduce the amount of data being read at once
+
 ## Architecture
 
 rflasher uses a workspace structure with clear separation of concerns:
 
-- **`rflasher-core`** - `no_std` core library with chip database, SPI protocol, and flash operations
+- **`rflasher-core`** - `no_std` core library with chip database, SPI protocol, and flash operations (supports both sync and async via `maybe-async`)
 - **`rflasher-flash`** - Unified flash device abstraction (works with both SPI and opaque programmers)
 - **`rflasher-chips-codegen`** - Build-time code generator for chip database
+- **`rflasher-wasm`** - Browser-based web interface using egui and WebSerial API (async mode)
 - **`rflasher-ch341a`** - CH341A USB programmer support
 - **`rflasher-ch347`** - CH347 USB programmer support
 - **`rflasher-dediprog`** - Dediprog SF-series USB programmer support
-- **`rflasher-serprog`** - Serial Flasher Protocol implementation
+- **`rflasher-serprog`** - Serial Flasher Protocol implementation (supports both sync and async)
 - **`rflasher-ftdi`** - FTDI MPSSE programmer support
 - **`rflasher-ft4222`** - FTDI FT4222H USB to SPI bridge support
 - **`rflasher-raiden`** - Raiden Debug SPI (Chrome OS debug hardware) support
@@ -383,6 +516,15 @@ rflasher uses a workspace structure with clear separation of concerns:
 - **`rflasher-linux-gpio`** - Linux GPIO bitbang SPI via character device
 - **`rflasher-linux-mtd`** - Linux MTD (Memory Technology Device) interface
 - **`rflasher-dummy`** - In-memory flash emulator for testing
+
+### Async/Sync Architecture
+
+The core library uses the [`maybe-async`](https://crates.io/crates/maybe-async) crate to support both synchronous (for CLI/native applications) and asynchronous (for WASM/browser applications) operation from a single codebase:
+
+- **Sync mode** (CLI): Enabled with the `is_sync` feature flag, compiles to blocking synchronous code
+- **Async mode** (WASM): Default mode, uses async/await for non-blocking browser operations
+
+This design allows the same flash operations, chip database, and programmer traits to work seamlessly in both native CLI applications and browser-based WASM environments without code duplication.
 
 ## Safety Warnings
 
