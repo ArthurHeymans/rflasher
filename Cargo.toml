@@ -18,8 +18,11 @@ members = [
     "crates/rflasher-raiden",
     "crates/rflasher-repl",
     "crates/rflasher-wasm",
+    "crates/postcard-spi-icd",
+    "crates/rflasher-postcard-spi",
 ]
-# Exclude WASM crate from default build (requires wasm32 target)
+
+# Exclude WASM crate and firmware from default build (requires different targets)
 default-members = [
     ".",
     "crates/rflasher-core",
@@ -38,6 +41,13 @@ default-members = [
     "crates/rflasher-dummy",
     "crates/rflasher-raiden",
     "crates/rflasher-repl",
+    "crates/postcard-spi-icd",
+    "crates/rflasher-postcard-spi",
+]
+
+# Firmware is excluded from workspace due to different target
+exclude = [
+    "firmware/pico-postcard-spi",
 ]
 
 [workspace.package]
@@ -85,7 +95,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden"]
+default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden", "postcard-spi"]
 
 # Programmer features (passed through to rflasher-flash)
 dummy = ["rflasher-flash/dummy"]
@@ -100,12 +110,13 @@ linux-mtd = ["rflasher-flash/linux-mtd"]
 linux-gpio = ["rflasher-flash/linux-gpio"]
 internal = ["rflasher-flash/internal"]
 raiden = ["rflasher-flash/raiden"]
+postcard-spi = ["rflasher-flash/postcard-spi"]
 
 # REPL feature for scripting with Steel Scheme
 repl = ["dep:rflasher-repl"]
 
 # Enable all programmers
-all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden"]
+all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "postcard-spi"]
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std", "is_sync"] }

@@ -1,0 +1,54 @@
+[package]
+name = "pico-postcard-spi"
+version = "0.1.0"
+edition = "2021"
+description = "Postcard-RPC based SPI programmer firmware for Raspberry Pi Pico"
+license = "GPL-2.0-or-later"
+
+[dependencies]
+# Embassy (versions matching embassy-rp 0.9 requirements)
+embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thread", "defmt"] }
+embassy-rp = { version = "0.9", features = ["defmt", "time-driver", "critical-section-impl", "rp2040"] }
+embassy-usb = { version = "0.5", features = ["defmt"] }
+embassy-sync = { version = "0.7", features = ["defmt"] }
+embassy-time = { version = "0.5", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-futures = "0.1"
+
+# Postcard RPC
+postcard-rpc = { version = "0.12", default-features = false, features = ["embassy-usb-0_5-server", "defmt"] }
+postcard-spi-icd = { path = "../../crates/postcard-spi-icd" }
+
+# Serialization
+postcard = { version = "1", default-features = false }
+serde = { version = "1", default-features = false, features = ["derive"] }
+
+# Cortex-M (no critical-section-single-core - embassy-rp handles it with critical-section-impl)
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+
+# PIO for multi-I/O SPI
+pio = "0.3"
+pio-proc = "0.2"
+
+# Utilities
+static_cell = "2"
+heapless = "0.8"
+fixed = "1.28"
+portable-atomic = { version = "1", features = ["critical-section"] }
+
+# Logging
+defmt = "1.0"
+defmt-rtt = "0.4"
+panic-probe = { version = "1.0", features = ["print-defmt"] }
+
+[profile.release]
+debug = 2
+lto = true
+opt-level = "s"
+panic = "abort"
+
+[profile.dev]
+debug = 2
+lto = true
+opt-level = "s"
+panic = "abort"
