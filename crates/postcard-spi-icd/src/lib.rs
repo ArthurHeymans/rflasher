@@ -331,6 +331,7 @@ impl SpiTransaction {
 /// Operations are executed sequentially. Each `Transact` operation
 /// handles CS automatically (assert before, deassert after).
 #[derive(Debug, Clone, Serialize, Deserialize, Schema)]
+#[allow(clippy::large_enum_variant)] // Intentional for no_std embedded use
 pub enum BatchOp {
     /// Execute a complete SPI transaction (CS is handled automatically)
     Transact(SpiTransaction),
@@ -359,6 +360,7 @@ pub enum BatchOp {
 
 /// Result of a single batch operation
 #[derive(Debug, Clone, Serialize, Deserialize, Schema)]
+#[allow(clippy::large_enum_variant)] // Intentional for no_std embedded use
 pub enum BatchOpResult {
     /// Operation completed successfully (no data returned)
     Ok,
