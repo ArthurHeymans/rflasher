@@ -59,6 +59,8 @@ impl PostcardSpi {
     /// ```
     pub fn open_by_serial(serial: &str) -> Result<Self> {
         let serial_owned = serial.to_string();
+        // Enter runtime context so try_new_raw_nusb can spawn internal tasks
+        let _guard = get_runtime().enter();
         let client = HostClient::try_new_raw_nusb(
             move |d| d.serial_number() == Some(&serial_owned),
             "postcard_spi/error",
@@ -78,6 +80,8 @@ impl PostcardSpi {
     /// * `vid` - USB Vendor ID
     /// * `pid` - USB Product ID
     pub fn open_by_vid_pid(vid: u16, pid: u16) -> Result<Self> {
+        // Enter runtime context so try_new_raw_nusb can spawn internal tasks
+        let _guard = get_runtime().enter();
         let client = HostClient::try_new_raw_nusb(
             move |d| d.vendor_id() == vid && d.product_id() == pid,
             "postcard_spi/error",

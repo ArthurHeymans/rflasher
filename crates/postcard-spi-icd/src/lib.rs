@@ -231,7 +231,7 @@ pub const MAX_BATCH_OPS: usize = 32;
 pub const MAX_BATCH_READS: usize = 16;
 
 /// Maximum bytes per read result in a batch
-pub const MAX_BATCH_READ_SIZE: usize = 64;
+pub const MAX_BATCH_READ_SIZE: usize = 1024;
 
 /// Maximum write data per transaction in a batch (256 = typical flash page size)
 pub const MAX_BATCH_TX_DATA: usize = 256;

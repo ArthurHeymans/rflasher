@@ -62,13 +62,13 @@
             pciutils
           ];
 
-        # Base rust toolchain with WASM target for web builds
+        # Base rust toolchain with WASM target for web builds & firmware
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
             "rust-src"
             "rust-analyzer"
           ];
-          targets = [ "wasm32-unknown-unknown" ];
+          targets = [ "wasm32-unknown-unknown" "thumbv6m-none-eabi"];
         };
 
         # Rust toolchain with cross targets

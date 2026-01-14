@@ -114,10 +114,10 @@ fn usb_config() -> embassy_usb::Config<'static> {
     config.product = Some("pico-postcard-spi");
     config.serial_number = Some("00000001");
 
-    // Vendor-specific class for raw bulk transfers
-    config.device_class = 0xFF;
-    config.device_sub_class = 0x00;
-    config.device_protocol = 0x00;
+    // Required for composite devices with IADs (Interface Association Descriptors)
+    config.device_class = 0xEF; // Miscellaneous
+    config.device_sub_class = 0x02; // Common Class
+    config.device_protocol = 0x01; // IAD
 
     config
 }
@@ -157,14 +157,14 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
     // Initialize chip select pins (active low, start high/deasserted)
-    let cs0 = Output::new(p.PIN_3, Level::High);
-    let cs1 = Output::new(p.PIN_4, Level::High);
+    let cs0 = Output::new(p.PIN_5, Level::High);
+    let cs1 = Output::new(p.PIN_9, Level::High);
 
     // Initialize PIO QSPI driver (bit-banged GPIO for now)
     let qspi = PioQspi::new(
         p.PIN_2, // SCK
-        p.PIN_5, // IO0 (MOSI)
-        p.PIN_6, // IO1 (MISO)
+        p.PIN_3, // IO0 (MOSI)
+        p.PIN_4, // IO1 (MISO)
         p.PIN_7, // IO2
         p.PIN_8, // IO3
     );

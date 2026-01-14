@@ -95,7 +95,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden"]
+default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden", "postcard-spi"]
 
 # Programmer features (passed through to rflasher-flash)
 dummy = ["rflasher-flash/dummy"]
