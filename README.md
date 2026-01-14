@@ -370,6 +370,8 @@ Type `(rflasher-help)` in the REPL for the full list of commands.
 
 rflasher includes a browser-based web interface that allows you to program flash chips directly from your web browser using the WebSerial API. This is useful for scenarios where installing native software is difficult or when you need a portable, cross-platform solution.
 
+![rflasher Web Interface](docs/images/webui-screenshot.png)
+
 ### Features
 
 - **Browser-based UI**: Modern egui-based interface running entirely in the browser
