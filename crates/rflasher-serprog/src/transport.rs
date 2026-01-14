@@ -1,40 +1,50 @@
 //! Transport layer abstraction for serprog communication
 //!
 //! This module provides a unified interface for serial and TCP transports.
+//! Uses `maybe_async` to support both sync and async modes.
 
-use crate::error::{Result, SerprogError};
+use crate::error::Result;
+#[cfg(feature = "is_sync")]
+use crate::error::SerprogError;
+use maybe_async::maybe_async;
 
 /// Transport trait for reading and writing bytes
+///
+/// This trait uses `maybe_async` to support both sync and async modes:
+/// - With `is_sync` feature: blocking/synchronous
+/// - Without `is_sync` feature: async (for WASM, Embassy, tokio)
+#[maybe_async(AFIT)]
 pub trait Transport {
     /// Write bytes to the transport
-    fn write(&mut self, data: &[u8]) -> Result<()>;
+    async fn write(&mut self, data: &[u8]) -> Result<()>;
 
     /// Read bytes from the transport
     ///
     /// Reads exactly `buf.len()` bytes into the buffer.
     /// Returns an error if not enough bytes are available.
-    fn read(&mut self, buf: &mut [u8]) -> Result<()>;
+    async fn read(&mut self, buf: &mut [u8]) -> Result<()>;
 
     /// Read with timeout (non-blocking)
     ///
     /// Reads up to `buf.len()` bytes, waiting up to `timeout_ms` milliseconds.
     /// Returns the number of bytes read, or 0 if timeout.
-    fn read_nonblock(&mut self, buf: &mut [u8], timeout_ms: u32) -> Result<usize>;
+    async fn read_nonblock(&mut self, buf: &mut [u8], timeout_ms: u32) -> Result<usize>;
 
     /// Write with timeout (non-blocking)
     ///
     /// Returns true if write succeeded, false on timeout.
-    fn write_nonblock(&mut self, data: &[u8], timeout_ms: u32) -> Result<bool>;
+    async fn write_nonblock(&mut self, data: &[u8], timeout_ms: u32) -> Result<bool>;
 
     /// Flush any buffered data
-    fn flush(&mut self) -> Result<()>;
+    async fn flush(&mut self) -> Result<()>;
 }
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "is_sync"))]
 pub mod serial {
-    //! Serial port transport implementation
+    //! Serial port transport implementation (sync mode)
 
     use super::*;
+    use maybe_async::maybe_async;
     use serialport::{DataBits, FlowControl, Parity, SerialPort, StopBits};
     use std::io::{Read, Write};
     use std::time::Duration;
@@ -71,18 +81,19 @@ pub mod serial {
         }
     }
 
+    #[maybe_async(AFIT)]
     impl Transport for SerialTransport {
-        fn write(&mut self, data: &[u8]) -> Result<()> {
+        async fn write(&mut self, data: &[u8]) -> Result<()> {
             self.port.write_all(data)?;
             Ok(())
         }
 
-        fn read(&mut self, buf: &mut [u8]) -> Result<()> {
+        async fn read(&mut self, buf: &mut [u8]) -> Result<()> {
             self.port.read_exact(buf)?;
             Ok(())
         }
 
-        fn read_nonblock(&mut self, buf: &mut [u8], timeout_ms: u32) -> Result<usize> {
+        async fn read_nonblock(&mut self, buf: &mut [u8], timeout_ms: u32) -> Result<usize> {
             // Set temporary timeout
             let old_timeout = self.port.timeout();
             self.port
@@ -99,7 +110,7 @@ pub mod serial {
             result
         }
 
-        fn write_nonblock(&mut self, data: &[u8], timeout_ms: u32) -> Result<bool> {
+        async fn write_nonblock(&mut self, data: &[u8], timeout_ms: u32) -> Result<bool> {
             // Set temporary timeout
             let old_timeout = self.port.timeout();
             self.port
@@ -116,18 +127,19 @@ pub mod serial {
             result
         }
 
-        fn flush(&mut self) -> Result<()> {
+        async fn flush(&mut self) -> Result<()> {
             self.port.flush()?;
             Ok(())
         }
     }
 }
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "is_sync"))]
 pub mod tcp {
-    //! TCP socket transport implementation
+    //! TCP socket transport implementation (sync mode)
 
     use super::*;
+    use maybe_async::maybe_async;
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::Duration;
@@ -169,18 +181,19 @@ pub mod tcp {
         }
     }
 
+    #[maybe_async(AFIT)]
     impl Transport for TcpTransport {
-        fn write(&mut self, data: &[u8]) -> Result<()> {
+        async fn write(&mut self, data: &[u8]) -> Result<()> {
             self.stream.write_all(data)?;
             Ok(())
         }
 
-        fn read(&mut self, buf: &mut [u8]) -> Result<()> {
+        async fn read(&mut self, buf: &mut [u8]) -> Result<()> {
             self.stream.read_exact(buf)?;
             Ok(())
         }
 
-        fn read_nonblock(&mut self, buf: &mut [u8], timeout_ms: u32) -> Result<usize> {
+        async fn read_nonblock(&mut self, buf: &mut [u8], timeout_ms: u32) -> Result<usize> {
             // Set temporary timeout
             self.stream
                 .set_read_timeout(Some(Duration::from_millis(timeout_ms as u64)))?;
@@ -197,7 +210,7 @@ pub mod tcp {
             result
         }
 
-        fn write_nonblock(&mut self, data: &[u8], timeout_ms: u32) -> Result<bool> {
+        async fn write_nonblock(&mut self, data: &[u8], timeout_ms: u32) -> Result<bool> {
             // Set temporary timeout
             self.stream
                 .set_write_timeout(Some(Duration::from_millis(timeout_ms as u64)))?;
@@ -215,9 +228,15 @@ pub mod tcp {
             result
         }
 
-        fn flush(&mut self) -> Result<()> {
+        async fn flush(&mut self) -> Result<()> {
             self.stream.flush()?;
             Ok(())
         }
     }
 }
+
+// Re-export serial/tcp modules based on feature flags
+#[cfg(all(feature = "std", feature = "is_sync"))]
+pub use serial::SerialTransport;
+#[cfg(all(feature = "std", feature = "is_sync"))]
+pub use tcp::TcpTransport;

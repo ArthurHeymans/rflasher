@@ -4,14 +4,13 @@
 //! SPI-based flash chips (via `SpiMaster` + `FlashContext`) and opaque
 //! programmers (via `OpaqueMaster`).
 //!
-//! The key insight is that from the perspective of high-level operations
-//! (read, write, erase, verify, smart write), both types provide the same
-//! semantic operations - just with different underlying implementations.
+//! Uses `maybe_async` to support both sync and async modes.
 
 use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::Result;
 #[cfg(feature = "alloc")]
 use crate::wp::{WpConfig, WpError, WpMode, WpRange, WpResult, WriteOptions};
+use maybe_async::maybe_async;
 
 /// Unified trait for flash devices
 ///
@@ -40,6 +39,7 @@ use crate::wp::{WpConfig, WpError, WpMode, WpRange, WpResult, WriteOptions};
 ///     Ok(buf)
 /// }
 /// ```
+#[maybe_async(AFIT)]
 pub trait FlashDevice {
     /// Get the total flash size in bytes
     fn size(&self) -> u32;
@@ -75,7 +75,7 @@ pub trait FlashDevice {
     /// # Errors
     /// * `AddressOutOfBounds` - If the read extends beyond flash size
     /// * `ReadError` - If the read operation fails
-    fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()>;
+    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()>;
 
     /// Write data to flash
     ///
@@ -89,7 +89,7 @@ pub trait FlashDevice {
     /// # Errors
     /// * `AddressOutOfBounds` - If the write extends beyond flash size
     /// * `WriteError` - If the write operation fails
-    fn write(&mut self, addr: u32, data: &[u8]) -> Result<()>;
+    async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()>;
 
     /// Erase a region of flash
     ///
@@ -103,7 +103,7 @@ pub trait FlashDevice {
     /// * `AddressOutOfBounds` - If the erase extends beyond flash size
     /// * `InvalidAlignment` - If address or length is not properly aligned
     /// * `EraseError` - If the erase operation fails
-    fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
+    async fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
 
     /// Check if a range is valid for this device
     fn is_valid_range(&self, addr: u32, len: usize) -> bool {
@@ -123,31 +123,35 @@ pub trait FlashDevice {
 
     /// Read current write protection configuration
     #[cfg(feature = "alloc")]
-    fn read_wp_config(&mut self) -> WpResult<WpConfig> {
+    async fn read_wp_config(&mut self) -> WpResult<WpConfig> {
         Err(WpError::ChipUnsupported)
     }
 
     /// Write write protection configuration
     #[cfg(feature = "alloc")]
-    fn write_wp_config(&mut self, _config: &WpConfig, _options: WriteOptions) -> WpResult<()> {
+    async fn write_wp_config(
+        &mut self,
+        _config: &WpConfig,
+        _options: WriteOptions,
+    ) -> WpResult<()> {
         Err(WpError::ChipUnsupported)
     }
 
     /// Set write protection mode only
     #[cfg(feature = "alloc")]
-    fn set_wp_mode(&mut self, _mode: WpMode, _options: WriteOptions) -> WpResult<()> {
+    async fn set_wp_mode(&mut self, _mode: WpMode, _options: WriteOptions) -> WpResult<()> {
         Err(WpError::ChipUnsupported)
     }
 
     /// Set protected range only
     #[cfg(feature = "alloc")]
-    fn set_wp_range(&mut self, _range: &WpRange, _options: WriteOptions) -> WpResult<()> {
+    async fn set_wp_range(&mut self, _range: &WpRange, _options: WriteOptions) -> WpResult<()> {
         Err(WpError::ChipUnsupported)
     }
 
     /// Disable all write protection
     #[cfg(feature = "alloc")]
-    fn disable_wp(&mut self, _options: WriteOptions) -> WpResult<()> {
+    async fn disable_wp(&mut self, _options: WriteOptions) -> WpResult<()> {
         Err(WpError::ChipUnsupported)
     }
 
@@ -163,18 +167,19 @@ pub trait FlashDevice {
 /// This is separate from the main trait to keep the core trait minimal and
 /// easier to implement, while still providing useful derived functionality.
 #[cfg(feature = "alloc")]
+#[maybe_async(AFIT)]
 pub trait FlashDeviceExt: FlashDevice {
     /// Read the entire flash contents
-    fn read_all(&mut self) -> Result<alloc::vec::Vec<u8>> {
+    async fn read_all(&mut self) -> Result<alloc::vec::Vec<u8>> {
         let size = self.size() as usize;
         let mut buf = alloc::vec![0u8; size];
-        self.read(0, &mut buf)?;
+        self.read(0, &mut buf).await?;
         Ok(buf)
     }
 
     /// Erase the entire flash chip
-    fn erase_all(&mut self) -> Result<()> {
-        self.erase(0, self.size())
+    async fn erase_all(&mut self) -> Result<()> {
+        self.erase(0, self.size()).await
     }
 }
 

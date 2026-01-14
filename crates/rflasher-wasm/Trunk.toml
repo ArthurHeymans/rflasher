@@ -1,0 +1,15 @@
+# Trunk configuration for rflasher-wasm
+
+[build]
+# Output directory
+dist = "dist"
+
+[watch]
+# Watch these directories for changes
+watch = ["src", "index.html"]
+
+[serve]
+# Development server configuration
+address = "127.0.0.1"
+port = 8080
+open = false

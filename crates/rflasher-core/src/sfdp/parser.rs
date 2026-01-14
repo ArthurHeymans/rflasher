@@ -1,27 +1,36 @@
 //! SFDP parsing implementation
 //!
 //! This module provides functions to read and parse SFDP data from flash chips.
+//!
+//! Uses `maybe_async` to support both sync and async modes.
 
 use crate::error::{Error, Result};
 use crate::programmer::SpiMaster;
 use crate::protocol;
+use maybe_async::maybe_async;
 
 use super::types::*;
 
 /// Read raw SFDP data from flash
 ///
 /// This is a low-level function that reads SFDP data at the specified address.
-pub fn read_sfdp<M: SpiMaster + ?Sized>(master: &mut M, addr: u32, buf: &mut [u8]) -> Result<()> {
-    protocol::read_sfdp(master, addr, buf)
+#[maybe_async]
+pub async fn read_sfdp<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    addr: u32,
+    buf: &mut [u8],
+) -> Result<()> {
+    protocol::read_sfdp(master, addr, buf).await
 }
 
 /// Parse the SFDP header and verify signature
-fn parse_header<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpHeader> {
+#[maybe_async]
+async fn parse_header<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpHeader> {
     let mut buf = [0u8; 8];
 
     log::debug!("Reading SFDP header (8 bytes at address 0x00)...");
 
-    read_sfdp(master, 0x00, &mut buf)?;
+    read_sfdp(master, 0x00, &mut buf).await?;
 
     log::debug!(
         "SFDP header bytes: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
@@ -58,13 +67,14 @@ fn parse_header<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpHeader> {
 }
 
 /// Read and parse a parameter header
-fn read_param_header<M: SpiMaster + ?Sized>(
+#[maybe_async]
+async fn read_param_header<M: SpiMaster + ?Sized>(
     master: &mut M,
     index: usize,
 ) -> Result<ParameterHeader> {
     let mut buf = [0u8; 8];
     let addr = 0x08 + (index as u32 * 8);
-    read_sfdp(master, addr, &mut buf)?;
+    read_sfdp(master, addr, &mut buf).await?;
     Ok(ParameterHeader::parse(&buf))
 }
 
@@ -259,7 +269,8 @@ fn parse_bfpt_dword16(dword: u32, params: &mut BasicFlashParams) {
 }
 
 /// Parse the Basic Flash Parameter Table
-fn parse_bfpt<M: SpiMaster + ?Sized>(
+#[maybe_async]
+async fn parse_bfpt<M: SpiMaster + ?Sized>(
     master: &mut M,
     header: &ParameterHeader,
 ) -> Result<BasicFlashParams> {
@@ -272,7 +283,7 @@ fn parse_bfpt<M: SpiMaster + ?Sized>(
     // Read the parameter table
     let mut buf = [0u8; 92]; // Up to 23 DWORDs (JESD216F)
     let read_len = core::cmp::min(len, buf.len());
-    read_sfdp(master, header.table_pointer, &mut buf[..read_len])?;
+    read_sfdp(master, header.table_pointer, &mut buf[..read_len]).await?;
 
     let mut params = BasicFlashParams {
         revision: header.revision,
@@ -329,7 +340,8 @@ fn parse_bfpt<M: SpiMaster + ?Sized>(
 }
 
 /// Parse the 4-Byte Address Instruction Table
-fn parse_4byte_addr_table<M: SpiMaster + ?Sized>(
+#[maybe_async]
+async fn parse_4byte_addr_table<M: SpiMaster + ?Sized>(
     master: &mut M,
     header: &ParameterHeader,
 ) -> Result<FourByteAddrTable> {
@@ -342,7 +354,7 @@ fn parse_4byte_addr_table<M: SpiMaster + ?Sized>(
     // Read the parameter table (2 DWORDs)
     let mut buf = [0u8; 8];
     let read_len = core::cmp::min(len, buf.len());
-    read_sfdp(master, header.table_pointer, &mut buf[..read_len])?;
+    read_sfdp(master, header.table_pointer, &mut buf[..read_len]).await?;
 
     let get_dword = |offset: usize| -> u32 {
         if offset + 4 <= read_len {
@@ -381,9 +393,10 @@ fn parse_4byte_addr_table<M: SpiMaster + ?Sized>(
 /// println!("Flash size: {} bytes", info.total_size());
 /// println!("Page size: {} bytes", info.page_size());
 /// ```
-pub fn probe<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpInfo> {
+#[maybe_async]
+pub async fn probe<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpInfo> {
     // Read and parse the SFDP header
-    let header = parse_header(master)?;
+    let header = parse_header(master).await?;
 
     let num_headers = header.num_param_headers();
     let mut info = SfdpInfo {
@@ -401,17 +414,17 @@ pub fn probe<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpInfo> {
             break;
         }
 
-        let param_header = read_param_header(master, i)?;
+        let param_header = read_param_header(master, i).await?;
 
         match param_header.id {
             // Basic Flash Parameter Table (mandatory)
             PARAM_ID_BASIC => {
-                info.basic_params = parse_bfpt(master, &param_header)?;
+                info.basic_params = parse_bfpt(master, &param_header).await?;
                 found_bfpt = true;
             }
             // 4-Byte Address Instruction Table
             PARAM_ID_4BYTE_ADDR => {
-                if let Ok(table) = parse_4byte_addr_table(master, &param_header) {
+                if let Ok(table) = parse_4byte_addr_table(master, &param_header).await {
                     log::debug!(
                         "Found 4-byte address instruction table: rev {}.{}",
                         table.revision.major,
@@ -443,9 +456,10 @@ pub fn probe<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpInfo> {
 /// Check if SFDP is supported without fully parsing
 ///
 /// This is a quick check that only reads the SFDP signature.
-pub fn is_supported<M: SpiMaster + ?Sized>(master: &mut M) -> bool {
+#[maybe_async]
+pub async fn is_supported<M: SpiMaster + ?Sized>(master: &mut M) -> bool {
     let mut buf = [0u8; 4];
-    if read_sfdp(master, 0x00, &mut buf).is_err() {
+    if read_sfdp(master, 0x00, &mut buf).await.is_err() {
         return false;
     }
 
@@ -799,15 +813,16 @@ impl SfdpProbeResult {
 ///
 /// Returns a result containing all discovered information.
 #[cfg(feature = "std")]
-pub fn probe_with_database<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn probe_with_database<M: SpiMaster + ?Sized>(
     master: &mut M,
     db: &crate::chip::ChipDatabase,
 ) -> Result<SfdpProbeResult> {
     // Read JEDEC ID first
-    let (jedec_manufacturer, jedec_device) = protocol::read_jedec_id(master)?;
+    let (jedec_manufacturer, jedec_device) = protocol::read_jedec_id(master).await?;
 
     // Probe SFDP
-    let sfdp = probe(master)?;
+    let sfdp = probe(master).await?;
 
     // Look up in database
     let database_chip = db

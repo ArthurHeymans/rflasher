@@ -37,7 +37,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libudev-dev libftdi1-dev
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --exclude rflasher-wasm --all-targets --all-features -- -D warnings
 
   test:
     name: Tests
@@ -53,7 +53,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libudev-dev libftdi1-dev
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --exclude rflasher-wasm --all-features
 
   build:
     name: Build
@@ -69,4 +69,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libudev-dev libftdi1-dev
       - name: Build
-        run: cargo build --workspace --all-features --release
+        run: cargo build --workspace --exclude rflasher-wasm --all-features --release
+
+  wasm:
+    name: WASM Build
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: --cfg=web_sys_unstable_apis
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (WASM)
+        run: cargo clippy --package rflasher-wasm --target wasm32-unknown-unknown -- -D warnings
+      - name: Build (WASM)
+        run: cargo build --package rflasher-wasm --target wasm32-unknown-unknown --release

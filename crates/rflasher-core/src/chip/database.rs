@@ -3,7 +3,11 @@
 //! This module provides the `ChipDatabase` type for loading chip definitions
 //! from RON files at runtime.
 
-use alloc::{string::String, vec::Vec};
+use alloc::{
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -307,6 +311,10 @@ struct VendorDef {
 // Chip database
 // ============================================================================
 
+// Include the generated chip database if the feature is enabled
+#[cfg(feature = "static-chips")]
+include!(concat!(env!("OUT_DIR"), "/chips_generated.rs"));
+
 /// Runtime chip database
 ///
 /// Holds a collection of flash chip definitions that can be loaded from RON files.
@@ -316,8 +324,26 @@ pub struct ChipDatabase {
 }
 
 impl ChipDatabase {
-    /// Create an empty chip database
+    /// Create a chip database with the static chip definitions (if compiled in)
+    ///
+    /// When the `static-chips` feature is enabled, this returns a database
+    /// pre-populated with all chips from the chips/vendors/ directory.
+    /// Otherwise, returns an empty database.
+    #[cfg(feature = "static-chips")]
     pub fn new() -> Self {
+        Self {
+            chips: CHIPS.clone(),
+        }
+    }
+
+    /// Create an empty chip database (no static chips compiled in)
+    #[cfg(not(feature = "static-chips"))]
+    pub fn new() -> Self {
+        Self { chips: Vec::new() }
+    }
+
+    /// Create an empty chip database (ignores static chips even if compiled in)
+    pub fn empty() -> Self {
         Self { chips: Vec::new() }
     }
 
@@ -461,7 +487,7 @@ mod tests {
         )
         "#;
 
-        let mut db = ChipDatabase::new();
+        let mut db = ChipDatabase::empty();
         let count = db.load_ron(ron).unwrap();
 
         assert_eq!(count, 1);

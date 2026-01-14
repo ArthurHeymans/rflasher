@@ -3,6 +3,10 @@
 //! This crate implements the serprog protocol for communication with
 //! microcontroller-based flash programmers.
 //!
+//! Uses `maybe_async` to support both sync and async modes:
+//! - With `is_sync` feature: blocking/synchronous operations
+//! - Without `is_sync` feature: async operations (for WASM, Embassy, tokio)
+//!
 //! # Protocol Overview
 //!
 //! The Serial Flasher Protocol (serprog) is a simple protocol for communicating
@@ -11,12 +15,13 @@
 //!
 //! # Supported Transports
 //!
-//! - Serial port: `/dev/ttyUSB0`, `/dev/ttyACM0`, `COM1`, etc.
-//! - TCP socket: `host:port`
+//! - Serial port: `/dev/ttyUSB0`, `/dev/ttyACM0`, `COM1`, etc. (sync mode only)
+//! - TCP socket: `host:port` (sync mode only)
+//! - Custom transports: Implement the `Transport` trait for WebSerial, etc.
 //!
-//! # Example
+//! # Example (sync mode)
 //!
-//! ```no_run
+//! ```ignore
 //! use rflasher_serprog::{Serprog, SerialTransport};
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
@@ -37,6 +42,8 @@
 //! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
+// Allow async fn in traits - we use maybe-async for dual sync/async support
+#![allow(async_fn_in_trait)]
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
@@ -44,6 +51,7 @@ extern crate alloc;
 pub mod error;
 pub mod protocol;
 
+// Device and transport are available in std mode
 #[cfg(feature = "std")]
 pub mod device;
 #[cfg(feature = "std")]
@@ -56,14 +64,16 @@ pub use protocol::{bus, CommandMap, ProgrammerInfo};
 #[cfg(feature = "std")]
 pub use device::Serprog;
 #[cfg(feature = "std")]
-pub use transport::serial::SerialTransport;
-#[cfg(feature = "std")]
-pub use transport::tcp::TcpTransport;
-#[cfg(feature = "std")]
 pub use transport::Transport;
 
+// Serial and TCP transports only available in sync mode with std
+#[cfg(all(feature = "std", feature = "is_sync"))]
+pub use transport::SerialTransport;
+#[cfg(all(feature = "std", feature = "is_sync"))]
+pub use transport::TcpTransport;
+
 /// Connection options for serprog
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "is_sync"))]
 #[derive(Debug, Clone)]
 pub enum SerprogConnection {
     /// Serial port connection
@@ -82,7 +92,7 @@ pub enum SerprogConnection {
     },
 }
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "is_sync"))]
 impl SerprogConnection {
     /// Parse a connection string
     ///
@@ -132,11 +142,13 @@ impl SerprogConnection {
 ///
 /// This is a convenience function that handles both serial and TCP connections
 /// and returns a type-erased SpiMaster.
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "is_sync"))]
 pub fn open_serprog(
     options: &str,
-) -> std::result::Result<Box<dyn rflasher_core::programmer::SpiMaster>, Box<dyn std::error::Error>>
-{
+) -> std::result::Result<
+    Box<dyn rflasher_core::programmer::SpiMaster + Send>,
+    Box<dyn std::error::Error>,
+> {
     let conn = SerprogConnection::parse(options)?;
 
     match conn {
@@ -154,14 +166,14 @@ pub fn open_serprog(
 }
 
 /// Open a serprog connection via serial port
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "is_sync"))]
 pub fn open_serial(device: &str, baud: Option<u32>) -> Result<Serprog<SerialTransport>> {
     let transport = SerialTransport::open(device, baud)?;
     Serprog::new(transport)
 }
 
 /// Open a serprog connection via TCP
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "is_sync"))]
 pub fn open_tcp(host: &str, port: u16) -> Result<Serprog<TcpTransport>> {
     let transport = TcpTransport::connect(host, port)?;
     Serprog::new(transport)

@@ -22,9 +22,11 @@ rflasher-internal = { path = "../rflasher-internal", optional = true }
 rflasher-raiden = { path = "../rflasher-raiden", optional = true }
 
 [features]
-default = ["std"]
+default = ["std", "is_sync"]
 std = ["rflasher-core/std"]
 alloc = ["rflasher-core/alloc"]
+# Sync mode - when enabled, all programmer code is synchronous
+is_sync = ["rflasher-core/is_sync", "rflasher-serprog?/is_sync"]
 
 # Programmer features
 dummy = ["dep:rflasher-dummy"]

@@ -1,0 +1,4 @@
+# Enable unstable web-sys APIs (WebSerial)
+# See: https://wasm-bindgen.github.io/wasm-bindgen/web-sys/unstable-apis.html
+[build]
+rustflags = ["--cfg=web_sys_unstable_apis"]

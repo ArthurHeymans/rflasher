@@ -11,6 +11,7 @@ use super::types::{
 use crate::error::Error;
 use crate::programmer::SpiMaster;
 use crate::protocol;
+use maybe_async::maybe_async;
 
 /// Write protection result type with detailed error information
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +64,11 @@ impl core::fmt::Display for WpError {
 pub type WpResult<T> = core::result::Result<T, WpError>;
 
 /// Read a single bit from the appropriate status register
-fn read_bit<M: SpiMaster + ?Sized>(master: &mut M, bit_info: &RegBitInfo) -> WpResult<Option<u8>> {
+#[maybe_async]
+async fn read_bit<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    bit_info: &RegBitInfo,
+) -> WpResult<Option<u8>> {
     let reg = match bit_info.reg {
         Some(r) => r,
         None => return Ok(None),
@@ -74,10 +79,10 @@ fn read_bit<M: SpiMaster + ?Sized>(master: &mut M, bit_info: &RegBitInfo) -> WpR
     }
 
     let sr_val = match reg {
-        StatusRegister::Status1 => protocol::read_status1(master)?,
-        StatusRegister::Status2 => protocol::read_status2(master)?,
-        StatusRegister::Status3 => protocol::read_status3(master)?,
-        StatusRegister::Config => protocol::read_status2(master)?, // Often same as SR2
+        StatusRegister::Status1 => protocol::read_status1(master).await?,
+        StatusRegister::Status2 => protocol::read_status2(master).await?,
+        StatusRegister::Status3 => protocol::read_status3(master).await?,
+        StatusRegister::Config => protocol::read_status2(master).await?, // Often same as SR2
     };
 
     let bit_val = (sr_val >> bit_info.bit_index) & 1;
@@ -85,37 +90,38 @@ fn read_bit<M: SpiMaster + ?Sized>(master: &mut M, bit_info: &RegBitInfo) -> WpR
 }
 
 /// Read all write protection bits from the chip
-pub fn read_wp_bits<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn read_wp_bits<M: SpiMaster + ?Sized>(
     master: &mut M,
     bit_map: &WpRegBitMap,
 ) -> WpResult<WpBits> {
     let mut bits = WpBits::empty();
 
     // Read SRP
-    bits.srp = read_bit(master, &bit_map.srp)?;
+    bits.srp = read_bit(master, &bit_map.srp).await?;
 
     // Read SRL
-    bits.srl = read_bit(master, &bit_map.srl)?;
+    bits.srl = read_bit(master, &bit_map.srl).await?;
 
     // Read CMP
-    bits.cmp = read_bit(master, &bit_map.cmp)?;
+    bits.cmp = read_bit(master, &bit_map.cmp).await?;
 
     // Read SEC
-    bits.sec = read_bit(master, &bit_map.sec)?;
+    bits.sec = read_bit(master, &bit_map.sec).await?;
 
     // Read TB
-    bits.tb = read_bit(master, &bit_map.tb)?;
+    bits.tb = read_bit(master, &bit_map.tb).await?;
 
     // Read BP bits
     bits.bp_count = bit_map.bp_count();
     for i in 0..bits.bp_count {
-        if let Some(val) = read_bit(master, &bit_map.bp[i])? {
+        if let Some(val) = read_bit(master, &bit_map.bp[i]).await? {
             bits.bp[i] = val;
         }
     }
 
     // Check for WPS bit (per-sector protection mode)
-    if let Some(1) = read_bit(master, &bit_map.wps)? {
+    if let Some(1) = read_bit(master, &bit_map.wps).await? {
         return Err(WpError::UnsupportedState);
     }
 
@@ -123,13 +129,14 @@ pub fn read_wp_bits<M: SpiMaster + ?Sized>(
 }
 
 /// Read the current write protection configuration
-pub fn read_wp_config<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn read_wp_config<M: SpiMaster + ?Sized>(
     master: &mut M,
     bit_map: &WpRegBitMap,
     total_size: u32,
     decoder: RangeDecoder,
 ) -> WpResult<WpConfig> {
-    let bits = read_wp_bits(master, bit_map)?;
+    let bits = read_wp_bits(master, bit_map).await?;
     let mode = bits.mode();
     let range = decode_range(&bits, total_size, decoder);
 
@@ -190,10 +197,11 @@ fn build_register_values(bits: &WpBits, bit_map: &WpRegBitMap) -> (u8, u8, u8) {
 }
 
 /// Read current register values preserving non-WP bits
-fn read_current_registers<M: SpiMaster + ?Sized>(master: &mut M) -> WpResult<(u8, u8, u8)> {
-    let sr1 = protocol::read_status1(master)?;
-    let sr2 = protocol::read_status2(master).unwrap_or(0);
-    let sr3 = protocol::read_status3(master).unwrap_or(0);
+#[maybe_async]
+async fn read_current_registers<M: SpiMaster + ?Sized>(master: &mut M) -> WpResult<(u8, u8, u8)> {
+    let sr1 = protocol::read_status1(master).await?;
+    let sr2 = protocol::read_status2(master).await.unwrap_or(0);
+    let sr3 = protocol::read_status3(master).await.unwrap_or(0);
     Ok((sr1, sr2, sr3))
 }
 
@@ -246,14 +254,15 @@ pub struct WriteOptions {
 }
 
 /// Write WP bits to the chip
-pub fn write_wp_bits<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn write_wp_bits<M: SpiMaster + ?Sized>(
     master: &mut M,
     bits: &WpBits,
     bit_map: &WpRegBitMap,
     options: WriteOptions,
 ) -> WpResult<()> {
     // Read current values
-    let (curr_sr1, curr_sr2, _curr_sr3) = read_current_registers(master)?;
+    let (curr_sr1, curr_sr2, _curr_sr3) = read_current_registers(master).await?;
 
     // Build new values and masks
     let (new_sr1, new_sr2, _new_sr3) = build_register_values(bits, bit_map);
@@ -280,13 +289,13 @@ pub fn write_wp_bits<M: SpiMaster + ?Sized>(
     // 2. Or writing to volatile SR copies that reset on power cycle
     let _ = options.volatile; // Acknowledge the option for future use
     if need_sr2 {
-        protocol::write_status12(master, final_sr1, final_sr2)?;
+        protocol::write_status12(master, final_sr1, final_sr2).await?;
     } else {
-        protocol::write_status1(master, final_sr1)?;
+        protocol::write_status1(master, final_sr1).await?;
     }
 
     // Verify the write
-    let (verify_sr1, verify_sr2, _) = read_current_registers(master)?;
+    let (verify_sr1, verify_sr2, _) = read_current_registers(master).await?;
     if (verify_sr1 & mask1) != (final_sr1 & mask1) {
         return Err(WpError::VerifyFailed);
     }
@@ -298,7 +307,8 @@ pub fn write_wp_bits<M: SpiMaster + ?Sized>(
 }
 
 /// Set the write protection mode
-pub fn set_wp_mode<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn set_wp_mode<M: SpiMaster + ?Sized>(
     master: &mut M,
     mode: WpMode,
     bit_map: &WpRegBitMap,
@@ -327,11 +337,12 @@ pub fn set_wp_mode<M: SpiMaster + ?Sized>(
         return Err(WpError::ModeUnsupported);
     }
 
-    write_wp_bits(master, &bits, bit_map, options)
+    write_wp_bits(master, &bits, bit_map, options).await
 }
 
 /// Set the protected range
-pub fn set_wp_range<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn set_wp_range<M: SpiMaster + ?Sized>(
     master: &mut M,
     range: &WpRange,
     bit_map: &WpRegBitMap,
@@ -340,7 +351,7 @@ pub fn set_wp_range<M: SpiMaster + ?Sized>(
     options: WriteOptions,
 ) -> WpResult<()> {
     // Read current bits to use as template
-    let current_bits = read_wp_bits(master, bit_map)?;
+    let current_bits = read_wp_bits(master, bit_map).await?;
 
     // Create a template with all available bits
     let mut template = WpBits::empty();
@@ -364,11 +375,12 @@ pub fn set_wp_range<M: SpiMaster + ?Sized>(
     write_bits.srp = current_bits.srp;
     write_bits.srl = current_bits.srl;
 
-    write_wp_bits(master, &write_bits, bit_map, options)
+    write_wp_bits(master, &write_bits, bit_map, options).await
 }
 
 /// Write complete write protection configuration
-pub fn write_wp_config<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn write_wp_config<M: SpiMaster + ?Sized>(
     master: &mut M,
     config: &WpConfig,
     bit_map: &WpRegBitMap,
@@ -377,14 +389,15 @@ pub fn write_wp_config<M: SpiMaster + ?Sized>(
     options: WriteOptions,
 ) -> WpResult<()> {
     // First set the range
-    set_wp_range(master, &config.range, bit_map, total_size, decoder, options)?;
+    set_wp_range(master, &config.range, bit_map, total_size, decoder, options).await?;
 
     // Then set the mode
-    set_wp_mode(master, config.mode, bit_map, options)
+    set_wp_mode(master, config.mode, bit_map, options).await
 }
 
 /// Disable all write protection
-pub fn disable_wp<M: SpiMaster + ?Sized>(
+#[maybe_async]
+pub async fn disable_wp<M: SpiMaster + ?Sized>(
     master: &mut M,
     bit_map: &WpRegBitMap,
     options: WriteOptions,
@@ -416,7 +429,7 @@ pub fn disable_wp<M: SpiMaster + ?Sized>(
         bits.sec = Some(0);
     }
 
-    write_wp_bits(master, &bits, bit_map, options)
+    write_wp_bits(master, &bits, bit_map, options).await
 }
 
 #[cfg(feature = "alloc")]
