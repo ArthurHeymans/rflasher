@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use rflasher_ch341a::Ch341a;
@@ -379,7 +380,7 @@ enum WritePhase {
 
 /// Status log
 struct StatusLog {
-    messages: Vec<(LogLevel, String)>,
+    messages: VecDeque<(LogLevel, String)>,
     max_messages: usize,
 }
 
@@ -394,7 +395,7 @@ enum LogLevel {
 impl Default for StatusLog {
     fn default() -> Self {
         Self {
-            messages: Vec::new(),
+            messages: VecDeque::new(),
             max_messages: 100,
         }
     }
@@ -402,9 +403,9 @@ impl Default for StatusLog {
 
 impl StatusLog {
     fn log(&mut self, level: LogLevel, message: impl Into<String>) {
-        self.messages.push((level, message.into()));
+        self.messages.push_back((level, message.into()));
         if self.messages.len() > self.max_messages {
-            self.messages.remove(0);
+            self.messages.pop_front();
         }
     }
 

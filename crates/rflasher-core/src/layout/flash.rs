@@ -3,6 +3,7 @@
 //! These functions read IFD (Intel Flash Descriptor) and FMAP (Flash Map)
 //! structures directly from a flash chip, rather than from a file.
 
+use alloc::string::ToString;
 use std::vec;
 
 use crate::flash::{self, FlashContext};
@@ -51,7 +52,7 @@ pub async fn read_ifd_from_flash<M: SpiMaster + ?Sized>(
 
     flash::read(master, ctx, 0, &mut buf)
         .await
-        .map_err(|_| LayoutError::IoError)?;
+        .map_err(|e| LayoutError::IoError(e.to_string()))?;
 
     if !has_ifd(&buf) {
         return Err(LayoutError::InvalidIfdSignature);
@@ -111,7 +112,7 @@ async fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
     let chip_size = ctx.total_size() as u32;
 
     if rom_offset + len > chip_size {
-        return Err(LayoutError::IoError);
+        return Err(LayoutError::IoError("offset + length exceeds chip size".into()));
     }
 
     if (len as usize) < FMAP_HEADER_SIZE {
@@ -204,7 +205,7 @@ async fn fmap_lsearch_rom<M: SpiMaster + ?Sized>(
 
     flash::read(master, ctx, rom_offset, &mut buf)
         .await
-        .map_err(|_| LayoutError::IoError)?;
+        .map_err(|e| LayoutError::IoError(e.to_string()))?;
 
     if !has_fmap(&buf) {
         return Err(LayoutError::InvalidFmapSignature);
@@ -224,7 +225,7 @@ async fn read_fmap_at_offset<M: SpiMaster + ?Sized>(
     let mut header = vec![0u8; FMAP_HEADER_SIZE];
     flash::read(master, ctx, offset, &mut header)
         .await
-        .map_err(|_| LayoutError::IoError)?;
+        .map_err(|e| LayoutError::IoError(e.to_string()))?;
 
     if !is_valid_fmap_header(&header) {
         return Err(LayoutError::InvalidFmapSignature);
@@ -237,7 +238,7 @@ async fn read_fmap_at_offset<M: SpiMaster + ?Sized>(
     let mut fmap_data = vec![0u8; total_size];
     flash::read(master, ctx, offset, &mut fmap_data)
         .await
-        .map_err(|_| LayoutError::IoError)?;
+        .map_err(|e| LayoutError::IoError(e.to_string()))?;
 
     fmap::parse_fmap_at(&fmap_data, 0)
 }

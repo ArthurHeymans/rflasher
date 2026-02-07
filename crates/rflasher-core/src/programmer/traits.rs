@@ -192,11 +192,102 @@ impl SpiMaster for alloc::boxed::Box<dyn SpiMaster + Send> {
     }
 }
 
+/// Helper function for implementing `SpiMaster::execute()`.
+///
+/// Most programmer implementations follow the same pattern:
+/// 1. Check I/O mode is supported
+/// 2. Build a write buffer from the command header + write data
+/// 3. Call an internal transfer method
+/// 4. Copy any read data back into the command's read buffer
+///
+/// This function handles steps 1, 2, and 4, delegating step 3 to the
+/// provided closure. The closure receives the write data and the read buffer
+/// to fill directly.
+///
+/// # Example
+///
+/// ```ignore
+/// fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+///     default_execute(cmd, self.features(), |write_data, read_buf| {
+///         self.spi_transfer(write_data, read_buf)
+///             .map_err(|_| CoreError::ProgrammerError)
+///     })
+/// }
+/// ```
+#[cfg(feature = "alloc")]
+pub fn default_execute<F>(
+    cmd: &mut SpiCommand<'_>,
+    features: SpiFeatures,
+    transfer_fn: F,
+) -> Result<()>
+where
+    F: FnOnce(&[u8], &mut [u8]) -> Result<()>,
+{
+    use crate::spi::check_io_mode_supported;
+
+    check_io_mode_supported(cmd.io_mode, features)?;
+
+    let header_len = cmd.header_len();
+    let mut write_data = alloc::vec![0u8; header_len + cmd.write_data.len()];
+    cmd.encode_header(&mut write_data);
+    write_data[header_len..].copy_from_slice(cmd.write_data);
+
+    transfer_fn(&write_data, cmd.read_buf)
+}
+
+/// Helper function for implementing `SpiMaster::execute()` when the
+/// internal transfer method returns a `Vec<u8>` instead of writing
+/// directly into the read buffer.
+///
+/// # Example
+///
+/// ```ignore
+/// fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+///     default_execute_with_vec(cmd, self.features(), |write_data, read_len| {
+///         self.spi_transfer(write_data, read_len)
+///             .map_err(|_| CoreError::ProgrammerError)
+///     })
+/// }
+/// ```
+#[cfg(feature = "alloc")]
+pub fn default_execute_with_vec<F>(
+    cmd: &mut SpiCommand<'_>,
+    features: SpiFeatures,
+    transfer_fn: F,
+) -> Result<()>
+where
+    F: FnOnce(&[u8], usize) -> Result<alloc::vec::Vec<u8>>,
+{
+    use crate::spi::check_io_mode_supported;
+
+    check_io_mode_supported(cmd.io_mode, features)?;
+
+    let header_len = cmd.header_len();
+    let mut write_data = alloc::vec![0u8; header_len + cmd.write_data.len()];
+    cmd.encode_header(&mut write_data);
+    write_data[header_len..].copy_from_slice(cmd.write_data);
+
+    let read_len = cmd.read_buf.len();
+    if read_len > 0 {
+        let result = transfer_fn(&write_data, read_len)?;
+        if result.len() < read_len {
+            return Err(crate::error::Error::ReadError { addr: 0 });
+        }
+        cmd.read_buf.copy_from_slice(&result[..read_len]);
+    } else {
+        transfer_fn(&write_data, 0)?;
+    }
+
+    Ok(())
+}
+
 /// Information about a programmer
 #[derive(Debug, Clone)]
 pub struct ProgrammerInfo {
     /// Name of the programmer
     pub name: &'static str,
+    /// Alternative names/aliases
+    pub aliases: &'static [&'static str],
     /// Description
     pub description: &'static str,
     /// Whether this programmer requires elevated privileges

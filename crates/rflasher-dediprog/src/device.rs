@@ -8,8 +8,9 @@ use std::time::Duration;
 use nusb::transfer::{Buffer, Bulk, In, Out};
 use nusb::{Endpoint, Interface, MaybeFuture};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
+use rflasher_core::programmer::default_execute_with_vec;
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
+use rflasher_core::spi::SpiCommand;
 
 use crate::error::{DediprogError, Result};
 use crate::protocol::*;
@@ -746,24 +747,10 @@ impl SpiMaster for Dediprog {
     }
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        // Check I/O mode support
-        check_io_mode_supported(cmd.io_mode, self.features())?;
-
-        // For simple commands, use transceive
-        let header_len = cmd.header_len();
-        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
-        cmd.encode_header(&mut write_data);
-        write_data[header_len..].copy_from_slice(cmd.write_data);
-
-        let read_len = cmd.read_buf.len();
-        let result = self
-            .spi_transceive(&write_data, read_len)
-            .map_err(|_e| CoreError::ProgrammerError)?;
-
-        cmd.read_buf
-            .copy_from_slice(&result[..read_len.min(result.len())]);
-
-        Ok(())
+        default_execute_with_vec(cmd, self.features(), |write_data, read_len| {
+            self.spi_transceive(write_data, read_len)
+                .map_err(|_| CoreError::ProgrammerError)
+        })
     }
 
     fn delay_us(&mut self, us: u32) {

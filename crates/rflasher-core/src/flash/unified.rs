@@ -209,6 +209,12 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
     data: &[u8],
     progress: &mut P,
 ) -> Result<WriteStats> {
+    if data.is_empty() {
+        let stats = WriteStats::default();
+        progress.complete(&stats);
+        return Ok(stats);
+    }
+
     if !device.is_valid_range(addr, data.len()) {
         return Err(Error::AddressOutOfBounds);
     }
@@ -217,6 +223,7 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
     // Clone erase blocks to avoid borrow checker issues
     let erase_blocks: Vec<_> = device.erase_blocks().to_vec();
     let granularity = device.write_granularity();
+    // Safe: data.len() > 0 guaranteed by the early return above
     let region_end = addr + data.len() as u32 - 1;
 
     let mut stats = WriteStats::default();
@@ -302,10 +309,22 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
 
             // Restore preserved data
             if let Some(ref buf) = pre_data {
-                device.write(op.start, buf).await?;
+                if let Err(e) = device.write(op.start, buf).await {
+                    log::error!(
+                        "Failed to restore {} bytes at 0x{:08X} after erase — data may be lost: {}",
+                        buf.len(), op.start, e
+                    );
+                    return Err(e);
+                }
             }
             if let Some(ref buf) = post_data {
-                device.write(region_end_addr, buf).await?;
+                if let Err(e) = device.write(region_end_addr, buf).await {
+                    log::error!(
+                        "Failed to restore {} bytes at 0x{:08X} after erase — data may be lost: {}",
+                        buf.len(), region_end_addr, e
+                    );
+                    return Err(e);
+                }
             }
 
             // Update our view of current contents
@@ -589,7 +608,7 @@ pub async fn verify<D: FlashDevice>(device: &mut D, expected: &[u8], addr: u32) 
 
         let expected_chunk = &expected[offset..offset + chunk_size];
         if chunk_buf != expected_chunk {
-            return Err(Error::VerifyError);
+            return Err(Error::VerifyError { addr: addr + offset as u32 });
         }
 
         offset += chunk_size;

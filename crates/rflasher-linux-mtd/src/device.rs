@@ -263,7 +263,7 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
         // Seek to the address
         self.file
             .seek(SeekFrom::Start(addr as u64))
-            .map_err(|_| rflasher_core::error::Error::ReadError)?;
+            .map_err(|_| rflasher_core::error::Error::ReadError { addr })?;
 
         // Read in chunks aligned to erase block size for better performance
         let eb_size = self.info.erase_size as usize;
@@ -276,7 +276,9 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
 
             self.file
                 .read_exact(&mut buf[offset..offset + step])
-                .map_err(|_| rflasher_core::error::Error::ReadError)?;
+                .map_err(|_| rflasher_core::error::Error::ReadError {
+                    addr: addr + offset as u32,
+                })?;
 
             offset += step;
         }
@@ -292,7 +294,7 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
         // Seek to the address
         self.file
             .seek(SeekFrom::Start(addr as u64))
-            .map_err(|_| rflasher_core::error::Error::WriteError)?;
+            .map_err(|_| rflasher_core::error::Error::WriteError { addr })?;
 
         // Write in chunks aligned to erase block size for better performance
         let chunksize = self.info.erase_size as usize;
@@ -305,12 +307,16 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
 
             self.file
                 .write_all(&data[offset..offset + step])
-                .map_err(|_| rflasher_core::error::Error::WriteError)?;
+                .map_err(|_| rflasher_core::error::Error::WriteError {
+                    addr: addr + offset as u32,
+                })?;
 
             // Flush after each chunk
             self.file
                 .flush()
-                .map_err(|_| rflasher_core::error::Error::WriteError)?;
+                .map_err(|_| rflasher_core::error::Error::WriteError {
+                    addr: addr + offset as u32,
+                })?;
 
             offset += step;
         }
