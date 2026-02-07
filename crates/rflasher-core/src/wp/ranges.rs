@@ -9,11 +9,28 @@ use super::types::{RangeDecoder, WpBits, WpRange};
 pub type ProtectedRange = WpRange;
 
 impl WpRange {
-    /// Create a new protected range from start and end addresses
+    /// Create a new protected range from start address and inclusive end address
+    ///
+    /// The `end` address is inclusive (i.e., the last byte that is protected).
+    /// For example, `from_start_end(0, 0xFFF)` creates a 4096-byte range.
+    ///
+    /// When `end == u32::MAX` and `start == 0` the length would be 2^32 which
+    /// cannot be represented in a `u32`. We saturate to `u32::MAX` in that case
+    /// (off by one byte for a hypothetical 4 GiB device, but SPI NOR flash
+    /// chips never reach that size).
     pub const fn from_start_end(start: u32, end: u32) -> Self {
         Self {
             start,
-            len: end.saturating_sub(start),
+            // end is inclusive, so length is (end - start + 1), saturating to
+            // avoid overflow when the range spans the full u32 address space.
+            len: if end >= start {
+                match (end - start).checked_add(1) {
+                    Some(n) => n,
+                    None => u32::MAX, // saturate: 2^32 bytes doesn't fit in u32
+                }
+            } else {
+                0
+            },
         }
     }
 }

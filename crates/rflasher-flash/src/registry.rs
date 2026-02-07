@@ -132,6 +132,19 @@ pub struct ProgrammerParams {
     pub params: HashMap<String, String>,
 }
 
+impl ProgrammerParams {
+    /// Convert parameters to a Vec of (&str, &str) pairs for passing to parse_options
+    ///
+    /// This eliminates the repetitive `.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()`
+    /// pattern used throughout the registry.
+    pub fn as_option_pairs(&self) -> Vec<(&str, &str)> {
+        self.params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect()
+    }
+}
+
 /// Parse a programmer string into name and parameters
 ///
 /// Format: "name" or "name:key1=value1,key2=value2"
@@ -203,11 +216,7 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
         "ch347" | "ch347_spi" => {
             use rflasher_ch347::{parse_options, Ch347};
             log::info!("Opening CH347 programmer for REPL...");
-            let options: Vec<(&str, &str)> = params
-                .params
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
+            let options = params.as_option_pairs();
             let config = parse_options(&options).map_err(|e| format!("Invalid CH347 parameters: {}", e))?;
             let master = Ch347::open_with_config(config).map_err(|e| {
                 format!(
@@ -222,11 +231,7 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
         "dediprog" | "dediprog_spi" => {
             use rflasher_dediprog::{parse_options, Dediprog};
             log::info!("Opening Dediprog programmer for REPL...");
-            let options: Vec<(&str, &str)> = params
-                .params
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
+            let options = params.as_option_pairs();
             let config = parse_options(&options).map_err(|e| format!("Invalid Dediprog parameters: {}", e))?;
             let master = Dediprog::open_with_config(config).map_err(|e| {
                 format!(
@@ -302,11 +307,7 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
         "ftdi" | "ft2232_spi" | "ft4232_spi" => {
             use rflasher_ftdi::{parse_options, Ftdi};
             log::info!("Opening FTDI programmer for REPL...");
-            let options: Vec<(&str, &str)> = params
-                .params
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
+            let options = params.as_option_pairs();
             let config = parse_options(&options).map_err(|e| format!("Invalid FTDI parameters: {}", e))?;
             let master = Ftdi::open(&config).map_err(|e| {
                 format!("Failed to open FTDI device: {}", e)
@@ -318,11 +319,7 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
         "ft4222" | "ft4222_spi" => {
             use rflasher_ft4222::{parse_options, Ft4222};
             log::info!("Opening FT4222H programmer for REPL...");
-            let options: Vec<(&str, &str)> = params
-                .params
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
+            let options = params.as_option_pairs();
             let config = parse_options(&options).map_err(|e| format!("Invalid FT4222 parameters: {}", e))?;
             let master = Ft4222::open_with_config(config).map_err(|e| {
                 format!("Failed to open FT4222H device: {}", e)
@@ -334,11 +331,7 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
         "linux_spi" | "linux-spi" | "spidev" => {
             use rflasher_linux_spi::{parse_options, LinuxSpi};
             log::info!("Opening Linux SPI programmer for REPL...");
-            let options: Vec<(&str, &str)> = params
-                .params
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
+            let options = params.as_option_pairs();
             let config = parse_options(&options).map_err(|e| format!("Invalid linux_spi parameters: {}", e))?;
             let master = LinuxSpi::open(&config).map_err(|e| {
                 format!("Failed to open Linux SPI device: {}", e)
@@ -350,11 +343,7 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
         "linux_gpio_spi" | "linux-gpio-spi" | "linux_gpio" | "linux-gpio" => {
             use rflasher_linux_gpio::{parse_options, LinuxGpioSpi};
             log::info!("Opening Linux GPIO SPI programmer for REPL...");
-            let options: Vec<(&str, &str)> = params
-                .params
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
+            let options = params.as_option_pairs();
             let config = parse_options(&options).map_err(|e| format!("Invalid linux_gpio_spi parameters: {}", e))?;
             let master = LinuxGpioSpi::open(&config).map_err(|e| {
                 format!("Failed to open Linux GPIO SPI device: {}", e)
@@ -366,11 +355,7 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
         "raiden_debug_spi" | "raiden" | "raiden_spi" => {
             use rflasher_raiden::{parse_options, RaidenDebugSpi};
             log::info!("Opening Raiden Debug SPI programmer for REPL...");
-            let options: Vec<(&str, &str)> = params
-                .params
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
+            let options = params.as_option_pairs();
             let config = parse_options(&options).map_err(|e| format!("Invalid raiden parameters: {}", e))?;
             let master = RaidenDebugSpi::open_with_config(&config).map_err(|e| {
                 format!("Failed to open Raiden Debug SPI device: {}", e)
@@ -526,12 +511,7 @@ fn open_ch347(
 
     log::info!("Opening CH347 programmer...");
 
-    // Convert HashMap to Vec<(&str, &str)> for parse_options
-    let options: Vec<(&str, &str)> = params
-        .params
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let options = params.as_option_pairs();
 
     let config = parse_options(&options).map_err(|e| format!("Invalid CH347 parameters: {}", e))?;
 
@@ -554,12 +534,7 @@ fn open_dediprog(
 
     log::info!("Opening Dediprog programmer...");
 
-    // Convert HashMap to Vec<(&str, &str)> for parse_options
-    let options: Vec<(&str, &str)> = params
-        .params
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let options = params.as_option_pairs();
 
     let config =
         parse_options(&options).map_err(|e| format!("Invalid Dediprog parameters: {}", e))?;
@@ -672,12 +647,7 @@ fn open_ftdi(
 
     log::info!("Opening FTDI programmer...");
 
-    // Convert HashMap to Vec<(&str, &str)> for parse_options
-    let options: Vec<(&str, &str)> = params
-        .params
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let options = params.as_option_pairs();
 
     let config = parse_options(&options).map_err(|e| format!("Invalid FTDI parameters: {}", e))?;
 
@@ -703,12 +673,7 @@ fn open_ft4222(
 
     log::info!("Opening FT4222H programmer...");
 
-    // Convert HashMap to Vec<(&str, &str)> for parse_options
-    let options: Vec<(&str, &str)> = params
-        .params
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let options = params.as_option_pairs();
 
     let config =
         parse_options(&options).map_err(|e| format!("Invalid FT4222 parameters: {}", e))?;
@@ -738,11 +703,7 @@ fn open_linux_spi(
 
     log::info!("Opening Linux SPI programmer...");
 
-    let options: Vec<(&str, &str)> = params
-        .params
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let options = params.as_option_pairs();
 
     let config =
         parse_options(&options).map_err(|e| format!("Invalid linux_spi parameters: {}", e))?;
@@ -765,11 +726,7 @@ fn open_linux_mtd(params: &ProgrammerParams) -> Result<FlashHandle, Box<dyn std:
 
     log::info!("Opening Linux MTD programmer...");
 
-    let options: Vec<(&str, &str)> = params
-        .params
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let options = params.as_option_pairs();
 
     let config =
         parse_options(&options).map_err(|e| format!("Invalid linux_mtd parameters: {}", e))?;
@@ -807,11 +764,7 @@ fn open_linux_gpio_spi(
 
     log::info!("Opening Linux GPIO SPI (bitbang) programmer...");
 
-    let options: Vec<(&str, &str)> = params
-        .params
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let options = params.as_option_pairs();
 
     let config =
         parse_options(&options).map_err(|e| format!("Invalid linux_gpio_spi parameters: {}", e))?;
@@ -837,11 +790,7 @@ fn open_internal(
 
     log::info!("Opening internal programmer...");
 
-    let options: Vec<(&str, &str)> = params
-        .params
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let options = params.as_option_pairs();
 
     let internal_opts = InternalOptions::from_options(&options)
         .map_err(|e| format!("Invalid internal programmer options: {}", e))?;
@@ -884,11 +833,7 @@ fn open_raiden(
 
     log::info!("Opening Raiden Debug SPI programmer...");
 
-    let options: Vec<(&str, &str)> = params
-        .params
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let options = params.as_option_pairs();
 
     let config =
         parse_options(&options).map_err(|e| format!("Invalid raiden parameters: {}", e))?;

@@ -268,33 +268,44 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
         progress.erasing(erase_ops.len(), bytes_to_erase);
 
         for (i, op) in erase_ops.iter().enumerate() {
-            // Handle data outside our region but inside the erase block
+            // Handle data outside our region but inside the erase block.
+            // A block may straddle the start, the end, or both boundaries
+            // of our region, so we must check each side independently.
             let block_end = op.start + op.size;
+            let region_end_addr = addr + data.len() as u32;
+
+            let extends_before = op.start < addr;
+            let extends_after = block_end > region_end_addr;
 
             // Read data before our region (if block extends before)
-            if op.start < addr {
+            let pre_data = if extends_before {
                 let preserve_len = (addr - op.start) as usize;
-                let mut preserve_data = vec![0u8; preserve_len];
-                device.read(op.start, &mut preserve_data).await?;
-
-                // Erase and restore
-                device.erase(op.start, op.size).await?;
-                device.write(op.start, &preserve_data).await?;
-            }
-            // Handle data after our region (if block extends after)
-            else if block_end > addr + data.len() as u32 {
-                let region_end_addr = addr + data.len() as u32;
-                let preserve_start = region_end_addr;
-                let preserve_len = (block_end - region_end_addr) as usize;
-
-                let mut preserve_data = vec![0u8; preserve_len];
-                device.read(preserve_start, &mut preserve_data).await?;
-
-                device.erase(op.start, op.size).await?;
-                device.write(preserve_start, &preserve_data).await?;
+                let mut buf = vec![0u8; preserve_len];
+                device.read(op.start, &mut buf).await?;
+                Some(buf)
             } else {
-                // Block is entirely within our region
-                device.erase(op.start, op.size).await?;
+                None
+            };
+
+            // Read data after our region (if block extends after)
+            let post_data = if extends_after {
+                let preserve_len = (block_end - region_end_addr) as usize;
+                let mut buf = vec![0u8; preserve_len];
+                device.read(region_end_addr, &mut buf).await?;
+                Some(buf)
+            } else {
+                None
+            };
+
+            // Erase the block
+            device.erase(op.start, op.size).await?;
+
+            // Restore preserved data
+            if let Some(ref buf) = pre_data {
+                device.write(op.start, buf).await?;
+            }
+            if let Some(ref buf) = post_data {
+                device.write(region_end_addr, buf).await?;
             }
 
             // Update our view of current contents

@@ -39,6 +39,35 @@ pub struct FlashContext {
     pub use_native_4byte: bool,
 }
 
+/// Shared methods for FlashContext that are identical across alloc/no_std.
+macro_rules! impl_flash_context_common {
+    () => {
+        /// Get the page size for this chip
+        pub fn page_size(&self) -> usize {
+            self.chip.page_size as usize
+        }
+
+        /// Get the total size of this chip
+        pub fn total_size(&self) -> usize {
+            self.chip.total_size as usize
+        }
+
+        /// Check if an address is valid for this chip
+        pub fn is_valid_address(&self, addr: u32) -> bool {
+            addr < self.chip.total_size
+        }
+
+        /// Check if an address range is valid for this chip
+        pub fn is_valid_range(&self, addr: u32, len: usize) -> bool {
+            if addr >= self.chip.total_size {
+                return false;
+            }
+            let end = addr as u64 + len as u64;
+            end <= self.chip.total_size as u64
+        }
+    };
+}
+
 #[cfg(feature = "alloc")]
 impl FlashContext {
     /// Create a new flash context for the given chip
@@ -60,29 +89,7 @@ impl FlashContext {
         }
     }
 
-    /// Get the page size for this chip
-    pub fn page_size(&self) -> usize {
-        self.chip.page_size as usize
-    }
-
-    /// Get the total size of this chip
-    pub fn total_size(&self) -> usize {
-        self.chip.total_size as usize
-    }
-
-    /// Check if an address is valid for this chip
-    pub fn is_valid_address(&self, addr: u32) -> bool {
-        addr < self.chip.total_size
-    }
-
-    /// Check if an address range is valid for this chip
-    pub fn is_valid_range(&self, addr: u32, len: usize) -> bool {
-        if addr >= self.chip.total_size {
-            return false;
-        }
-        let end = addr as u64 + len as u64;
-        end <= self.chip.total_size as u64
-    }
+    impl_flash_context_common!();
 }
 
 #[cfg(not(feature = "alloc"))]
@@ -106,27 +113,5 @@ impl FlashContext {
         }
     }
 
-    /// Get the page size for this chip
-    pub fn page_size(&self) -> usize {
-        self.chip.page_size as usize
-    }
-
-    /// Get the total size of this chip
-    pub fn total_size(&self) -> usize {
-        self.chip.total_size as usize
-    }
-
-    /// Check if an address is valid for this chip
-    pub fn is_valid_address(&self, addr: u32) -> bool {
-        addr < self.chip.total_size
-    }
-
-    /// Check if an address range is valid for this chip
-    pub fn is_valid_range(&self, addr: u32, len: usize) -> bool {
-        if addr >= self.chip.total_size {
-            return false;
-        }
-        let end = addr as u64 + len as u64;
-        end <= self.chip.total_size as u64
-    }
+    impl_flash_context_common!();
 }

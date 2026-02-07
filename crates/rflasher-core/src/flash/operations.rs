@@ -450,9 +450,12 @@ pub fn plan_optimal_erase(
         return Vec::new();
     }
 
-    // Determine buffer offset (if buffers are region-sized vs full-chip)
+    // Determine buffer offset (if buffers are region-sized vs full-chip).
+    // If the buffer is smaller than the region end address + 1 (i.e. it doesn't
+    // cover the full address space up to region_end), it must be a region-sized
+    // buffer starting at region_start.
     let buffer_offset = match have {
-        Some(h) if (h.len() as u32) < region_end => region_start,
+        Some(h) if (h.len() as u64) < (region_end as u64 + 1) => region_start,
         _ => 0,
     };
 

@@ -337,14 +337,16 @@ pub async fn is_busy<M: SpiMaster + ?Sized>(master: &mut M) -> Result<bool> {
 // Multi-I/O Read Functions
 // ============================================================================
 
-/// Read data using Dual Output mode (1-1-2) with 3-byte address
-///
-/// Uses opcode 0x3B with 8 dummy cycles.
+/// Internal helper to perform a chunked multi-IO read
 #[maybe_async]
-pub async fn read_dual_out_3b<M: SpiMaster + ?Sized>(
+async fn read_multi_io<M: SpiMaster + ?Sized>(
     master: &mut M,
+    opcode: u8,
     addr: u32,
     buf: &mut [u8],
+    address_width: AddressWidth,
+    io_mode: IoMode,
+    dummy_cycles: u8,
 ) -> Result<()> {
     let max_len = master.max_read_len();
     let mut offset = 0;
@@ -353,11 +355,11 @@ pub async fn read_dual_out_3b<M: SpiMaster + ?Sized>(
         let chunk_len = core::cmp::min(max_len, buf.len() - offset);
         let chunk = &mut buf[offset..offset + chunk_len];
         let mut cmd = SpiCommand {
-            opcode: opcodes::DOR,
+            opcode,
             address: Some(addr + offset as u32),
-            address_width: AddressWidth::ThreeByte,
-            io_mode: IoMode::DualOut,
-            dummy_cycles: 8, // 8 dummy cycles for dual output read
+            address_width,
+            io_mode,
+            dummy_cycles,
             write_data: &[],
             read_buf: chunk,
         };
@@ -368,35 +370,20 @@ pub async fn read_dual_out_3b<M: SpiMaster + ?Sized>(
     Ok(())
 }
 
+/// Read data using Dual Output mode (1-1-2) with 3-byte address
+///
+/// Uses opcode 0x3B with 8 dummy cycles.
+#[maybe_async]
+pub async fn read_dual_out_3b<M: SpiMaster + ?Sized>(master: &mut M, addr: u32, buf: &mut [u8]) -> Result<()> {
+    read_multi_io(master, opcodes::DOR, addr, buf, AddressWidth::ThreeByte, IoMode::DualOut, 8).await
+}
+
 /// Read data using Dual I/O mode (1-2-2) with 3-byte address
 ///
 /// Uses opcode 0xBB with mode byte and dummy cycles.
 #[maybe_async]
-pub async fn read_dual_io_3b<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    addr: u32,
-    buf: &mut [u8],
-) -> Result<()> {
-    let max_len = master.max_read_len();
-    let mut offset = 0;
-
-    while offset < buf.len() {
-        let chunk_len = core::cmp::min(max_len, buf.len() - offset);
-        let chunk = &mut buf[offset..offset + chunk_len];
-        let mut cmd = SpiCommand {
-            opcode: opcodes::DIOR,
-            address: Some(addr + offset as u32),
-            address_width: AddressWidth::ThreeByte,
-            io_mode: IoMode::DualIo,
-            dummy_cycles: 4, // 4 dummy cycles (including mode byte) for 1-2-2
-            write_data: &[],
-            read_buf: chunk,
-        };
-        master.execute(&mut cmd).await?;
-        offset += chunk_len;
-    }
-
-    Ok(())
+pub async fn read_dual_io_3b<M: SpiMaster + ?Sized>(master: &mut M, addr: u32, buf: &mut [u8]) -> Result<()> {
+    read_multi_io(master, opcodes::DIOR, addr, buf, AddressWidth::ThreeByte, IoMode::DualIo, 4).await
 }
 
 /// Read data using Quad Output mode (1-1-4) with 3-byte address
@@ -404,31 +391,8 @@ pub async fn read_dual_io_3b<M: SpiMaster + ?Sized>(
 /// Uses opcode 0x6B with 8 dummy cycles.
 /// Requires Quad Enable (QE) bit to be set.
 #[maybe_async]
-pub async fn read_quad_out_3b<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    addr: u32,
-    buf: &mut [u8],
-) -> Result<()> {
-    let max_len = master.max_read_len();
-    let mut offset = 0;
-
-    while offset < buf.len() {
-        let chunk_len = core::cmp::min(max_len, buf.len() - offset);
-        let chunk = &mut buf[offset..offset + chunk_len];
-        let mut cmd = SpiCommand {
-            opcode: opcodes::QOR,
-            address: Some(addr + offset as u32),
-            address_width: AddressWidth::ThreeByte,
-            io_mode: IoMode::QuadOut,
-            dummy_cycles: 8, // 8 dummy cycles for quad output read
-            write_data: &[],
-            read_buf: chunk,
-        };
-        master.execute(&mut cmd).await?;
-        offset += chunk_len;
-    }
-
-    Ok(())
+pub async fn read_quad_out_3b<M: SpiMaster + ?Sized>(master: &mut M, addr: u32, buf: &mut [u8]) -> Result<()> {
+    read_multi_io(master, opcodes::QOR, addr, buf, AddressWidth::ThreeByte, IoMode::QuadOut, 8).await
 }
 
 /// Read data using Quad I/O mode (1-4-4) with 3-byte address
@@ -436,147 +400,32 @@ pub async fn read_quad_out_3b<M: SpiMaster + ?Sized>(
 /// Uses opcode 0xEB with mode byte and dummy cycles.
 /// Requires Quad Enable (QE) bit to be set.
 #[maybe_async]
-pub async fn read_quad_io_3b<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    addr: u32,
-    buf: &mut [u8],
-) -> Result<()> {
-    let max_len = master.max_read_len();
-    let mut offset = 0;
-
-    while offset < buf.len() {
-        let chunk_len = core::cmp::min(max_len, buf.len() - offset);
-        let chunk = &mut buf[offset..offset + chunk_len];
-        let mut cmd = SpiCommand {
-            opcode: opcodes::QIOR,
-            address: Some(addr + offset as u32),
-            address_width: AddressWidth::ThreeByte,
-            io_mode: IoMode::QuadIo,
-            dummy_cycles: 6, // 6 dummy cycles (including mode byte) for 1-4-4
-            write_data: &[],
-            read_buf: chunk,
-        };
-        master.execute(&mut cmd).await?;
-        offset += chunk_len;
-    }
-
-    Ok(())
+pub async fn read_quad_io_3b<M: SpiMaster + ?Sized>(master: &mut M, addr: u32, buf: &mut [u8]) -> Result<()> {
+    read_multi_io(master, opcodes::QIOR, addr, buf, AddressWidth::ThreeByte, IoMode::QuadIo, 6).await
 }
 
 /// Read data using Dual Output mode (1-1-2) with 4-byte address
 #[maybe_async]
-pub async fn read_dual_out_4b<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    addr: u32,
-    buf: &mut [u8],
-) -> Result<()> {
-    let max_len = master.max_read_len();
-    let mut offset = 0;
-
-    while offset < buf.len() {
-        let chunk_len = core::cmp::min(max_len, buf.len() - offset);
-        let chunk = &mut buf[offset..offset + chunk_len];
-        let mut cmd = SpiCommand {
-            opcode: opcodes::DOR_4B,
-            address: Some(addr + offset as u32),
-            address_width: AddressWidth::FourByte,
-            io_mode: IoMode::DualOut,
-            dummy_cycles: 8,
-            write_data: &[],
-            read_buf: chunk,
-        };
-        master.execute(&mut cmd).await?;
-        offset += chunk_len;
-    }
-
-    Ok(())
+pub async fn read_dual_out_4b<M: SpiMaster + ?Sized>(master: &mut M, addr: u32, buf: &mut [u8]) -> Result<()> {
+    read_multi_io(master, opcodes::DOR_4B, addr, buf, AddressWidth::FourByte, IoMode::DualOut, 8).await
 }
 
 /// Read data using Dual I/O mode (1-2-2) with 4-byte address
 #[maybe_async]
-pub async fn read_dual_io_4b<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    addr: u32,
-    buf: &mut [u8],
-) -> Result<()> {
-    let max_len = master.max_read_len();
-    let mut offset = 0;
-
-    while offset < buf.len() {
-        let chunk_len = core::cmp::min(max_len, buf.len() - offset);
-        let chunk = &mut buf[offset..offset + chunk_len];
-        let mut cmd = SpiCommand {
-            opcode: opcodes::DIOR_4B,
-            address: Some(addr + offset as u32),
-            address_width: AddressWidth::FourByte,
-            io_mode: IoMode::DualIo,
-            dummy_cycles: 4,
-            write_data: &[],
-            read_buf: chunk,
-        };
-        master.execute(&mut cmd).await?;
-        offset += chunk_len;
-    }
-
-    Ok(())
+pub async fn read_dual_io_4b<M: SpiMaster + ?Sized>(master: &mut M, addr: u32, buf: &mut [u8]) -> Result<()> {
+    read_multi_io(master, opcodes::DIOR_4B, addr, buf, AddressWidth::FourByte, IoMode::DualIo, 4).await
 }
 
 /// Read data using Quad Output mode (1-1-4) with 4-byte address
 #[maybe_async]
-pub async fn read_quad_out_4b<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    addr: u32,
-    buf: &mut [u8],
-) -> Result<()> {
-    let max_len = master.max_read_len();
-    let mut offset = 0;
-
-    while offset < buf.len() {
-        let chunk_len = core::cmp::min(max_len, buf.len() - offset);
-        let chunk = &mut buf[offset..offset + chunk_len];
-        let mut cmd = SpiCommand {
-            opcode: opcodes::QOR_4B,
-            address: Some(addr + offset as u32),
-            address_width: AddressWidth::FourByte,
-            io_mode: IoMode::QuadOut,
-            dummy_cycles: 8,
-            write_data: &[],
-            read_buf: chunk,
-        };
-        master.execute(&mut cmd).await?;
-        offset += chunk_len;
-    }
-
-    Ok(())
+pub async fn read_quad_out_4b<M: SpiMaster + ?Sized>(master: &mut M, addr: u32, buf: &mut [u8]) -> Result<()> {
+    read_multi_io(master, opcodes::QOR_4B, addr, buf, AddressWidth::FourByte, IoMode::QuadOut, 8).await
 }
 
 /// Read data using Quad I/O mode (1-4-4) with 4-byte address
 #[maybe_async]
-pub async fn read_quad_io_4b<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    addr: u32,
-    buf: &mut [u8],
-) -> Result<()> {
-    let max_len = master.max_read_len();
-    let mut offset = 0;
-
-    while offset < buf.len() {
-        let chunk_len = core::cmp::min(max_len, buf.len() - offset);
-        let chunk = &mut buf[offset..offset + chunk_len];
-        let mut cmd = SpiCommand {
-            opcode: opcodes::QIOR_4B,
-            address: Some(addr + offset as u32),
-            address_width: AddressWidth::FourByte,
-            io_mode: IoMode::QuadIo,
-            dummy_cycles: 6,
-            write_data: &[],
-            read_buf: chunk,
-        };
-        master.execute(&mut cmd).await?;
-        offset += chunk_len;
-    }
-
-    Ok(())
+pub async fn read_quad_io_4b<M: SpiMaster + ?Sized>(master: &mut M, addr: u32, buf: &mut [u8]) -> Result<()> {
+    read_multi_io(master, opcodes::QIOR_4B, addr, buf, AddressWidth::FourByte, IoMode::QuadIo, 6).await
 }
 
 // ============================================================================
@@ -756,53 +605,30 @@ pub async fn exit_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) ->
 
 /// Select the best available read mode based on programmer and chip capabilities
 ///
-/// Returns the read function to use and the corresponding IO mode.
+/// Returns the IO mode and corresponding opcode.
+/// Prefers higher bandwidth modes: Quad I/O > Quad Out > Dual I/O > Dual Out > Single.
 pub fn select_read_mode(
     master_features: SpiFeatures,
     chip_has_dual: bool,
     chip_has_quad: bool,
     use_4byte: bool,
 ) -> (IoMode, u8) {
-    // Prefer quad I/O if both programmer and chip support it
-    if chip_has_quad && master_features.contains(SpiFeatures::QUAD_IO) {
-        if use_4byte {
-            return (IoMode::QuadIo, opcodes::QIOR_4B);
-        } else {
-            return (IoMode::QuadIo, opcodes::QIOR);
-        }
-    }
+    // Candidates in priority order: (chip_capable, master_feature, mode, opcode_3b, opcode_4b)
+    let candidates: [(bool, SpiFeatures, IoMode, u8, u8); 4] = [
+        (chip_has_quad, SpiFeatures::QUAD_IO, IoMode::QuadIo, opcodes::QIOR, opcodes::QIOR_4B),
+        (chip_has_quad, SpiFeatures::QUAD_IN, IoMode::QuadOut, opcodes::QOR, opcodes::QOR_4B),
+        (chip_has_dual, SpiFeatures::DUAL_IO, IoMode::DualIo, opcodes::DIOR, opcodes::DIOR_4B),
+        (chip_has_dual, SpiFeatures::DUAL_IN, IoMode::DualOut, opcodes::DOR, opcodes::DOR_4B),
+    ];
 
-    // Fall back to quad output
-    if chip_has_quad && master_features.contains(SpiFeatures::QUAD_IN) {
-        if use_4byte {
-            return (IoMode::QuadOut, opcodes::QOR_4B);
-        } else {
-            return (IoMode::QuadOut, opcodes::QOR);
-        }
-    }
-
-    // Try dual I/O
-    if chip_has_dual && master_features.contains(SpiFeatures::DUAL_IO) {
-        if use_4byte {
-            return (IoMode::DualIo, opcodes::DIOR_4B);
-        } else {
-            return (IoMode::DualIo, opcodes::DIOR);
-        }
-    }
-
-    // Try dual output
-    if chip_has_dual && master_features.contains(SpiFeatures::DUAL_IN) {
-        if use_4byte {
-            return (IoMode::DualOut, opcodes::DOR_4B);
-        } else {
-            return (IoMode::DualOut, opcodes::DOR);
+    for (chip_capable, feature, mode, opcode_3b, opcode_4b) in candidates {
+        if chip_capable && master_features.contains(feature) {
+            let opcode = if use_4byte { opcode_4b } else { opcode_3b };
+            return (mode, opcode);
         }
     }
 
     // Fall back to single I/O
-    if use_4byte {
-        (IoMode::Single, opcodes::READ_4B)
-    } else {
-        (IoMode::Single, opcodes::READ)
-    }
+    let opcode = if use_4byte { opcodes::READ_4B } else { opcodes::READ };
+    (IoMode::Single, opcode)
 }

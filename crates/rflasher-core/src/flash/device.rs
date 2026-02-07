@@ -107,8 +107,9 @@ pub trait FlashDevice {
 
     /// Check if a range is valid for this device
     fn is_valid_range(&self, addr: u32, len: usize) -> bool {
-        let end = addr.saturating_add(len as u32);
-        end <= self.size() && end >= addr // Check for overflow
+        // Use u64 arithmetic to avoid truncation when len > u32::MAX
+        let end = addr as u64 + len as u64;
+        end <= self.size() as u64
     }
 
     // =========================================================================

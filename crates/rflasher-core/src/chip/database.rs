@@ -3,11 +3,7 @@
 //! This module provides the `ChipDatabase` type for loading chip definitions
 //! from RON files at runtime.
 
-use alloc::{
-    string::{String, ToString},
-    vec,
-    vec::Vec,
-};
+use alloc::{string::String, vec::Vec};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -18,39 +14,18 @@ use super::types::{
 use super::Features;
 
 /// Error type for chip database operations
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ChipDbError {
     /// I/O error reading files
-    Io(io::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] io::Error),
     /// RON parsing error
-    Parse(ron::error::SpannedError),
+    #[error("Parse error: {0}")]
+    Parse(#[from] ron::error::SpannedError),
     /// Validation error
+    #[error("Validation error: {0}")]
     Validation(String),
 }
-
-impl From<io::Error> for ChipDbError {
-    fn from(e: io::Error) -> Self {
-        ChipDbError::Io(e)
-    }
-}
-
-impl From<ron::error::SpannedError> for ChipDbError {
-    fn from(e: ron::error::SpannedError) -> Self {
-        ChipDbError::Parse(e)
-    }
-}
-
-impl std::fmt::Display for ChipDbError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ChipDbError::Io(e) => write!(f, "I/O error: {}", e),
-            ChipDbError::Parse(e) => write!(f, "Parse error: {}", e),
-            ChipDbError::Validation(msg) => write!(f, "Validation error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for ChipDbError {}
 
 // ============================================================================
 // RON deserialization types (intermediate format)
@@ -109,77 +84,42 @@ struct FeaturesDef {
 
 impl From<FeaturesDef> for Features {
     fn from(def: FeaturesDef) -> Self {
-        let mut f = Features::empty();
-        if def.wrsr_wren {
-            f |= Features::WRSR_WREN;
-        }
-        if def.wrsr_ewsr {
-            f |= Features::WRSR_EWSR;
-        }
-        if def.wrsr_ext {
-            f |= Features::WRSR_EXT;
-        }
-        if def.fast_read {
-            f |= Features::FAST_READ;
-        }
-        if def.dual_io {
-            f |= Features::DUAL_IO;
-        }
-        if def.quad_io {
-            f |= Features::QUAD_IO;
-        }
-        if def.four_byte_addr {
-            f |= Features::FOUR_BYTE_ADDR;
-        }
-        if def.four_byte_enter {
-            f |= Features::FOUR_BYTE_ENTER;
-        }
-        if def.four_byte_native {
-            f |= Features::FOUR_BYTE_NATIVE;
-        }
-        if def.ext_addr_reg {
-            f |= Features::EXT_ADDR_REG;
-        }
-        if def.otp {
-            f |= Features::OTP;
-        }
-        if def.qpi {
-            f |= Features::QPI;
-        }
-        if def.security_reg {
-            f |= Features::SECURITY_REG;
-        }
-        if def.sfdp {
-            f |= Features::SFDP;
-        }
-        if def.write_byte {
-            f |= Features::WRITE_BYTE;
-        }
-        if def.aai_word {
-            f |= Features::AAI_WORD;
-        }
-        if def.status_reg_2 {
-            f |= Features::STATUS_REG_2;
-        }
-        if def.status_reg_3 {
-            f |= Features::STATUS_REG_3;
-        }
-        if def.qe_sr2 {
-            f |= Features::QE_SR2;
-        }
-        if def.deep_power_down {
-            f |= Features::DEEP_POWER_DOWN;
-        }
-        if def.wp_tb {
-            f |= Features::WP_TB;
-        }
-        if def.wp_sec {
-            f |= Features::WP_SEC;
-        }
-        if def.wp_cmp {
-            f |= Features::WP_CMP;
-        }
-        f
+        [
+            (def.wrsr_wren, Features::WRSR_WREN),
+            (def.wrsr_ewsr, Features::WRSR_EWSR),
+            (def.wrsr_ext, Features::WRSR_EXT),
+            (def.fast_read, Features::FAST_READ),
+            (def.dual_io, Features::DUAL_IO),
+            (def.quad_io, Features::QUAD_IO),
+            (def.four_byte_addr, Features::FOUR_BYTE_ADDR),
+            (def.four_byte_enter, Features::FOUR_BYTE_ENTER),
+            (def.four_byte_native, Features::FOUR_BYTE_NATIVE),
+            (def.ext_addr_reg, Features::EXT_ADDR_REG),
+            (def.otp, Features::OTP),
+            (def.qpi, Features::QPI),
+            (def.security_reg, Features::SECURITY_REG),
+            (def.sfdp, Features::SFDP),
+            (def.write_byte, Features::WRITE_BYTE),
+            (def.aai_word, Features::AAI_WORD),
+            (def.status_reg_2, Features::STATUS_REG_2),
+            (def.status_reg_3, Features::STATUS_REG_3),
+            (def.qe_sr2, Features::QE_SR2),
+            (def.deep_power_down, Features::DEEP_POWER_DOWN),
+            (def.wp_tb, Features::WP_TB),
+            (def.wp_sec, Features::WP_SEC),
+            (def.wp_cmp, Features::WP_CMP),
+        ]
+        .into_iter()
+        .fold(
+            Features::empty(),
+            |acc, (enabled, flag)| {
+                if enabled {
+                    acc | flag
+                } else {
+                    acc
+                }
+            },
+        )
     }
 }
 

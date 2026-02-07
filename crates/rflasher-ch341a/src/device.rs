@@ -281,17 +281,18 @@ impl Ch341a {
             .map_err(|e| Ch341aError::TransferFailed(e.to_string()))?;
 
         // Collect read responses (blocking)
+        // The CH341A returns (CH341_PACKET_LENGTH - 1) bytes per SPI stream
+        // packet, matching the C flashprog implementation which reads in
+        // chunks of exactly that size. The nusb library requires IN transfer
+        // buffers to be a multiple of max_packet_size, so we round up the
+        // allocation but only consume the bytes we actually need.
         let mut result = Vec::with_capacity(read_len);
         let mut remaining = read_len;
         let max_packet_size = self.in_ep.max_packet_size();
 
-        // We need to read enough data to cover all expected bytes
-        // Each read can return up to max_packet_size bytes
         while remaining > 0 {
-            // Request length must be multiple of max packet size
-            let request_len = std::cmp::min(remaining, CH341_PACKET_LENGTH - 1)
-                .div_ceil(max_packet_size)
-                * max_packet_size;
+            let cur_todo = std::cmp::min(CH341_PACKET_LENGTH - 1, remaining);
+            let request_len = cur_todo.div_ceil(max_packet_size) * max_packet_size;
             let mut in_buf = Buffer::new(request_len);
             in_buf.set_requested_len(request_len);
 
@@ -305,8 +306,18 @@ impl Ch341a {
             result.extend_from_slice(&data[..to_take]);
             remaining -= to_take;
 
-            // If we got less than expected, stop
+            // Guard against short transfers: if the device returned fewer
+            // bytes than we requested, continuing the loop would likely hang
+            // (the device has no more data to give for this SPI transaction).
             if data.len() < request_len {
+                if remaining > 0 {
+                    log::warn!(
+                        "CH341A: short USB read ({} < {} requested), {} bytes still missing",
+                        data.len(),
+                        request_len,
+                        remaining,
+                    );
+                }
                 break;
             }
         }

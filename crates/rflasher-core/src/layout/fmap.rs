@@ -218,27 +218,23 @@ fn binary_search_fmap<S: FmapSearchable>(
     let mut offset_0_checked = false;
 
     for stride in strides.filter(|&s| s <= len) {
-        // Generate offsets at this stride level
-        let offsets = (rom_offset..=rom_offset + len - FMAP_HEADER_SIZE as u32)
-            .step_by(stride as usize)
-            .filter(|&offset| {
-                // Skip offsets already checked by larger strides
-                if offset.is_multiple_of(stride * 2) && offset != 0 {
-                    return false;
-                }
-
-                // Special handling for offset 0 - only check once
-                if offset == 0 {
-                    if offset_0_checked {
-                        return false;
-                    }
-                    offset_0_checked = true;
-                }
-
-                true
-            });
+        // Generate candidate offsets at this stride level
+        let offsets =
+            (rom_offset..=rom_offset + len - FMAP_HEADER_SIZE as u32).step_by(stride as usize);
 
         for offset in offsets {
+            // Skip offsets already checked by larger strides
+            if offset.is_multiple_of(stride * 2) && offset != 0 {
+                continue;
+            }
+
+            // Special handling for offset 0 - only check once
+            if offset == 0 {
+                if offset_0_checked {
+                    continue;
+                }
+                offset_0_checked = true;
+            }
             // Read signature first (8 bytes) - cheap check
             if storage.read_at(offset, &mut sig_buf).is_err() {
                 continue;
