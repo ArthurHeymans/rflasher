@@ -106,6 +106,8 @@ pub trait FlashDevice {
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
 
     /// Check if a range is valid for this device
+    ///
+    /// Uses u64 arithmetic to avoid truncation when `len > u32::MAX`.
     fn is_valid_range(&self, addr: u32, len: usize) -> bool {
         // Use u64 arithmetic to avoid truncation when len > u32::MAX
         let end = addr as u64 + len as u64;

@@ -271,7 +271,7 @@ where
     if read_len > 0 {
         let result = transfer_fn(&write_data, read_len)?;
         if result.len() < read_len {
-            return Err(crate::error::Error::ReadError { addr: 0 });
+            return Err(crate::error::Error::ProgrammerError);
         }
         cmd.read_buf.copy_from_slice(&result[..read_len]);
     } else {

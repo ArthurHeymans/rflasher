@@ -200,6 +200,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             }
             IoMode::Qpi => {
                 // QPI mode requires special handling - fall back to single for now
+                log::warn!("QPI read mode not yet implemented, falling back to single I/O");
                 if use_4byte_native {
                     protocol::read_4b(self.master(), addr, buf).await
                 } else {

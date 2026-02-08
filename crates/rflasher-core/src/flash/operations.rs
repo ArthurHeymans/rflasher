@@ -752,6 +752,7 @@ pub async fn read<M: SpiMaster + ?Sized>(
         IoMode::Qpi => {
             // QPI mode requires special handling - fall back to single for now
             // TODO: Implement QPI read when needed
+            log::warn!("QPI read mode not yet implemented, falling back to single I/O");
             if use_4byte {
                 protocol::read_4b(master, addr, buf).await
             } else {

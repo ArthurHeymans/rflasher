@@ -974,6 +974,7 @@ mod tests {
         }
     }
 
+    #[maybe_async::maybe_async(AFIT)]
     impl crate::programmer::SpiMaster for MockSfdpFlash {
         fn features(&self) -> crate::programmer::SpiFeatures {
             crate::programmer::SpiFeatures::empty()
@@ -987,7 +988,10 @@ mod tests {
             256
         }
 
-        fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> crate::error::Result<()> {
+        async fn execute(
+            &mut self,
+            cmd: &mut crate::spi::SpiCommand<'_>,
+        ) -> crate::error::Result<()> {
             use crate::spi::opcodes;
 
             match cmd.opcode {
@@ -1021,7 +1025,7 @@ mod tests {
             }
         }
 
-        fn delay_us(&mut self, _us: u32) {}
+        async fn delay_us(&mut self, _us: u32) {}
     }
 
     #[test]
