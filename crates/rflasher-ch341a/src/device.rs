@@ -152,68 +152,175 @@ impl Ch341a {
         Ok(())
     }
 
-    /// Perform an SPI transfer
+    /// Perform an SPI transfer using pipelined async USB transfers.
     ///
-    /// This is the core function that sends data to and receives data from
-    /// the SPI flash chip.
+    /// This mirrors flashprog's `usb_transfer()` approach for maximum throughput:
+    /// 1. Build all OUT data (CS packet + SPI_STREAM packets) into one contiguous buffer
+    /// 2. Submit the entire OUT buffer as a single async bulk transfer
+    /// 3. Simultaneously pre-submit up to `USB_IN_TRANSFERS` parallel IN transfers
+    /// 4. As IN transfers complete, reap them and submit new ones until all data is read
+    ///
+    /// This pipelining is critical for USB 1.1 performance: the device produces
+    /// IN responses as it processes each SPI_STREAM packet from the OUT data,
+    /// and having multiple IN transfers pre-queued ensures we never miss data.
     fn spi_transfer(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         let writecnt = write_data.len();
         let readcnt = read_len;
+        let total_spi_bytes = writecnt + readcnt;
+        let max_packet_size = self.in_ep.max_packet_size();
 
-        // Calculate how many packets we need
-        // Each packet can hold 31 bytes of SPI data (32 - 1 for command byte)
-        let packets = (writecnt + readcnt + CH341_PACKET_LENGTH - 2) / (CH341_PACKET_LENGTH - 1);
+        let packets = (total_spi_bytes + CH341_PACKET_LENGTH - 2) / (CH341_PACKET_LENGTH - 1);
 
-        // Allocate write buffer: CS packet + data packets
-        // CS packet is 32 bytes, each data packet is 32 bytes
-        let total_write_len = CH341_PACKET_LENGTH + packets * CH341_PACKET_LENGTH;
-        let mut wbuf = vec![0u8; total_write_len];
+        // Build the entire OUT buffer: CS packet + all SPI_STREAM packets
+        let out_total = CH341_PACKET_LENGTH + packets * CH341_PACKET_LENGTH;
+        let mut wbuf = vec![0u8; out_total];
 
-        // Build CS assertion packet with any accumulated delay
-        self.build_cs_packet(&mut wbuf[0..CH341_PACKET_LENGTH]);
+        // First 32-byte slot: CS assertion packet
+        self.build_cs_packet(&mut wbuf[..CH341_PACKET_LENGTH]);
 
-        // Build data packets
+        // Following slots: SPI_STREAM packets
         let mut write_left = writecnt;
         let mut read_left = readcnt;
         let mut write_idx = 0;
 
         for p in 0..packets {
-            let packet_start = CH341_PACKET_LENGTH + p * CH341_PACKET_LENGTH;
-            let packet = &mut wbuf[packet_start..packet_start + CH341_PACKET_LENGTH];
-
             let write_now = std::cmp::min(CH341_PACKET_LENGTH - 1, write_left);
             let read_now = std::cmp::min((CH341_PACKET_LENGTH - 1) - write_now, read_left);
 
-            packet[0] = CH341A_CMD_SPI_STREAM;
-
-            // Copy write data with bit reversal
+            let offset = CH341_PACKET_LENGTH + p * CH341_PACKET_LENGTH;
+            wbuf[offset] = CH341A_CMD_SPI_STREAM;
             for i in 0..write_now {
-                packet[1 + i] = reverse_byte(write_data[write_idx + i]);
+                wbuf[offset + 1 + i] = reverse_byte(write_data[write_idx + i]);
             }
+            // Fill read portion with 0xFF (already 0x00 from vec init, set explicitly)
+            for i in 0..read_now {
+                wbuf[offset + 1 + write_now + i] = 0xFF;
+            }
+
             write_idx += write_now;
             write_left -= write_now;
-
-            // Fill read portion with 0xFF
-            for i in 0..read_now {
-                packet[1 + write_now + i] = 0xFF;
-            }
             read_left -= read_now;
         }
 
-        // Calculate actual bytes to send and receive
-        let actual_write_len = CH341_PACKET_LENGTH + packets + writecnt + readcnt;
-        let actual_read_len = writecnt + readcnt;
+        // Actual OUT length: CS packet (32) + for each SPI packet: 1 cmd byte + payload bytes
+        let out_len = CH341_PACKET_LENGTH + packets + total_spi_bytes;
 
-        // Perform USB transfer
-        let rbuf = self.usb_transfer(&wbuf[..actual_write_len], actual_read_len)?;
+        // Allocate read result buffer
+        let mut rbuf = vec![0u8; total_spi_bytes];
+        let mut in_done: usize = 0;
+        let mut in_submitted: usize = 0;
 
-        // Extract and reverse read data
+        // Number of parallel IN transfers (matching flashprog's USB_IN_TRANSFERS=32)
+        const USB_IN_TRANSFERS: usize = 32;
+        // Track the expected payload size for each in-flight IN transfer
+        let mut in_flight_sizes: [usize; USB_IN_TRANSFERS] = [0; USB_IN_TRANSFERS];
+        let mut submit_idx: usize = 0;
+        let mut complete_idx: usize = 0;
+        let mut in_pending: usize = 0;
+
+        // IN transfer request size must be a multiple of max_packet_size
+        let in_request_len = max_packet_size;
+
+        // Submit the OUT transfer (non-blocking)
+        let out_buf = Buffer::from(wbuf[..out_len].to_vec());
+        self.out_ep.submit(out_buf);
+        let mut out_done = false;
+
+        // Main loop: interleave IN submissions, IN completions, and OUT progress.
+        // This mirrors flashprog's event loop where libusb_handle_events_timeout()
+        // drives both OUT and IN transfers simultaneously. In nusb, waiting on
+        // in_ep also allows the shared event handler to process OUT completions.
+        //
+        // We must keep IN transfers queued so the host controller can alternate
+        // OUT and IN transactions in each USB frame. If we exhaust our IN queue
+        // without resubmitting, the device has nowhere to send responses and
+        // stalls, preventing it from accepting more OUT data → deadlock.
+        loop {
+            // Schedule new IN reads as long as there are free slots and unscheduled bytes
+            while in_pending < USB_IN_TRANSFERS && in_submitted < total_spi_bytes {
+                let cur_todo =
+                    std::cmp::min(CH341_PACKET_LENGTH - 1, total_spi_bytes - in_submitted);
+                in_flight_sizes[submit_idx] = cur_todo;
+
+                let buf = Buffer::new(in_request_len);
+                self.in_ep.submit(buf);
+
+                in_submitted += cur_todo;
+                in_pending += 1;
+                submit_idx = (submit_idx + 1) % USB_IN_TRANSFERS;
+            }
+
+            // Check if we're done
+            if out_done && in_done >= total_spi_bytes {
+                break;
+            }
+
+            // Wait for the next IN completion (this also drives OUT progress via
+            // nusb's shared event loop on the usbfs fd)
+            if self.in_ep.pending() > 0 {
+                let completion = match self.in_ep.wait_next_complete(Duration::from_secs(5)) {
+                    Some(c) => c,
+                    None => {
+                        self.drain_all_pending();
+                        return Err(Ch341aError::TransferFailed("IN transfer timed out".into()));
+                    }
+                };
+
+                if let Err(e) = completion.status {
+                    self.drain_all_pending();
+                    return Err(Ch341aError::TransferFailed(format!(
+                        "IN transfer failed: {e}"
+                    )));
+                }
+
+                let expected = in_flight_sizes[complete_idx];
+                let actual = std::cmp::min(completion.actual_len, expected);
+                let dst_end = std::cmp::min(in_done + actual, total_spi_bytes);
+                rbuf[in_done..dst_end].copy_from_slice(&completion.buffer[..dst_end - in_done]);
+                in_done += actual;
+                in_pending -= 1;
+                complete_idx = (complete_idx + 1) % USB_IN_TRANSFERS;
+            }
+
+            // Check OUT completion (non-blocking: just check if it's done)
+            if !out_done && self.out_ep.pending() > 0 {
+                if let Some(c) = self.out_ep.wait_next_complete(Duration::ZERO) {
+                    if let Err(e) = c.status {
+                        self.drain_all_pending();
+                        return Err(Ch341aError::TransferFailed(format!(
+                            "OUT transfer failed: {e}"
+                        )));
+                    }
+                    out_done = true;
+                }
+            } else if !out_done {
+                // OUT endpoint has 0 pending but we never saw completion - shouldn't happen
+                out_done = true;
+            }
+        }
+
+        // Drain any extra pending transfers
+        self.drain_all_pending();
+
+        // Extract and bit-reverse the read data
         let mut result = Vec::with_capacity(readcnt);
         for i in 0..readcnt {
             result.push(reverse_byte(rbuf[writecnt + i]));
         }
 
         Ok(result)
+    }
+
+    /// Cancel and drain all pending transfers on both endpoints.
+    fn drain_all_pending(&mut self) {
+        self.out_ep.cancel_all();
+        while self.out_ep.pending() > 0 {
+            let _ = self.out_ep.wait_next_complete(Duration::from_secs(1));
+        }
+        self.in_ep.cancel_all();
+        while self.in_ep.pending() > 0 {
+            let _ = self.in_ep.wait_next_complete(Duration::from_secs(1));
+        }
     }
 
     /// Build the CS assertion packet with delay handling
@@ -264,76 +371,13 @@ impl Ch341a {
         log::trace!("USB write {} bytes", data.len());
         Ok(())
     }
-
-    /// Perform a USB transfer (write then read, blocking)
-    fn usb_transfer(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
-        // For the CH341A, we need to handle the quirky packet-based protocol
-        // where each 32-byte write packet results in a 31-byte read response.
-
-        // First, write the data
-        let mut out_buf = Buffer::new(write_data.len());
-        out_buf.extend_from_slice(write_data);
-        let write_completion = self
-            .out_ep
-            .transfer_blocking(out_buf, Duration::from_secs(5));
-        write_completion
-            .into_result()
-            .map_err(|e| Ch341aError::TransferFailed(e.to_string()))?;
-
-        // Collect read responses (blocking)
-        // The CH341A returns (CH341_PACKET_LENGTH - 1) bytes per SPI stream
-        // packet, matching the C flashprog implementation which reads in
-        // chunks of exactly that size. The nusb library requires IN transfer
-        // buffers to be a multiple of max_packet_size, so we round up the
-        // allocation but only consume the bytes we actually need.
-        let mut result = Vec::with_capacity(read_len);
-        let mut remaining = read_len;
-        let max_packet_size = self.in_ep.max_packet_size();
-
-        while remaining > 0 {
-            let cur_todo = std::cmp::min(CH341_PACKET_LENGTH - 1, remaining);
-            let request_len = cur_todo.div_ceil(max_packet_size) * max_packet_size;
-            let mut in_buf = Buffer::new(request_len);
-            in_buf.set_requested_len(request_len);
-
-            let read_completion = self.in_ep.transfer_blocking(in_buf, Duration::from_secs(5));
-
-            let data = read_completion
-                .into_result()
-                .map_err(|e| Ch341aError::TransferFailed(e.to_string()))?;
-
-            let to_take = std::cmp::min(data.len(), remaining);
-            result.extend_from_slice(&data[..to_take]);
-            remaining -= to_take;
-
-            // Guard against short transfers: if the device returned fewer
-            // bytes than we requested, continuing the loop would likely hang
-            // (the device has no more data to give for this SPI transaction).
-            if data.len() < request_len {
-                if remaining > 0 {
-                    log::warn!(
-                        "CH341A: short USB read ({} < {} requested), {} bytes still missing",
-                        data.len(),
-                        request_len,
-                        remaining,
-                    );
-                }
-                break;
-            }
-        }
-
-        log::trace!(
-            "USB transfer: wrote {} bytes, read {} bytes",
-            write_data.len(),
-            result.len()
-        );
-
-        Ok(result)
-    }
 }
 
 impl Drop for Ch341a {
     fn drop(&mut self) {
+        // Drain any pending transfers before shutdown to avoid panics
+        self.drain_all_pending();
+
         // Disable output pins on close
         if let Err(e) = self.enable_pins(false) {
             log::warn!("Failed to disable pins on close: {}", e);

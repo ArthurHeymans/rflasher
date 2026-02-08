@@ -25,16 +25,20 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(any(feature = "std", feature = "wasm")), no_std)]
 
 #[cfg(feature = "std")]
 mod device;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod error;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod protocol;
+#[cfg(feature = "wasm")]
+mod web_device;
 
 #[cfg(feature = "std")]
 pub use device::Ch341a;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{Ch341aError, Result};
+#[cfg(feature = "wasm")]
+pub use web_device::Ch341aAsync;
