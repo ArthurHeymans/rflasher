@@ -4,7 +4,7 @@ use eframe::egui;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use rflasher_ch341a::Ch341aAsync;
+use rflasher_ch341a::Ch341a;
 use rflasher_core::chip::{ChipDatabase, FlashChip};
 use rflasher_core::flash::unified::{smart_write, WriteProgress, WriteStats};
 use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult, SpiFlashDevice};
@@ -55,7 +55,7 @@ impl ProgrammerType {
 /// Connected programmer - wraps either a serprog or CH341A device
 enum Programmer {
     Serprog(Serprog<WebSerialTransport>),
-    Ch341a(Ch341aAsync),
+    Ch341a(Ch341a),
 }
 
 // =============================================================================
@@ -624,26 +624,22 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            match Ch341aAsync::request_device().await {
-                Ok(device_info) => {
-                    match Ch341aAsync::open(device_info).await {
-                        Ok(ch341a) => {
-                            {
-                                let mut state = shared.borrow_mut();
-                                state.programmer = Some(Programmer::Ch341a(ch341a));
-                                state.messages.push(AsyncMessage::Connected {
-                                    programmer_name: "CH341A".to_string(),
-                                });
-                            }
-                        }
-                        Err(e) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                        }
+            match Ch341a::request_device().await {
+                Ok(device_info) => match Ch341a::open(device_info).await {
+                    Ok(ch341a) => {
+                        let mut state = shared.borrow_mut();
+                        state.programmer = Some(Programmer::Ch341a(ch341a));
+                        state.messages.push(AsyncMessage::Connected {
+                            programmer_name: "CH341A".to_string(),
+                        });
                     }
-                }
+                    Err(e) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                    }
+                },
                 Err(e) => {
                     shared
                         .borrow_mut()

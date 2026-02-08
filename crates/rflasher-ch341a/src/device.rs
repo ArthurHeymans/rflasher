@@ -2,11 +2,20 @@
 //!
 //! This module provides the main `Ch341a` struct that implements USB
 //! communication with the CH341A programmer and the `SpiMaster` trait.
+//!
+//! Uses `maybe_async` to support both sync and async modes from a single
+//! codebase:
+//! - With `is_sync` feature (native CLI): all async is stripped, blocking USB
+//! - Without `is_sync` (WASM): full async with WebUSB
 
+#[cfg(feature = "is_sync")]
 use std::time::Duration;
 
+use maybe_async::maybe_async;
 use nusb::transfer::{Buffer, Bulk, In, Out};
-use nusb::{Endpoint, MaybeFuture};
+use nusb::Endpoint;
+#[cfg(feature = "std")]
+use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
@@ -14,11 +23,68 @@ use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
 use crate::error::{Ch341aError, Result};
 use crate::protocol::*;
 
+// ---------------------------------------------------------------------------
+// Platform-specific endpoint wait macros
+// ---------------------------------------------------------------------------
+// These macros provide a uniform interface over nusb's blocking (native)
+// and async (WASM) completion APIs. Using macros avoids the borrow issues
+// that arise with &mut Endpoint in free functions, since the macro expands
+// inline and Rust can split borrows on struct fields.
+
+/// Wait for the next completion on an endpoint, with timeout.
+/// In sync mode: blocks with the given timeout.
+/// In async mode: awaits indefinitely (timeout is ignored — nusb's async
+/// API does not support timeouts natively; the caller should add an external
+/// timeout wrapper if needed).
+/// Returns `Option<Completion>`.
+macro_rules! ep_wait {
+    ($ep:expr, $timeout:expr) => {{
+        #[cfg(feature = "is_sync")]
+        {
+            $ep.wait_next_complete($timeout)
+        }
+        #[cfg(not(feature = "is_sync"))]
+        {
+            Some($ep.next_complete().await)
+        }
+    }};
+}
+
+/// Try to get the next completion without blocking (non-blocking poll).
+/// Returns `Option<Completion>`.
+macro_rules! ep_try {
+    ($ep:expr) => {{
+        #[cfg(feature = "is_sync")]
+        {
+            $ep.wait_next_complete(Duration::ZERO)
+        }
+        #[cfg(not(feature = "is_sync"))]
+        {
+            use std::task::Poll;
+            std::future::poll_fn(|cx| match $ep.poll_next_complete(cx) {
+                Poll::Ready(c) => Poll::Ready(Some(c)),
+                Poll::Pending => Poll::Ready(None),
+            })
+            .await
+        }
+    }};
+}
+
+// ---------------------------------------------------------------------------
+// CH341A device struct
+// ---------------------------------------------------------------------------
+
 /// CH341A USB programmer
 ///
 /// This struct represents a connection to a CH341A USB device and implements
 /// the `SpiMaster` trait for communicating with SPI flash chips.
+///
+/// On native (with `is_sync`), all methods are synchronous and blocking.
+/// On WASM (without `is_sync`), methods are async and use WebUSB.
 pub struct Ch341a {
+    /// USB interface (kept alive to maintain device claim on WASM)
+    #[cfg(feature = "wasm")]
+    _interface: nusb::Interface,
     /// Bulk OUT endpoint for writes
     out_ep: Endpoint<Bulk, Out>,
     /// Bulk IN endpoint for reads
@@ -27,6 +93,11 @@ pub struct Ch341a {
     stored_delay_us: u32,
 }
 
+// ---------------------------------------------------------------------------
+// Native-only methods (device enumeration, Drop)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "std")]
 impl Ch341a {
     /// Open a CH341A device
     ///
@@ -107,33 +178,173 @@ impl Ch341a {
 
         Ok(devices)
     }
+}
 
+/// Information about a connected CH341A device
+#[cfg(feature = "std")]
+#[derive(Debug, Clone)]
+pub struct Ch341aDeviceInfo {
+    /// USB bus number
+    pub bus: u8,
+    /// USB device address
+    pub address: u8,
+}
+
+#[cfg(feature = "std")]
+impl std::fmt::Display for Ch341aDeviceInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CH341A at bus {} address {}", self.bus, self.address)
+    }
+}
+
+// Drop implementation only for sync mode (async requires explicit shutdown)
+#[cfg(feature = "is_sync")]
+impl Drop for Ch341a {
+    fn drop(&mut self) {
+        // Drain any pending transfers before shutdown to avoid panics
+        self.drain_all_pending();
+
+        // Disable output pins on close
+        if let Err(e) = self.enable_pins(false) {
+            log::warn!("Failed to disable pins on close: {}", e);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WASM-only methods (WebUSB device picker, async open, shutdown)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "wasm")]
+impl Ch341a {
+    /// Request a CH341A device via the WebUSB permission prompt
+    ///
+    /// This must be called from a user gesture (e.g., button click) in the browser.
+    /// It shows the browser's device picker filtered to CH341A devices.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn request_device() -> Result<nusb::DeviceInfo> {
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen_futures::JsFuture;
+        use web_sys::{UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
+
+        let usb = web_sys::window()
+            .ok_or(Ch341aError::DeviceNotFound)?
+            .navigator()
+            .usb();
+
+        // Create filter for CH341A devices
+        let filter = UsbDeviceFilter::new();
+        filter.set_vendor_id(CH341A_USB_VENDOR);
+        filter.set_product_id(CH341A_USB_PRODUCT);
+
+        let filters = js_sys::Array::new();
+        filters.push(&filter);
+
+        let options = UsbDeviceRequestOptions::new(&filters);
+
+        log::info!("Requesting CH341A device via WebUSB picker...");
+
+        let device_promise = usb.request_device(&options);
+        let device_js = JsFuture::from(device_promise)
+            .await
+            .map_err(|e| Ch341aError::OpenFailed(format!("WebUSB request failed: {:?}", e)))?;
+
+        let device: UsbDevice = device_js
+            .dyn_into()
+            .map_err(|_| Ch341aError::OpenFailed("Failed to get USB device".to_string()))?;
+
+        log::info!(
+            "CH341A device selected: VID={:04X} PID={:04X}",
+            device.vendor_id(),
+            device.product_id()
+        );
+
+        let device_info = nusb::device_info_from_webusb(device)
+            .await
+            .map_err(|e| Ch341aError::OpenFailed(format!("Failed to get device info: {}", e)))?;
+
+        Ok(device_info)
+    }
+
+    /// Open a CH341A device from a DeviceInfo
+    pub async fn open(device_info: nusb::DeviceInfo) -> Result<Self> {
+        log::info!(
+            "Opening CH341A device VID={:04X} PID={:04X}",
+            device_info.vendor_id(),
+            device_info.product_id()
+        );
+
+        let device = device_info
+            .open()
+            .await
+            .map_err(|e| Ch341aError::OpenFailed(e.to_string()))?;
+
+        let interface = device
+            .claim_interface(0)
+            .await
+            .map_err(|e| Ch341aError::ClaimFailed(e.to_string()))?;
+
+        let out_ep = interface
+            .endpoint::<Bulk, Out>(WRITE_EP)
+            .map_err(|e| Ch341aError::ClaimFailed(e.to_string()))?;
+        let in_ep = interface
+            .endpoint::<Bulk, In>(READ_EP)
+            .map_err(|e| Ch341aError::ClaimFailed(e.to_string()))?;
+
+        let mut ch341a = Self {
+            _interface: interface,
+            out_ep,
+            in_ep,
+            stored_delay_us: 0,
+        };
+
+        ch341a.configure().await?;
+        Ok(ch341a)
+    }
+
+    /// Shutdown: disable output pins (WASM equivalent of Drop)
+    pub async fn shutdown(&mut self) {
+        self.drain_all_pending().await;
+        if let Err(e) = self.enable_pins(false).await {
+            log::warn!("Failed to disable pins on shutdown: {}", e);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared methods (sync or async via maybe_async)
+// ---------------------------------------------------------------------------
+
+impl Ch341a {
     /// Configure the CH341A for SPI mode
-    fn configure(&mut self) -> Result<()> {
+    #[maybe_async]
+    async fn configure(&mut self) -> Result<()> {
         // Set I2C/SPI mode to 100kHz base (the actual SPI speed is ~2MHz)
-        self.config_stream(CH341A_STM_I2C_100K)?;
+        self.config_stream(CH341A_STM_I2C_100K).await?;
 
         // Enable output pins
-        self.enable_pins(true)?;
+        self.enable_pins(true).await?;
 
         log::info!("CH341A configured for SPI mode");
         Ok(())
     }
 
     /// Configure the stream interface speed
-    fn config_stream(&mut self, speed: u8) -> Result<()> {
+    #[maybe_async]
+    async fn config_stream(&mut self, speed: u8) -> Result<()> {
         let buf = vec![
             CH341A_CMD_I2C_STREAM,
             CH341A_CMD_I2C_STM_SET | (speed & 0x7),
             CH341A_CMD_I2C_STM_END,
         ];
 
-        self.usb_write(&buf)?;
+        self.usb_write(&buf).await?;
         Ok(())
     }
 
     /// Enable or disable output pins
-    fn enable_pins(&mut self, enable: bool) -> Result<()> {
+    #[maybe_async]
+    async fn enable_pins(&mut self, enable: bool) -> Result<()> {
         let dir = if enable {
             UIO_DIR_OUTPUT
         } else {
@@ -147,8 +358,25 @@ impl Ch341a {
             CH341A_CMD_UIO_STM_END,
         ];
 
-        self.usb_write(&buf)?;
+        self.usb_write(&buf).await?;
         log::debug!("Pins {}abled", if enable { "en" } else { "dis" });
+        Ok(())
+    }
+
+    /// Write data to USB endpoint
+    #[maybe_async]
+    async fn usb_write(&mut self, data: &[u8]) -> Result<()> {
+        let buf = Buffer::from(data.to_vec());
+        self.out_ep.submit(buf);
+
+        let completion = ep_wait!(self.out_ep, Duration::from_secs(5))
+            .ok_or_else(|| Ch341aError::TransferFailed("USB write timed out".into()))?;
+
+        completion
+            .status
+            .map_err(|e| Ch341aError::TransferFailed(e.to_string()))?;
+
+        log::trace!("USB write {} bytes", data.len());
         Ok(())
     }
 
@@ -163,7 +391,8 @@ impl Ch341a {
     /// This pipelining is critical for USB 1.1 performance: the device produces
     /// IN responses as it processes each SPI_STREAM packet from the OUT data,
     /// and having multiple IN transfers pre-queued ensures we never miss data.
-    fn spi_transfer(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
+    #[maybe_async]
+    async fn spi_transfer(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         let writecnt = write_data.len();
         let readcnt = read_len;
         let total_spi_bytes = writecnt + readcnt;
@@ -234,7 +463,7 @@ impl Ch341a {
         // We must keep IN transfers queued so the host controller can alternate
         // OUT and IN transactions in each USB frame. If we exhaust our IN queue
         // without resubmitting, the device has nowhere to send responses and
-        // stalls, preventing it from accepting more OUT data → deadlock.
+        // stalls, preventing it from accepting more OUT data -> deadlock.
         loop {
             // Schedule new IN reads as long as there are free slots and unscheduled bytes
             while in_pending < USB_IN_TRANSFERS && in_submitted < total_spi_bytes {
@@ -258,16 +487,16 @@ impl Ch341a {
             // Wait for the next IN completion (this also drives OUT progress via
             // nusb's shared event loop on the usbfs fd)
             if self.in_ep.pending() > 0 {
-                let completion = match self.in_ep.wait_next_complete(Duration::from_secs(5)) {
+                let completion = match ep_wait!(self.in_ep, Duration::from_secs(5)) {
                     Some(c) => c,
                     None => {
-                        self.drain_all_pending();
+                        self.drain_all_pending().await;
                         return Err(Ch341aError::TransferFailed("IN transfer timed out".into()));
                     }
                 };
 
                 if let Err(e) = completion.status {
-                    self.drain_all_pending();
+                    self.drain_all_pending().await;
                     return Err(Ch341aError::TransferFailed(format!(
                         "IN transfer failed: {e}"
                     )));
@@ -284,9 +513,9 @@ impl Ch341a {
 
             // Check OUT completion (non-blocking: just check if it's done)
             if !out_done && self.out_ep.pending() > 0 {
-                if let Some(c) = self.out_ep.wait_next_complete(Duration::ZERO) {
+                if let Some(c) = ep_try!(self.out_ep) {
                     if let Err(e) = c.status {
-                        self.drain_all_pending();
+                        self.drain_all_pending().await;
                         return Err(Ch341aError::TransferFailed(format!(
                             "OUT transfer failed: {e}"
                         )));
@@ -300,7 +529,7 @@ impl Ch341a {
         }
 
         // Drain any extra pending transfers
-        self.drain_all_pending();
+        self.drain_all_pending().await;
 
         // Extract and bit-reverse the read data
         let mut result = Vec::with_capacity(readcnt);
@@ -312,14 +541,15 @@ impl Ch341a {
     }
 
     /// Cancel and drain all pending transfers on both endpoints.
-    fn drain_all_pending(&mut self) {
+    #[maybe_async]
+    async fn drain_all_pending(&mut self) {
         self.out_ep.cancel_all();
         while self.out_ep.pending() > 0 {
-            let _ = self.out_ep.wait_next_complete(Duration::from_secs(1));
+            let _ = ep_wait!(self.out_ep, Duration::from_secs(1));
         }
         self.in_ep.cancel_all();
         while self.in_ep.pending() > 0 {
-            let _ = self.in_ep.wait_next_complete(Duration::from_secs(1));
+            let _ = ep_wait!(self.in_ep, Duration::from_secs(1));
         }
     }
 
@@ -356,35 +586,13 @@ impl Ch341a {
         // End UIO stream
         packet[idx] = CH341A_CMD_UIO_STM_END;
     }
-
-    /// Write data to USB endpoint (blocking)
-    fn usb_write(&mut self, data: &[u8]) -> Result<()> {
-        let mut buf = Buffer::new(data.len());
-        buf.extend_from_slice(data);
-
-        let completion = self.out_ep.transfer_blocking(buf, Duration::from_secs(5));
-
-        completion
-            .into_result()
-            .map_err(|e| Ch341aError::TransferFailed(e.to_string()))?;
-
-        log::trace!("USB write {} bytes", data.len());
-        Ok(())
-    }
 }
 
-impl Drop for Ch341a {
-    fn drop(&mut self) {
-        // Drain any pending transfers before shutdown to avoid panics
-        self.drain_all_pending();
+// ---------------------------------------------------------------------------
+// SpiMaster trait implementation
+// ---------------------------------------------------------------------------
 
-        // Disable output pins on close
-        if let Err(e) = self.enable_pins(false) {
-            log::warn!("Failed to disable pins on close: {}", e);
-        }
-    }
-}
-
+#[maybe_async(AFIT)]
 impl SpiMaster for Ch341a {
     fn features(&self) -> SpiFeatures {
         // CH341A supports 4-byte addressing (software handled)
@@ -401,7 +609,7 @@ impl SpiMaster for Ch341a {
         4 * 1024
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         // Check that the requested I/O mode is supported
         check_io_mode_supported(cmd.io_mode, self.features())?;
 
@@ -419,6 +627,7 @@ impl SpiMaster for Ch341a {
         let read_len = cmd.read_buf.len();
         let result = self
             .spi_transfer(&write_data, read_len)
+            .await
             .map_err(|_e| CoreError::ProgrammerError)?;
 
         // Copy read data back
@@ -427,30 +636,36 @@ impl SpiMaster for Ch341a {
         Ok(())
     }
 
-    fn delay_us(&mut self, us: u32) {
+    async fn delay_us(&mut self, us: u32) {
         // Accumulate small delays into the CS packet (up to ~20us)
-        // For longer delays, use actual sleep
         if (us + self.stored_delay_us) > 20 {
             let inc = 20 - self.stored_delay_us;
-            std::thread::sleep(Duration::from_micros((us - inc) as u64));
+
+            #[cfg(feature = "is_sync")]
+            {
+                std::thread::sleep(Duration::from_micros((us - inc) as u64));
+            }
+
+            #[cfg(feature = "wasm")]
+            {
+                let delay_ms = ((us - inc) as f64 / 1000.0).ceil() as i32;
+                if delay_ms > 0 {
+                    // Use setTimeout to delay in WASM
+                    let promise = js_sys::Promise::new(&mut |resolve, _| {
+                        let window = web_sys::window().unwrap();
+                        window
+                            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                                &resolve, delay_ms,
+                            )
+                            .unwrap();
+                    });
+                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                }
+            }
+
             self.stored_delay_us = inc;
         } else {
             self.stored_delay_us += us;
         }
-    }
-}
-
-/// Information about a connected CH341A device
-#[derive(Debug, Clone)]
-pub struct Ch341aDeviceInfo {
-    /// USB bus number
-    pub bus: u8,
-    /// USB device address
-    pub address: u8,
-}
-
-impl std::fmt::Display for Ch341aDeviceInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CH341A at bus {} address {}", self.bus, self.address)
     }
 }

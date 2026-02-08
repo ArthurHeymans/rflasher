@@ -4,6 +4,10 @@
 //! The CH341A is a cheap and widely available USB programmer commonly used
 //! for programming SPI flash chips.
 //!
+//! Uses `maybe_async` to support both sync and async modes:
+//! - With `is_sync` feature (native CLI): blocking/synchronous
+//! - Without `is_sync` (WASM): async with WebUSB
+//!
 //! # Protocol Overview
 //!
 //! The CH341A communicates via USB bulk transfers. SPI data is sent using
@@ -27,18 +31,16 @@
 
 #![cfg_attr(not(any(feature = "std", feature = "wasm")), no_std)]
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod device;
 #[cfg(any(feature = "std", feature = "wasm"))]
 mod error;
 #[cfg(any(feature = "std", feature = "wasm"))]
 mod protocol;
-#[cfg(feature = "wasm")]
-mod web_device;
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 pub use device::Ch341a;
+#[cfg(feature = "std")]
+pub use device::Ch341aDeviceInfo;
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{Ch341aError, Result};
-#[cfg(feature = "wasm")]
-pub use web_device::Ch341aAsync;

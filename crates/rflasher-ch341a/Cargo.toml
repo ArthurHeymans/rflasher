@@ -7,13 +7,16 @@ description = "CH341A USB programmer support for rflasher"
 
 [features]
 default = ["std"]
-std = ["rflasher-core/std", "rflasher-core/is_sync", "nusb", "futures-lite"]
+std = ["rflasher-core/std", "is_sync", "nusb", "futures-lite"]
+# Sync mode - when enabled, async code is compiled as sync
+is_sync = ["rflasher-core/is_sync", "maybe-async/is_sync"]
 wasm = ["rflasher-core/std", "nusb", "web-sys", "wasm-bindgen", "wasm-bindgen-futures", "js-sys"]
 
 [dependencies]
 rflasher-core.workspace = true
 nusb = { workspace = true, optional = true }
 futures-lite = { version = "2", optional = true }
+maybe-async.workspace = true
 log.workspace = true
 
 # WASM dependencies (optional, only for wasm feature)
