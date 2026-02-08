@@ -82,6 +82,9 @@ bitflags! {
     }
 }
 
+// Note: bitflags types don't derive Default, but `Features::empty()` serves
+// the same purpose. We keep the manual impl for ergonomics with #[derive(Default)]
+// on structs containing Features.
 impl Default for Features {
     fn default() -> Self {
         Features::empty()

@@ -1,7 +1,7 @@
 //! Flash chip type definitions
 
 #[cfg(feature = "alloc")]
-use alloc::{string::String, vec, vec::Vec};
+use alloc::{string::String, vec::Vec};
 
 use super::features::Features;
 
@@ -43,6 +43,7 @@ impl EraseRegion {
     }
 
     /// Get the total size of this region in bytes
+    #[must_use]
     pub const fn total_size(&self) -> u32 {
         self.size * self.count
     }
@@ -70,47 +71,16 @@ impl EraseBlock {
     /// Note: This creates a block with count=1, suitable for chip erase operations.
     /// For sector/block erase operations, use `with_count()` instead to specify
     /// the number of blocks on the chip.
-    #[cfg(feature = "alloc")]
     pub fn new(opcode: u8, size: u32) -> Self {
-        Self {
-            opcode,
-            regions: vec![EraseRegion::new(size, 1)],
-        }
-    }
-
-    /// Create a new erase block with a single uniform region
-    ///
-    /// Note: This creates a block with count=1, suitable for chip erase operations.
-    /// For sector/block erase operations, use `with_count()` instead to specify
-    /// the number of blocks on the chip.
-    #[cfg(not(feature = "alloc"))]
-    pub fn new(opcode: u8, size: u32) -> Self {
-        let mut regions = RegionVec::new();
-        regions.push(EraseRegion::new(size, 1)).unwrap();
-        Self { opcode, regions }
+        Self::with_count(opcode, size, 1)
     }
 
     /// Create a new erase block with a single uniform region and specified count
     ///
     /// This is the correct way to create sector/block erase definitions where
     /// multiple blocks of the same size exist on the chip.
-    #[cfg(feature = "alloc")]
     pub fn with_count(opcode: u8, size: u32, count: u32) -> Self {
-        Self {
-            opcode,
-            regions: vec![EraseRegion::new(size, count)],
-        }
-    }
-
-    /// Create a new erase block with a single uniform region and specified count
-    ///
-    /// This is the correct way to create sector/block erase definitions where
-    /// multiple blocks of the same size exist on the chip.
-    #[cfg(not(feature = "alloc"))]
-    pub fn with_count(opcode: u8, size: u32, count: u32) -> Self {
-        let mut regions = RegionVec::new();
-        regions.push(EraseRegion::new(size, count)).unwrap();
-        Self { opcode, regions }
+        Self::with_regions(opcode, &[EraseRegion::new(size, count)])
     }
 
     /// Create an erase block from multiple regions
@@ -141,11 +111,13 @@ impl EraseBlock {
     }
 
     /// Get the total size covered by this erase operation
+    #[must_use]
     pub fn total_size(&self) -> u32 {
         self.regions.iter().map(|r| r.total_size()).sum()
     }
 
     /// Check if this is a uniform erase (single region)
+    #[must_use]
     pub fn is_uniform(&self) -> bool {
         self.regions.len() == 1
     }
@@ -173,6 +145,7 @@ impl EraseBlock {
     ///
     /// A chip erase block is characterized by having a single region with count=1.
     /// This is used by opcodes like 0xC7 or 0x60 which erase the entire chip at once.
+    #[must_use]
     pub fn is_chip_erase(&self) -> bool {
         // Chip erase blocks have exactly one region with count=1
         // This distinguishes them from sector/block erase which have count > 1
@@ -325,16 +298,19 @@ pub struct FlashChip {
 
 impl FlashChip {
     /// Get the JEDEC ID as a 24-bit value (manufacturer << 16 | device)
+    #[must_use]
     pub fn jedec_id(&self) -> u32 {
         ((self.jedec_manufacturer as u32) << 16) | (self.jedec_device as u32)
     }
 
     /// Check if this chip matches the given JEDEC ID
+    #[must_use]
     pub fn matches_jedec_id(&self, manufacturer: u8, device: u16) -> bool {
         self.jedec_manufacturer == manufacturer && self.jedec_device == device
     }
 
     /// Check if this chip requires 4-byte addressing
+    #[must_use]
     pub fn requires_4byte_addr(&self) -> bool {
         self.total_size > 16 * 1024 * 1024
     }
@@ -449,6 +425,11 @@ mod tests {
 }
 
 /// JEDEC manufacturer IDs
+///
+/// Note: Some manufacturer IDs are shared between vendors. JEDEC bank
+/// extensions would normally disambiguate, but many cheap flash chips
+/// only report a single-byte ID. The duplicates here reflect real-world
+/// usage in flashrom/flashprog chip databases.
 pub mod manufacturer {
     /// AMD/Spansion
     pub const AMD: u8 = 0x01;
@@ -462,22 +443,22 @@ pub mod manufacturer {
     pub const GIGADEVICE: u8 = 0xC8;
     /// Intel
     pub const INTEL: u8 = 0x89;
-    /// ISSI
+    /// ISSI (shares 0x9D with PMC — disambiguated by device ID)
     pub const ISSI: u8 = 0x9D;
     /// Macronix
     pub const MACRONIX: u8 = 0xC2;
-    /// Micron
+    /// Micron (shares 0x20 with ST and XMC — disambiguated by device ID)
     pub const MICRON: u8 = 0x20;
-    /// PMC
+    /// PMC (shares 0x9D with ISSI — disambiguated by device ID)
     pub const PMC: u8 = 0x9D;
     /// Sanyo
     pub const SANYO: u8 = 0x62;
     /// SST
     pub const SST: u8 = 0xBF;
-    /// ST (now Micron)
+    /// ST / STMicroelectronics, now Micron (shares 0x20 with Micron and XMC)
     pub const ST: u8 = 0x20;
     /// Winbond
     pub const WINBOND: u8 = 0xEF;
-    /// XMC
+    /// XMC (shares 0x20 with Micron and ST — disambiguated by device ID)
     pub const XMC: u8 = 0x20;
 }

@@ -123,8 +123,7 @@ pub trait SpiMaster {
     ///
     /// Some programmers (like Intel internal) have restrictions on which
     /// opcodes can be executed. Returns true if the opcode is allowed.
-    fn probe_opcode(&self, opcode: u8) -> bool {
-        let _ = opcode;
+    fn probe_opcode(&self, _opcode: u8) -> bool {
         true
     }
 

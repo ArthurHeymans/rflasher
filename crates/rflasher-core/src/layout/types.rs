@@ -44,11 +44,13 @@ impl Region {
     }
 
     /// Get the size of this region in bytes
+    #[must_use]
     pub fn size(&self) -> u32 {
         self.end - self.start + 1
     }
 
     /// Check if an address is within this region
+    #[must_use]
     pub fn contains(&self, addr: u32) -> bool {
         addr >= self.start && addr <= self.end
     }

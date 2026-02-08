@@ -4,6 +4,8 @@ use eframe::egui;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use rflasher_ch341a::Ch341a;
+use rflasher_ch347::{Ch347, SpiSpeed};
 use rflasher_core::chip::{ChipDatabase, FlashChip};
 use rflasher_core::flash::unified::{smart_write, WriteProgress, WriteStats};
 use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult, SpiFlashDevice};
@@ -27,6 +29,79 @@ async fn yield_to_browser() {
             .expect("setTimeout failed");
     });
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+// =============================================================================
+// Programmer type abstraction
+// =============================================================================
+
+/// The type of programmer to connect to
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProgrammerType {
+    /// serprog via WebSerial
+    Serprog,
+    /// CH341A via WebUSB
+    Ch341a,
+    /// CH347 via WebUSB
+    Ch347,
+}
+
+impl ProgrammerType {
+    fn label(&self) -> &'static str {
+        match self {
+            ProgrammerType::Serprog => "serprog (WebSerial)",
+            ProgrammerType::Ch341a => "CH341A (WebUSB)",
+            ProgrammerType::Ch347 => "CH347 (WebUSB)",
+        }
+    }
+
+    /// Whether this programmer uses WebUSB (vs WebSerial)
+    fn is_webusb(&self) -> bool {
+        matches!(self, ProgrammerType::Ch341a | ProgrammerType::Ch347)
+    }
+}
+
+/// Connected programmer - wraps a serprog, CH341A, or CH347 device
+enum Programmer {
+    Serprog(Serprog<WebSerialTransport>),
+    Ch341a(Ch341a),
+    Ch347(Ch347),
+}
+
+// ---------------------------------------------------------------------------
+// Macro to dispatch operations across programmer variants
+// ---------------------------------------------------------------------------
+// This eliminates the per-variant match arm duplication in every spawner.
+// The macro takes the programmer, calls the operation on the inner SpiMaster,
+// and puts it back into the shared state.
+
+/// Dispatch an async operation across all programmer variants.
+///
+/// Usage: `with_programmer!(shared, programmer, |master| { async body using master })`
+///
+/// The `master` binding is `&mut impl SpiMaster`. The async body must return
+/// the master back via `device.into_parts()` pattern or similar -- the macro
+/// handles putting the Programmer wrapper back into shared state.
+macro_rules! with_programmer {
+    ($shared:expr, $programmer:expr, $name:ident, $body:expr) => {
+        match $programmer {
+            Programmer::Serprog(mut $name) => {
+                let result = $body;
+                $shared.borrow_mut().programmer = Some(Programmer::Serprog($name));
+                result
+            }
+            Programmer::Ch341a(mut $name) => {
+                let result = $body;
+                $shared.borrow_mut().programmer = Some(Programmer::Ch341a($name));
+                result
+            }
+            Programmer::Ch347(mut $name) => {
+                let result = $body;
+                $shared.borrow_mut().programmer = Some(Programmer::Ch347($name));
+                result
+            }
+        }
+    };
 }
 
 // =============================================================================
@@ -82,8 +157,8 @@ enum ProgressUpdate {
 struct SharedState {
     /// Messages from async tasks
     messages: Vec<AsyncMessage>,
-    /// The serprog device (if connected)
-    serprog: Option<Serprog<WebSerialTransport>>,
+    /// The connected programmer (if any)
+    programmer: Option<Programmer>,
     /// Whether an async operation is running
     busy: bool,
 }
@@ -235,12 +310,18 @@ pub struct RflasherApp {
     file_buffer: Option<Vec<u8>>,
     /// Baud rate for serial connection
     baud_rate: u32,
+    /// Selected programmer type
+    programmer_type: ProgrammerType,
+    /// Selected SPI speed for CH347
+    spi_speed: SpiSpeed,
     /// Chip database
     chip_db: ChipDatabase,
     /// Detected chip info
     chip_info: Option<ChipInfo>,
     /// egui context for requesting repaints
     ctx: Option<egui::Context>,
+    /// Whether the udev rules window is open
+    show_udev_window: bool,
 }
 
 /// Detected chip information
@@ -353,9 +434,12 @@ impl Default for RflasherApp {
             status: StatusLog::default(),
             file_buffer: None,
             baud_rate: 115200,
+            programmer_type: ProgrammerType::Serprog,
+            spi_speed: SpiSpeed::default(),
             chip_db: ChipDatabase::new(),
             chip_info: None,
             ctx: None,
+            show_udev_window: false,
         }
     }
 }
@@ -400,6 +484,12 @@ impl RflasherApp {
                 AsyncMessage::ConnectionFailed(err) => {
                     self.connection = ConnectionState::Disconnected;
                     self.status.error(format!("Connection failed: {}", err));
+                    if self.programmer_type.is_webusb() {
+                        self.status.warn(
+                            "On Linux, this may be a permissions issue. \
+                             Check Help > USB permissions for udev rules.",
+                        );
+                    }
                 }
                 AsyncMessage::ProbeComplete(result) => {
                     self.operation = OperationState::Idle;
@@ -528,6 +618,14 @@ impl RflasherApp {
     // =========================================================================
 
     fn spawn_connect(&mut self) {
+        match self.programmer_type {
+            ProgrammerType::Serprog => self.spawn_connect_serprog(),
+            ProgrammerType::Ch341a => self.spawn_connect_ch341a(),
+            ProgrammerType::Ch347 => self.spawn_connect_ch347(),
+        }
+    }
+
+    fn spawn_connect_serprog(&mut self) {
         let baud_rate = self.baud_rate;
         let shared = self.shared.clone();
         let ctx = self.ctx.clone();
@@ -546,7 +644,7 @@ impl RflasherApp {
                             let name = serprog.info().name_str().to_string();
                             {
                                 let mut state = shared.borrow_mut();
-                                state.serprog = Some(serprog);
+                                state.programmer = Some(Programmer::Serprog(serprog));
                                 state.messages.push(AsyncMessage::Connected {
                                     programmer_name: name,
                                 });
@@ -575,18 +673,116 @@ impl RflasherApp {
         });
     }
 
+    fn spawn_connect_ch341a(&mut self) {
+        let shared = self.shared.clone();
+        let ctx = self.ctx.clone();
+
+        self.connection = ConnectionState::Connecting;
+        self.status.info("Requesting CH341A device via WebUSB...");
+
+        wasm_bindgen_futures::spawn_local(async move {
+            shared.borrow_mut().busy = true;
+
+            match Ch341a::request_device().await {
+                Ok(device_info) => match Ch341a::open(device_info).await {
+                    Ok(ch341a) => {
+                        let mut state = shared.borrow_mut();
+                        state.programmer = Some(Programmer::Ch341a(ch341a));
+                        state.messages.push(AsyncMessage::Connected {
+                            programmer_name: "CH341A".to_string(),
+                        });
+                    }
+                    Err(e) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                    }
+                },
+                Err(e) => {
+                    shared
+                        .borrow_mut()
+                        .messages
+                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                }
+            }
+
+            shared.borrow_mut().busy = false;
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+    }
+
+    fn spawn_connect_ch347(&mut self) {
+        let shared = self.shared.clone();
+        let ctx = self.ctx.clone();
+        let spi_speed = self.spi_speed;
+
+        self.connection = ConnectionState::Connecting;
+        self.status.info("Requesting CH347 device via WebUSB...");
+
+        wasm_bindgen_futures::spawn_local(async move {
+            shared.borrow_mut().busy = true;
+
+            let config = rflasher_ch347::SpiConfig::default().with_speed(spi_speed);
+
+            match Ch347::request_device().await {
+                Ok(device_info) => match Ch347::open_with_config(device_info, config).await {
+                    Ok(ch347) => {
+                        let variant_name = match ch347.variant() {
+                            rflasher_ch347::Ch347Variant::Ch347T => "CH347T",
+                            rflasher_ch347::Ch347Variant::Ch347F => "CH347F",
+                        };
+                        let mut state = shared.borrow_mut();
+                        state.programmer = Some(Programmer::Ch347(ch347));
+                        state.messages.push(AsyncMessage::Connected {
+                            programmer_name: variant_name.to_string(),
+                        });
+                    }
+                    Err(e) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                    }
+                },
+                Err(e) => {
+                    shared
+                        .borrow_mut()
+                        .messages
+                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                }
+            }
+
+            shared.borrow_mut().busy = false;
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+    }
+
     fn spawn_disconnect(&mut self) {
         let shared = self.shared.clone();
 
-        // Take the serprog out of shared state
-        let serprog = shared.borrow_mut().serprog.take();
+        // Take the programmer out of shared state
+        let programmer = shared.borrow_mut().programmer.take();
 
-        if let Some(mut serprog) = serprog {
+        if let Some(programmer) = programmer {
             let ctx = self.ctx.clone();
 
             wasm_bindgen_futures::spawn_local(async move {
-                // Shutdown serprog (disables output drivers)
-                serprog.shutdown().await;
+                match programmer {
+                    Programmer::Serprog(mut serprog) => {
+                        serprog.shutdown().await;
+                    }
+                    Programmer::Ch341a(mut ch341a) => {
+                        ch341a.shutdown().await;
+                    }
+                    Programmer::Ch347(mut ch347) => {
+                        ch347.shutdown().await;
+                    }
+                }
 
                 shared
                     .borrow_mut()
@@ -614,30 +810,27 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            // We need to borrow serprog mutably, but we can't hold the borrow across await
-            // So we take it out, use it, and put it back
-            let serprog = shared.borrow_mut().serprog.take();
+            let programmer = shared.borrow_mut().programmer.take();
 
-            if let Some(mut serprog) = serprog {
+            if let Some(programmer) = programmer {
                 use rflasher_core::flash::probe_detailed;
 
-                match probe_detailed(&mut serprog, &chip_db).await {
-                    Ok(result) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ProbeComplete(Box::new(result)));
+                with_programmer!(shared, programmer, master, {
+                    match probe_detailed(&mut master, &chip_db).await {
+                        Ok(result) => {
+                            shared
+                                .borrow_mut()
+                                .messages
+                                .push(AsyncMessage::ProbeComplete(Box::new(result)));
+                        }
+                        Err(e) => {
+                            shared
+                                .borrow_mut()
+                                .messages
+                                .push(AsyncMessage::ProbeFailed(format!("{:?}", e)));
+                        }
                     }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ProbeFailed(format!("{:?}", e)));
-                    }
-                }
-
-                // Put serprog back
-                shared.borrow_mut().serprog = Some(serprog);
+                });
             } else {
                 shared
                     .borrow_mut()
@@ -672,39 +865,36 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            let serprog = shared.borrow_mut().serprog.take();
+            let programmer = shared.borrow_mut().programmer.take();
 
-            if let Some(serprog) = serprog {
+            if let Some(programmer) = programmer {
                 use rflasher_core::flash::unified::read_with_progress;
 
                 let ctx_flash = FlashContext::new(chip);
-                let mut device = SpiFlashDevice::new(serprog, ctx_flash);
-
                 let mut buf = vec![0u8; size];
                 let mut progress = SharedProgress::new(shared.clone(), ctx.clone());
 
-                let result = read_with_progress(&mut device, &mut buf, &mut progress).await;
+                with_programmer!(shared, programmer, master, {
+                    let mut device = SpiFlashDevice::new(master, ctx_flash);
+                    let result = read_with_progress(&mut device, &mut buf, &mut progress).await;
+                    let (m, _) = device.into_parts();
+                    master = m;
 
-                // Get serprog back from device
-                let (serprog, _) = device.into_parts();
-
-                match result {
-                    Ok(()) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ReadComplete(buf));
+                    match result {
+                        Ok(()) => {
+                            shared
+                                .borrow_mut()
+                                .messages
+                                .push(AsyncMessage::ReadComplete(buf));
+                        }
+                        Err(e) => {
+                            shared
+                                .borrow_mut()
+                                .messages
+                                .push(AsyncMessage::ReadFailed(format!("{:?}", e)));
+                        }
                     }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ReadFailed(format!("{:?}", e)));
-                    }
-                }
-
-                // Put serprog back
-                shared.borrow_mut().serprog = Some(serprog);
+                });
             } else {
                 shared
                     .borrow_mut()
@@ -755,36 +945,33 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            let serprog = shared.borrow_mut().serprog.take();
+            let programmer = shared.borrow_mut().programmer.take();
 
-            if let Some(serprog) = serprog {
+            if let Some(programmer) = programmer {
                 let ctx_flash = FlashContext::new(chip);
-                let mut device = SpiFlashDevice::new(serprog, ctx_flash);
-
                 let mut progress = SharedProgress::new(shared.clone(), ctx.clone());
 
-                let result = smart_write(&mut device, &data, &mut progress).await;
+                with_programmer!(shared, programmer, master, {
+                    let mut device = SpiFlashDevice::new(master, ctx_flash);
+                    let result = smart_write(&mut device, &data, &mut progress).await;
+                    let (m, _) = device.into_parts();
+                    master = m;
 
-                // Get serprog back from device
-                let (serprog, _) = device.into_parts();
-
-                match result {
-                    Ok(stats) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::WriteComplete(stats));
+                    match result {
+                        Ok(stats) => {
+                            shared
+                                .borrow_mut()
+                                .messages
+                                .push(AsyncMessage::WriteComplete(stats));
+                        }
+                        Err(e) => {
+                            shared
+                                .borrow_mut()
+                                .messages
+                                .push(AsyncMessage::WriteFailed(format!("{:?}", e)));
+                        }
                     }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::WriteFailed(format!("{:?}", e)));
-                    }
-                }
-
-                // Put serprog back
-                shared.borrow_mut().serprog = Some(serprog);
+                });
             } else {
                 shared
                     .borrow_mut()
@@ -819,35 +1006,32 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            let serprog = shared.borrow_mut().serprog.take();
+            let programmer = shared.borrow_mut().programmer.take();
 
-            if let Some(serprog) = serprog {
+            if let Some(programmer) = programmer {
                 let ctx_flash = FlashContext::new(chip);
-                let mut device = SpiFlashDevice::new(serprog, ctx_flash);
 
-                // Erase the entire chip
-                let result = device.erase(0, size).await;
+                with_programmer!(shared, programmer, master, {
+                    let mut device = SpiFlashDevice::new(master, ctx_flash);
+                    let result = device.erase(0, size).await;
+                    let (m, _) = device.into_parts();
+                    master = m;
 
-                // Get serprog back from device
-                let (serprog, _) = device.into_parts();
-
-                match result {
-                    Ok(()) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::EraseComplete);
+                    match result {
+                        Ok(()) => {
+                            shared
+                                .borrow_mut()
+                                .messages
+                                .push(AsyncMessage::EraseComplete);
+                        }
+                        Err(e) => {
+                            shared
+                                .borrow_mut()
+                                .messages
+                                .push(AsyncMessage::EraseFailed(format!("{:?}", e)));
+                        }
                     }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::EraseFailed(format!("{:?}", e)));
-                    }
-                }
-
-                // Put serprog back
-                shared.borrow_mut().serprog = Some(serprog);
+                });
             } else {
                 shared
                     .borrow_mut()
@@ -897,95 +1081,101 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            let serprog = shared.borrow_mut().serprog.take();
+            let programmer = shared.borrow_mut().programmer.take();
 
-            if let Some(serprog) = serprog {
+            if let Some(programmer) = programmer {
                 let ctx_flash = FlashContext::new(chip);
-                let mut device = SpiFlashDevice::new(serprog, ctx_flash);
 
-                // Verify with progress reporting
-                const CHUNK_SIZE: usize = 4096;
-                const YIELD_INTERVAL: usize = 65536; // Yield every 64KB
-                let total = data.len();
-                let mut offset = 0usize;
-                let mut last_repaint = 0usize;
-                let mut last_yield = 0usize;
-                let mut verify_error: Option<String> = None;
+                // Helper closure-like async block for verification
+                async fn do_verify<M: rflasher_core::programmer::SpiMaster>(
+                    master: M,
+                    ctx_flash: FlashContext,
+                    data: &[u8],
+                    shared: &SharedStateRef,
+                    ctx: &Option<egui::Context>,
+                ) -> (M, Option<String>) {
+                    let mut device = SpiFlashDevice::new(master, ctx_flash);
 
-                while offset < total {
-                    let chunk_size = core::cmp::min(CHUNK_SIZE, total - offset);
-                    let mut buf = vec![0u8; chunk_size];
+                    const CHUNK_SIZE: usize = 4096;
+                    const YIELD_INTERVAL: usize = 65536;
+                    let total = data.len();
+                    let mut offset = 0usize;
+                    let mut last_repaint = 0usize;
+                    let mut last_yield = 0usize;
+                    let mut verify_error: Option<String> = None;
 
-                    match device.read(offset as u32, &mut buf).await {
-                        Ok(()) => {
-                            let expected = &data[offset..offset + chunk_size];
-                            if buf != expected {
-                                // Find first mismatch
-                                for (i, (a, b)) in buf.iter().zip(expected.iter()).enumerate() {
-                                    if a != b {
-                                        verify_error = Some(format!(
-                                            "Mismatch at 0x{:X}: read 0x{:02X}, expected 0x{:02X}",
-                                            offset + i,
-                                            a,
-                                            b
-                                        ));
-                                        break;
+                    while offset < total {
+                        let chunk_size = core::cmp::min(CHUNK_SIZE, total - offset);
+                        let mut buf = vec![0u8; chunk_size];
+
+                        match device.read(offset as u32, &mut buf).await {
+                            Ok(()) => {
+                                let expected = &data[offset..offset + chunk_size];
+                                if buf != expected {
+                                    for (i, (a, b)) in buf.iter().zip(expected.iter()).enumerate() {
+                                        if a != b {
+                                            verify_error = Some(format!(
+                                                "Mismatch at 0x{:X}: read 0x{:02X}, expected 0x{:02X}",
+                                                offset + i, a, b
+                                            ));
+                                            break;
+                                        }
                                     }
+                                    break;
                                 }
+                            }
+                            Err(e) => {
+                                verify_error = Some(format!("Read error: {:?}", e));
                                 break;
                             }
                         }
-                        Err(e) => {
-                            verify_error = Some(format!("Read error: {:?}", e));
-                            break;
+
+                        offset += chunk_size;
+
+                        shared.borrow_mut().messages.push(AsyncMessage::Progress(
+                            ProgressUpdate::Verifying {
+                                done: offset,
+                                total,
+                            },
+                        ));
+
+                        if offset >= last_repaint + YIELD_INTERVAL {
+                            last_repaint = offset;
+                            if let Some(ref ctx) = ctx {
+                                ctx.request_repaint();
+                            }
+                        }
+
+                        if offset >= last_yield + YIELD_INTERVAL {
+                            last_yield = offset;
+                            yield_to_browser().await;
                         }
                     }
 
-                    offset += chunk_size;
+                    let (master, _) = device.into_parts();
+                    (master, verify_error)
+                }
 
-                    // Report progress (always update message for final state)
-                    shared.borrow_mut().messages.push(AsyncMessage::Progress(
-                        ProgressUpdate::Verifying {
-                            done: offset,
-                            total,
-                        },
-                    ));
+                with_programmer!(shared, programmer, master, {
+                    let (m, verify_error) =
+                        do_verify(master, ctx_flash, &data, &shared, &ctx).await;
+                    master = m;
 
-                    // Throttle repaint requests
-                    if offset >= last_repaint + YIELD_INTERVAL {
-                        last_repaint = offset;
-                        if let Some(ref ctx) = ctx {
-                            ctx.request_repaint();
+                    match verify_error {
+                        None => {
+                            shared
+                                .borrow_mut()
+                                .messages
+                                .push(AsyncMessage::VerifyComplete);
+                        }
+                        Some(err) => {
+                            shared
+                                .borrow_mut()
+                                .messages
+                                .push(AsyncMessage::VerifyFailed(err));
                         }
                     }
-
-                    // Yield to browser periodically to keep WebSerial responsive
-                    if offset >= last_yield + YIELD_INTERVAL {
-                        last_yield = offset;
-                        yield_to_browser().await;
-                    }
-                }
-
-                // Get serprog back from device
-                let (serprog, _) = device.into_parts();
-
-                match verify_error {
-                    None => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::VerifyComplete);
-                    }
-                    Some(err) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::VerifyFailed(err));
-                    }
-                }
-
-                // Put serprog back
-                shared.borrow_mut().serprog = Some(serprog);
+                });
             } else {
                 shared
                     .borrow_mut()
@@ -1021,8 +1211,21 @@ impl eframe::App for RflasherApp {
                 ui.heading("rflasher");
                 ui.separator();
                 ui.label("Flash Programmer");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button("Help", |ui| {
+                        if ui.button("USB permissions (udev rules)").clicked() {
+                            self.show_udev_window = true;
+                            ui.close();
+                        }
+                    });
+                });
             });
         });
+
+        // Udev rules popup window
+        if self.show_udev_window {
+            self.ui_udev_window(ctx);
+        }
 
         egui::SidePanel::left("controls")
             .min_width(250.0)
@@ -1045,31 +1248,82 @@ impl RflasherApp {
         ui.heading("Connection");
         ui.add_space(5.0);
 
-        // Baud rate selection
+        // Programmer type selection
         ui.horizontal(|ui| {
-            ui.label("Baud rate:");
-            egui::ComboBox::from_id_salt("baud_rate")
-                .selected_text(format!("{}", self.baud_rate))
+            ui.label("Programmer:");
+            egui::ComboBox::from_id_salt("programmer_type")
+                .selected_text(self.programmer_type.label())
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.baud_rate, 9600, "9600");
-                    ui.selectable_value(&mut self.baud_rate, 19200, "19200");
-                    ui.selectable_value(&mut self.baud_rate, 38400, "38400");
-                    ui.selectable_value(&mut self.baud_rate, 57600, "57600");
-                    ui.selectable_value(&mut self.baud_rate, 115200, "115200");
-                    ui.selectable_value(&mut self.baud_rate, 230400, "230400");
-                    ui.selectable_value(&mut self.baud_rate, 460800, "460800");
-                    ui.selectable_value(&mut self.baud_rate, 921600, "921600");
-                    ui.selectable_value(&mut self.baud_rate, 1000000, "1000000");
-                    ui.selectable_value(&mut self.baud_rate, 2000000, "2000000");
+                    ui.selectable_value(
+                        &mut self.programmer_type,
+                        ProgrammerType::Serprog,
+                        ProgrammerType::Serprog.label(),
+                    );
+                    ui.selectable_value(
+                        &mut self.programmer_type,
+                        ProgrammerType::Ch341a,
+                        ProgrammerType::Ch341a.label(),
+                    );
+                    ui.selectable_value(
+                        &mut self.programmer_type,
+                        ProgrammerType::Ch347,
+                        ProgrammerType::Ch347.label(),
+                    );
                 });
         });
+
+        // Baud rate selection (only for serprog)
+        if self.programmer_type == ProgrammerType::Serprog {
+            ui.horizontal(|ui| {
+                ui.label("Baud rate:");
+                egui::ComboBox::from_id_salt("baud_rate")
+                    .selected_text(format!("{}", self.baud_rate))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.baud_rate, 9600, "9600");
+                        ui.selectable_value(&mut self.baud_rate, 19200, "19200");
+                        ui.selectable_value(&mut self.baud_rate, 38400, "38400");
+                        ui.selectable_value(&mut self.baud_rate, 57600, "57600");
+                        ui.selectable_value(&mut self.baud_rate, 115200, "115200");
+                        ui.selectable_value(&mut self.baud_rate, 230400, "230400");
+                        ui.selectable_value(&mut self.baud_rate, 460800, "460800");
+                        ui.selectable_value(&mut self.baud_rate, 921600, "921600");
+                        ui.selectable_value(&mut self.baud_rate, 1000000, "1000000");
+                        ui.selectable_value(&mut self.baud_rate, 2000000, "2000000");
+                    });
+            });
+        }
+
+        // SPI speed selection (only for CH347)
+        if self.programmer_type == ProgrammerType::Ch347 {
+            let connected = self.is_connected();
+            ui.add_enabled_ui(!connected, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("SPI speed:");
+                    egui::ComboBox::from_id_salt("spi_speed")
+                        .selected_text(self.spi_speed.label())
+                        .show_ui(ui, |ui| {
+                            for &speed in SpiSpeed::ALL {
+                                ui.selectable_value(&mut self.spi_speed, speed, speed.label());
+                            }
+                        });
+                });
+            });
+            if connected {
+                ui.label("Reconnect to change SPI speed");
+            }
+        }
 
         ui.add_space(5.0);
 
         // Connection status and button
         match &self.connection {
             ConnectionState::Disconnected => {
-                if ui.button("Connect (WebSerial)").clicked() {
+                let button_label = if self.programmer_type.is_webusb() {
+                    "Connect (WebUSB)"
+                } else {
+                    "Connect (WebSerial)"
+                };
+                if ui.button(button_label).clicked() {
                     self.spawn_connect();
                 }
             }
@@ -1298,6 +1552,52 @@ impl RflasherApp {
                         }
                     };
                 }
+            });
+    }
+
+    fn ui_udev_window(&mut self, ctx: &egui::Context) {
+        egui::Window::new("USB Permissions (Linux udev rules)")
+            .open(&mut self.show_udev_window)
+            .min_width(520.0)
+            .resizable(true)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.label(
+                    "On Linux, WebUSB requires udev rules to grant browser access to USB devices.",
+                );
+                ui.label(
+                    "Create the file below and replug the device (or run the reload commands).",
+                );
+                ui.add_space(5.0);
+
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.monospace("# /etc/udev/rules.d/50-rflasher.rules");
+                    ui.add_space(3.0);
+                    ui.monospace("# CH341A (VID:1a86 PID:5512)");
+                    ui.monospace(concat!(
+                        "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"1a86\", ",
+                        "ATTR{idProduct}==\"5512\", MODE=\"0666\"",
+                    ));
+                    ui.add_space(3.0);
+                    ui.monospace("# CH347T (VID:1a86 PID:55db)");
+                    ui.monospace(concat!(
+                        "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"1a86\", ",
+                        "ATTR{idProduct}==\"55db\", MODE=\"0666\"",
+                    ));
+                    ui.add_space(3.0);
+                    ui.monospace("# CH347F (VID:1a86 PID:55de)");
+                    ui.monospace(concat!(
+                        "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"1a86\", ",
+                        "ATTR{idProduct}==\"55de\", MODE=\"0666\"",
+                    ));
+                });
+
+                ui.add_space(5.0);
+                ui.label("Then reload udev rules:");
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.monospace("sudo udevadm control --reload-rules");
+                    ui.monospace("sudo udevadm trigger");
+                });
             });
     }
 }

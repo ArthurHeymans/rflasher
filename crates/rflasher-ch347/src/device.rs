@@ -2,11 +2,20 @@
 //!
 //! This module provides the main `Ch347` struct that implements USB
 //! communication with the CH347 programmer and the `SpiMaster` trait.
+//!
+//! Uses `maybe_async` to support both sync and async modes from a single
+//! codebase:
+//! - With `is_sync` feature (native CLI): all async is stripped, blocking USB
+//! - Without `is_sync` (WASM): full async with WebUSB
 
+#[cfg(feature = "is_sync")]
 use std::time::Duration;
 
+use maybe_async::maybe_async;
 use nusb::transfer::{Buffer, Bulk, In, Out};
-use nusb::{Endpoint, MaybeFuture};
+use nusb::Endpoint;
+#[cfg(feature = "std")]
+use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
@@ -14,23 +23,41 @@ use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
 use crate::error::{Ch347Error, Result};
 use crate::protocol::*;
 
+// ---------------------------------------------------------------------------
+// Platform-specific endpoint wait macro
+// ---------------------------------------------------------------------------
+
+/// Wait for the next completion on an endpoint, with timeout.
+/// In sync mode: blocks with the given timeout.
+/// In async mode: awaits indefinitely.
+macro_rules! ep_wait {
+    ($ep:expr, $timeout:expr) => {{
+        #[cfg(feature = "is_sync")]
+        {
+            $ep.wait_next_complete($timeout)
+        }
+        #[cfg(not(feature = "is_sync"))]
+        {
+            Some($ep.next_complete().await)
+        }
+    }};
+}
+
+// ---------------------------------------------------------------------------
+// CH347 device struct
+// ---------------------------------------------------------------------------
+
 /// CH347 USB programmer
 ///
 /// This struct represents a connection to a CH347 USB device and implements
 /// the `SpiMaster` trait for communicating with SPI flash chips.
 ///
-/// The CH347 is a high-speed USB 2.0 to SPI/I2C/JTAG/UART bridge that supports
-/// SPI clock speeds up to 60 MHz and has two chip select lines.
-///
-/// # Features
-///
-/// - High-speed USB 2.0 (480 Mbps)
-/// - SPI speeds from 468.75 kHz to 60 MHz
-/// - Two chip select lines (CS0, CS1)
-/// - SPI modes 0-3
-/// - 4-byte address support (software handled)
-/// - Standard single-bit SPI only (dual/quad modes not supported)
+/// On native (with `is_sync`), all methods are synchronous and blocking.
+/// On WASM (without `is_sync`), methods are async and use WebUSB.
 pub struct Ch347 {
+    /// USB interface (kept alive to maintain device claim on WASM)
+    #[cfg(feature = "wasm")]
+    _interface: nusb::Interface,
     /// Bulk OUT endpoint for writes
     out_ep: Endpoint<Bulk, Out>,
     /// Bulk IN endpoint for reads
@@ -41,6 +68,11 @@ pub struct Ch347 {
     variant: Ch347Variant,
 }
 
+// ---------------------------------------------------------------------------
+// Native-only methods (device enumeration, Drop)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "std")]
 impl Ch347 {
     /// Open a CH347 device with default configuration
     ///
@@ -108,18 +140,7 @@ impl Ch347 {
             .active_configuration()
             .map_err(|e| Ch347Error::OpenFailed(format!("Failed to get config: {}", e)))?;
 
-        let mut spi_interface: Option<u8> = None;
-        for iface in config_desc.interface_alt_settings() {
-            if iface.class() == 0xFF {
-                // LIBUSB_CLASS_VENDOR_SPEC
-                spi_interface = Some(iface.interface_number());
-                break;
-            }
-        }
-
-        let iface_num = spi_interface.ok_or_else(|| {
-            Ch347Error::OpenFailed("Could not find vendor-specific interface".to_string())
-        })?;
+        let iface_num = find_vendor_interface(&config_desc)?;
 
         log::debug!("Using interface {}", iface_num);
 
@@ -138,6 +159,8 @@ impl Ch347 {
             .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
 
         let mut ch347 = Self {
+            #[cfg(feature = "wasm")]
+            _interface: interface,
             out_ep,
             in_ep,
             config,
@@ -174,16 +197,6 @@ impl Ch347 {
         Ok(devices)
     }
 
-    /// Get the current SPI configuration
-    pub fn config(&self) -> &SpiConfig {
-        &self.config
-    }
-
-    /// Get the device variant
-    pub fn variant(&self) -> Ch347Variant {
-        self.variant
-    }
-
     /// Update SPI configuration
     ///
     /// This sends the new configuration to the device.
@@ -209,17 +222,218 @@ impl Ch347 {
         self.config.mode = mode;
         self.configure()
     }
+}
+
+/// Information about a connected CH347 device
+#[cfg(feature = "std")]
+#[derive(Debug, Clone)]
+pub struct Ch347DeviceInfo {
+    /// USB bus number
+    pub bus: u8,
+    /// USB device address
+    pub address: u8,
+    /// Device variant
+    pub variant: Ch347Variant,
+}
+
+#[cfg(feature = "std")]
+impl std::fmt::Display for Ch347DeviceInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CH347{} at bus {} address {}",
+            if self.variant == Ch347Variant::Ch347T {
+                "T"
+            } else {
+                "F"
+            },
+            self.bus,
+            self.address
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WASM-only methods (WebUSB device picker, async open, shutdown)
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+impl Ch347 {
+    /// Request a CH347 device via the WebUSB permission prompt
+    ///
+    /// This must be called from a user gesture (e.g., button click) in the browser.
+    /// It shows the browser's device picker filtered to CH347 devices (both T and F variants).
+    #[cfg(target_arch = "wasm32")]
+    pub async fn request_device() -> Result<nusb::DeviceInfo> {
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen_futures::JsFuture;
+        use web_sys::{UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
+
+        let usb = web_sys::window()
+            .ok_or(Ch347Error::DeviceNotFound)?
+            .navigator()
+            .usb();
+
+        // Create filters for both CH347T and CH347F devices
+        let filter_t = UsbDeviceFilter::new();
+        filter_t.set_vendor_id(CH347_USB_VENDOR);
+        filter_t.set_product_id(CH347T_USB_PRODUCT);
+
+        let filter_f = UsbDeviceFilter::new();
+        filter_f.set_vendor_id(CH347_USB_VENDOR);
+        filter_f.set_product_id(CH347F_USB_PRODUCT);
+
+        let filters = js_sys::Array::new();
+        filters.push(&filter_t);
+        filters.push(&filter_f);
+
+        let options = UsbDeviceRequestOptions::new(&filters);
+
+        log::info!("Requesting CH347 device via WebUSB picker...");
+
+        let device_promise = usb.request_device(&options);
+        let device_js = JsFuture::from(device_promise)
+            .await
+            .map_err(|e| Ch347Error::OpenFailed(format!("WebUSB request failed: {:?}", e)))?;
+
+        let device: UsbDevice = device_js
+            .dyn_into()
+            .map_err(|_| Ch347Error::OpenFailed("Failed to get USB device".to_string()))?;
+
+        log::info!(
+            "CH347 device selected: VID={:04X} PID={:04X}",
+            device.vendor_id(),
+            device.product_id()
+        );
+
+        let device_info = nusb::device_info_from_webusb(device)
+            .await
+            .map_err(|e| Ch347Error::OpenFailed(format!("Failed to get device info: {}", e)))?;
+
+        Ok(device_info)
+    }
+
+    /// Open a CH347 device from a DeviceInfo with default configuration (WASM async path)
+    pub async fn open(device_info: nusb::DeviceInfo) -> Result<Self> {
+        Self::open_with_config(device_info, SpiConfig::default()).await
+    }
+
+    /// Open a CH347 device from a DeviceInfo with custom configuration (WASM async path)
+    pub async fn open_with_config(
+        device_info: nusb::DeviceInfo,
+        config: SpiConfig,
+    ) -> Result<Self> {
+        let variant =
+            Ch347Variant::from_product_id(device_info.product_id()).unwrap_or(Ch347Variant::Ch347T);
+
+        log::info!(
+            "Opening CH347{} device VID={:04X} PID={:04X}",
+            if variant == Ch347Variant::Ch347T {
+                "T"
+            } else {
+                "F"
+            },
+            device_info.vendor_id(),
+            device_info.product_id()
+        );
+
+        let device = device_info
+            .open()
+            .await
+            .map_err(|e| Ch347Error::OpenFailed(e.to_string()))?;
+
+        // Find the vendor-specific interface for SPI
+        let config_desc = device
+            .active_configuration()
+            .map_err(|e| Ch347Error::OpenFailed(format!("Failed to get config: {}", e)))?;
+
+        let iface_num = find_vendor_interface(&config_desc)?;
+
+        log::debug!("Using interface {}", iface_num);
+
+        let interface = device
+            .claim_interface(iface_num)
+            .await
+            .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
+
+        let out_ep = interface
+            .endpoint::<Bulk, Out>(WRITE_EP)
+            .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
+        let in_ep = interface
+            .endpoint::<Bulk, In>(READ_EP)
+            .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
+
+        let mut ch347 = Self {
+            _interface: interface,
+            out_ep,
+            in_ep,
+            config,
+            variant,
+        };
+
+        ch347.configure().await?;
+        Ok(ch347)
+    }
+
+    /// Shutdown: clean up (WASM equivalent of Drop)
+    pub async fn shutdown(&mut self) {
+        // Drain any pending transfers
+        self.out_ep.cancel_all();
+        while self.out_ep.pending() > 0 {
+            let _ = ep_wait!(self.out_ep, Duration::from_secs(1));
+        }
+        self.in_ep.cancel_all();
+        while self.in_ep.pending() > 0 {
+            let _ = ep_wait!(self.in_ep, Duration::from_secs(1));
+        }
+        log::info!("CH347 shutdown complete");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: find vendor-specific interface
+// ---------------------------------------------------------------------------
+
+/// Find the vendor-specific (class 0xFF) interface number for SPI.
+/// CH347T uses interface 2, CH347F uses interface 4.
+fn find_vendor_interface(config_desc: &nusb::descriptors::ConfigurationDescriptor) -> Result<u8> {
+    for iface in config_desc.interface_alt_settings() {
+        if iface.class() == 0xFF {
+            // LIBUSB_CLASS_VENDOR_SPEC
+            return Ok(iface.interface_number());
+        }
+    }
+    Err(Ch347Error::OpenFailed(
+        "Could not find vendor-specific interface".to_string(),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Shared methods (sync or async via maybe_async)
+// ---------------------------------------------------------------------------
+
+impl Ch347 {
+    /// Get the current SPI configuration
+    pub fn config(&self) -> &SpiConfig {
+        &self.config
+    }
+
+    /// Get the device variant
+    pub fn variant(&self) -> Ch347Variant {
+        self.variant
+    }
 
     /// Configure the CH347 for SPI mode
-    fn configure(&mut self) -> Result<()> {
+    #[maybe_async]
+    async fn configure(&mut self) -> Result<()> {
         let config_buf = self.config.build_config_buffer();
 
         // Send configuration
-        self.usb_write(&config_buf)?;
+        self.usb_write(&config_buf).await?;
 
         // Read response (the device echoes back the config)
         let mut response = vec![0u8; 29];
-        self.usb_read(&mut response)?;
+        self.usb_read(&mut response).await?;
 
         log::info!(
             "CH347 configured: speed={}kHz, mode={}, cs={}",
@@ -232,7 +446,8 @@ impl Ch347 {
     }
 
     /// Control chip select lines
-    fn cs_control(&mut self, assert: bool) -> Result<()> {
+    #[maybe_async]
+    async fn cs_control(&mut self, assert: bool) -> Result<()> {
         let cs_value = if assert {
             CH347_CS_ASSERT | CH347_CS_CHANGE
         } else {
@@ -257,13 +472,14 @@ impl Ch347 {
             }
         }
 
-        self.usb_write(&cmd)?;
+        self.usb_write(&cmd).await?;
 
         Ok(())
     }
 
     /// Write data via SPI (CS must already be asserted)
-    fn spi_write(&mut self, data: &[u8]) -> Result<()> {
+    #[maybe_async]
+    async fn spi_write(&mut self, data: &[u8]) -> Result<()> {
         let mut bytes_written = 0;
         let mut resp_buf = [0u8; 4];
 
@@ -278,10 +494,10 @@ impl Ch347 {
             buffer[3..3 + chunk_len]
                 .copy_from_slice(&data[bytes_written..bytes_written + chunk_len]);
 
-            self.usb_write(&buffer)?;
+            self.usb_write(&buffer).await?;
 
             // Read acknowledgment
-            self.usb_read(&mut resp_buf)?;
+            self.usb_read(&mut resp_buf).await?;
 
             bytes_written += chunk_len;
         }
@@ -290,7 +506,8 @@ impl Ch347 {
     }
 
     /// Read data via SPI (CS must already be asserted)
-    fn spi_read(&mut self, data: &mut [u8]) -> Result<()> {
+    #[maybe_async]
+    async fn spi_read(&mut self, data: &mut [u8]) -> Result<()> {
         let readcnt = data.len();
 
         // Build read command
@@ -305,14 +522,14 @@ impl Ch347 {
             ((readcnt >> 24) & 0xFF) as u8,
         ];
 
-        self.usb_write(&command_buf)?;
+        self.usb_write(&command_buf).await?;
 
         // Read response packets
         let mut bytes_read = 0;
         let mut buffer = vec![0u8; CH347_PACKET_SIZE];
 
         while bytes_read < readcnt {
-            let received = self.usb_read(&mut buffer)?;
+            let received = self.usb_read(&mut buffer).await?;
 
             if received < 3 {
                 return Err(Ch347Error::InvalidResponse(
@@ -340,63 +557,77 @@ impl Ch347 {
     }
 
     /// Perform an SPI transfer (write then read)
-    fn spi_transfer(&mut self, write_data: &[u8], read_buf: &mut [u8]) -> Result<()> {
+    #[maybe_async]
+    async fn spi_transfer(&mut self, write_data: &[u8], read_buf: &mut [u8]) -> Result<()> {
         // Assert CS
-        self.cs_control(true)?;
+        self.cs_control(true).await?;
 
         // Write phase
         if !write_data.is_empty() {
-            self.spi_write(write_data)?;
+            self.spi_write(write_data).await?;
         }
 
         // Read phase
         if !read_buf.is_empty() {
-            self.spi_read(read_buf)?;
+            self.spi_read(read_buf).await?;
         }
 
         // Deassert CS
-        self.cs_control(false)?;
+        self.cs_control(false).await?;
 
         Ok(())
     }
 
-    /// Write data to USB endpoint (blocking)
-    fn usb_write(&mut self, data: &[u8]) -> Result<()> {
+    /// Write data to USB endpoint
+    #[maybe_async]
+    async fn usb_write(&mut self, data: &[u8]) -> Result<()> {
         let mut buf = Buffer::new(data.len());
         buf.extend_from_slice(data);
 
-        let completion = self.out_ep.transfer_blocking(buf, Duration::from_secs(5));
+        self.out_ep.submit(buf);
+
+        let completion = ep_wait!(self.out_ep, Duration::from_secs(5))
+            .ok_or_else(|| Ch347Error::TransferFailed("USB write timed out".into()))?;
 
         completion
-            .into_result()
+            .status
             .map_err(|e| Ch347Error::TransferFailed(e.to_string()))?;
 
         log::trace!("USB write {} bytes", data.len());
         Ok(())
     }
 
-    /// Read data from USB endpoint (blocking)
-    fn usb_read(&mut self, buffer: &mut [u8]) -> Result<usize> {
+    /// Read data from USB endpoint
+    #[maybe_async]
+    async fn usb_read(&mut self, buffer: &mut [u8]) -> Result<usize> {
         let max_packet_size = self.in_ep.max_packet_size();
         // Request length must be multiple of max packet size
         let request_len = buffer.len().div_ceil(max_packet_size) * max_packet_size;
         let mut in_buf = Buffer::new(request_len);
         in_buf.set_requested_len(request_len);
 
-        let completion = self.in_ep.transfer_blocking(in_buf, Duration::from_secs(5));
+        self.in_ep.submit(in_buf);
 
-        let data = completion
-            .into_result()
+        let completion = ep_wait!(self.in_ep, Duration::from_secs(5))
+            .ok_or_else(|| Ch347Error::TransferFailed("USB read timed out".into()))?;
+
+        completion
+            .status
             .map_err(|e| Ch347Error::TransferFailed(e.to_string()))?;
 
-        let received = std::cmp::min(data.len(), buffer.len());
-        buffer[..received].copy_from_slice(&data[..received]);
+        let received = std::cmp::min(completion.actual_len, buffer.len());
+        buffer[..received].copy_from_slice(&completion.buffer[..received]);
 
         log::trace!("USB read {} bytes", received);
         Ok(received)
     }
 }
 
+// ---------------------------------------------------------------------------
+// SpiMaster trait implementation
+// ---------------------------------------------------------------------------
+
+#[maybe_async(AFIT)]
 impl SpiMaster for Ch347 {
     fn features(&self) -> SpiFeatures {
         // CH347 supports 4-byte addressing (software handled)
@@ -414,7 +645,7 @@ impl SpiMaster for Ch347 {
         64 * 1024
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         // Check that the requested I/O mode is supported
         check_io_mode_supported(cmd.io_mode, self.features())?;
 
@@ -430,46 +661,43 @@ impl SpiMaster for Ch347 {
 
         // Perform the transfer
         self.spi_transfer(&write_data, cmd.read_buf)
+            .await
             .map_err(|_e| CoreError::ProgrammerError)?;
 
         Ok(())
     }
 
-    fn delay_us(&mut self, us: u32) {
-        // Simple sleep-based delay
+    async fn delay_us(&mut self, us: u32) {
+        // Simple delay
         // The CH347 doesn't have a built-in delay command like the CH341A
         if us > 0 {
-            std::thread::sleep(Duration::from_micros(us as u64));
+            #[cfg(feature = "is_sync")]
+            {
+                std::thread::sleep(Duration::from_micros(us as u64));
+            }
+
+            #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+            {
+                let delay_ms = ((us as f64) / 1000.0).ceil() as i32;
+                if delay_ms > 0 {
+                    let promise = js_sys::Promise::new(&mut |resolve, _| {
+                        let window = web_sys::window().unwrap();
+                        window
+                            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                                &resolve, delay_ms,
+                            )
+                            .unwrap();
+                    });
+                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                }
+            }
         }
     }
 }
 
-/// Information about a connected CH347 device
-#[derive(Debug, Clone)]
-pub struct Ch347DeviceInfo {
-    /// USB bus number
-    pub bus: u8,
-    /// USB device address
-    pub address: u8,
-    /// Device variant
-    pub variant: Ch347Variant,
-}
-
-impl std::fmt::Display for Ch347DeviceInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "CH347{} at bus {} address {}",
-            if self.variant == Ch347Variant::Ch347T {
-                "T"
-            } else {
-                "F"
-            },
-            self.bus,
-            self.address
-        )
-    }
-}
+// ---------------------------------------------------------------------------
+// Option parsing (native only)
+// ---------------------------------------------------------------------------
 
 /// Parse programmer options for CH347
 ///
@@ -484,6 +712,7 @@ impl std::fmt::Display for Ch347DeviceInfo {
 /// let options = [("spispeed", "30000"), ("cs", "1")];
 /// let config = parse_options(&options)?;
 /// ```
+#[cfg(feature = "std")]
 pub fn parse_options(options: &[(&str, &str)]) -> Result<SpiConfig> {
     let mut config = SpiConfig::default();
 

@@ -350,12 +350,20 @@ fn print_chip_info(handle: &mut FlashHandle) {
             "JEDEC ID:        {:02X} {:04X}",
             info.jedec_manufacturer, info.jedec_device
         );
-        println!(
-            "Size:            {} bytes ({} KiB / {} MiB)",
-            info.total_size,
-            info.total_size / 1024,
-            info.total_size / (1024 * 1024)
-        );
+        if info.total_size >= 1024 * 1024 {
+            println!(
+                "Size:            {} bytes ({} KiB / {} MiB)",
+                info.total_size,
+                info.total_size / 1024,
+                info.total_size / (1024 * 1024)
+            );
+        } else {
+            println!(
+                "Size:            {} bytes ({} KiB)",
+                info.total_size,
+                info.total_size / 1024,
+            );
+        }
         println!("Page size:       {} bytes", info.page_size);
 
         // Show SFDP status

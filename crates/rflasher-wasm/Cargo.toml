@@ -3,7 +3,7 @@ name = "rflasher-wasm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Web interface for rflasher using egui and WebSerial"
+description = "Web interface for rflasher using egui and WebSerial/WebUSB"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -16,6 +16,8 @@ default = []
 # We override the workspace dependency to ensure async mode for WASM
 rflasher-core = { path = "../rflasher-core", default-features = false, features = ["std", "alloc", "static-chips"] }
 rflasher-serprog = { path = "../rflasher-serprog", default-features = false, features = ["std", "wasm"] }
+rflasher-ch341a = { path = "../rflasher-ch341a", default-features = false, features = ["wasm"] }
+rflasher-ch347 = { path = "../rflasher-ch347", default-features = false, features = ["wasm"] }
 
 # GUI
 eframe = { version = "0.33", default-features = false, features = [
@@ -62,6 +64,11 @@ web-sys = { version = "0.3", features = [
     "SerialPortInfo",
     "FlowControlType",
     "ParityType",
+    # WebUSB API types (unstable - for USB device programmers)
+    "Usb",
+    "UsbDevice",
+    "UsbDeviceFilter",
+    "UsbDeviceRequestOptions",
 ] }
 
 # maybe-async for Transport trait

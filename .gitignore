@@ -1,3 +1,5 @@
 /target
 /man
 /crates/rflasher-wasm/dist
+/firmware
+opencode.json

@@ -83,17 +83,17 @@
             </div>
         </noscript>
         <div class="browser-warning" id="browser-warning" style="display: none;">
-            <strong>WebSerial Not Supported</strong>
-            <p>Your browser doesn't support the WebSerial API.</p>
-            <p>Please use Chrome, Edge, or Opera on desktop.</p>
+            <strong>WebSerial/WebUSB Not Fully Supported</strong>
+            <p>Your browser may not support WebSerial or WebUSB APIs.</p>
+            <p>Please use Chrome, Edge, or Opera on desktop for full support.</p>
         </div>
     </div>
     
     <canvas id="rflasher_canvas"></canvas>
     
     <script>
-        // Check for WebSerial support
-        if (!('serial' in navigator)) {
+        // Check for WebSerial and WebUSB support
+        if (!('serial' in navigator) && !('usb' in navigator)) {
             document.getElementById('browser-warning').style.display = 'block';
         }
         

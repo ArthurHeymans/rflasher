@@ -61,7 +61,7 @@ log = "0.4"
 thiserror = "2"
 env_logger = "0.11"
 tokio = { version = "1", features = ["full"] }
-nusb = "0.2.1"
+nusb = { git = "https://github.com/ArthuRheymans/nusb.git", branch = "task/webusb-rebased" }
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.17"
 

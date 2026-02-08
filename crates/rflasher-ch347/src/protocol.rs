@@ -88,6 +88,32 @@ pub enum SpiSpeed {
 }
 
 impl SpiSpeed {
+    /// All SPI speed variants, from fastest to slowest
+    pub const ALL: &[SpiSpeed] = &[
+        SpiSpeed::Speed60M,
+        SpiSpeed::Speed30M,
+        SpiSpeed::Speed15M,
+        SpiSpeed::Speed7_5M,
+        SpiSpeed::Speed3_75M,
+        SpiSpeed::Speed1_875M,
+        SpiSpeed::Speed937_5K,
+        SpiSpeed::Speed468_75K,
+    ];
+
+    /// Human-readable label for display in UIs
+    pub fn label(self) -> &'static str {
+        match self {
+            SpiSpeed::Speed60M => "60 MHz",
+            SpiSpeed::Speed30M => "30 MHz",
+            SpiSpeed::Speed15M => "15 MHz",
+            SpiSpeed::Speed7_5M => "7.5 MHz (Default)",
+            SpiSpeed::Speed3_75M => "3.75 MHz",
+            SpiSpeed::Speed1_875M => "1.875 MHz",
+            SpiSpeed::Speed937_5K => "937.5 kHz",
+            SpiSpeed::Speed468_75K => "468.75 kHz",
+        }
+    }
+
     /// Convert a frequency in kHz to the closest divisor
     pub fn from_khz(khz: u32) -> Self {
         // Base clock is 120 MHz, divisor = 2^(n+1)
