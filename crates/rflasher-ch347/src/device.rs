@@ -311,8 +311,16 @@ impl Ch347 {
         Ok(device_info)
     }
 
-    /// Open a CH347 device from a DeviceInfo (WASM async path)
+    /// Open a CH347 device from a DeviceInfo with default configuration (WASM async path)
     pub async fn open(device_info: nusb::DeviceInfo) -> Result<Self> {
+        Self::open_with_config(device_info, SpiConfig::default()).await
+    }
+
+    /// Open a CH347 device from a DeviceInfo with custom configuration (WASM async path)
+    pub async fn open_with_config(
+        device_info: nusb::DeviceInfo,
+        config: SpiConfig,
+    ) -> Result<Self> {
         let variant = Ch347Variant::from_product_id(device_info.product_id())
             .unwrap_or(Ch347Variant::Ch347T);
 
@@ -357,7 +365,7 @@ impl Ch347 {
             _interface: interface,
             out_ep,
             in_ep,
-            config: SpiConfig::default(),
+            config,
             variant,
         };
 

@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rflasher_ch341a::Ch341a;
-use rflasher_ch347::Ch347;
+use rflasher_ch347::{Ch347, SpiSpeed};
 use rflasher_core::chip::{ChipDatabase, FlashChip};
 use rflasher_core::flash::unified::{smart_write, WriteProgress, WriteStats};
 use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult, SpiFlashDevice};
@@ -312,6 +312,8 @@ pub struct RflasherApp {
     baud_rate: u32,
     /// Selected programmer type
     programmer_type: ProgrammerType,
+    /// Selected SPI speed for CH347
+    spi_speed: SpiSpeed,
     /// Chip database
     chip_db: ChipDatabase,
     /// Detected chip info
@@ -433,6 +435,7 @@ impl Default for RflasherApp {
             file_buffer: None,
             baud_rate: 115200,
             programmer_type: ProgrammerType::Serprog,
+            spi_speed: SpiSpeed::default(),
             chip_db: ChipDatabase::new(),
             chip_info: None,
             ctx: None,
@@ -714,6 +717,7 @@ impl RflasherApp {
     fn spawn_connect_ch347(&mut self) {
         let shared = self.shared.clone();
         let ctx = self.ctx.clone();
+        let spi_speed = self.spi_speed;
 
         self.connection = ConnectionState::Connecting;
         self.status.info("Requesting CH347 device via WebUSB...");
@@ -721,8 +725,10 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
+            let config = rflasher_ch347::SpiConfig::default().with_speed(spi_speed);
+
             match Ch347::request_device().await {
-                Ok(device_info) => match Ch347::open(device_info).await {
+                Ok(device_info) => match Ch347::open_with_config(device_info, config).await {
                     Ok(ch347) => {
                         let variant_name = match ch347.variant() {
                             rflasher_ch347::Ch347Variant::Ch347T => "CH347T",
@@ -1285,6 +1291,30 @@ impl RflasherApp {
                         ui.selectable_value(&mut self.baud_rate, 2000000, "2000000");
                     });
             });
+        }
+
+        // SPI speed selection (only for CH347)
+        if self.programmer_type == ProgrammerType::Ch347 {
+            let connected = self.is_connected();
+            ui.add_enabled_ui(!connected, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("SPI speed:");
+                    egui::ComboBox::from_id_salt("spi_speed")
+                        .selected_text(self.spi_speed.label())
+                        .show_ui(ui, |ui| {
+                            for &speed in SpiSpeed::ALL {
+                                ui.selectable_value(
+                                    &mut self.spi_speed,
+                                    speed,
+                                    speed.label(),
+                                );
+                            }
+                        });
+                });
+            });
+            if connected {
+                ui.label("Reconnect to change SPI speed");
+            }
         }
 
         ui.add_space(5.0);
