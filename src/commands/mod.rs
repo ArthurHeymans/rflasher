@@ -27,9 +27,9 @@ pub use list::{list_chips, list_programmers};
 
 /// Format a byte size as a human-readable string (e.g., "256 KiB", "4 MiB")
 pub fn format_size(bytes: u32) -> String {
-    if bytes >= 1024 * 1024 && bytes % (1024 * 1024) == 0 {
+    if bytes >= 1024 * 1024 && bytes.is_multiple_of(1024 * 1024) {
         format!("{} MiB", bytes / (1024 * 1024))
-    } else if bytes >= 1024 && bytes % 1024 == 0 {
+    } else if bytes >= 1024 && bytes.is_multiple_of(1024) {
         format!("{} KiB", bytes / 1024)
     } else {
         format!("{} bytes", bytes)

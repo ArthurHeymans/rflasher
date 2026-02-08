@@ -144,8 +144,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         let chip_has_quad = ctx.chip.features.contains(Features::QUAD_IO);
         let use_native_4byte = ctx.use_native_4byte;
         let use_4byte_native = ctx.address_mode == AddressMode::FourByte && use_native_4byte;
-        let enter_exit_4byte =
-            ctx.address_mode == AddressMode::FourByte && !use_native_4byte;
+        let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !use_native_4byte;
 
         let master_features = self.master().features();
 

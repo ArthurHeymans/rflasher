@@ -24,6 +24,7 @@ use super::context::{AddressMode, FlashContext};
 // =============================================================================
 
 /// The erased value for flash memory (all bits set)
+#[cfg(feature = "alloc")]
 const ERASED_VALUE: u8 = 0xFF;
 
 /// Determine if an erase is required to transition from `have` to `want`
@@ -42,7 +43,11 @@ const ERASED_VALUE: u8 = 0xFF;
 /// `true` if erasing is required, `false` if the write can proceed without erase
 #[cfg(feature = "alloc")]
 pub fn need_erase(have: &[u8], want: &[u8], granularity: WriteGranularity) -> bool {
-    assert_eq!(have.len(), want.len(), "need_erase: have and want must be the same length");
+    assert_eq!(
+        have.len(),
+        want.len(),
+        "need_erase: have and want must be the same length"
+    );
 
     match granularity {
         WriteGranularity::Bit => {
@@ -109,7 +114,11 @@ pub struct WriteRange {
 /// `Some(WriteRange)` if there are changes, `None` if no more changes from `offset`
 #[cfg(feature = "alloc")]
 pub fn get_next_write_range(have: &[u8], want: &[u8], offset: u32) -> Option<WriteRange> {
-    assert_eq!(have.len(), want.len(), "get_next_write_range: have and want must be the same length");
+    assert_eq!(
+        have.len(),
+        want.len(),
+        "get_next_write_range: have and want must be the same length"
+    );
 
     let start_offset = offset as usize;
     if start_offset >= have.len() {

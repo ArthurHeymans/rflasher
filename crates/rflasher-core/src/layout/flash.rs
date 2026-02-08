@@ -112,7 +112,9 @@ async fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
     let chip_size = ctx.total_size() as u32;
 
     if rom_offset + len > chip_size {
-        return Err(LayoutError::IoError("offset + length exceeds chip size".into()));
+        return Err(LayoutError::IoError(
+            "offset + length exceeds chip size".into(),
+        ));
     }
 
     if (len as usize) < FMAP_HEADER_SIZE {

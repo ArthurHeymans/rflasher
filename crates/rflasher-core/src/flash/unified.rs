@@ -312,7 +312,9 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
                 if let Err(e) = device.write(op.start, buf).await {
                     log::error!(
                         "Failed to restore {} bytes at 0x{:08X} after erase — data may be lost: {}",
-                        buf.len(), op.start, e
+                        buf.len(),
+                        op.start,
+                        e
                     );
                     return Err(e);
                 }
@@ -321,7 +323,9 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
                 if let Err(e) = device.write(region_end_addr, buf).await {
                     log::error!(
                         "Failed to restore {} bytes at 0x{:08X} after erase — data may be lost: {}",
-                        buf.len(), region_end_addr, e
+                        buf.len(),
+                        region_end_addr,
+                        e
                     );
                     return Err(e);
                 }
@@ -608,7 +612,9 @@ pub async fn verify<D: FlashDevice>(device: &mut D, expected: &[u8], addr: u32) 
 
         let expected_chunk = &expected[offset..offset + chunk_size];
         if chunk_buf != expected_chunk {
-            return Err(Error::VerifyError { addr: addr + offset as u32 });
+            return Err(Error::VerifyError {
+                addr: addr + offset as u32,
+            });
         }
 
         offset += chunk_size;
