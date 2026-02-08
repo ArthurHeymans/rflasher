@@ -4,6 +4,10 @@
 //! The CH347 is a high-speed USB 2.0 (480 Mbps) device that supports
 //! SPI, I2C, UART, and JTAG interfaces.
 //!
+//! Uses `maybe_async` to support both sync and async modes:
+//! - With `is_sync` feature (native CLI): blocking/synchronous
+//! - Without `is_sync` (WASM): async with WebUSB
+//!
 //! # Protocol Overview
 //!
 //! The CH347 communicates via USB bulk transfers using a dedicated command
@@ -56,18 +60,20 @@
 //! if the CH347 hardware actually supports them. Standard SPI mode covers the vast
 //! majority of flash chip programming use cases.
 
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(any(feature = "std", feature = "wasm")), no_std)]
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod device;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod error;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod protocol;
 
+#[cfg(any(feature = "std", feature = "wasm"))]
+pub use device::Ch347;
 #[cfg(feature = "std")]
-pub use device::{parse_options, Ch347, Ch347DeviceInfo};
-#[cfg(feature = "std")]
+pub use device::{parse_options, Ch347DeviceInfo};
+#[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{Ch347Error, Result};
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 pub use protocol::{Ch347Variant, ChipSelect, SpiConfig, SpiMode, SpiSpeed};

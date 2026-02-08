@@ -26,7 +26,7 @@ default = ["std", "is_sync"]
 std = ["rflasher-core/std"]
 alloc = ["rflasher-core/alloc"]
 # Sync mode - when enabled, all programmer code is synchronous
-is_sync = ["rflasher-core/is_sync", "rflasher-serprog?/is_sync", "rflasher-ch341a?/is_sync"]
+is_sync = ["rflasher-core/is_sync", "rflasher-serprog?/is_sync", "rflasher-ch341a?/is_sync", "rflasher-ch347?/is_sync"]
 
 # Programmer features
 dummy = ["dep:rflasher-dummy"]
