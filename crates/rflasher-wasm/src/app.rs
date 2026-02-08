@@ -4,6 +4,7 @@ use eframe::egui;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use rflasher_ch341a::Ch341aAsync;
 use rflasher_core::chip::{ChipDatabase, FlashChip};
 use rflasher_core::flash::unified::{smart_write, WriteProgress, WriteStats};
 use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult, SpiFlashDevice};
@@ -27,6 +28,34 @@ async fn yield_to_browser() {
             .expect("setTimeout failed");
     });
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+// =============================================================================
+// Programmer type abstraction
+// =============================================================================
+
+/// The type of programmer to connect to
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProgrammerType {
+    /// serprog via WebSerial
+    Serprog,
+    /// CH341A via WebUSB
+    Ch341a,
+}
+
+impl ProgrammerType {
+    fn label(&self) -> &'static str {
+        match self {
+            ProgrammerType::Serprog => "serprog (WebSerial)",
+            ProgrammerType::Ch341a => "CH341A (WebUSB)",
+        }
+    }
+}
+
+/// Connected programmer - wraps either a serprog or CH341A device
+enum Programmer {
+    Serprog(Serprog<WebSerialTransport>),
+    Ch341a(Ch341aAsync),
 }
 
 // =============================================================================
@@ -82,8 +111,8 @@ enum ProgressUpdate {
 struct SharedState {
     /// Messages from async tasks
     messages: Vec<AsyncMessage>,
-    /// The serprog device (if connected)
-    serprog: Option<Serprog<WebSerialTransport>>,
+    /// The connected programmer (if any)
+    programmer: Option<Programmer>,
     /// Whether an async operation is running
     busy: bool,
 }
@@ -235,6 +264,8 @@ pub struct RflasherApp {
     file_buffer: Option<Vec<u8>>,
     /// Baud rate for serial connection
     baud_rate: u32,
+    /// Selected programmer type
+    programmer_type: ProgrammerType,
     /// Chip database
     chip_db: ChipDatabase,
     /// Detected chip info
@@ -353,6 +384,7 @@ impl Default for RflasherApp {
             status: StatusLog::default(),
             file_buffer: None,
             baud_rate: 115200,
+            programmer_type: ProgrammerType::Serprog,
             chip_db: ChipDatabase::new(),
             chip_info: None,
             ctx: None,
@@ -528,6 +560,13 @@ impl RflasherApp {
     // =========================================================================
 
     fn spawn_connect(&mut self) {
+        match self.programmer_type {
+            ProgrammerType::Serprog => self.spawn_connect_serprog(),
+            ProgrammerType::Ch341a => self.spawn_connect_ch341a(),
+        }
+    }
+
+    fn spawn_connect_serprog(&mut self) {
         let baud_rate = self.baud_rate;
         let shared = self.shared.clone();
         let ctx = self.ctx.clone();
@@ -546,7 +585,7 @@ impl RflasherApp {
                             let name = serprog.info().name_str().to_string();
                             {
                                 let mut state = shared.borrow_mut();
-                                state.serprog = Some(serprog);
+                                state.programmer = Some(Programmer::Serprog(serprog));
                                 state.messages.push(AsyncMessage::Connected {
                                     programmer_name: name,
                                 });
@@ -575,18 +614,69 @@ impl RflasherApp {
         });
     }
 
+    fn spawn_connect_ch341a(&mut self) {
+        let shared = self.shared.clone();
+        let ctx = self.ctx.clone();
+
+        self.connection = ConnectionState::Connecting;
+        self.status.info("Requesting CH341A device via WebUSB...");
+
+        wasm_bindgen_futures::spawn_local(async move {
+            shared.borrow_mut().busy = true;
+
+            match Ch341aAsync::request_device().await {
+                Ok(device_info) => {
+                    match Ch341aAsync::open(device_info).await {
+                        Ok(ch341a) => {
+                            {
+                                let mut state = shared.borrow_mut();
+                                state.programmer = Some(Programmer::Ch341a(ch341a));
+                                state.messages.push(AsyncMessage::Connected {
+                                    programmer_name: "CH341A".to_string(),
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            shared
+                                .borrow_mut()
+                                .messages
+                                .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                        }
+                    }
+                }
+                Err(e) => {
+                    shared
+                        .borrow_mut()
+                        .messages
+                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                }
+            }
+
+            shared.borrow_mut().busy = false;
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+    }
+
     fn spawn_disconnect(&mut self) {
         let shared = self.shared.clone();
 
-        // Take the serprog out of shared state
-        let serprog = shared.borrow_mut().serprog.take();
+        // Take the programmer out of shared state
+        let programmer = shared.borrow_mut().programmer.take();
 
-        if let Some(mut serprog) = serprog {
+        if let Some(programmer) = programmer {
             let ctx = self.ctx.clone();
 
             wasm_bindgen_futures::spawn_local(async move {
-                // Shutdown serprog (disables output drivers)
-                serprog.shutdown().await;
+                match programmer {
+                    Programmer::Serprog(mut serprog) => {
+                        serprog.shutdown().await;
+                    }
+                    Programmer::Ch341a(mut ch341a) => {
+                        ch341a.shutdown().await;
+                    }
+                }
 
                 shared
                     .borrow_mut()
@@ -614,30 +704,47 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            // We need to borrow serprog mutably, but we can't hold the borrow across await
-            // So we take it out, use it, and put it back
-            let serprog = shared.borrow_mut().serprog.take();
+            let programmer = shared.borrow_mut().programmer.take();
 
-            if let Some(mut serprog) = serprog {
+            if let Some(programmer) = programmer {
                 use rflasher_core::flash::probe_detailed;
 
-                match probe_detailed(&mut serprog, &chip_db).await {
-                    Ok(result) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ProbeComplete(Box::new(result)));
+                match programmer {
+                    Programmer::Serprog(mut serprog) => {
+                        match probe_detailed(&mut serprog, &chip_db).await {
+                            Ok(result) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::ProbeComplete(Box::new(result)));
+                            }
+                            Err(e) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::ProbeFailed(format!("{:?}", e)));
+                            }
+                        }
+                        shared.borrow_mut().programmer = Some(Programmer::Serprog(serprog));
                     }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ProbeFailed(format!("{:?}", e)));
+                    Programmer::Ch341a(mut ch341a) => {
+                        match probe_detailed(&mut ch341a, &chip_db).await {
+                            Ok(result) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::ProbeComplete(Box::new(result)));
+                            }
+                            Err(e) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::ProbeFailed(format!("{:?}", e)));
+                            }
+                        }
+                        shared.borrow_mut().programmer = Some(Programmer::Ch341a(ch341a));
                     }
                 }
-
-                // Put serprog back
-                shared.borrow_mut().serprog = Some(serprog);
             } else {
                 shared
                     .borrow_mut()
@@ -672,39 +779,61 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            let serprog = shared.borrow_mut().serprog.take();
+            let programmer = shared.borrow_mut().programmer.take();
 
-            if let Some(serprog) = serprog {
+            if let Some(programmer) = programmer {
                 use rflasher_core::flash::unified::read_with_progress;
 
                 let ctx_flash = FlashContext::new(chip);
-                let mut device = SpiFlashDevice::new(serprog, ctx_flash);
-
                 let mut buf = vec![0u8; size];
                 let mut progress = SharedProgress::new(shared.clone(), ctx.clone());
 
-                let result = read_with_progress(&mut device, &mut buf, &mut progress).await;
+                match programmer {
+                    Programmer::Serprog(serprog) => {
+                        let mut device = SpiFlashDevice::new(serprog, ctx_flash);
+                        let result = read_with_progress(&mut device, &mut buf, &mut progress).await;
+                        let (serprog, _) = device.into_parts();
 
-                // Get serprog back from device
-                let (serprog, _) = device.into_parts();
+                        match result {
+                            Ok(()) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::ReadComplete(buf));
+                            }
+                            Err(e) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::ReadFailed(format!("{:?}", e)));
+                            }
+                        }
 
-                match result {
-                    Ok(()) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ReadComplete(buf));
+                        shared.borrow_mut().programmer = Some(Programmer::Serprog(serprog));
                     }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ReadFailed(format!("{:?}", e)));
+                    Programmer::Ch341a(ch341a) => {
+                        let mut device = SpiFlashDevice::new(ch341a, ctx_flash);
+                        let result = read_with_progress(&mut device, &mut buf, &mut progress).await;
+                        let (ch341a, _) = device.into_parts();
+
+                        match result {
+                            Ok(()) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::ReadComplete(buf));
+                            }
+                            Err(e) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::ReadFailed(format!("{:?}", e)));
+                            }
+                        }
+
+                        shared.borrow_mut().programmer = Some(Programmer::Ch341a(ch341a));
                     }
                 }
-
-                // Put serprog back
-                shared.borrow_mut().serprog = Some(serprog);
             } else {
                 shared
                     .borrow_mut()
@@ -755,36 +884,58 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            let serprog = shared.borrow_mut().serprog.take();
+            let programmer = shared.borrow_mut().programmer.take();
 
-            if let Some(serprog) = serprog {
+            if let Some(programmer) = programmer {
                 let ctx_flash = FlashContext::new(chip);
-                let mut device = SpiFlashDevice::new(serprog, ctx_flash);
-
                 let mut progress = SharedProgress::new(shared.clone(), ctx.clone());
 
-                let result = smart_write(&mut device, &data, &mut progress).await;
+                match programmer {
+                    Programmer::Serprog(serprog) => {
+                        let mut device = SpiFlashDevice::new(serprog, ctx_flash);
+                        let result = smart_write(&mut device, &data, &mut progress).await;
+                        let (serprog, _) = device.into_parts();
 
-                // Get serprog back from device
-                let (serprog, _) = device.into_parts();
+                        match result {
+                            Ok(stats) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::WriteComplete(stats));
+                            }
+                            Err(e) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::WriteFailed(format!("{:?}", e)));
+                            }
+                        }
 
-                match result {
-                    Ok(stats) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::WriteComplete(stats));
+                        shared.borrow_mut().programmer = Some(Programmer::Serprog(serprog));
                     }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::WriteFailed(format!("{:?}", e)));
+                    Programmer::Ch341a(ch341a) => {
+                        let mut device = SpiFlashDevice::new(ch341a, ctx_flash);
+                        let result = smart_write(&mut device, &data, &mut progress).await;
+                        let (ch341a, _) = device.into_parts();
+
+                        match result {
+                            Ok(stats) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::WriteComplete(stats));
+                            }
+                            Err(e) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::WriteFailed(format!("{:?}", e)));
+                            }
+                        }
+
+                        shared.borrow_mut().programmer = Some(Programmer::Ch341a(ch341a));
                     }
                 }
-
-                // Put serprog back
-                shared.borrow_mut().serprog = Some(serprog);
             } else {
                 shared
                     .borrow_mut()
@@ -819,35 +970,57 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            let serprog = shared.borrow_mut().serprog.take();
+            let programmer = shared.borrow_mut().programmer.take();
 
-            if let Some(serprog) = serprog {
+            if let Some(programmer) = programmer {
                 let ctx_flash = FlashContext::new(chip);
-                let mut device = SpiFlashDevice::new(serprog, ctx_flash);
 
-                // Erase the entire chip
-                let result = device.erase(0, size).await;
+                match programmer {
+                    Programmer::Serprog(serprog) => {
+                        let mut device = SpiFlashDevice::new(serprog, ctx_flash);
+                        let result = device.erase(0, size).await;
+                        let (serprog, _) = device.into_parts();
 
-                // Get serprog back from device
-                let (serprog, _) = device.into_parts();
+                        match result {
+                            Ok(()) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::EraseComplete);
+                            }
+                            Err(e) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::EraseFailed(format!("{:?}", e)));
+                            }
+                        }
 
-                match result {
-                    Ok(()) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::EraseComplete);
+                        shared.borrow_mut().programmer = Some(Programmer::Serprog(serprog));
                     }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::EraseFailed(format!("{:?}", e)));
+                    Programmer::Ch341a(ch341a) => {
+                        let mut device = SpiFlashDevice::new(ch341a, ctx_flash);
+                        let result = device.erase(0, size).await;
+                        let (ch341a, _) = device.into_parts();
+
+                        match result {
+                            Ok(()) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::EraseComplete);
+                            }
+                            Err(e) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::EraseFailed(format!("{:?}", e)));
+                            }
+                        }
+
+                        shared.borrow_mut().programmer = Some(Programmer::Ch341a(ch341a));
                     }
                 }
-
-                // Put serprog back
-                shared.borrow_mut().serprog = Some(serprog);
             } else {
                 shared
                     .borrow_mut()
@@ -897,95 +1070,125 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            let serprog = shared.borrow_mut().serprog.take();
+            let programmer = shared.borrow_mut().programmer.take();
 
-            if let Some(serprog) = serprog {
+            if let Some(programmer) = programmer {
                 let ctx_flash = FlashContext::new(chip);
-                let mut device = SpiFlashDevice::new(serprog, ctx_flash);
 
-                // Verify with progress reporting
-                const CHUNK_SIZE: usize = 4096;
-                const YIELD_INTERVAL: usize = 65536; // Yield every 64KB
-                let total = data.len();
-                let mut offset = 0usize;
-                let mut last_repaint = 0usize;
-                let mut last_yield = 0usize;
-                let mut verify_error: Option<String> = None;
+                // Helper closure-like async block for verification
+                async fn do_verify<M: rflasher_core::programmer::SpiMaster>(
+                    master: M,
+                    ctx_flash: FlashContext,
+                    data: &[u8],
+                    shared: &SharedStateRef,
+                    ctx: &Option<egui::Context>,
+                ) -> (M, Option<String>) {
+                    let mut device = SpiFlashDevice::new(master, ctx_flash);
 
-                while offset < total {
-                    let chunk_size = core::cmp::min(CHUNK_SIZE, total - offset);
-                    let mut buf = vec![0u8; chunk_size];
+                    const CHUNK_SIZE: usize = 4096;
+                    const YIELD_INTERVAL: usize = 65536;
+                    let total = data.len();
+                    let mut offset = 0usize;
+                    let mut last_repaint = 0usize;
+                    let mut last_yield = 0usize;
+                    let mut verify_error: Option<String> = None;
 
-                    match device.read(offset as u32, &mut buf).await {
-                        Ok(()) => {
-                            let expected = &data[offset..offset + chunk_size];
-                            if buf != expected {
-                                // Find first mismatch
-                                for (i, (a, b)) in buf.iter().zip(expected.iter()).enumerate() {
-                                    if a != b {
-                                        verify_error = Some(format!(
-                                            "Mismatch at 0x{:X}: read 0x{:02X}, expected 0x{:02X}",
-                                            offset + i,
-                                            a,
-                                            b
-                                        ));
-                                        break;
+                    while offset < total {
+                        let chunk_size = core::cmp::min(CHUNK_SIZE, total - offset);
+                        let mut buf = vec![0u8; chunk_size];
+
+                        match device.read(offset as u32, &mut buf).await {
+                            Ok(()) => {
+                                let expected = &data[offset..offset + chunk_size];
+                                if buf != expected {
+                                    for (i, (a, b)) in buf.iter().zip(expected.iter()).enumerate() {
+                                        if a != b {
+                                            verify_error = Some(format!(
+                                                "Mismatch at 0x{:X}: read 0x{:02X}, expected 0x{:02X}",
+                                                offset + i, a, b
+                                            ));
+                                            break;
+                                        }
                                     }
+                                    break;
                                 }
+                            }
+                            Err(e) => {
+                                verify_error = Some(format!("Read error: {:?}", e));
                                 break;
                             }
                         }
-                        Err(e) => {
-                            verify_error = Some(format!("Read error: {:?}", e));
-                            break;
+
+                        offset += chunk_size;
+
+                        shared.borrow_mut().messages.push(AsyncMessage::Progress(
+                            ProgressUpdate::Verifying {
+                                done: offset,
+                                total,
+                            },
+                        ));
+
+                        if offset >= last_repaint + YIELD_INTERVAL {
+                            last_repaint = offset;
+                            if let Some(ref ctx) = ctx {
+                                ctx.request_repaint();
+                            }
+                        }
+
+                        if offset >= last_yield + YIELD_INTERVAL {
+                            last_yield = offset;
+                            yield_to_browser().await;
                         }
                     }
 
-                    offset += chunk_size;
+                    let (master, _) = device.into_parts();
+                    (master, verify_error)
+                }
 
-                    // Report progress (always update message for final state)
-                    shared.borrow_mut().messages.push(AsyncMessage::Progress(
-                        ProgressUpdate::Verifying {
-                            done: offset,
-                            total,
-                        },
-                    ));
+                match programmer {
+                    Programmer::Serprog(serprog) => {
+                        let (serprog, verify_error) =
+                            do_verify(serprog, ctx_flash, &data, &shared, &ctx).await;
 
-                    // Throttle repaint requests
-                    if offset >= last_repaint + YIELD_INTERVAL {
-                        last_repaint = offset;
-                        if let Some(ref ctx) = ctx {
-                            ctx.request_repaint();
+                        match verify_error {
+                            None => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::VerifyComplete);
+                            }
+                            Some(err) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::VerifyFailed(err));
+                            }
                         }
-                    }
 
-                    // Yield to browser periodically to keep WebSerial responsive
-                    if offset >= last_yield + YIELD_INTERVAL {
-                        last_yield = offset;
-                        yield_to_browser().await;
+                        shared.borrow_mut().programmer = Some(Programmer::Serprog(serprog));
+                    }
+                    Programmer::Ch341a(ch341a) => {
+                        let (ch341a, verify_error) =
+                            do_verify(ch341a, ctx_flash, &data, &shared, &ctx).await;
+
+                        match verify_error {
+                            None => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::VerifyComplete);
+                            }
+                            Some(err) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::VerifyFailed(err));
+                            }
+                        }
+
+                        shared.borrow_mut().programmer = Some(Programmer::Ch341a(ch341a));
                     }
                 }
-
-                // Get serprog back from device
-                let (serprog, _) = device.into_parts();
-
-                match verify_error {
-                    None => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::VerifyComplete);
-                    }
-                    Some(err) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::VerifyFailed(err));
-                    }
-                }
-
-                // Put serprog back
-                shared.borrow_mut().serprog = Some(serprog);
             } else {
                 shared
                     .borrow_mut()
@@ -1045,31 +1248,56 @@ impl RflasherApp {
         ui.heading("Connection");
         ui.add_space(5.0);
 
-        // Baud rate selection
+        // Programmer type selection
         ui.horizontal(|ui| {
-            ui.label("Baud rate:");
-            egui::ComboBox::from_id_salt("baud_rate")
-                .selected_text(format!("{}", self.baud_rate))
+            ui.label("Programmer:");
+            egui::ComboBox::from_id_salt("programmer_type")
+                .selected_text(self.programmer_type.label())
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.baud_rate, 9600, "9600");
-                    ui.selectable_value(&mut self.baud_rate, 19200, "19200");
-                    ui.selectable_value(&mut self.baud_rate, 38400, "38400");
-                    ui.selectable_value(&mut self.baud_rate, 57600, "57600");
-                    ui.selectable_value(&mut self.baud_rate, 115200, "115200");
-                    ui.selectable_value(&mut self.baud_rate, 230400, "230400");
-                    ui.selectable_value(&mut self.baud_rate, 460800, "460800");
-                    ui.selectable_value(&mut self.baud_rate, 921600, "921600");
-                    ui.selectable_value(&mut self.baud_rate, 1000000, "1000000");
-                    ui.selectable_value(&mut self.baud_rate, 2000000, "2000000");
+                    ui.selectable_value(
+                        &mut self.programmer_type,
+                        ProgrammerType::Serprog,
+                        ProgrammerType::Serprog.label(),
+                    );
+                    ui.selectable_value(
+                        &mut self.programmer_type,
+                        ProgrammerType::Ch341a,
+                        ProgrammerType::Ch341a.label(),
+                    );
                 });
         });
+
+        // Baud rate selection (only for serprog)
+        if self.programmer_type == ProgrammerType::Serprog {
+            ui.horizontal(|ui| {
+                ui.label("Baud rate:");
+                egui::ComboBox::from_id_salt("baud_rate")
+                    .selected_text(format!("{}", self.baud_rate))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.baud_rate, 9600, "9600");
+                        ui.selectable_value(&mut self.baud_rate, 19200, "19200");
+                        ui.selectable_value(&mut self.baud_rate, 38400, "38400");
+                        ui.selectable_value(&mut self.baud_rate, 57600, "57600");
+                        ui.selectable_value(&mut self.baud_rate, 115200, "115200");
+                        ui.selectable_value(&mut self.baud_rate, 230400, "230400");
+                        ui.selectable_value(&mut self.baud_rate, 460800, "460800");
+                        ui.selectable_value(&mut self.baud_rate, 921600, "921600");
+                        ui.selectable_value(&mut self.baud_rate, 1000000, "1000000");
+                        ui.selectable_value(&mut self.baud_rate, 2000000, "2000000");
+                    });
+            });
+        }
 
         ui.add_space(5.0);
 
         // Connection status and button
         match &self.connection {
             ConnectionState::Disconnected => {
-                if ui.button("Connect (WebSerial)").clicked() {
+                let button_label = match self.programmer_type {
+                    ProgrammerType::Serprog => "Connect (WebSerial)",
+                    ProgrammerType::Ch341a => "Connect (WebUSB)",
+                };
+                if ui.button(button_label).clicked() {
                     self.spawn_connect();
                 }
             }

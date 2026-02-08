@@ -4,6 +4,8 @@
 //! from RON files at runtime.
 
 use alloc::{string::String, vec::Vec};
+#[cfg(feature = "static-chips")]
+use alloc::{string::ToString, vec};
 use std::fs;
 use std::io;
 use std::path::Path;
