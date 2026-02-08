@@ -159,6 +159,8 @@ impl Ch347 {
             .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
 
         let mut ch347 = Self {
+            #[cfg(feature = "wasm")]
+            _interface: interface,
             out_ep,
             in_ep,
             config,
@@ -255,7 +257,7 @@ impl std::fmt::Display for Ch347DeviceInfo {
 // WASM-only methods (WebUSB device picker, async open, shutdown)
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", not(feature = "is_sync")))]
 impl Ch347 {
     /// Request a CH347 device via the WebUSB permission prompt
     ///
@@ -321,8 +323,8 @@ impl Ch347 {
         device_info: nusb::DeviceInfo,
         config: SpiConfig,
     ) -> Result<Self> {
-        let variant = Ch347Variant::from_product_id(device_info.product_id())
-            .unwrap_or(Ch347Variant::Ch347T);
+        let variant =
+            Ch347Variant::from_product_id(device_info.product_id()).unwrap_or(Ch347Variant::Ch347T);
 
         log::info!(
             "Opening CH347{} device VID={:04X} PID={:04X}",
@@ -674,7 +676,7 @@ impl SpiMaster for Ch347 {
                 std::thread::sleep(Duration::from_micros(us as u64));
             }
 
-            #[cfg(feature = "wasm")]
+            #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
             {
                 let delay_ms = ((us as f64) / 1000.0).ceil() as i32;
                 if delay_ms > 0 {

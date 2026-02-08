@@ -153,6 +153,8 @@ impl Ch341a {
             .map_err(|e| Ch341aError::ClaimFailed(e.to_string()))?;
 
         let mut ch341a = Self {
+            #[cfg(feature = "wasm")]
+            _interface: interface,
             out_ep,
             in_ep,
             stored_delay_us: 0,
@@ -215,7 +217,7 @@ impl Drop for Ch341a {
 // WASM-only methods (WebUSB device picker, async open, shutdown)
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", not(feature = "is_sync")))]
 impl Ch341a {
     /// Request a CH341A device via the WebUSB permission prompt
     ///
@@ -646,7 +648,7 @@ impl SpiMaster for Ch341a {
                 std::thread::sleep(Duration::from_micros((us - inc) as u64));
             }
 
-            #[cfg(feature = "wasm")]
+            #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
             {
                 let delay_ms = ((us - inc) as f64 / 1000.0).ceil() as i32;
                 if delay_ms > 0 {

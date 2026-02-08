@@ -1303,11 +1303,7 @@ impl RflasherApp {
                         .selected_text(self.spi_speed.label())
                         .show_ui(ui, |ui| {
                             for &speed in SpiSpeed::ALL {
-                                ui.selectable_value(
-                                    &mut self.spi_speed,
-                                    speed,
-                                    speed.label(),
-                                );
+                                ui.selectable_value(&mut self.spi_speed, speed, speed.label());
                             }
                         });
                 });
