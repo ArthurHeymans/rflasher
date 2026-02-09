@@ -1476,11 +1476,7 @@ impl RflasherApp {
                         .show_ui(ui, |ui| {
                             for &(iface, label) in &all_interfaces {
                                 if iface.index() < max_channels {
-                                    ui.selectable_value(
-                                        &mut self.ftdi_interface,
-                                        iface,
-                                        label,
-                                    );
+                                    ui.selectable_value(&mut self.ftdi_interface, iface, label);
                                 }
                             }
                         });

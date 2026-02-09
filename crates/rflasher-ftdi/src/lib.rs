@@ -87,7 +87,10 @@
 //! | 20      | 3 MHz     |
 //! | 60      | 1 MHz     |
 
-#![cfg_attr(not(any(feature = "std", feature = "native", feature = "wasm")), no_std)]
+#![cfg_attr(
+    not(any(feature = "std", feature = "native", feature = "wasm")),
+    no_std
+)]
 
 // libftdi1 C backend (default `std` feature)
 #[cfg(all(feature = "std", not(feature = "native"), not(feature = "wasm")))]
@@ -95,17 +98,12 @@ mod device;
 #[cfg(all(feature = "std", not(feature = "native"), not(feature = "wasm")))]
 mod error;
 
-// Pure-Rust rs-ftdi backend (`native` feature)
-#[cfg(all(feature = "native", not(feature = "wasm")))]
-mod native_device;
-#[cfg(all(feature = "native", not(feature = "wasm")))]
-mod native_error;
-
-// WASM/WebUSB backend (`wasm` feature) - uses nusb directly with maybe_async
-#[cfg(feature = "wasm")]
-mod wasm_device;
-#[cfg(feature = "wasm")]
-mod wasm_error;
+// Pure-Rust rs-ftdi backend, shared by `native` and `wasm` features.
+// Uses maybe_async for sync (native) / async (wasm) polymorphism.
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod rsftdi_device;
+#[cfg(any(feature = "native", feature = "wasm"))]
+mod rsftdi_error;
 
 // Protocol constants are shared by all backends
 #[cfg(any(feature = "std", feature = "native", feature = "wasm"))]
@@ -117,15 +115,13 @@ pub use device::{parse_options, Ftdi, FtdiDeviceInfo};
 #[cfg(all(feature = "std", not(feature = "native"), not(feature = "wasm")))]
 pub use error::{FtdiError, Result};
 
+// rs-ftdi backend (native sync or wasm async)
+#[cfg(any(feature = "native", feature = "wasm"))]
+pub use rsftdi_device::Ftdi;
 #[cfg(all(feature = "native", not(feature = "wasm")))]
-pub use native_device::{parse_options, Ftdi, FtdiDeviceInfo};
-#[cfg(all(feature = "native", not(feature = "wasm")))]
-pub use native_error::{FtdiError, Result};
-
-#[cfg(feature = "wasm")]
-pub use wasm_device::Ftdi;
-#[cfg(feature = "wasm")]
-pub use wasm_error::{FtdiError, Result};
+pub use rsftdi_device::{parse_options, FtdiDeviceInfo};
+#[cfg(any(feature = "native", feature = "wasm"))]
+pub use rsftdi_error::{FtdiError, Result};
 
 // parse_options is only available in native/std mode (not wasm)
 // In WASM, the UI provides configuration directly

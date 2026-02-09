@@ -1,25 +1,31 @@
-//! FTDI MPSSE device implementation using pure-Rust rs-ftdi backend
+//! FTDI MPSSE device implementation using rs-ftdi (shared by native and wasm)
 //!
-//! This module provides the same `Ftdi` struct and public API as `device.rs`,
-//! but uses the pure-Rust `rs-ftdi` crate (backed by `nusb`) instead of
-//! C libftdi1 bindings.
+//! This module provides the `Ftdi` struct using the pure-Rust `rs-ftdi` crate
+//! (backed by `nusb`). It uses `maybe_async` to support both native sync and
+//! WASM async modes from a single codebase.
+//!
+//! rs-ftdi handles USB communication, modem status byte stripping, and endpoint
+//! management. This module layers MPSSE SPI protocol on top.
 
+#[cfg(feature = "is_sync")]
 use std::time::Duration;
 
+use maybe_async::maybe_async;
+#[cfg(feature = "is_sync")]
 use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
 use rs_ftdi::FtdiDevice;
 
-use crate::native_error::{FtdiError, Result};
 use crate::protocol::*;
+use crate::rsftdi_error::{FtdiError, Result};
 
-/// FTDI MPSSE programmer (pure-Rust backend)
+/// FTDI MPSSE programmer (rs-ftdi backend, shared by native and wasm)
 ///
 /// This struct represents a connection to an FTDI device using the MPSSE
 /// engine for SPI communication. It uses the pure-Rust `rs-ftdi` crate
-/// instead of C libftdi1 bindings.
+/// and supports both native sync and WASM async modes via `maybe_async`.
 pub struct Ftdi {
     /// rs-ftdi device context
     device: FtdiDevice,
@@ -31,24 +37,34 @@ pub struct Ftdi {
     pindir: u8,
 }
 
+// ---------------------------------------------------------------------------
+// Helper: convert our FtdiInterface to rs-ftdi's Interface
+// ---------------------------------------------------------------------------
+
+fn map_interface(iface: FtdiInterface) -> rs_ftdi::Interface {
+    match iface {
+        FtdiInterface::A => rs_ftdi::Interface::A,
+        FtdiInterface::B => rs_ftdi::Interface::B,
+        FtdiInterface::C => rs_ftdi::Interface::C,
+        FtdiInterface::D => rs_ftdi::Interface::D,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Native-only methods (device enumeration, sync open, Drop)
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "native", not(feature = "wasm")))]
 impl Ftdi {
     /// Open an FTDI device with the given configuration
     pub fn open(config: &FtdiConfig) -> Result<Self> {
         log::info!(
-            "Opening FTDI {} channel {} (native rs-ftdi backend)",
+            "Opening FTDI {} channel {} (rs-ftdi backend)",
             config.device_type.name(),
             config.interface.letter()
         );
 
-        // Map our interface enum to rs-ftdi's Interface enum
-        let interface = match config.interface {
-            FtdiInterface::A => rs_ftdi::Interface::A,
-            FtdiInterface::B => rs_ftdi::Interface::B,
-            FtdiInterface::C => rs_ftdi::Interface::C,
-            FtdiInterface::D => rs_ftdi::Interface::D,
-        };
-
-        // Open by VID/PID
+        let interface = map_interface(config.interface);
         let vid = config.device_type.vendor_id();
         let pid = config.device_type.product_id();
 
@@ -85,7 +101,7 @@ impl Ftdi {
         ftdi.init_mpsse(config)?;
 
         log::info!(
-            "FTDI configured for SPI at {:.2} MHz (native rs-ftdi backend)",
+            "FTDI configured for SPI at {:.2} MHz (rs-ftdi backend)",
             config.spi_clock_mhz()
         );
 
@@ -102,8 +118,130 @@ impl Ftdi {
         Self::open(&FtdiConfig::for_device(device_type))
     }
 
-    /// Initialize the MPSSE engine
-    fn init_mpsse(&mut self, config: &FtdiConfig) -> Result<()> {
+    /// List available FTDI devices
+    pub fn list_devices() -> Result<Vec<FtdiDeviceInfo>> {
+        let devices = nusb::list_devices()
+            .wait()
+            .map_err(|e| FtdiError::UsbError(e.to_string()))?
+            .filter_map(|dev| {
+                let vid = dev.vendor_id();
+                let pid = dev.product_id();
+
+                get_device_info(vid, pid).map(|info| FtdiDeviceInfo {
+                    bus: dev.busnum(),
+                    address: dev.device_address(),
+                    vendor_id: vid,
+                    product_id: pid,
+                    vendor_name: info.vendor_name,
+                    device_name: info.device_name,
+                    serial: None,
+                })
+            })
+            .collect();
+
+        Ok(devices)
+    }
+}
+
+// Drop implementation only for sync mode (async requires explicit shutdown)
+#[cfg(feature = "is_sync")]
+impl Drop for Ftdi {
+    fn drop(&mut self) {
+        // Release I/O pins on close
+        if let Err(e) = self.release_pins() {
+            log::warn!("Failed to release pins on close: {}", e);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WASM-only methods (WebUSB device picker, async open, shutdown)
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+impl Ftdi {
+    /// Request an FTDI device via the WebUSB permission prompt
+    ///
+    /// This must be called from a user gesture (e.g., button click) in the browser.
+    /// It shows the browser's device picker filtered to all supported FTDI devices.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn request_device() -> Result<nusb::DeviceInfo> {
+        // Delegate to rs-ftdi's WebUSB device picker
+        rs_ftdi::FtdiDevice::request_device()
+            .await
+            .map_err(|e| FtdiError::OpenFailed(format!("WebUSB request failed: {}", e)))
+    }
+
+    /// Open an FTDI device from a DeviceInfo with the given configuration
+    pub async fn open(device_info: nusb::DeviceInfo, config: &FtdiConfig) -> Result<Self> {
+        log::info!(
+            "Opening FTDI {} channel {} VID={:04X} PID={:04X} (rs-ftdi WebUSB)",
+            config.device_type.name(),
+            config.interface.letter(),
+            device_info.vendor_id(),
+            device_info.product_id()
+        );
+
+        let interface = map_interface(config.interface);
+
+        let mut device = FtdiDevice::open_wasm(device_info, interface)
+            .await
+            .map_err(|e| FtdiError::OpenFailed(format!("{}", e)))?;
+
+        // Reset USB device
+        device
+            .usb_reset()
+            .await
+            .map_err(|e| FtdiError::ConfigFailed(format!("USB reset failed: {}", e)))?;
+
+        // Set latency timer (2ms for best performance)
+        device
+            .set_latency_timer(2)
+            .await
+            .map_err(|e| FtdiError::ConfigFailed(format!("Set latency timer failed: {}", e)))?;
+
+        // Set MPSSE bitbang mode
+        device
+            .set_bitmode(0x00, rs_ftdi::BitMode::Mpsse)
+            .await
+            .map_err(|e| FtdiError::ConfigFailed(format!("Set MPSSE mode failed: {}", e)))?;
+
+        let mut ftdi = Ftdi {
+            device,
+            cs_bits: config.cs_bits,
+            aux_bits: config.aux_bits,
+            pindir: config.pindir,
+        };
+
+        // Initialize MPSSE
+        ftdi.init_mpsse(config).await?;
+
+        log::info!(
+            "FTDI configured for SPI at {:.2} MHz (rs-ftdi WebUSB)",
+            config.spi_clock_mhz()
+        );
+
+        Ok(ftdi)
+    }
+
+    /// Shutdown: release pins (WASM equivalent of Drop)
+    pub async fn shutdown(&mut self) {
+        if let Err(e) = self.release_pins().await {
+            log::warn!("Failed to release pins on shutdown: {}", e);
+        }
+        self.device.shutdown().await;
+        log::info!("FTDI shutdown complete");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared methods (sync or async via maybe_async)
+// ---------------------------------------------------------------------------
+
+impl Ftdi {
+    /// Initialize the MPSSE engine with MPSSE commands
+    #[maybe_async]
+    async fn init_mpsse(&mut self, config: &FtdiConfig) -> Result<()> {
         let mut buf = Vec::with_capacity(32);
 
         // Disable divide-by-5 prescaler for 60 MHz base clock (H devices)
@@ -151,30 +289,46 @@ impl Ftdi {
             buf.push(config.pindir_high);
         }
 
-        self.send(&buf)?;
+        self.send(&buf).await?;
 
         Ok(())
     }
 
     /// Send data to the FTDI device
-    fn send(&mut self, data: &[u8]) -> Result<()> {
+    #[maybe_async]
+    async fn send(&mut self, data: &[u8]) -> Result<()> {
         self.device
             .write_all(data)
+            .await
             .map_err(|e| FtdiError::TransferFailed(format!("Write failed: {}", e)))?;
         log::trace!("Sent {} bytes", data.len());
         Ok(())
     }
 
     /// Receive data from the FTDI device
-    fn recv(&mut self, len: usize) -> Result<Vec<u8>> {
+    #[maybe_async]
+    async fn recv(&mut self, len: usize) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; len];
         let mut total = 0;
 
         while total < len {
-            match self.device.read_data(&mut buf[total..]) {
+            match self.device.read_data(&mut buf[total..]).await {
                 Ok(0) => {
                     // No data available, wait a bit
-                    std::thread::sleep(Duration::from_micros(100));
+                    #[cfg(feature = "is_sync")]
+                    {
+                        std::thread::sleep(Duration::from_micros(100));
+                    }
+                    #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+                    {
+                        let promise = js_sys::Promise::new(&mut |resolve, _| {
+                            let window = web_sys::window().unwrap();
+                            window
+                                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 1)
+                                .unwrap();
+                        });
+                        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                    }
                 }
                 Ok(n) => {
                     total += n;
@@ -189,8 +343,9 @@ impl Ftdi {
         Ok(buf)
     }
 
-    /// Perform an SPI transfer
-    fn spi_transfer(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
+    /// Perform an SPI transfer via MPSSE commands
+    #[maybe_async]
+    async fn spi_transfer(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         let writecnt = write_data.len();
         let readcnt = read_len;
 
@@ -201,7 +356,7 @@ impl Ftdi {
             ));
         }
 
-        // Build command buffer
+        // Build MPSSE command buffer
         let mut buf = Vec::with_capacity(FTDI_HW_BUFFER_SIZE);
 
         // Assert CS
@@ -209,7 +364,7 @@ impl Ftdi {
         buf.push(self.aux_bits);
         buf.push(self.pindir);
 
-        // Write command (WREN, opcode, address, data)
+        // Write command (opcode + address + data)
         if writecnt > 0 {
             buf.push(MPSSE_DO_WRITE | MPSSE_WRITE_NEG);
             buf.push(((writecnt - 1) & 0xFF) as u8);
@@ -233,57 +388,29 @@ impl Ftdi {
         buf.push(SEND_IMMEDIATE);
 
         // Send command
-        self.send(&buf)?;
+        self.send(&buf).await?;
 
         // Read response if needed
         if readcnt > 0 {
-            self.recv(readcnt)
+            self.recv(readcnt).await
         } else {
             Ok(Vec::new())
         }
     }
 
     /// Release I/O pins (set all as inputs)
-    fn release_pins(&mut self) -> Result<()> {
+    #[maybe_async]
+    async fn release_pins(&mut self) -> Result<()> {
         let buf = [SET_BITS_LOW, 0x00, 0x00];
-        self.send(&buf)
-    }
-
-    /// List available FTDI devices
-    pub fn list_devices() -> Result<Vec<FtdiDeviceInfo>> {
-        let devices = nusb::list_devices()
-            .wait()
-            .map_err(|e| FtdiError::UsbError(e.to_string()))?
-            .filter_map(|dev| {
-                let vid = dev.vendor_id();
-                let pid = dev.product_id();
-
-                get_device_info(vid, pid).map(|info| FtdiDeviceInfo {
-                    bus: dev.busnum(),
-                    address: dev.device_address(),
-                    vendor_id: vid,
-                    product_id: pid,
-                    vendor_name: info.vendor_name,
-                    device_name: info.device_name,
-                    serial: None, // Would need to open device to get this
-                })
-            })
-            .collect();
-
-        Ok(devices)
+        self.send(&buf).await
     }
 }
 
-impl Drop for Ftdi {
-    fn drop(&mut self) {
-        // Release I/O pins on close
-        if let Err(e) = self.release_pins() {
-            log::warn!("Failed to release pins on close: {}", e);
-        }
-        // Device will be closed automatically when dropped
-    }
-}
+// ---------------------------------------------------------------------------
+// SpiMaster trait implementation
+// ---------------------------------------------------------------------------
 
+#[maybe_async(AFIT)]
 impl SpiMaster for Ftdi {
     fn features(&self) -> SpiFeatures {
         // FTDI MPSSE supports 4-byte addressing (software handled)
@@ -300,7 +427,7 @@ impl SpiMaster for Ftdi {
         256
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         // Check that the requested I/O mode is supported
         check_io_mode_supported(cmd.io_mode, self.features())?;
 
@@ -318,6 +445,7 @@ impl SpiMaster for Ftdi {
         let read_len = cmd.read_buf.len();
         let result = self
             .spi_transfer(&write_data, read_len)
+            .await
             .map_err(|_e| CoreError::ProgrammerError)?;
 
         // Copy read data back
@@ -326,14 +454,38 @@ impl SpiMaster for Ftdi {
         Ok(())
     }
 
-    fn delay_us(&mut self, us: u32) {
-        // For FTDI, we just use a regular sleep
-        // The MPSSE doesn't have built-in delay commands for arbitrary times
-        std::thread::sleep(Duration::from_micros(us as u64));
+    async fn delay_us(&mut self, us: u32) {
+        if us > 0 {
+            #[cfg(feature = "is_sync")]
+            {
+                std::thread::sleep(Duration::from_micros(us as u64));
+            }
+
+            #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+            {
+                let delay_ms = ((us as f64) / 1000.0).ceil() as i32;
+                if delay_ms > 0 {
+                    let promise = js_sys::Promise::new(&mut |resolve, _| {
+                        let window = web_sys::window().unwrap();
+                        window
+                            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                                &resolve, delay_ms,
+                            )
+                            .unwrap();
+                    });
+                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                }
+            }
+        }
     }
 }
 
+// ---------------------------------------------------------------------------
+// Device info (for list_devices, native only)
+// ---------------------------------------------------------------------------
+
 /// Information about a connected FTDI device
+#[cfg(all(feature = "native", not(feature = "wasm")))]
 #[derive(Debug, Clone)]
 pub struct FtdiDeviceInfo {
     /// USB bus number
@@ -352,6 +504,7 @@ pub struct FtdiDeviceInfo {
     pub serial: Option<String>,
 }
 
+#[cfg(all(feature = "native", not(feature = "wasm")))]
 impl std::fmt::Display for FtdiDeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -367,9 +520,14 @@ impl std::fmt::Display for FtdiDeviceInfo {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Option parsing (native only, not wasm)
+// ---------------------------------------------------------------------------
+
 /// Parse programmer options from a string
 ///
 /// Format: "type=<type>,port=<A|B|C|D>,divisor=<N>,serial=<serial>,gpiol0=<H|L|C>"
+#[cfg(all(feature = "native", not(feature = "wasm")))]
 pub fn parse_options(options: &[(&str, &str)]) -> Result<FtdiConfig> {
     let mut config = FtdiConfig::default();
 

@@ -1,4 +1,4 @@
-//! Error types for FTDI programmer (pure-Rust rs-ftdi backend)
+//! Error types for FTDI programmer (rs-ftdi backend, shared by native and wasm)
 
 use std::fmt;
 
@@ -33,7 +33,7 @@ pub enum FtdiError {
     InvalidParameter(String),
 
     /// rs-ftdi error
-    NativeFtdi(String),
+    RsFtdi(String),
 
     /// USB enumeration error
     UsbError(String),
@@ -50,7 +50,7 @@ impl fmt::Display for FtdiError {
             FtdiError::InvalidDeviceType(s) => write!(f, "Invalid device type: {}", s),
             FtdiError::InvalidChannel(s) => write!(f, "Invalid channel: {}", s),
             FtdiError::InvalidParameter(s) => write!(f, "Invalid parameter: {}", s),
-            FtdiError::NativeFtdi(s) => write!(f, "rs-ftdi error: {}", s),
+            FtdiError::RsFtdi(s) => write!(f, "rs-ftdi error: {}", s),
             FtdiError::UsbError(s) => write!(f, "USB error: {}", s),
         }
     }
@@ -58,15 +58,9 @@ impl fmt::Display for FtdiError {
 
 impl std::error::Error for FtdiError {}
 
-impl From<nusb::Error> for FtdiError {
-    fn from(e: nusb::Error) -> Self {
-        FtdiError::UsbError(e.to_string())
-    }
-}
-
 impl From<rs_ftdi::Error> for FtdiError {
     fn from(e: rs_ftdi::Error) -> Self {
-        FtdiError::NativeFtdi(e.to_string())
+        FtdiError::RsFtdi(e.to_string())
     }
 }
 
