@@ -69,6 +69,7 @@ impl ProgrammerType {
 }
 
 /// Connected programmer - wraps a serprog, CH341A, CH347, or FTDI device
+#[allow(clippy::large_enum_variant)]
 enum Programmer {
     Serprog(Serprog<WebSerialTransport>),
     Ch341a(Ch341a),
