@@ -75,18 +75,34 @@
 //! | 20      | 3 MHz     |
 //! | 60      | 1 MHz     |
 
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(any(feature = "std", feature = "native")), no_std)]
 
-#[cfg(feature = "std")]
+// libftdi1 C backend (default `std` feature)
+#[cfg(all(feature = "std", not(feature = "native")))]
 mod device;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(feature = "native")))]
 mod error;
-#[cfg(feature = "std")]
+
+// Pure-Rust rs-ftdi backend (`native` feature)
+#[cfg(feature = "native")]
+mod native_device;
+#[cfg(feature = "native")]
+mod native_error;
+
+// Protocol constants are shared by both backends
+#[cfg(any(feature = "std", feature = "native"))]
 mod protocol;
 
-#[cfg(feature = "std")]
+// Re-exports: same public API regardless of backend
+#[cfg(all(feature = "std", not(feature = "native")))]
 pub use device::{parse_options, Ftdi, FtdiConfig, FtdiDeviceInfo};
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(feature = "native")))]
 pub use error::{FtdiError, Result};
-#[cfg(feature = "std")]
+
+#[cfg(feature = "native")]
+pub use native_device::{parse_options, Ftdi, FtdiConfig, FtdiDeviceInfo};
+#[cfg(feature = "native")]
+pub use native_error::{FtdiError, Result};
+
+#[cfg(any(feature = "std", feature = "native"))]
 pub use protocol::{FtdiDeviceType, FtdiInterface, SUPPORTED_DEVICES};

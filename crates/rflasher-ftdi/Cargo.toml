@@ -8,6 +8,8 @@ description = "FTDI MPSSE programmer support for rflasher"
 [features]
 default = ["std"]
 std = ["rflasher-core/std", "ftdi", "nusb", "futures-lite"]
+# Use pure-Rust rs-ftdi backend instead of C libftdi1 bindings
+native = ["rflasher-core/std", "rs-ftdi", "nusb", "futures-lite"]
 
 [dependencies]
 rflasher-core.workspace = true
@@ -15,6 +17,9 @@ log.workspace = true
 
 # FTDI support - using ftdi crate (libftdi1 bindings)
 ftdi = { version = "0.1", optional = true }
+
+# Pure-Rust FTDI backend
+rs-ftdi = { path = "../../../rs-ftdi", package = "ftdi", optional = true }
 
 # USB device enumeration (for listing devices)
 nusb = { workspace = true, optional = true }
