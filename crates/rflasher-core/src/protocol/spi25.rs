@@ -23,6 +23,24 @@ use crate::programmer::{SpiFeatures, SpiMaster};
 use crate::spi::{opcodes, AddressWidth, IoMode, SpiCommand};
 use maybe_async::maybe_async;
 
+// Timing constants for SPI flash operations
+/// Poll interval for status register write completion (microseconds)
+const WRSR_POLL_US: u32 = 10_000;
+/// Timeout for status register write completion (microseconds)
+const WRSR_TIMEOUT_US: u32 = 500_000;
+/// Poll interval for page program completion (microseconds)
+const PAGE_PROGRAM_POLL_US: u32 = 10;
+/// Timeout for page program completion (microseconds)
+const PAGE_PROGRAM_TIMEOUT_US: u32 = 10_000;
+/// Poll interval for chip erase completion (microseconds)
+const CHIP_ERASE_POLL_US: u32 = 1_000_000;
+/// Timeout for chip erase completion (microseconds)
+const CHIP_ERASE_TIMEOUT_US: u32 = 200_000_000;
+/// Poll interval for block erase completion (microseconds)
+pub const BLOCK_ERASE_POLL_US: u32 = 10_000;
+/// Timeout for block erase completion (microseconds)
+pub const BLOCK_ERASE_TIMEOUT_US: u32 = 10_000_000;
+
 /// Read the JEDEC ID from a flash chip
 ///
 /// Returns (manufacturer_id, device_id) on success.
@@ -128,7 +146,7 @@ pub async fn write_status1<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> 
     let mut cmd = SpiCommand::write_reg(opcodes::WRSR, &data);
     master.execute(&mut cmd).await?;
     // Status register write typically takes 5-200ms, poll every 10ms
-    wait_ready(master, 10_000, 500_000).await
+    wait_ready(master, WRSR_POLL_US, WRSR_TIMEOUT_US).await
 }
 
 /// Write status registers 1 and 2 together
@@ -141,7 +159,7 @@ pub async fn write_status12<M: SpiMaster + ?Sized>(master: &mut M, sr1: u8, sr2:
     let mut cmd = SpiCommand::write_reg(opcodes::WRSR, &data);
     master.execute(&mut cmd).await?;
     // Status register write typically takes 5-200ms, poll every 10ms
-    wait_ready(master, 10_000, 500_000).await
+    wait_ready(master, WRSR_POLL_US, WRSR_TIMEOUT_US).await
 }
 
 /// Read data from flash using 3-byte addressing
@@ -202,7 +220,7 @@ pub async fn program_page_3b<M: SpiMaster + ?Sized>(
     master.execute(&mut cmd).await?;
 
     // Page program: poll every 10us, timeout after 10ms (typical is 0.7-5ms)
-    wait_ready(master, 10, 10_000).await
+    wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await
 }
 
 /// Program a single page using 4-byte addressing
@@ -219,7 +237,7 @@ pub async fn program_page_4b<M: SpiMaster + ?Sized>(
     master.execute(&mut cmd).await?;
 
     // Page program: poll every 10us, timeout after 10ms (typical is 0.7-5ms)
-    wait_ready(master, 10, 10_000).await
+    wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await
 }
 
 /// Erase a sector/block at the given address
@@ -261,7 +279,7 @@ pub async fn chip_erase<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     master.execute(&mut cmd).await?;
 
     // Chip erase: poll every 1s, timeout after 200s
-    wait_ready(master, 1_000_000, 200_000_000).await
+    wait_ready(master, CHIP_ERASE_POLL_US, CHIP_ERASE_TIMEOUT_US).await
 }
 
 /// Enter 4-byte address mode
@@ -646,7 +664,7 @@ async fn write_status2_direct<M: SpiMaster + ?Sized>(master: &mut M, value: u8) 
     let mut cmd = SpiCommand::write_reg(opcodes::WRSR2, &data);
     master.execute(&mut cmd).await?;
     // Status register write typically takes 5-200ms, poll every 10ms
-    wait_ready(master, 10_000, 500_000).await
+    wait_ready(master, WRSR_POLL_US, WRSR_TIMEOUT_US).await
 }
 
 /// Check if quad mode is enabled

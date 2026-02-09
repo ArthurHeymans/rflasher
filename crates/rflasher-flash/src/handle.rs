@@ -236,6 +236,6 @@ impl rflasher_core::layout::FmapSearchable for FlashHandle {
         buf: &mut [u8],
     ) -> Result<(), rflasher_core::layout::LayoutError> {
         self.read(offset, buf)
-            .map_err(|_| rflasher_core::layout::LayoutError::IoError)
+            .map_err(|e| rflasher_core::layout::LayoutError::IoError(e.to_string()))
     }
 }

@@ -79,6 +79,17 @@ pub enum LayoutSource {
     Manual,
 }
 
+impl core::fmt::Display for LayoutSource {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            LayoutSource::Toml => write!(f, "TOML file"),
+            LayoutSource::Ifd => write!(f, "Intel Flash Descriptor"),
+            LayoutSource::Fmap => write!(f, "FMAP"),
+            LayoutSource::Manual => write!(f, "Manual"),
+        }
+    }
+}
+
 /// A flash memory layout containing named regions
 #[derive(Debug, Clone)]
 #[cfg(feature = "alloc")]
@@ -299,7 +310,7 @@ pub enum LayoutError {
     /// FMAP version not supported
     UnsupportedFmapVersion,
     /// I/O error
-    IoError,
+    IoError(alloc::string::String),
 }
 
 #[cfg(feature = "std")]
@@ -322,7 +333,7 @@ impl std::fmt::Display for LayoutError {
             Self::InvalidIfdSignature => write!(f, "invalid Intel Flash Descriptor signature"),
             Self::InvalidFmapSignature => write!(f, "invalid FMAP signature"),
             Self::UnsupportedFmapVersion => write!(f, "unsupported FMAP version"),
-            Self::IoError => write!(f, "I/O error"),
+            Self::IoError(msg) => write!(f, "I/O error: {}", msg),
         }
     }
 }

@@ -154,7 +154,7 @@ pub fn print_layout(layout: &Layout) {
     );
 
     if let Some(size) = layout.chip_size {
-        println!("Chip:   {} bytes ({} MiB)", size, size / (1024 * 1024));
+        println!("Chip:   {} bytes ({})", size, super::format_size(size));
     }
 
     println!("\nRegions ({}):", layout.len());
@@ -166,13 +166,7 @@ pub fn print_layout(layout: &Layout) {
 
     for region in &layout.regions {
         let size = region.size();
-        let size_str = if size >= 1024 * 1024 {
-            format!("{} MiB", size / (1024 * 1024))
-        } else if size >= 1024 {
-            format!("{} KiB", size / 1024)
-        } else {
-            format!("{} B", size)
-        };
+        let size_str = super::format_size(size);
 
         println!(
             "{:<20} {:#010X} {:#010X} {:>10} {:>8} {:>8}",

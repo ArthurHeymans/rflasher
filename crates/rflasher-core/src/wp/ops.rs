@@ -60,6 +60,9 @@ impl core::fmt::Display for WpError {
     }
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for WpError {}
+
 /// Result type for write protection operations
 pub type WpResult<T> = core::result::Result<T, WpError>;
 

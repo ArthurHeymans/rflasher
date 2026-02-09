@@ -8,8 +8,9 @@ use std::time::Duration;
 use nusb::transfer::{Bulk, In, Out};
 use nusb::{Interface, MaybeFuture};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
+use rflasher_core::programmer::default_execute_with_vec;
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
+use rflasher_core::spi::SpiCommand;
 
 use crate::error::{RaidenError, Result};
 use crate::protocol::*;
@@ -526,36 +527,17 @@ impl SpiMaster for RaidenDebugSpi {
     }
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        // Check that the requested I/O mode is supported
-        check_io_mode_supported(cmd.io_mode, self.features())?;
-
-        // Build the command bytes to send
-        let header_len = cmd.header_len();
-        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
-
-        // Encode opcode + address + dummy bytes
-        cmd.encode_header(&mut write_data);
-
-        // Append write data (for write commands)
-        write_data[header_len..].copy_from_slice(cmd.write_data);
-
-        // Perform the transfer
-        let read_len = cmd.read_buf.len();
         log::debug!(
-            "SPI execute: opcode=0x{:02X}, write_len={}, read_len={}",
+            "SPI execute: opcode=0x{:02X}, read_len={}",
             cmd.opcode,
-            write_data.len(),
-            read_len
+            cmd.read_buf.len()
         );
-        let result = self.spi_transfer(&write_data, read_len).map_err(|e| {
-            log::error!("SPI transfer failed: {}", e);
-            CoreError::ProgrammerError
-        })?;
-
-        // Copy read data back
-        cmd.read_buf.copy_from_slice(&result);
-
-        Ok(())
+        default_execute_with_vec(cmd, self.features(), |write_data, read_len| {
+            self.spi_transfer(write_data, read_len).map_err(|e| {
+                log::error!("SPI transfer failed: {}", e);
+                CoreError::ProgrammerError
+            })
+        })
     }
 
     fn delay_us(&mut self, us: u32) {

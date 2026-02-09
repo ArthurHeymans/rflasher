@@ -60,22 +60,12 @@ pub fn list_chips(db: &ChipDatabase, vendor_filter: Option<&str>) {
             }
         }
 
-        let size_str = format_size(chip.total_size);
+        let size_str = super::format_size(chip.total_size);
         let jedec_str = format!("{:02X} {:04X}", chip.jedec_manufacturer, chip.jedec_device);
 
         println!(
             "{:<12} {:<20} {:>10} {:>10}",
             chip.vendor, chip.name, size_str, jedec_str
         );
-    }
-}
-
-fn format_size(bytes: u32) -> String {
-    if bytes >= 1024 * 1024 {
-        format!("{} MiB", bytes / (1024 * 1024))
-    } else if bytes >= 1024 {
-        format!("{} KiB", bytes / 1024)
-    } else {
-        format!("{} B", bytes)
     }
 }

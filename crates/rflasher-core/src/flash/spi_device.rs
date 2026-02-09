@@ -132,25 +132,90 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
+        use crate::chip::Features;
+        use crate::spi::IoMode;
+
         let ctx = self.context();
         if !ctx.is_valid_range(addr, buf.len()) {
             return Err(Error::AddressOutOfBounds);
         }
 
-        match ctx.address_mode {
-            AddressMode::ThreeByte => protocol::read_3b(self.master(), addr, buf).await,
-            AddressMode::FourByte => {
-                if ctx.use_native_4byte {
+        let chip_has_dual = ctx.chip.features.contains(Features::DUAL_IO);
+        let chip_has_quad = ctx.chip.features.contains(Features::QUAD_IO);
+        let use_native_4byte = ctx.use_native_4byte;
+        let use_4byte_native = ctx.address_mode == AddressMode::FourByte && use_native_4byte;
+        let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !use_native_4byte;
+
+        let master_features = self.master().features();
+
+        // Select the best read mode based on chip and programmer capabilities
+        let (io_mode, ..) = protocol::select_read_mode(
+            master_features,
+            chip_has_dual,
+            chip_has_quad,
+            use_4byte_native,
+        );
+
+        // Enter 4-byte mode if needed and not using native commands
+        if enter_exit_4byte {
+            protocol::enter_4byte_mode(self.master()).await?;
+        }
+
+        let result = match io_mode {
+            IoMode::Single => {
+                if use_4byte_native {
                     protocol::read_4b(self.master(), addr, buf).await
                 } else {
-                    // Enter 4-byte mode, read, exit
-                    protocol::enter_4byte_mode(self.master()).await?;
-                    let result = protocol::read_3b(self.master(), addr, buf).await;
-                    let _ = protocol::exit_4byte_mode(self.master()).await;
-                    result
+                    protocol::read_3b(self.master(), addr, buf).await
                 }
             }
+            IoMode::DualOut => {
+                if use_4byte_native {
+                    protocol::read_dual_out_4b(self.master(), addr, buf).await
+                } else {
+                    protocol::read_dual_out_3b(self.master(), addr, buf).await
+                }
+            }
+            IoMode::DualIo => {
+                if use_4byte_native {
+                    protocol::read_dual_io_4b(self.master(), addr, buf).await
+                } else {
+                    protocol::read_dual_io_3b(self.master(), addr, buf).await
+                }
+            }
+            IoMode::QuadOut => {
+                if use_4byte_native {
+                    protocol::read_quad_out_4b(self.master(), addr, buf).await
+                } else {
+                    protocol::read_quad_out_3b(self.master(), addr, buf).await
+                }
+            }
+            IoMode::QuadIo => {
+                if use_4byte_native {
+                    protocol::read_quad_io_4b(self.master(), addr, buf).await
+                } else {
+                    protocol::read_quad_io_3b(self.master(), addr, buf).await
+                }
+            }
+            IoMode::Qpi => {
+                // QPI mode requires special handling - fall back to single for now
+                log::warn!("QPI read mode not yet implemented, falling back to single I/O");
+                if use_4byte_native {
+                    protocol::read_4b(self.master(), addr, buf).await
+                } else {
+                    protocol::read_3b(self.master(), addr, buf).await
+                }
+            }
+        };
+
+        // Exit 4-byte mode if we entered it
+        if enter_exit_4byte {
+            if let Err(e) = protocol::exit_4byte_mode(self.master()).await {
+                log::warn!("Failed to exit 4-byte address mode: {}", e);
+            }
         }
+
+        result
     }
 
     async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
@@ -195,7 +260,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             if result.is_err() {
                 // Try to exit 4-byte mode before returning error
                 if use_4byte && !use_native {
-                    let _ = protocol::exit_4byte_mode(self.master()).await;
+                    if let Err(e) = protocol::exit_4byte_mode(self.master()).await {
+                        log::warn!("Failed to exit 4-byte address mode: {}", e);
+                    }
                 }
                 return result;
             }
@@ -270,7 +337,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
             if result.is_err() {
                 if use_4byte && !use_native {
-                    let _ = protocol::exit_4byte_mode(self.master()).await;
+                    if let Err(e) = protocol::exit_4byte_mode(self.master()).await {
+                        log::warn!("Failed to exit 4-byte address mode: {}", e);
+                    }
                 }
                 return result;
             }
@@ -278,7 +347,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             // Verify the block was erased
             if let Err(e) = self.check_erased_range(current_addr, block_size).await {
                 if use_4byte && !use_native {
-                    let _ = protocol::exit_4byte_mode(self.master()).await;
+                    if let Err(exit_e) = protocol::exit_4byte_mode(self.master()).await {
+                        log::warn!("Failed to exit 4-byte address mode: {}", exit_e);
+                    }
                 }
                 return Err(e);
             }
