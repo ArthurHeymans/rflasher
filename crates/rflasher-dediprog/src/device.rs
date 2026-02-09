@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use maybe_async::maybe_async;
 use nusb::transfer::{Buffer, Bulk, In, Out};
 use nusb::{Endpoint, Interface, MaybeFuture};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
@@ -116,8 +117,8 @@ pub struct Dediprog {
     device_string: String,
     /// Protocol version
     protocol: Protocol,
-    /// Current I/O mode
-    io_mode: DpIoMode,
+    /// Current I/O mode (None = unknown/uninitialized, matching flashprog's -1 sentinel)
+    io_mode: Option<DpIoMode>,
     /// Configured maximum I/O mode
     max_io_mode: DpIoMode,
 }
@@ -200,7 +201,7 @@ impl Dediprog {
             firmware_version: 0,
             device_string: String::new(),
             protocol: Protocol::Unknown,
-            io_mode: DpIoMode::Single,
+            io_mode: None,
             max_io_mode: config.io_mode,
         };
 
@@ -349,11 +350,15 @@ impl Dediprog {
     fn read_device_id(&mut self) -> Result<u32> {
         if self.device_type >= DeviceType::SF600PG2 {
             // Newer protocol for SF600PG2/SF700
+            // Always query the id twice as the endpoint can lock up
+            // in mysterious ways otherwise (matches flashprog behavior).
             let out = [0x00, 0x00, 0x00, 0x02, 0x00, 0x00];
-            self.control_write_raw(0x71, 0, 0, &out)?;
-
             let mut buf = [0u8; 512];
-            let len = self.bulk_read(&mut buf)?;
+            let mut len = 0;
+            for _ in 0..2 {
+                self.control_write_raw(0x71, 0, 0, &out)?;
+                len = self.bulk_read(&mut buf)?;
+            }
             if len >= 3 {
                 return Ok((buf[2] as u32) << 16 | (buf[1] as u32) << 8 | (buf[0] as u32));
             }
@@ -479,13 +484,13 @@ impl Dediprog {
             return Ok(());
         }
 
-        if self.io_mode == mode {
+        if self.io_mode == Some(mode) {
             return Ok(());
         }
 
         log::trace!("Setting I/O mode to {:?}", mode);
         self.control_write(Command::IoMode, mode as u16, 0, &[])?;
-        self.io_mode = mode;
+        self.io_mode = Some(mode);
         Ok(())
     }
 
@@ -683,17 +688,711 @@ impl Dediprog {
     pub fn protocol(&self) -> Protocol {
         self.protocol
     }
+
+    // -----------------------------------------------------------------------
+    // Bulk read/write command packet preparation (matches flashprog exactly)
+    // -----------------------------------------------------------------------
+
+    /// Build the common 5-byte header shared by all protocol versions.
+    /// Returns 5 on success, or an error if count exceeds MAX_BLOCK_COUNT.
+    fn prepare_rw_cmd_common(
+        cmd_buf: &mut [u8; MAX_CMD_SIZE],
+        dp_spi_cmd: u8,
+        count: u32,
+    ) -> Result<usize> {
+        if count > MAX_BLOCK_COUNT as u32 {
+            return Err(DediprogError::InvalidParameter(format!(
+                "Unsupported transfer length of {} blocks",
+                count
+            )));
+        }
+        cmd_buf[0] = (count & 0xff) as u8;
+        cmd_buf[1] = ((count >> 8) & 0xff) as u8;
+        cmd_buf[2] = 0; // RFU
+        cmd_buf[3] = dp_spi_cmd; // Read/Write Mode
+        cmd_buf[4] = 0; // "Opcode"
+        Ok(5)
+    }
+
+    /// Protocol V1 command packet: address in wValue/wIndex, 5-byte packet.
+    fn prepare_rw_cmd_v1(
+        cmd_buf: &mut [u8; MAX_CMD_SIZE],
+        dp_spi_cmd: u8,
+        start: u32,
+        block_count: u32,
+    ) -> Result<(usize, u16, u16)> {
+        let cmd_len = Self::prepare_rw_cmd_common(cmd_buf, dp_spi_cmd, block_count)?;
+
+        if start >> 24 != 0 {
+            return Err(DediprogError::InvalidParameter(
+                "Can't handle 4-byte address with dediprog V1 protocol".to_string(),
+            ));
+        }
+
+        let value = (start & 0xffff) as u16;
+        let idx = ((start >> 16) & 0xff) as u16;
+        Ok((cmd_len, value, idx))
+    }
+
+    /// Protocol V2 command packet: address in bytes 6-9, 10-byte packet.
+    fn prepare_rw_cmd_v2(
+        cmd_buf: &mut [u8; MAX_CMD_SIZE],
+        is_read: bool,
+        dp_spi_cmd: u8,
+        start: u32,
+        block_count: u32,
+        read_op: Option<&BulkReadOp>,
+    ) -> Result<(usize, u16, u16)> {
+        Self::prepare_rw_cmd_common(cmd_buf, dp_spi_cmd, block_count)?;
+
+        if is_read {
+            if let Some(op) = read_op {
+                if op.native_4ba {
+                    cmd_buf[3] = ReadMode::FourByteAddrFast0x0C as u8;
+                } else if op.opcode != 0x03 {
+                    // JEDEC_READ = 0x03
+                    cmd_buf[3] = ReadMode::Fast as u8;
+                }
+
+                if op.opcode == 0x13 {
+                    // JEDEC_READ_4BA
+                    cmd_buf[4] = 0x0C; // JEDEC_FAST_READ_4BA
+                } else {
+                    cmd_buf[4] = op.opcode;
+                }
+            }
+        } else {
+            // Write: check for 4BA write support
+            if dp_spi_cmd == WriteMode::PagePgm as u8 {
+                if let Some(op) = read_op {
+                    if op.native_4ba {
+                        cmd_buf[3] = WriteMode::FourByteAddr256BPagePgm0x12 as u8;
+                        cmd_buf[4] = 0x12; // JEDEC_BYTE_PROGRAM_4BA
+                    }
+                }
+            }
+        }
+
+        cmd_buf[5] = 0; // RFU
+        cmd_buf[6] = (start >> 0) as u8;
+        cmd_buf[7] = (start >> 8) as u8;
+        cmd_buf[8] = (start >> 16) as u8;
+        cmd_buf[9] = (start >> 24) as u8;
+
+        Ok((10, 0, 0))
+    }
+
+    /// Protocol V3 command packet: fully configurable, 12 bytes for read, 14 for write.
+    fn prepare_rw_cmd_v3(
+        cmd_buf: &mut [u8; MAX_CMD_SIZE],
+        is_read: bool,
+        dp_spi_cmd: u8,
+        start: u32,
+        block_count: u32,
+        read_op: Option<&BulkReadOp>,
+        in_4ba_mode: bool,
+    ) -> Result<(usize, u16, u16)> {
+        Self::prepare_rw_cmd_common(cmd_buf, dp_spi_cmd, block_count)?;
+
+        cmd_buf[5] = 0; // RFU
+        cmd_buf[6] = (start >> 0) as u8;
+        cmd_buf[7] = (start >> 8) as u8;
+        cmd_buf[8] = (start >> 16) as u8;
+        cmd_buf[9] = (start >> 24) as u8;
+
+        if is_read {
+            let op = read_op.ok_or_else(|| {
+                DediprogError::InvalidParameter("read_op required for V3 read".to_string())
+            })?;
+            cmd_buf[3] = ReadMode::Configurable as u8;
+            cmd_buf[4] = op.opcode;
+            cmd_buf[10] = if op.native_4ba || in_4ba_mode { 4 } else { 3 };
+            cmd_buf[11] = op.dummy_cycles / 2;
+            Ok((12, 0, 0))
+        } else {
+            if dp_spi_cmd == WriteMode::PagePgm as u8 {
+                if let Some(op) = read_op {
+                    if op.native_4ba {
+                        cmd_buf[3] = WriteMode::FourByteAddr256BPagePgm as u8;
+                        cmd_buf[4] = 0x12; // JEDEC_BYTE_PROGRAM_4BA
+                    } else if in_4ba_mode {
+                        cmd_buf[3] = WriteMode::FourByteAddr256BPagePgm as u8;
+                        cmd_buf[4] = 0x02; // JEDEC_BYTE_PROGRAM
+                    }
+                }
+            }
+            // Page size: 256 bytes (little-endian u32)
+            // FIXME: This assumes page size of 256 (same as flashprog).
+            cmd_buf[10] = 0x00;
+            cmd_buf[11] = 0x01;
+            cmd_buf[12] = 0x00;
+            cmd_buf[13] = 0x00;
+            Ok((14, 0, 0))
+        }
+    }
+
+    /// Prepare a read/write command packet, dispatching to the correct protocol version.
+    fn prepare_rw_cmd(
+        &self,
+        is_read: bool,
+        dp_spi_cmd: u8,
+        start: u32,
+        block_count: u32,
+        read_op: Option<&BulkReadOp>,
+        in_4ba_mode: bool,
+    ) -> Result<([u8; MAX_CMD_SIZE], usize, u16, u16)> {
+        let mut cmd_buf = [0u8; MAX_CMD_SIZE];
+        let (len, value, idx) = match self.protocol {
+            Protocol::V1 => Self::prepare_rw_cmd_v1(&mut cmd_buf, dp_spi_cmd, start, block_count)?,
+            Protocol::V2 => Self::prepare_rw_cmd_v2(
+                &mut cmd_buf,
+                is_read,
+                dp_spi_cmd,
+                start,
+                block_count,
+                read_op,
+            )?,
+            Protocol::V3 => Self::prepare_rw_cmd_v3(
+                &mut cmd_buf,
+                is_read,
+                dp_spi_cmd,
+                start,
+                block_count,
+                read_op,
+                in_4ba_mode,
+            )?,
+            Protocol::Unknown => {
+                return Err(DediprogError::FirmwareError(
+                    "Unknown protocol version".to_string(),
+                ));
+            }
+        };
+        Ok((cmd_buf, len, value, idx))
+    }
+
+    // -----------------------------------------------------------------------
+    // Bulk SPI read (async ring buffer, matches flashprog)
+    // -----------------------------------------------------------------------
+
+    /// Bulk read from SPI flash. Both `start` and `len` must be 512-byte aligned.
+    /// Uses async queued bulk IN transfers for maximum throughput.
+    ///
+    /// If `read_op` is provided (for protocol V2/V3), the firmware will use the
+    /// specified opcode, I/O mode, and dummy cycles. Otherwise defaults to
+    /// standard read mode with single I/O.
+    pub fn spi_bulk_read(
+        &mut self,
+        buf: &mut [u8],
+        start: u32,
+        len: u32,
+        read_op: Option<&BulkReadOp>,
+        in_4ba_mode: bool,
+    ) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+
+        let chunksize: u32 = BULK_CHUNK_SIZE as u32;
+        if (start % chunksize) != 0 || (len % chunksize) != 0 {
+            return Err(DediprogError::InvalidParameter(format!(
+                "Unaligned start=0x{:x}, len=0x{:x}",
+                start, len
+            )));
+        }
+
+        let count = len / chunksize;
+
+        // Set IO mode: use read_op's mode if provided, otherwise single
+        if let Some(op) = read_op {
+            self.set_io_mode(op.io_mode)?;
+        } else {
+            self.set_io_mode(DpIoMode::Single)?;
+        }
+
+        let (cmd_buf, cmd_len, value, idx) = self.prepare_rw_cmd(
+            true,
+            ReadMode::Std as u8,
+            start,
+            count,
+            read_op,
+            in_4ba_mode,
+        )?;
+
+        // Send CMD_READ control transfer to initiate the bulk read
+        self.control_write_raw(Command::Read as u8, value, idx, &cmd_buf[..cmd_len])?;
+
+        // Open the IN endpoint for bulk transfers
+        let mut in_ep: Endpoint<Bulk, In> = self
+            .interface
+            .endpoint(self.in_endpoint)
+            .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
+
+        let max_packet_size = in_ep.max_packet_size();
+
+        // Pre-submit up to ASYNC_TRANSFERS parallel IN transfers (ring buffer)
+        let total_chunks = count as usize;
+        let max_pending = ASYNC_TRANSFERS.min(total_chunks);
+
+        let mut queued_idx: usize = 0;
+        let mut finished_idx: usize = 0;
+        let mut error = false;
+
+        // Calculate the request length rounded up to max_packet_size
+        let request_len =
+            (BULK_CHUNK_SIZE + max_packet_size - 1) / max_packet_size * max_packet_size;
+
+        // Initial submission: fill the ring buffer
+        while queued_idx < total_chunks && (queued_idx - finished_idx) < max_pending {
+            let mut transfer_buf = Buffer::new(request_len);
+            transfer_buf.set_requested_len(request_len);
+            in_ep.submit(transfer_buf);
+            queued_idx += 1;
+        }
+
+        // Reap completions and submit new transfers
+        while finished_idx < total_chunks && !error {
+            let completion = match in_ep
+                .wait_next_complete(Duration::from_millis(DEFAULT_TIMEOUT_MS + 7000))
+            {
+                Some(c) => c,
+                None => {
+                    log::error!(
+                        "SPI bulk read timed out at chunk {}/{}",
+                        finished_idx,
+                        total_chunks
+                    );
+                    error = true;
+                    break;
+                }
+            };
+
+            match completion.status {
+                Ok(()) => {
+                    let offset = finished_idx * BULK_CHUNK_SIZE;
+                    let copy_len = BULK_CHUNK_SIZE.min(buf.len() - offset);
+                    buf[offset..offset + copy_len].copy_from_slice(&completion.buffer[..copy_len]);
+                }
+                Err(e) => {
+                    log::error!("SPI bulk read failed at chunk {}: {:?}", finished_idx, e);
+                    error = true;
+                    break;
+                }
+            }
+            finished_idx += 1;
+
+            // Submit next transfer if there are more chunks
+            if queued_idx < total_chunks {
+                let mut transfer_buf = Buffer::new(request_len);
+                transfer_buf.set_requested_len(request_len);
+                in_ep.submit(transfer_buf);
+                queued_idx += 1;
+            }
+        }
+
+        // Drain any remaining pending transfers on error
+        if error {
+            in_ep.cancel_all();
+            while in_ep.pending() > 0 {
+                let _ = in_ep.wait_next_complete(Duration::from_secs(1));
+            }
+            return Err(DediprogError::TransferFailed(
+                "SPI bulk read failed".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Read SPI flash with automatic alignment handling.
+    /// Handles unaligned start/len by using slow (transceive) reads for residue,
+    /// and bulk reads for the aligned middle portion.
+    pub fn spi_read(
+        &mut self,
+        buf: &mut [u8],
+        start: u32,
+        len: u32,
+        read_op: Option<&BulkReadOp>,
+        in_4ba_mode: bool,
+    ) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+
+        let chunksize: u32 = BULK_CHUNK_SIZE as u32;
+        let residue = if start % chunksize != 0 {
+            (len).min(chunksize - (start % chunksize))
+        } else {
+            0
+        };
+
+        self.set_leds(Led::Busy)?;
+
+        // Read unaligned head via slow transceive
+        if residue > 0 {
+            if let Err(e) = self.slow_read(&mut buf[..residue as usize], start, residue, in_4ba_mode) {
+                self.set_leds(Led::Error)?;
+                return Err(e);
+            }
+        }
+
+        // Bulk read the aligned middle
+        let bulk_len = ((len - residue) / chunksize) * chunksize;
+        if bulk_len > 0 {
+            let offset = residue as usize;
+            if let Err(e) = self.spi_bulk_read(
+                &mut buf[offset..offset + bulk_len as usize],
+                start + residue,
+                bulk_len,
+                read_op,
+                in_4ba_mode,
+            ) {
+                self.set_leds(Led::Error)?;
+                return Err(e);
+            }
+        }
+
+        // Read unaligned tail via slow transceive
+        let tail_len = len - residue - bulk_len;
+        if tail_len > 0 {
+            let offset = (residue + bulk_len) as usize;
+            if let Err(e) = self.slow_read(
+                &mut buf[offset..offset + tail_len as usize],
+                start + residue + bulk_len,
+                tail_len,
+                in_4ba_mode,
+            ) {
+                self.set_leds(Led::Error)?;
+                return Err(e);
+            }
+        }
+
+        self.set_leds(Led::Pass)?;
+        Ok(())
+    }
+
+    /// Slow read via individual transceive commands (for unaligned residue).
+    /// Uses 4-byte address commands when `in_4ba_mode` is true.
+    fn slow_read(&mut self, buf: &mut [u8], start: u32, len: u32, in_4ba_mode: bool) -> Result<()> {
+        log::debug!(
+            "Slow read for partial block from 0x{:x}, length 0x{:x}",
+            start,
+            len
+        );
+
+        let max_read = 16; // max_transceive_read
+        let mut offset: u32 = 0;
+        while offset < len {
+            let chunk = ((len - offset) as usize).min(max_read);
+            let addr = start + offset;
+
+            let result = if in_4ba_mode || addr > 0xFFFFFF {
+                // Use 4-byte address read (0x13 = JEDEC_READ_4BA)
+                let cmd_data = [
+                    0x13,
+                    (addr >> 24) as u8,
+                    (addr >> 16) as u8,
+                    (addr >> 8) as u8,
+                    addr as u8,
+                ];
+                self.spi_transceive(&cmd_data, chunk)?
+            } else {
+                // Use standard 3-byte address read (0x03 = JEDEC_READ)
+                let cmd_data = [
+                    0x03,
+                    (addr >> 16) as u8,
+                    (addr >> 8) as u8,
+                    addr as u8,
+                ];
+                self.spi_transceive(&cmd_data, chunk)?
+            };
+
+            buf[offset as usize..offset as usize + chunk].copy_from_slice(&result[..chunk]);
+            offset += chunk as u32;
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Bulk SPI write (synchronous, matches flashprog)
+    // -----------------------------------------------------------------------
+
+    /// Bulk write to SPI flash. Both `start` and `len` must be `chunksize`-byte aligned.
+    /// chunksize must be 256 (page size). Each 256-byte chunk is zero-padded to 512 bytes
+    /// with 0xFF fill, matching flashprog behavior.
+    pub fn spi_bulk_write(
+        &mut self,
+        buf: &[u8],
+        chunksize: u32,
+        start: u32,
+        len: u32,
+        write_mode: u8,
+        in_4ba_mode: bool,
+    ) -> Result<()> {
+        if chunksize != 256 {
+            return Err(DediprogError::InvalidParameter(format!(
+                "Chunk sizes other than 256 bytes are unsupported, chunksize={}",
+                chunksize
+            )));
+        }
+
+        if len == 0 {
+            return Ok(());
+        }
+
+        if (start % chunksize) != 0 || (len % chunksize) != 0 {
+            return Err(DediprogError::InvalidParameter(format!(
+                "Unaligned start=0x{:x}, len=0x{:x}",
+                start, len
+            )));
+        }
+
+        let count = len / chunksize;
+
+        // Writes always use single I/O mode
+        self.set_io_mode(DpIoMode::Single)?;
+
+        let (cmd_buf, cmd_len, value, idx) =
+            self.prepare_rw_cmd(false, write_mode, start, count, None, in_4ba_mode)?;
+
+        // Send CMD_WRITE control transfer to initiate the bulk write
+        self.control_write_raw(Command::Write as u8, value, idx, &cmd_buf[..cmd_len])?;
+
+        // Open the OUT endpoint for bulk transfers
+        let mut out_ep: Endpoint<Bulk, Out> = self
+            .interface
+            .endpoint(self.out_endpoint)
+            .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
+
+        // Write each chunk: 256 bytes of data + 256 bytes of 0xFF padding = 512 bytes
+        for i in 0..count as usize {
+            let mut usbbuf = Buffer::new(BULK_CHUNK_SIZE);
+            let data_offset = i * chunksize as usize;
+            let data_end = data_offset + chunksize as usize;
+            usbbuf.extend_from_slice(&buf[data_offset..data_end]);
+            // Pad remaining bytes with 0xFF
+            let padding = BULK_CHUNK_SIZE - chunksize as usize;
+            usbbuf.extend_fill(padding, 0xFF);
+
+            let completion = out_ep.transfer_blocking(usbbuf, Duration::from_secs(5));
+            match completion.status {
+                Ok(()) if completion.actual_len == BULK_CHUNK_SIZE => {}
+                Ok(()) => {
+                    return Err(DediprogError::TransferFailed(format!(
+                        "SPI bulk write short transfer: expected {}, got {}",
+                        BULK_CHUNK_SIZE, completion.actual_len
+                    )));
+                }
+                Err(e) => {
+                    return Err(DediprogError::TransferFailed(format!(
+                        "SPI bulk write failed at chunk {}: {:?}",
+                        i, e
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Write SPI flash using standard page program (256-byte pages).
+    /// Handles alignment and splits large writes that exceed MAX_BLOCK_COUNT pages.
+    pub fn spi_write_256(
+        &mut self,
+        buf: &[u8],
+        start: u32,
+        len: u32,
+        in_4ba_mode: bool,
+    ) -> Result<()> {
+        self.spi_write_chunked(buf, start, len, WriteMode::PagePgm as u8, in_4ba_mode)
+    }
+
+    /// Write SPI flash using AAI (Auto Address Increment) mode for SST chips.
+    pub fn spi_write_aai(
+        &mut self,
+        buf: &[u8],
+        start: u32,
+        len: u32,
+        in_4ba_mode: bool,
+    ) -> Result<()> {
+        self.spi_write_chunked(buf, start, len, WriteMode::TwoByteAai as u8, in_4ba_mode)
+    }
+
+    /// Chunked write: splits writes exceeding page_size * MAX_BLOCK_COUNT.
+    fn spi_write_chunked(
+        &mut self,
+        buf: &[u8],
+        mut start: u32,
+        mut len: u32,
+        write_mode: u8,
+        in_4ba_mode: bool,
+    ) -> Result<()> {
+        let page_size: u32 = 256;
+        let max_per_op = page_size * MAX_BLOCK_COUNT as u32;
+        let mut offset: usize = 0;
+
+        while len > 0 {
+            let len_here = len.min(max_per_op);
+            self.spi_write_single(
+                &buf[offset..offset + len_here as usize],
+                start,
+                len_here,
+                write_mode,
+                in_4ba_mode,
+            )?;
+            start += len_here;
+            offset += len_here as usize;
+            len -= len_here;
+        }
+        Ok(())
+    }
+
+    /// Write SPI flash with alignment handling (single operation, bounded by MAX_BLOCK_COUNT).
+    fn spi_write_single(
+        &mut self,
+        buf: &[u8],
+        start: u32,
+        len: u32,
+        write_mode: u8,
+        in_4ba_mode: bool,
+    ) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+
+        let chunksize: u32 = 256; // page size
+        let residue = if start % chunksize != 0 {
+            (chunksize - (start % chunksize)).min(len)
+        } else {
+            0
+        };
+
+        self.set_leds(Led::Busy)?;
+
+        // Write unaligned head via slow (transceive-based) writes
+        if residue > 0 {
+            if let Err(e) = self.slow_write(&buf[..residue as usize], start, residue, in_4ba_mode)
+            {
+                self.set_leds(Led::Error)?;
+                return Err(e);
+            }
+        }
+
+        // Bulk write the aligned middle
+        let bulk_len = ((len - residue) / chunksize) * chunksize;
+        if bulk_len > 0 {
+            let offset = residue as usize;
+            if let Err(e) = self.spi_bulk_write(
+                &buf[offset..offset + bulk_len as usize],
+                chunksize,
+                start + residue,
+                bulk_len,
+                write_mode,
+                in_4ba_mode,
+            ) {
+                self.set_leds(Led::Error)?;
+                return Err(e);
+            }
+        }
+
+        // Write unaligned tail via slow writes
+        let tail_len = len - residue - bulk_len;
+        if tail_len > 0 {
+            let offset = (residue + bulk_len) as usize;
+            if let Err(e) = self.slow_write(
+                &buf[offset..offset + tail_len as usize],
+                start + residue + bulk_len,
+                tail_len,
+                in_4ba_mode,
+            ) {
+                self.set_leds(Led::Error)?;
+                return Err(e);
+            }
+        }
+
+        self.set_leds(Led::Pass)?;
+        Ok(())
+    }
+
+    /// Slow write via individual transceive commands (for unaligned residue).
+    /// Implements page-program in max_write_len-byte chunks via WREN + PP + WIP polling.
+    /// Uses 4-byte address commands when `in_4ba_mode` is true.
+    fn slow_write(&mut self, buf: &[u8], start: u32, len: u32, in_4ba_mode: bool) -> Result<()> {
+        use rflasher_core::spi::opcodes;
+
+        log::debug!(
+            "Slow write for partial block from 0x{:x}, length 0x{:x}",
+            start,
+            len
+        );
+
+        let use_4ba = in_4ba_mode || start.checked_add(len).is_none_or(|end| end > 0xFFFFFF);
+        // 4BA commands use 5-byte header (opcode + 4 addr), 3BA uses 4-byte header
+        let header_len: usize = if use_4ba { 5 } else { 4 };
+        let max_write = 16 - header_len; // max_data_write = MAX_CMD_SIZE - header
+
+        let mut offset: u32 = 0;
+        while offset < len {
+            let chunk = ((len - offset) as usize).min(max_write);
+            let addr = start + offset;
+
+            // Send WREN
+            let wren = [opcodes::WREN];
+            self.spi_transceive(&wren, 0)?;
+
+            // Send Page Program with address + data
+            let mut cmd_data = vec![0u8; header_len + chunk];
+            if use_4ba {
+                cmd_data[0] = opcodes::PP_4B; // 0x12 = JEDEC_BYTE_PROGRAM_4BA
+                cmd_data[1] = (addr >> 24) as u8;
+                cmd_data[2] = (addr >> 16) as u8;
+                cmd_data[3] = (addr >> 8) as u8;
+                cmd_data[4] = addr as u8;
+                cmd_data[5..5 + chunk]
+                    .copy_from_slice(&buf[offset as usize..offset as usize + chunk]);
+            } else {
+                cmd_data[0] = opcodes::PP; // 0x02 = JEDEC_BYTE_PROGRAM
+                cmd_data[1] = (addr >> 16) as u8;
+                cmd_data[2] = (addr >> 8) as u8;
+                cmd_data[3] = addr as u8;
+                cmd_data[4..4 + chunk]
+                    .copy_from_slice(&buf[offset as usize..offset as usize + chunk]);
+            }
+            self.spi_transceive(&cmd_data, 0)?;
+
+            // Poll WIP (Write In Progress) bit with timeout
+            // Typical page program is <5ms; 5 seconds is extremely generous.
+            let wip_deadline =
+                std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let rdsr = [opcodes::RDSR];
+                let status = self.spi_transceive(&rdsr, 1)?;
+                if status[0] & opcodes::SR1_WIP == 0 {
+                    break;
+                }
+                if std::time::Instant::now() >= wip_deadline {
+                    return Err(DediprogError::TransferFailed(
+                        "Timed out waiting for flash WIP to clear".to_string(),
+                    ));
+                }
+                std::thread::sleep(Duration::from_micros(50));
+            }
+
+            offset += chunk as u32;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Dediprog {
     fn drop(&mut self) {
-        // Reset I/O mode
+        // Reset I/O mode to single
         let _ = self.set_io_mode(DpIoMode::Single);
         // Turn off voltage
         let _ = self.set_voltage(0);
     }
 }
 
+#[maybe_async(AFIT)]
 impl SpiMaster for Dediprog {
     fn features(&self) -> SpiFeatures {
         let mut features = SpiFeatures::empty();
@@ -745,7 +1444,7 @@ impl SpiMaster for Dediprog {
         16 - 5
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         // Check I/O mode support
         check_io_mode_supported(cmd.io_mode, self.features())?;
 
@@ -766,7 +1465,7 @@ impl SpiMaster for Dediprog {
         Ok(())
     }
 
-    fn delay_us(&mut self, us: u32) {
+    async fn delay_us(&mut self, us: u32) {
         std::thread::sleep(Duration::from_micros(us as u64));
     }
 }

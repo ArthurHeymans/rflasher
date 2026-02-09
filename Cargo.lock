@@ -2960,6 +2960,7 @@ version = "0.1.0"
 dependencies = [
  "futures-lite",
  "log",
+ "maybe-async",
  "nusb",
  "rflasher-core",
 ]

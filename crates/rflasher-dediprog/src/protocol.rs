@@ -386,6 +386,22 @@ pub fn parse_voltage(s: &str) -> Option<u16> {
     None
 }
 
+/// Parameters describing a bulk read operation for protocol V2/V3 command packets.
+///
+/// Higher-level code provides this to influence the read mode, opcode, dummy cycles,
+/// and 4-byte address handling in the command packet sent to the dediprog firmware.
+#[derive(Debug, Clone, Copy)]
+pub struct BulkReadOp {
+    /// SPI read opcode (e.g., 0x03 for READ, 0x0B for FAST_READ, 0x3B for DOR, etc.)
+    pub opcode: u8,
+    /// Whether this opcode natively uses 4-byte addresses (e.g., 0x13, 0x0C)
+    pub native_4ba: bool,
+    /// Number of dummy cycles required by this read command
+    pub dummy_cycles: u8,
+    /// I/O mode to use for this read (maps to CMD_IO_MODE)
+    pub io_mode: DpIoMode,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

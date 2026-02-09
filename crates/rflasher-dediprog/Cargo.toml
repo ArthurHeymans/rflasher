@@ -13,4 +13,5 @@ std = ["rflasher-core/std", "nusb", "futures-lite"]
 rflasher-core.workspace = true
 nusb = { workspace = true, optional = true }
 futures-lite = { version = "2", optional = true }
+maybe-async.workspace = true
 log.workspace = true
