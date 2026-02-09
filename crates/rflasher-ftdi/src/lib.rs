@@ -118,7 +118,7 @@ pub use error::{FtdiError, Result};
 // rs-ftdi backend (native sync or wasm async)
 #[cfg(any(feature = "native", feature = "wasm"))]
 pub use rsftdi_device::Ftdi;
-#[cfg(all(feature = "native", not(feature = "wasm")))]
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 pub use rsftdi_device::{parse_options, FtdiDeviceInfo};
 #[cfg(any(feature = "native", feature = "wasm"))]
 pub use rsftdi_error::{FtdiError, Result};

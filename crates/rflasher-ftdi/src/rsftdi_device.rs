@@ -54,7 +54,7 @@ fn map_interface(iface: FtdiInterface) -> rs_ftdi::Interface {
 // Native-only methods (device enumeration, sync open, Drop)
 // ---------------------------------------------------------------------------
 
-#[cfg(all(feature = "native", not(feature = "wasm")))]
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 impl Ftdi {
     /// Open an FTDI device with the given configuration
     pub fn open(config: &FtdiConfig) -> Result<Self> {
@@ -158,7 +158,7 @@ impl Drop for Ftdi {
 // WASM-only methods (WebUSB device picker, async open, shutdown)
 // ---------------------------------------------------------------------------
 
-#[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 impl Ftdi {
     /// Request an FTDI device via the WebUSB permission prompt
     ///
@@ -485,7 +485,7 @@ impl SpiMaster for Ftdi {
 // ---------------------------------------------------------------------------
 
 /// Information about a connected FTDI device
-#[cfg(all(feature = "native", not(feature = "wasm")))]
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 #[derive(Debug, Clone)]
 pub struct FtdiDeviceInfo {
     /// USB bus number
@@ -504,7 +504,7 @@ pub struct FtdiDeviceInfo {
     pub serial: Option<String>,
 }
 
-#[cfg(all(feature = "native", not(feature = "wasm")))]
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 impl std::fmt::Display for FtdiDeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -527,7 +527,7 @@ impl std::fmt::Display for FtdiDeviceInfo {
 /// Parse programmer options from a string
 ///
 /// Format: "type=<type>,port=<A|B|C|D>,divisor=<N>,serial=<serial>,gpiol0=<H|L|C>"
-#[cfg(all(feature = "native", not(feature = "wasm")))]
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 pub fn parse_options(options: &[(&str, &str)]) -> Result<FtdiConfig> {
     let mut config = FtdiConfig::default();
 
