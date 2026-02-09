@@ -3,6 +3,18 @@
 //! This crate provides support for FTDI-based SPI programmers using
 //! the MPSSE engine (FT2232H, FT4232H, FT232H, etc.).
 //!
+//! # Backends
+//!
+//! Three backends are available:
+//!
+//! - **`std`** (default): Uses libftdi1 C bindings (`ftdi` crate)
+//! - **`native`**: Pure-Rust `rs-ftdi` backend (backed by `nusb`)
+//! - **`wasm`**: WebUSB backend using `nusb` + `maybe_async` for browser use
+//!
+//! Uses `maybe_async` to support both sync and async modes (native + wasm):
+//! - With `is_sync` feature (native CLI): blocking/synchronous
+//! - Without `is_sync` (WASM): async with WebUSB
+//!
 //! # Supported Devices
 //!
 //! - FTDI FT2232H (dual channel, 60 MHz)
@@ -75,34 +87,50 @@
 //! | 20      | 3 MHz     |
 //! | 60      | 1 MHz     |
 
-#![cfg_attr(not(any(feature = "std", feature = "native")), no_std)]
+#![cfg_attr(not(any(feature = "std", feature = "native", feature = "wasm")), no_std)]
 
 // libftdi1 C backend (default `std` feature)
-#[cfg(all(feature = "std", not(feature = "native")))]
+#[cfg(all(feature = "std", not(feature = "native"), not(feature = "wasm")))]
 mod device;
-#[cfg(all(feature = "std", not(feature = "native")))]
+#[cfg(all(feature = "std", not(feature = "native"), not(feature = "wasm")))]
 mod error;
 
 // Pure-Rust rs-ftdi backend (`native` feature)
-#[cfg(feature = "native")]
+#[cfg(all(feature = "native", not(feature = "wasm")))]
 mod native_device;
-#[cfg(feature = "native")]
+#[cfg(all(feature = "native", not(feature = "wasm")))]
 mod native_error;
 
-// Protocol constants are shared by both backends
-#[cfg(any(feature = "std", feature = "native"))]
+// WASM/WebUSB backend (`wasm` feature) - uses nusb directly with maybe_async
+#[cfg(feature = "wasm")]
+mod wasm_device;
+#[cfg(feature = "wasm")]
+mod wasm_error;
+
+// Protocol constants are shared by all backends
+#[cfg(any(feature = "std", feature = "native", feature = "wasm"))]
 mod protocol;
 
 // Re-exports: same public API regardless of backend
-#[cfg(all(feature = "std", not(feature = "native")))]
-pub use device::{parse_options, Ftdi, FtdiConfig, FtdiDeviceInfo};
-#[cfg(all(feature = "std", not(feature = "native")))]
+#[cfg(all(feature = "std", not(feature = "native"), not(feature = "wasm")))]
+pub use device::{parse_options, Ftdi, FtdiDeviceInfo};
+#[cfg(all(feature = "std", not(feature = "native"), not(feature = "wasm")))]
 pub use error::{FtdiError, Result};
 
-#[cfg(feature = "native")]
-pub use native_device::{parse_options, Ftdi, FtdiConfig, FtdiDeviceInfo};
-#[cfg(feature = "native")]
+#[cfg(all(feature = "native", not(feature = "wasm")))]
+pub use native_device::{parse_options, Ftdi, FtdiDeviceInfo};
+#[cfg(all(feature = "native", not(feature = "wasm")))]
 pub use native_error::{FtdiError, Result};
 
-#[cfg(any(feature = "std", feature = "native"))]
-pub use protocol::{FtdiDeviceType, FtdiInterface, SUPPORTED_DEVICES};
+#[cfg(feature = "wasm")]
+pub use wasm_device::Ftdi;
+#[cfg(feature = "wasm")]
+pub use wasm_error::{FtdiError, Result};
+
+// parse_options is only available in native/std mode (not wasm)
+// In WASM, the UI provides configuration directly
+
+// FtdiConfig, FtdiDeviceType, FtdiInterface, and SUPPORTED_DEVICES are
+// shared across all backends and live in the protocol module.
+#[cfg(any(feature = "std", feature = "native", feature = "wasm"))]
+pub use protocol::{FtdiConfig, FtdiDeviceType, FtdiInterface, SUPPORTED_DEVICES};

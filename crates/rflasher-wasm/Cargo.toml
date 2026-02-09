@@ -18,6 +18,7 @@ rflasher-core = { path = "../rflasher-core", default-features = false, features 
 rflasher-serprog = { path = "../rflasher-serprog", default-features = false, features = ["std", "wasm"] }
 rflasher-ch341a = { path = "../rflasher-ch341a", default-features = false, features = ["wasm"] }
 rflasher-ch347 = { path = "../rflasher-ch347", default-features = false, features = ["wasm"] }
+rflasher-ftdi = { path = "../rflasher-ftdi", default-features = false, features = ["wasm"] }
 
 # GUI
 eframe = { version = "0.33", default-features = false, features = [

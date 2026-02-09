@@ -1,4 +1,4 @@
-//! Error types for FTDI programmer
+//! Error types for FTDI programmer (WASM/WebUSB backend)
 
 use std::fmt;
 
@@ -32,9 +32,6 @@ pub enum FtdiError {
     /// Invalid parameter
     InvalidParameter(String),
 
-    /// libftdi error
-    LibFtdi(String),
-
     /// USB enumeration error
     UsbError(String),
 }
@@ -50,7 +47,6 @@ impl fmt::Display for FtdiError {
             FtdiError::InvalidDeviceType(s) => write!(f, "Invalid device type: {}", s),
             FtdiError::InvalidChannel(s) => write!(f, "Invalid channel: {}", s),
             FtdiError::InvalidParameter(s) => write!(f, "Invalid parameter: {}", s),
-            FtdiError::LibFtdi(s) => write!(f, "libftdi error: {}", s),
             FtdiError::UsbError(s) => write!(f, "USB error: {}", s),
         }
     }
@@ -61,12 +57,6 @@ impl std::error::Error for FtdiError {}
 impl From<nusb::Error> for FtdiError {
     fn from(e: nusb::Error) -> Self {
         FtdiError::UsbError(e.to_string())
-    }
-}
-
-impl From<ftdi::Error> for FtdiError {
-    fn from(e: ftdi::Error) -> Self {
-        FtdiError::LibFtdi(e.to_string())
     }
 }
 

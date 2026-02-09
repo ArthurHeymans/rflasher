@@ -69,3 +69,9 @@ impl From<rs_ftdi::Error> for FtdiError {
         FtdiError::NativeFtdi(e.to_string())
     }
 }
+
+impl From<String> for FtdiError {
+    fn from(s: String) -> Self {
+        FtdiError::InvalidParameter(s)
+    }
+}
