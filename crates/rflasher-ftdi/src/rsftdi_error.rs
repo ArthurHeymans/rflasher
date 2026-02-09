@@ -1,4 +1,4 @@
-//! Error types for FTDI programmer
+//! Error types for FTDI programmer (rs-ftdi backend, shared by native and wasm)
 
 use std::fmt;
 
@@ -32,8 +32,8 @@ pub enum FtdiError {
     /// Invalid parameter
     InvalidParameter(String),
 
-    /// libftdi error
-    LibFtdi(String),
+    /// rs-ftdi error
+    RsFtdi(String),
 
     /// USB enumeration error
     UsbError(String),
@@ -50,7 +50,7 @@ impl fmt::Display for FtdiError {
             FtdiError::InvalidDeviceType(s) => write!(f, "Invalid device type: {}", s),
             FtdiError::InvalidChannel(s) => write!(f, "Invalid channel: {}", s),
             FtdiError::InvalidParameter(s) => write!(f, "Invalid parameter: {}", s),
-            FtdiError::LibFtdi(s) => write!(f, "libftdi error: {}", s),
+            FtdiError::RsFtdi(s) => write!(f, "rs-ftdi error: {}", s),
             FtdiError::UsbError(s) => write!(f, "USB error: {}", s),
         }
     }
@@ -58,15 +58,9 @@ impl fmt::Display for FtdiError {
 
 impl std::error::Error for FtdiError {}
 
-impl From<nusb::Error> for FtdiError {
-    fn from(e: nusb::Error) -> Self {
-        FtdiError::UsbError(e.to_string())
-    }
-}
-
-impl From<ftdi::Error> for FtdiError {
-    fn from(e: ftdi::Error) -> Self {
-        FtdiError::LibFtdi(e.to_string())
+impl From<rs_ftdi::Error> for FtdiError {
+    fn from(e: rs_ftdi::Error) -> Self {
+        FtdiError::RsFtdi(e.to_string())
     }
 }
 

@@ -594,3 +594,168 @@ pub fn get_device_info(vid: u16, pid: u16) -> Option<&'static SupportedDevice> {
         .iter()
         .find(|d| d.vendor_id == vid && d.product_id == pid)
 }
+
+// ============================================================================
+// FTDI configuration
+// ============================================================================
+
+/// Configuration for opening an FTDI device
+///
+/// This struct is shared across all backends (std/libftdi1, native/rs-ftdi,
+/// and wasm/WebUSB). Validation methods return `Result<Self, String>` so
+/// they are error-type-agnostic.
+#[derive(Debug, Clone)]
+pub struct FtdiConfig {
+    /// Device type (determines VID/PID and pin configuration)
+    pub device_type: FtdiDeviceType,
+    /// Interface/channel to use (A, B, C, D)
+    pub interface: FtdiInterface,
+    /// Clock divisor (2-65534, must be even)
+    /// SPI clock = base_clock / divisor
+    /// Base clock is 60 MHz for 'H' devices
+    pub divisor: u16,
+    /// CS pin bits (which pins are CS)
+    pub cs_bits: u8,
+    /// Auxiliary bits (extra pins to set high)
+    pub aux_bits: u8,
+    /// Pin direction (which pins are outputs)
+    pub pindir: u8,
+    /// High-byte pin direction
+    pub pindir_high: u8,
+    /// High-byte auxiliary bits
+    pub aux_bits_high: u8,
+    /// USB serial number filter (optional, used by native/std backends)
+    pub serial: Option<String>,
+    /// USB description filter (optional, used by native/std backends)
+    pub description: Option<String>,
+}
+
+impl Default for FtdiConfig {
+    fn default() -> Self {
+        let device_type = FtdiDeviceType::default();
+        FtdiConfig {
+            device_type,
+            interface: FtdiInterface::default(),
+            divisor: device_type.default_divisor(),
+            cs_bits: device_type.default_cs_bits(),
+            aux_bits: device_type.default_aux_bits(),
+            pindir: device_type.default_pindir(),
+            pindir_high: device_type.default_pindir_high(),
+            aux_bits_high: 0,
+            serial: None,
+            description: None,
+        }
+    }
+}
+
+impl FtdiConfig {
+    /// Create a new config for a specific device type
+    pub fn for_device(device_type: FtdiDeviceType) -> Self {
+        FtdiConfig {
+            device_type,
+            interface: FtdiInterface::default(),
+            divisor: device_type.default_divisor(),
+            cs_bits: device_type.default_cs_bits(),
+            aux_bits: device_type.default_aux_bits(),
+            pindir: device_type.default_pindir(),
+            pindir_high: device_type.default_pindir_high(),
+            aux_bits_high: 0,
+            serial: None,
+            description: None,
+        }
+    }
+
+    /// Set the interface/channel
+    ///
+    /// Returns `Err` if the channel is not available on this device type.
+    pub fn interface(mut self, interface: FtdiInterface) -> core::result::Result<Self, String> {
+        let max_channel = self.device_type.channel_count();
+        if interface.index() >= max_channel {
+            return Err(format!(
+                "Channel {} not available on {} (max: {})",
+                interface.letter(),
+                self.device_type.name(),
+                (b'A' + max_channel - 1) as char
+            ));
+        }
+        self.interface = interface;
+        Ok(self)
+    }
+
+    /// Set the clock divisor
+    ///
+    /// Returns `Err` if the divisor is invalid (must be even, between 2 and 65534).
+    pub fn divisor(mut self, divisor: u16) -> core::result::Result<Self, String> {
+        if divisor < 2 || !divisor.is_multiple_of(2) {
+            return Err(format!(
+                "Invalid divisor {}: must be even, between 2 and 65534",
+                divisor
+            ));
+        }
+        self.divisor = divisor;
+        Ok(self)
+    }
+
+    /// Set a GPIOL pin mode
+    ///
+    /// `pin` is 0-3 (GPIOL0-GPIOL3)
+    /// `mode` is 'H' (high output), 'L' (low output), 'C' (CS output), or 'I' (input)
+    pub fn gpiol(mut self, pin: u8, mode: char) -> core::result::Result<Self, String> {
+        if pin > 3 {
+            return Err(format!("Invalid GPIOL pin {}: must be 0-3", pin));
+        }
+
+        let reserved = self.device_type.default_pindir() & 0xF0;
+        let bit = 1 << (pin + 4);
+        if reserved & bit != 0 {
+            return Err(format!(
+                "GPIOL{} is reserved on {}",
+                pin,
+                self.device_type.name()
+            ));
+        }
+
+        match mode.to_ascii_uppercase() {
+            'H' => {
+                self.aux_bits |= bit;
+                self.pindir |= bit;
+            }
+            'L' => {
+                self.aux_bits &= !bit;
+                self.pindir |= bit;
+            }
+            'C' => {
+                self.cs_bits |= bit;
+                self.pindir |= bit;
+            }
+            'I' => {
+                self.aux_bits &= !bit;
+                self.cs_bits &= !bit;
+                self.pindir &= !bit;
+            }
+            _ => {
+                return Err(format!(
+                    "Invalid GPIOL mode '{}': must be H, L, C, or I",
+                    mode
+                ));
+            }
+        }
+
+        Ok(self)
+    }
+
+    /// Calculate the SPI clock frequency in MHz
+    pub fn spi_clock_mhz(&self) -> f64 {
+        let base_clock = if self.device_type.is_high_speed() {
+            60.0
+        } else {
+            12.0
+        };
+        base_clock / self.divisor as f64
+    }
+
+    /// Get the FTDI interface index (1-based for USB control requests)
+    pub fn usb_interface_index(&self) -> u16 {
+        self.interface.index() as u16 + 1
+    }
+}

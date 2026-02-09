@@ -520,11 +520,13 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     }
 
     // Build erase blocks from SFDP data
+    // Each erase type covers the entire chip uniformly, so count = total_size / block_size
+    let total_size = params.density_bytes as u32;
     let mut erase_blocks: Vec<EraseBlock> = params
         .erase_types
         .iter()
         .filter(|et| et.is_valid())
-        .map(|et| EraseBlock::new(et.opcode, et.size))
+        .map(|et| EraseBlock::with_count(et.opcode, et.size, total_size / et.size))
         .collect();
 
     // Sort by size (smallest first)

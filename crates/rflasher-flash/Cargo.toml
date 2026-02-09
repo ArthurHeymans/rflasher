@@ -26,7 +26,7 @@ default = ["std", "is_sync"]
 std = ["rflasher-core/std"]
 alloc = ["rflasher-core/alloc"]
 # Sync mode - when enabled, all programmer code is synchronous
-is_sync = ["rflasher-core/is_sync", "rflasher-serprog?/is_sync", "rflasher-ch341a?/is_sync", "rflasher-ch347?/is_sync"]
+is_sync = ["rflasher-core/is_sync", "rflasher-serprog?/is_sync", "rflasher-ch341a?/is_sync", "rflasher-ch347?/is_sync", "rflasher-ftdi?/is_sync"]
 
 # Programmer features
 dummy = ["dep:rflasher-dummy"]
@@ -35,6 +35,8 @@ ch347 = ["dep:rflasher-ch347"]
 dediprog = ["dep:rflasher-dediprog"]
 serprog = ["dep:rflasher-serprog"]
 ftdi = ["dep:rflasher-ftdi"]
+# Use pure-Rust rs-ftdi backend for FTDI MPSSE (instead of C libftdi1)
+ftdi-native = ["dep:rflasher-ftdi", "rflasher-ftdi/native"]
 ft4222 = ["dep:rflasher-ft4222"]
 linux-spi = ["dep:rflasher-linux-spi"]
 linux-mtd = ["dep:rflasher-linux-mtd"]

@@ -9,6 +9,7 @@ use rflasher_ch347::{Ch347, SpiSpeed};
 use rflasher_core::chip::{ChipDatabase, FlashChip};
 use rflasher_core::flash::unified::{smart_write, WriteProgress, WriteStats};
 use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult, SpiFlashDevice};
+use rflasher_ftdi::{Ftdi, FtdiConfig, FtdiDeviceType, FtdiInterface};
 use rflasher_serprog::Serprog;
 
 use crate::transport::WebSerialTransport;
@@ -44,6 +45,8 @@ enum ProgrammerType {
     Ch341a,
     /// CH347 via WebUSB
     Ch347,
+    /// FTDI MPSSE via WebUSB (FT2232H, FT4232H, FT232H, etc.)
+    Ftdi,
 }
 
 impl ProgrammerType {
@@ -52,20 +55,26 @@ impl ProgrammerType {
             ProgrammerType::Serprog => "serprog (WebSerial)",
             ProgrammerType::Ch341a => "CH341A (WebUSB)",
             ProgrammerType::Ch347 => "CH347 (WebUSB)",
+            ProgrammerType::Ftdi => "FTDI MPSSE (WebUSB)",
         }
     }
 
     /// Whether this programmer uses WebUSB (vs WebSerial)
     fn is_webusb(&self) -> bool {
-        matches!(self, ProgrammerType::Ch341a | ProgrammerType::Ch347)
+        matches!(
+            self,
+            ProgrammerType::Ch341a | ProgrammerType::Ch347 | ProgrammerType::Ftdi
+        )
     }
 }
 
-/// Connected programmer - wraps a serprog, CH341A, or CH347 device
+/// Connected programmer - wraps a serprog, CH341A, CH347, or FTDI device
+#[allow(clippy::large_enum_variant)]
 enum Programmer {
     Serprog(Serprog<WebSerialTransport>),
     Ch341a(Ch341a),
     Ch347(Ch347),
+    Ftdi(Ftdi),
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +107,11 @@ macro_rules! with_programmer {
             Programmer::Ch347(mut $name) => {
                 let result = $body;
                 $shared.borrow_mut().programmer = Some(Programmer::Ch347($name));
+                result
+            }
+            Programmer::Ftdi(mut $name) => {
+                let result = $body;
+                $shared.borrow_mut().programmer = Some(Programmer::Ftdi($name));
                 result
             }
         }
@@ -314,6 +328,12 @@ pub struct RflasherApp {
     programmer_type: ProgrammerType,
     /// Selected SPI speed for CH347
     spi_speed: SpiSpeed,
+    /// Selected FTDI device type
+    ftdi_device_type: FtdiDeviceType,
+    /// Selected FTDI interface/channel
+    ftdi_interface: FtdiInterface,
+    /// Selected FTDI clock divisor
+    ftdi_divisor: u16,
     /// Chip database
     chip_db: ChipDatabase,
     /// Detected chip info
@@ -436,6 +456,9 @@ impl Default for RflasherApp {
             baud_rate: 115200,
             programmer_type: ProgrammerType::Serprog,
             spi_speed: SpiSpeed::default(),
+            ftdi_device_type: FtdiDeviceType::default(),
+            ftdi_interface: FtdiInterface::default(),
+            ftdi_divisor: 2,
             chip_db: ChipDatabase::new(),
             chip_info: None,
             ctx: None,
@@ -622,6 +645,7 @@ impl RflasherApp {
             ProgrammerType::Serprog => self.spawn_connect_serprog(),
             ProgrammerType::Ch341a => self.spawn_connect_ch341a(),
             ProgrammerType::Ch347 => self.spawn_connect_ch347(),
+            ProgrammerType::Ftdi => self.spawn_connect_ftdi(),
         }
     }
 
@@ -762,6 +786,68 @@ impl RflasherApp {
         });
     }
 
+    fn spawn_connect_ftdi(&mut self) {
+        let shared = self.shared.clone();
+        let ctx = self.ctx.clone();
+        let config = FtdiConfig::for_device(self.ftdi_device_type);
+        // Apply user-selected interface and divisor
+        let config = match config.interface(self.ftdi_interface) {
+            Ok(c) => c,
+            Err(e) => {
+                self.status.error(format!("Invalid FTDI config: {}", e));
+                return;
+            }
+        };
+        let config = match config.divisor(self.ftdi_divisor) {
+            Ok(c) => c,
+            Err(e) => {
+                self.status.error(format!("Invalid FTDI config: {}", e));
+                return;
+            }
+        };
+
+        self.connection = ConnectionState::Connecting;
+        self.status.info("Requesting FTDI device via WebUSB...");
+
+        wasm_bindgen_futures::spawn_local(async move {
+            shared.borrow_mut().busy = true;
+
+            match Ftdi::request_device().await {
+                Ok(device_info) => match Ftdi::open(device_info, &config).await {
+                    Ok(ftdi) => {
+                        let name = format!(
+                            "{} ch {}",
+                            config.device_type.name(),
+                            config.interface.letter()
+                        );
+                        let mut state = shared.borrow_mut();
+                        state.programmer = Some(Programmer::Ftdi(ftdi));
+                        state.messages.push(AsyncMessage::Connected {
+                            programmer_name: name,
+                        });
+                    }
+                    Err(e) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                    }
+                },
+                Err(e) => {
+                    shared
+                        .borrow_mut()
+                        .messages
+                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                }
+            }
+
+            shared.borrow_mut().busy = false;
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+    }
+
     fn spawn_disconnect(&mut self) {
         let shared = self.shared.clone();
 
@@ -781,6 +867,9 @@ impl RflasherApp {
                     }
                     Programmer::Ch347(mut ch347) => {
                         ch347.shutdown().await;
+                    }
+                    Programmer::Ftdi(mut ftdi) => {
+                        ftdi.shutdown().await;
                     }
                 }
 
@@ -1269,6 +1358,11 @@ impl RflasherApp {
                         ProgrammerType::Ch347,
                         ProgrammerType::Ch347.label(),
                     );
+                    ui.selectable_value(
+                        &mut self.programmer_type,
+                        ProgrammerType::Ftdi,
+                        ProgrammerType::Ftdi.label(),
+                    );
                 });
         });
 
@@ -1310,6 +1404,104 @@ impl RflasherApp {
             });
             if connected {
                 ui.label("Reconnect to change SPI speed");
+            }
+        }
+
+        // FTDI settings (only for FTDI)
+        if self.programmer_type == ProgrammerType::Ftdi {
+            let connected = self.is_connected();
+            ui.add_enabled_ui(!connected, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Device type:");
+                    egui::ComboBox::from_id_salt("ftdi_device_type")
+                        .selected_text(self.ftdi_device_type.name())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.ftdi_device_type,
+                                FtdiDeviceType::Ft2232H,
+                                "FT2232H",
+                            );
+                            ui.selectable_value(
+                                &mut self.ftdi_device_type,
+                                FtdiDeviceType::Ft4232H,
+                                "FT4232H",
+                            );
+                            ui.selectable_value(
+                                &mut self.ftdi_device_type,
+                                FtdiDeviceType::Ft232H,
+                                "FT232H",
+                            );
+                            ui.selectable_value(
+                                &mut self.ftdi_device_type,
+                                FtdiDeviceType::Ft4233H,
+                                "FT4233H",
+                            );
+                            ui.selectable_value(
+                                &mut self.ftdi_device_type,
+                                FtdiDeviceType::Tumpa,
+                                "TUMPA",
+                            );
+                            ui.selectable_value(
+                                &mut self.ftdi_device_type,
+                                FtdiDeviceType::TumpaLite,
+                                "TUMPA Lite",
+                            );
+                            ui.selectable_value(
+                                &mut self.ftdi_device_type,
+                                FtdiDeviceType::JtagKey,
+                                "JTAGkey",
+                            );
+                            ui.selectable_value(
+                                &mut self.ftdi_device_type,
+                                FtdiDeviceType::GoogleServoV2,
+                                "Google Servo V2",
+                            );
+                        });
+                });
+                // Reset channel if it's no longer valid for the selected device type
+                let max_channels = self.ftdi_device_type.channel_count();
+                if self.ftdi_interface.index() >= max_channels {
+                    self.ftdi_interface = FtdiInterface::A;
+                }
+
+                ui.horizontal(|ui| {
+                    ui.label("Channel:");
+                    let all_interfaces = [
+                        (FtdiInterface::A, "A"),
+                        (FtdiInterface::B, "B"),
+                        (FtdiInterface::C, "C"),
+                        (FtdiInterface::D, "D"),
+                    ];
+                    egui::ComboBox::from_id_salt("ftdi_interface")
+                        .selected_text(format!("{}", self.ftdi_interface.letter()))
+                        .show_ui(ui, |ui| {
+                            for &(iface, label) in &all_interfaces {
+                                if iface.index() < max_channels {
+                                    ui.selectable_value(&mut self.ftdi_interface, iface, label);
+                                }
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("SPI clock:");
+                    egui::ComboBox::from_id_salt("ftdi_divisor")
+                        .selected_text(format!(
+                            "{:.1} MHz (div {})",
+                            60.0 / self.ftdi_divisor as f64,
+                            self.ftdi_divisor
+                        ))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.ftdi_divisor, 2, "30 MHz (div 2)");
+                            ui.selectable_value(&mut self.ftdi_divisor, 4, "15 MHz (div 4)");
+                            ui.selectable_value(&mut self.ftdi_divisor, 6, "10 MHz (div 6)");
+                            ui.selectable_value(&mut self.ftdi_divisor, 10, "6 MHz (div 10)");
+                            ui.selectable_value(&mut self.ftdi_divisor, 20, "3 MHz (div 20)");
+                            ui.selectable_value(&mut self.ftdi_divisor, 60, "1 MHz (div 60)");
+                        });
+                });
+            });
+            if connected {
+                ui.label("Reconnect to change FTDI settings");
             }
         }
 
@@ -1589,6 +1781,24 @@ impl RflasherApp {
                     ui.monospace(concat!(
                         "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"1a86\", ",
                         "ATTR{idProduct}==\"55de\", MODE=\"0666\"",
+                    ));
+                    ui.add_space(3.0);
+                    ui.monospace("# FTDI FT2232H (VID:0403 PID:6010)");
+                    ui.monospace(concat!(
+                        "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0403\", ",
+                        "ATTR{idProduct}==\"6010\", MODE=\"0666\"",
+                    ));
+                    ui.add_space(3.0);
+                    ui.monospace("# FTDI FT4232H (VID:0403 PID:6011)");
+                    ui.monospace(concat!(
+                        "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0403\", ",
+                        "ATTR{idProduct}==\"6011\", MODE=\"0666\"",
+                    ));
+                    ui.add_space(3.0);
+                    ui.monospace("# FTDI FT232H (VID:0403 PID:6014)");
+                    ui.monospace(concat!(
+                        "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0403\", ",
+                        "ATTR{idProduct}==\"6014\", MODE=\"0666\"",
                     ));
                 });
 

@@ -7,15 +7,39 @@ description = "FTDI MPSSE programmer support for rflasher"
 
 [features]
 default = ["std"]
-std = ["rflasher-core/std", "ftdi", "nusb", "futures-lite"]
+std = ["rflasher-core/std", "is_sync", "ftdi", "nusb", "futures-lite"]
+# Use pure-Rust rs-ftdi backend instead of C libftdi1 bindings
+native = ["rflasher-core/std", "is_sync", "rs-ftdi", "rs-ftdi/std", "nusb", "futures-lite"]
+# Sync mode - when enabled, async code is compiled as sync
+is_sync = ["rflasher-core/is_sync", "maybe-async/is_sync"]
+# WASM/WebUSB backend using rs-ftdi + nusb (async)
+wasm = ["rflasher-core/std", "rs-ftdi", "rs-ftdi/wasm", "nusb", "web-sys", "wasm-bindgen", "wasm-bindgen-futures", "js-sys"]
 
 [dependencies]
 rflasher-core.workspace = true
 log.workspace = true
+maybe-async.workspace = true
 
 # FTDI support - using ftdi crate (libftdi1 bindings)
 ftdi = { version = "0.1", optional = true }
 
+# Pure-Rust FTDI backend (rs-ftdi with sync/async support)
+rs-ftdi = { git = "https://github.com/ArthurHeymans/rs-ftdi.git", branch = "WASM", package = "ftdi", default-features = false, optional = true }
+
 # USB device enumeration (for listing devices)
 nusb = { workspace = true, optional = true }
 futures-lite = { version = "2", optional = true }
+
+# WASM dependencies (optional, only for wasm feature)
+web-sys = { version = "0.3", optional = true, features = [
+    "Navigator",
+    "Window",
+    "console",
+    "Usb",
+    "UsbDevice",
+    "UsbDeviceFilter",
+    "UsbDeviceRequestOptions",
+] }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }

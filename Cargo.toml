@@ -94,6 +94,8 @@ ch347 = ["rflasher-flash/ch347"]
 dediprog = ["rflasher-flash/dediprog"]
 serprog = ["rflasher-flash/serprog"]
 ftdi = ["rflasher-flash/ftdi"]
+# Use pure-Rust rs-ftdi backend for FTDI MPSSE (instead of C libftdi1)
+ftdi-native = ["rflasher-flash/ftdi-native"]
 ft4222 = ["rflasher-flash/ft4222"]
 linux-spi = ["rflasher-flash/linux-spi"]
 linux-mtd = ["rflasher-flash/linux-mtd"]
@@ -106,6 +108,8 @@ repl = ["dep:rflasher-repl"]
 
 # Enable all programmers
 all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden"]
+# Enable all programmers with pure-Rust FTDI backend
+all-programmers-native = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi-native", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden"]
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std", "is_sync"] }
