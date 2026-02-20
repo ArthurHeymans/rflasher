@@ -9,8 +9,8 @@ use nusb::transfer::{Buffer, Bulk, In, Out};
 use nusb::{Endpoint, Interface, MaybeFuture};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::default_execute_with_vec;
-use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::SpiCommand;
+use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
+use rflasher_core::spi::{opcodes, SpiCommand};
 
 use crate::error::{DediprogError, Result};
 use crate::protocol::*;
@@ -121,6 +121,8 @@ pub struct Dediprog {
     io_mode: DpIoMode,
     /// Configured maximum I/O mode
     max_io_mode: DpIoMode,
+    /// Flash size in bytes (set after probing, needed for OpaqueMaster)
+    flash_size: Option<u32>,
 }
 
 impl Dediprog {
@@ -203,6 +205,7 @@ impl Dediprog {
             protocol: Protocol::Unknown,
             io_mode: DpIoMode::Single,
             max_io_mode: config.io_mode,
+            flash_size: None,
         };
 
         // Try to read device string (may need set_voltage first for old devices)
@@ -684,6 +687,296 @@ impl Dediprog {
     pub fn protocol(&self) -> Protocol {
         self.protocol
     }
+
+    /// Set the flash size (call after probing to enable OpaqueMaster)
+    pub fn set_flash_size(&mut self, size: u32) {
+        self.flash_size = Some(size);
+    }
+
+    // =========================================================================
+    // Bulk Read/Write (CMD_READ/CMD_WRITE with USB bulk transfers)
+    // =========================================================================
+
+    /// Prepare a read/write command packet for the given protocol version.
+    ///
+    /// Returns the command packet size. The packet is written into `cmd_buf`.
+    /// `value` and `idx` are the USB control transfer wValue/wIndex fields.
+    fn prepare_rw_cmd(
+        &self,
+        cmd_buf: &mut [u8; MAX_CMD_SIZE],
+        value: &mut u16,
+        idx: &mut u16,
+        is_read: bool,
+        mode: u8,
+        start: u32,
+        count: u16,
+    ) -> Result<usize> {
+        // Common header (all protocol versions)
+        cmd_buf[0] = (count & 0xFF) as u8;
+        cmd_buf[1] = ((count >> 8) & 0xFF) as u8;
+        cmd_buf[2] = 0; // RFU
+        cmd_buf[3] = mode;
+        cmd_buf[4] = 0; // Opcode (overridden below for V2/V3)
+
+        match self.protocol {
+            Protocol::V1 => {
+                // V1: address in wValue/wIndex, 5-byte command packet
+                if start >> 24 != 0 {
+                    return Err(DediprogError::Unsupported(
+                        "4-byte address not supported on V1 protocol".to_string(),
+                    ));
+                }
+                *value = (start & 0xFFFF) as u16;
+                *idx = ((start >> 16) & 0xFF) as u16;
+                Ok(5)
+            }
+            Protocol::V2 => {
+                *value = 0;
+                *idx = 0;
+
+                if is_read {
+                    // For V2 reads, use standard read mode with fast read opcode
+                    // The firmware handles the SPI read command internally
+                    cmd_buf[3] = ReadMode::Fast as u8;
+                    cmd_buf[4] = opcodes::FAST_READ;
+                } else {
+                    // For V2 writes, use page program mode
+                    cmd_buf[3] = WriteMode::PagePgm as u8;
+                    cmd_buf[4] = 0;
+                }
+
+                cmd_buf[5] = 0; // RFU
+                cmd_buf[6] = (start & 0xFF) as u8;
+                cmd_buf[7] = ((start >> 8) & 0xFF) as u8;
+                cmd_buf[8] = ((start >> 16) & 0xFF) as u8;
+                cmd_buf[9] = ((start >> 24) & 0xFF) as u8;
+                Ok(10)
+            }
+            Protocol::V3 => {
+                *value = 0;
+                *idx = 0;
+
+                cmd_buf[5] = 0; // RFU
+                cmd_buf[6] = (start & 0xFF) as u8;
+                cmd_buf[7] = ((start >> 8) & 0xFF) as u8;
+                cmd_buf[8] = ((start >> 16) & 0xFF) as u8;
+                cmd_buf[9] = ((start >> 24) & 0xFF) as u8;
+
+                if is_read {
+                    cmd_buf[3] = ReadMode::Configurable as u8;
+                    cmd_buf[4] = opcodes::FAST_READ;
+                    cmd_buf[10] = if start >> 24 != 0 { 4 } else { 3 }; // address length
+                    cmd_buf[11] = 4; // dummy half-cycles (8 clocks / 2 for fast read)
+                    Ok(12)
+                } else {
+                    cmd_buf[3] = WriteMode::PagePgm as u8;
+                    cmd_buf[4] = 0;
+                    // Page size (256 bytes) as 32-bit LE
+                    cmd_buf[10] = 0x00;
+                    cmd_buf[11] = 0x01;
+                    cmd_buf[12] = 0x00;
+                    cmd_buf[13] = 0x00;
+                    Ok(14)
+                }
+            }
+            Protocol::Unknown => Err(DediprogError::Unsupported(
+                "Unknown protocol version".to_string(),
+            )),
+        }
+    }
+
+    /// Bulk read from flash using CMD_READ + USB bulk IN transfers.
+    ///
+    /// Start and len MUST be 512-byte aligned. Uses a single large URB so the
+    /// kernel handles all USB scheduling internally -- avoids per-packet
+    /// userspace round-trips through nusb's epoll background thread.
+    fn bulk_read_flash(&mut self, start: u32, buf: &mut [u8]) -> Result<()> {
+        let len = buf.len();
+        if len == 0 {
+            return Ok(());
+        }
+
+        let count = (len / BULK_CHUNK_SIZE) as u16;
+
+        // Set I/O mode for reads (single for now, can add multi-IO later)
+        self.set_io_mode(DpIoMode::Single)?;
+
+        // Build and send the CMD_READ command packet
+        let mut cmd_buf = [0u8; MAX_CMD_SIZE];
+        let mut value: u16 = 0;
+        let mut idx: u16 = 0;
+        let cmd_len = self.prepare_rw_cmd(
+            &mut cmd_buf,
+            &mut value,
+            &mut idx,
+            true,
+            ReadMode::Std as u8,
+            start,
+            count,
+        )?;
+
+        self.control_write_raw(Command::Read as u8, value, idx, &cmd_buf[..cmd_len])?;
+
+        // Submit a single large bulk IN transfer for the entire read.
+        // The kernel splits this into 512-byte TDs internally and handles all
+        // USB scheduling without any per-packet userspace round-trips.
+        let mut in_ep: Endpoint<Bulk, In> = self
+            .interface
+            .endpoint(self.in_endpoint)
+            .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
+
+        let xfer_buf = in_ep.allocate(len);
+        in_ep.submit(xfer_buf);
+
+        // Scale timeout with transfer size: 10 s base + ~30 us per byte
+        // (accommodates the slowest SPI speed of 375 kHz ≈ 47 KiB/s)
+        let timeout =
+            Duration::from_secs(ASYNC_TIMEOUT_SECS) + Duration::from_micros(len as u64 * 30);
+
+        let result = in_ep
+            .wait_next_complete(timeout)
+            .ok_or(DediprogError::Timeout)?;
+        result
+            .status
+            .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
+
+        if result.actual_len != len {
+            return Err(DediprogError::TransferFailed(format!(
+                "Short bulk read: expected {} bytes, got {}",
+                len, result.actual_len
+            )));
+        }
+
+        buf.copy_from_slice(&result.buffer[..len]);
+        Ok(())
+    }
+
+    /// Bulk write to flash using CMD_WRITE + USB bulk OUT transfers.
+    ///
+    /// Start and len MUST be 256-byte aligned. Builds a single contiguous
+    /// USB buffer with each 256-byte page padded to 512 bytes (0xFF fill),
+    /// then submits it as one large URB. The firmware reads 512 bytes at a
+    /// time and handles WREN, page program, and WIP polling internally.
+    fn bulk_write_flash(&mut self, start: u32, data: &[u8]) -> Result<()> {
+        const PAGE_SIZE: usize = 256;
+        let len = data.len();
+        if len == 0 {
+            return Ok(());
+        }
+
+        let count = (len / PAGE_SIZE) as u16;
+
+        // Writes always use single I/O
+        self.set_io_mode(DpIoMode::Single)?;
+
+        // Build and send the CMD_WRITE command packet
+        let mut cmd_buf = [0u8; MAX_CMD_SIZE];
+        let mut value: u16 = 0;
+        let mut idx: u16 = 0;
+        let cmd_len = self.prepare_rw_cmd(
+            &mut cmd_buf,
+            &mut value,
+            &mut idx,
+            false,
+            WriteMode::PagePgm as u8,
+            start,
+            count,
+        )?;
+
+        self.control_write_raw(Command::Write as u8, value, idx, &cmd_buf[..cmd_len])?;
+
+        // Build a single padded buffer: for each 256-byte page, write 256 data + 256 0xFF.
+        // The firmware consumes 512 bytes per page and handles the SPI protocol internally.
+        let mut out_ep: Endpoint<Bulk, Out> = self
+            .interface
+            .endpoint(self.out_endpoint)
+            .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
+
+        let count = count as usize;
+        let total_usb_len = count * BULK_CHUNK_SIZE;
+        let mut out_buf = out_ep.allocate(total_usb_len);
+
+        for i in 0..count {
+            let src_start = i * PAGE_SIZE;
+            out_buf.extend_from_slice(&data[src_start..src_start + PAGE_SIZE]);
+            out_buf.extend_from_slice(&[0xFF; BULK_CHUNK_SIZE - PAGE_SIZE]);
+        }
+
+        out_ep.submit(out_buf);
+
+        // Scale timeout with transfer size: 10 s base + 10 ms per page
+        // (accommodates worst-case page-program time of typical NOR flash)
+        let timeout =
+            Duration::from_secs(ASYNC_TIMEOUT_SECS) + Duration::from_millis(count as u64 * 10);
+
+        let result = out_ep
+            .wait_next_complete(timeout)
+            .ok_or(DediprogError::Timeout)?;
+        result
+            .status
+            .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Slow read via SPI transceive (for unaligned head/tail residuals).
+    /// Reads up to 16 bytes per USB control transfer using standard READ (0x03).
+    fn slow_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
+        let mut offset = 0usize;
+        while offset < buf.len() {
+            let chunk_len = (buf.len() - offset).min(16);
+            let a = addr + offset as u32;
+            let cmd = [opcodes::READ, (a >> 16) as u8, (a >> 8) as u8, a as u8];
+            let result = self.spi_transceive(&cmd, chunk_len)?;
+            buf[offset..offset + chunk_len].copy_from_slice(&result[..chunk_len]);
+            offset += chunk_len;
+        }
+        Ok(())
+    }
+
+    /// Slow write via SPI transceive (for unaligned head/tail residuals).
+    /// Sends individual WREN + PP + RDSR poll sequences, max 11 bytes data per transfer.
+    fn slow_write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+        let max_write = 16 - 5; // 11 bytes per transceive (16 - 1 opcode - 3 addr - 1 margin)
+        let mut offset = 0usize;
+
+        while offset < data.len() {
+            let a = addr + offset as u32;
+            // Respect page boundaries (256 bytes)
+            let page_offset = a as usize % 256;
+            let to_page_end = 256 - page_offset;
+            let remaining = data.len() - offset;
+            let chunk_len = remaining.min(max_write).min(to_page_end);
+
+            // WREN
+            self.spi_transceive(&[opcodes::WREN], 0)?;
+
+            // Page Program: [PP, addr_hi, addr_mid, addr_lo, data...]
+            let mut cmd = Vec::with_capacity(4 + chunk_len);
+            cmd.push(opcodes::PP);
+            cmd.push((a >> 16) as u8);
+            cmd.push((a >> 8) as u8);
+            cmd.push(a as u8);
+            cmd.extend_from_slice(&data[offset..offset + chunk_len]);
+            self.spi_transceive(&cmd, 0)?;
+
+            // Poll RDSR until WIP clears (bit 0)
+            let timeout = std::time::Instant::now();
+            loop {
+                let status = self.spi_transceive(&[opcodes::RDSR], 1)?;
+                if status[0] & 0x01 == 0 {
+                    break;
+                }
+                if timeout.elapsed() > Duration::from_millis(100) {
+                    return Err(DediprogError::Timeout);
+                }
+                std::thread::sleep(Duration::from_micros(100));
+            }
+
+            offset += chunk_len;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Dediprog {
@@ -692,6 +985,128 @@ impl Drop for Dediprog {
         let _ = self.set_io_mode(DpIoMode::Single);
         // Turn off voltage
         let _ = self.set_voltage(0);
+    }
+}
+
+impl OpaqueMaster for Dediprog {
+    fn size(&self) -> usize {
+        self.flash_size.unwrap_or(0) as usize
+    }
+
+    fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
+        let len = buf.len();
+        if len == 0 {
+            return Ok(());
+        }
+
+        // Split into: head residue + aligned bulk + tail residue
+        let chunk_size = BULK_CHUNK_SIZE;
+        let head_residue = if addr as usize % chunk_size != 0 {
+            len.min(chunk_size - (addr as usize % chunk_size))
+        } else {
+            0
+        };
+
+        // Head: slow read for unaligned start
+        if head_residue > 0 {
+            self.slow_read(addr, &mut buf[..head_residue])
+                .map_err(|_| CoreError::ReadError)?;
+        }
+
+        // Aligned bulk portion
+        let bulk_start = addr + head_residue as u32;
+        let remaining = len - head_residue;
+        let bulk_len = (remaining / chunk_size) * chunk_size;
+
+        if bulk_len > 0 {
+            // Bulk read may need to be split into MAX_BLOCK_COUNT chunks
+            let mut bulk_offset = 0usize;
+            while bulk_offset < bulk_len {
+                let this_len = (bulk_len - bulk_offset).min(MAX_BLOCK_COUNT as usize * chunk_size);
+                let this_len = (this_len / chunk_size) * chunk_size;
+                if this_len == 0 {
+                    break;
+                }
+                let buf_start = head_residue + bulk_offset;
+                self.bulk_read_flash(
+                    bulk_start + bulk_offset as u32,
+                    &mut buf[buf_start..buf_start + this_len],
+                )
+                .map_err(|_| CoreError::ReadError)?;
+                bulk_offset += this_len;
+            }
+        }
+
+        // Tail: slow read for remaining bytes
+        let tail_start = head_residue + bulk_len;
+        if tail_start < len {
+            self.slow_read(addr + tail_start as u32, &mut buf[tail_start..])
+                .map_err(|_| CoreError::ReadError)?;
+        }
+
+        Ok(())
+    }
+
+    fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
+        const PAGE_SIZE: usize = 256;
+        let len = data.len();
+        if len == 0 {
+            return Ok(());
+        }
+
+        // Split into: head residue + aligned bulk + tail residue
+        // Bulk writes require 256-byte (page) alignment
+        let head_residue = if addr as usize % PAGE_SIZE != 0 {
+            len.min(PAGE_SIZE - (addr as usize % PAGE_SIZE))
+        } else {
+            0
+        };
+
+        // Head: slow write for unaligned start
+        if head_residue > 0 {
+            self.slow_write(addr, &data[..head_residue])
+                .map_err(|_| CoreError::WriteError)?;
+        }
+
+        // Aligned bulk portion
+        let bulk_start = addr + head_residue as u32;
+        let remaining = len - head_residue;
+        let bulk_len = (remaining / PAGE_SIZE) * PAGE_SIZE;
+
+        if bulk_len > 0 {
+            // Bulk write may need to be split into MAX_BLOCK_COUNT chunks
+            let mut bulk_offset = 0usize;
+            while bulk_offset < bulk_len {
+                let this_len = (bulk_len - bulk_offset).min(MAX_BLOCK_COUNT as usize * PAGE_SIZE);
+                let this_len = (this_len / PAGE_SIZE) * PAGE_SIZE;
+                if this_len == 0 {
+                    break;
+                }
+                let data_start = head_residue + bulk_offset;
+                self.bulk_write_flash(
+                    bulk_start + bulk_offset as u32,
+                    &data[data_start..data_start + this_len],
+                )
+                .map_err(|_| CoreError::WriteError)?;
+                bulk_offset += this_len;
+            }
+        }
+
+        // Tail: slow write for remaining bytes
+        let tail_start = head_residue + bulk_len;
+        if tail_start < len {
+            self.slow_write(addr + tail_start as u32, &data[tail_start..])
+                .map_err(|_| CoreError::WriteError)?;
+        }
+
+        Ok(())
+    }
+
+    fn erase(&mut self, _addr: u32, _len: u32) -> CoreResult<()> {
+        // Erase is not supported through the opaque path.
+        // The HybridFlashDevice adapter uses SpiMaster for erase operations,
+        // since the Dediprog firmware has no bulk erase command.
+        Err(CoreError::ProgrammerError)
     }
 }
 

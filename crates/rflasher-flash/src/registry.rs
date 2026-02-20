@@ -7,7 +7,9 @@ use crate::handle::{ChipInfo, FlashHandle};
 use rflasher_core::chip::ChipDatabase;
 #[allow(unused_imports)] // Used in feature-gated code
 use rflasher_core::flash::FlashDevice;
-use rflasher_core::flash::{probe_detailed, OpaqueFlashDevice, ProbeResult, SpiFlashDevice};
+use rflasher_core::flash::{
+    probe_detailed, HybridFlashDevice, OpaqueFlashDevice, ProbeResult, SpiFlashDevice,
+};
 use rflasher_core::layout::parse_ifd;
 use rflasher_core::programmer::OpaqueMaster;
 use rflasher_core::sfdp::SfdpMismatch;
@@ -539,7 +541,7 @@ fn open_dediprog(
     let config =
         parse_options(&options).map_err(|e| format!("Invalid Dediprog parameters: {}", e))?;
 
-    let master = Dediprog::open_with_config(config).map_err(|e| {
+    let mut master = Dediprog::open_with_config(config).map_err(|e| {
         format!(
             "Failed to open Dediprog: {}\n\
              Make sure the device is connected and you have USB permissions.",
@@ -553,7 +555,19 @@ fn open_dediprog(
         master.device_string()
     );
 
-    probe_and_create_handle(master, db)
+    // Probe the flash chip via SpiMaster
+    let result = probe_detailed(&mut master, db)?;
+    log_probe_result(&result);
+    let chip_info = ChipInfo::from(result);
+    let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone().unwrap());
+
+    // Set flash size so OpaqueMaster bulk read/write knows the bounds
+    master.set_flash_size(ctx.total_size() as u32);
+
+    // Use HybridFlashDevice: OpaqueMaster for fast bulk read/write (CMD_READ/CMD_WRITE),
+    // SpiMaster for erase, status register access, and write protection
+    let device = HybridFlashDevice::new(master, ctx);
+    Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
 }
 
 #[cfg(feature = "serprog")]

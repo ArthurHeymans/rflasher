@@ -38,6 +38,7 @@
 
 mod context;
 mod device;
+mod hybrid_device;
 mod opaque_device;
 mod operations;
 mod spi_device;
@@ -48,6 +49,7 @@ pub use context::FlashContext;
 pub use device::FlashDevice;
 #[cfg(feature = "alloc")]
 pub use device::FlashDeviceExt;
+pub use hybrid_device::HybridFlashDevice;
 pub use opaque_device::OpaqueFlashDevice;
 pub use spi_device::SpiFlashDevice;
 

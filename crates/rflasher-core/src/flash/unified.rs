@@ -34,8 +34,13 @@ pub use crate::flash::operations::{
 /// The erased value for flash memory (all bits set)
 const ERASED_VALUE: u8 = 0xFF;
 
-/// Default read chunk size
-const READ_CHUNK_SIZE: usize = 4096;
+/// Default read chunk size for progress reporting.
+///
+/// Each chunk results in a separate `FlashDevice::read()` call, which for
+/// hardware-accelerated programmers (e.g. Dediprog) issues a new CMD_READ
+/// control transfer. Larger chunks amortize that overhead.
+/// 256 KiB gives ~64 progress updates for a 16 MiB flash.
+const READ_CHUNK_SIZE: usize = 256 * 1024;
 
 // =============================================================================
 // Unified operations
