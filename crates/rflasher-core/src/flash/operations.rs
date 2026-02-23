@@ -163,6 +163,64 @@ pub fn get_all_write_ranges(have: &[u8], want: &[u8]) -> Vec<WriteRange> {
     ranges
 }
 
+/// Coalesce write ranges to page boundaries for optimal write performance.
+///
+/// Hardware-accelerated programmers (like Dediprog) use fast bulk USB transfers
+/// for page-aligned writes, but fall back to slow byte-at-a-time SPI command
+/// sequencing (WREN + PP + RDSR polling per chunk) for sub-page or misaligned
+/// writes. This function aligns write ranges to `page_size` boundaries and
+/// merges overlapping/adjacent ranges so that all writes can use the fast path.
+///
+/// Writing page-aligned 0xFF bytes to already-erased flash is harmless (no
+/// state change in the flash cells) but allows the programmer's firmware to
+/// handle the entire write via its optimized bulk transfer path.
+///
+/// If `page_size` is 0 or 1, the input ranges are returned unchanged (no
+/// alignment benefit).
+///
+/// # Arguments
+/// * `ranges` - Write ranges from `get_all_write_ranges` (must be sorted by start)
+/// * `page_size` - Page size in bytes (typically 256 for SPI NOR flash)
+/// * `total_size` - Total flash/buffer size in bytes (for clamping)
+#[cfg(feature = "alloc")]
+pub fn coalesce_write_ranges(
+    ranges: &[WriteRange],
+    page_size: u32,
+    total_size: u32,
+) -> Vec<WriteRange> {
+    if ranges.is_empty() || page_size <= 1 {
+        return ranges.to_vec();
+    }
+
+    let mut result: Vec<WriteRange> = Vec::with_capacity(ranges.len());
+
+    for range in ranges {
+        // Align start down to page boundary
+        let aligned_start = (range.start / page_size) * page_size;
+        // Align end up to page boundary, clamped to total_size
+        let end = range.start + range.len;
+        let aligned_end = (end.div_ceil(page_size) * page_size).min(total_size);
+
+        // Merge with previous range if overlapping or adjacent
+        if let Some(last) = result.last_mut() {
+            let last_end = last.start + last.len;
+            if aligned_start <= last_end {
+                // Ranges overlap or are adjacent after alignment; merge
+                let merged_end = aligned_end.max(last_end);
+                last.len = merged_end - last.start;
+                continue;
+            }
+        }
+
+        result.push(WriteRange {
+            start: aligned_start,
+            len: aligned_end - aligned_start,
+        });
+    }
+
+    result
+}
+
 // =============================================================================
 // Optimal erase algorithm
 // =============================================================================
@@ -1099,6 +1157,173 @@ mod tests {
         assert_eq!(ranges[0], WriteRange { start: 0, len: 1 });
         assert_eq!(ranges[1], WriteRange { start: 3, len: 2 });
         assert_eq!(ranges[2], WriteRange { start: 7, len: 1 });
+    }
+
+    // =========================================================================
+    // Tests for coalesce_write_ranges
+    // =========================================================================
+
+    #[test]
+    fn test_coalesce_page_size_1_is_noop() {
+        let ranges = vec![
+            WriteRange { start: 1, len: 3 },
+            WriteRange { start: 10, len: 5 },
+        ];
+        let result = coalesce_write_ranges(&ranges, 1, 1024);
+        assert_eq!(result, ranges);
+    }
+
+    #[test]
+    fn test_coalesce_empty_ranges() {
+        let result = coalesce_write_ranges(&[], 256, 65536);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_coalesce_single_range_aligned() {
+        // Already page-aligned range should stay the same
+        let ranges = vec![WriteRange {
+            start: 256,
+            len: 512,
+        }];
+        let result = coalesce_write_ranges(&ranges, 256, 65536);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].start, 256);
+        assert_eq!(result[0].len, 512);
+    }
+
+    #[test]
+    fn test_coalesce_single_range_unaligned() {
+        // Unaligned range should be padded to page boundaries
+        let ranges = vec![WriteRange {
+            start: 100,
+            len: 50,
+        }];
+        let result = coalesce_write_ranges(&ranges, 256, 65536);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].start, 0); // Aligned down from 100
+        assert_eq!(result[0].len, 256); // Aligned up to cover byte 149
+    }
+
+    #[test]
+    fn test_coalesce_range_crossing_page_boundary() {
+        // Range crossing a page boundary should expand to cover both pages
+        let ranges = vec![WriteRange {
+            start: 200,
+            len: 100,
+        }]; // bytes 200-299, crosses page boundary at 256
+        let result = coalesce_write_ranges(&ranges, 256, 65536);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].start, 0); // Aligned down from 200
+        assert_eq!(result[0].len, 512); // Two pages: 0-255, 256-511
+    }
+
+    #[test]
+    fn test_coalesce_merges_adjacent_after_alignment() {
+        // Two ranges in different pages that become adjacent after alignment
+        let ranges = vec![
+            WriteRange {
+                start: 100,
+                len: 10,
+            }, // In page 0 (0-255)
+            WriteRange {
+                start: 300,
+                len: 10,
+            }, // In page 1 (256-511)
+        ];
+        let result = coalesce_write_ranges(&ranges, 256, 65536);
+        // After alignment: [0, 256) and [256, 512) -> adjacent, merged to [0, 512)
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].start, 0);
+        assert_eq!(result[0].len, 512);
+    }
+
+    #[test]
+    fn test_coalesce_preserves_gap_between_distant_ranges() {
+        // Two ranges far enough apart that they stay separate after alignment
+        let ranges = vec![
+            WriteRange {
+                start: 100,
+                len: 10,
+            }, // In page 0
+            WriteRange {
+                start: 600,
+                len: 10,
+            }, // In page 2 (512-767)
+        ];
+        let result = coalesce_write_ranges(&ranges, 256, 65536);
+        // After alignment: [0, 256) and [512, 768) -> gap at [256, 512), not merged
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].start, 0);
+        assert_eq!(result[0].len, 256);
+        assert_eq!(result[1].start, 512);
+        assert_eq!(result[1].len, 256);
+    }
+
+    #[test]
+    fn test_coalesce_clamps_to_total_size() {
+        // Range near end of flash should be clamped
+        let ranges = vec![WriteRange {
+            start: 1000,
+            len: 10,
+        }];
+        let result = coalesce_write_ranges(&ranges, 256, 1024);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].start, 768); // Aligned down from 1000
+        assert_eq!(result[0].len, 1024 - 768); // Clamped to total_size
+    }
+
+    #[test]
+    fn test_coalesce_many_small_ranges_in_same_page() {
+        // Many small ranges in the same page -> one page write
+        let ranges = vec![
+            WriteRange { start: 10, len: 1 },
+            WriteRange { start: 50, len: 2 },
+            WriteRange { start: 100, len: 5 },
+            WriteRange { start: 200, len: 3 },
+        ];
+        let result = coalesce_write_ranges(&ranges, 256, 65536);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].start, 0);
+        assert_eq!(result[0].len, 256);
+    }
+
+    #[test]
+    fn test_coalesce_typical_firmware_pattern() {
+        // Simulate: erased flash (0xFF) vs firmware with scattered 0xFF bytes.
+        // The byte-level comparison produces many small ranges broken by 0xFF matches.
+        // After coalescing to 256-byte pages, they should merge into fewer large ranges.
+        let ranges = vec![
+            WriteRange { start: 0, len: 100 }, // Data in page 0
+            WriteRange {
+                start: 105,
+                len: 150,
+            }, // More data in page 0 (gap was 0xFF)
+            WriteRange {
+                start: 256,
+                len: 200,
+            }, // Data in page 1
+            WriteRange {
+                start: 460,
+                len: 50,
+            }, // More data in page 1 (gap was 0xFF)
+            WriteRange {
+                start: 512,
+                len: 256,
+            }, // Full page 2
+            WriteRange {
+                start: 1024,
+                len: 10,
+            }, // Isolated write in page 4
+        ];
+        let result = coalesce_write_ranges(&ranges, 256, 65536);
+        // Pages 0,1,2 should merge into one range [0, 768)
+        // Page 4 is separate: [1024, 1280)
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].start, 0);
+        assert_eq!(result[0].len, 768); // 3 pages
+        assert_eq!(result[1].start, 1024);
+        assert_eq!(result[1].len, 256); // 1 page
     }
 
     // =========================================================================

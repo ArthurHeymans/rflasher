@@ -27,7 +27,9 @@ use crate::flash::operations::{map_to_4byte_erase_opcode, select_erase_block};
 use crate::programmer::{OpaqueMaster, SpiMaster};
 use crate::protocol;
 #[cfg(feature = "alloc")]
-use crate::wp::{self, RangeDecoder, WpBits, WpConfig, WpMode, WpRange, WpRegBitMap, WpResult, WriteOptions};
+use crate::wp::{
+    self, RangeDecoder, WpBits, WpConfig, WpMode, WpRange, WpRegBitMap, WpResult, WriteOptions,
+};
 use maybe_async::maybe_async;
 
 /// Flash device adapter for hybrid programmers (SpiMaster + OpaqueMaster)
@@ -106,6 +108,10 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
 
     fn erase_blocks(&self) -> &[EraseBlock] {
         self.ctx.chip.erase_blocks()
+    }
+
+    fn page_size(&self) -> u32 {
+        self.ctx.page_size() as u32
     }
 
     // Write protection support (delegates to SpiMaster, same as SpiFlashDevice)

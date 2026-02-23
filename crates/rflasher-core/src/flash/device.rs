@@ -66,6 +66,23 @@ pub trait FlashDevice {
     /// while SPI chips may have multiple (4KB, 32KB, 64KB, chip erase).
     fn erase_blocks(&self) -> &[EraseBlock];
 
+    /// Get the page size in bytes for optimal write alignment.
+    ///
+    /// Writes aligned to this size can use hardware-accelerated bulk transfer
+    /// paths (e.g., Dediprog CMD_WRITE + USB bulk OUT). Writes smaller than
+    /// this or misaligned may fall back to slow byte-at-a-time SPI command
+    /// sequencing.
+    ///
+    /// The smart write algorithm coalesces write ranges to this boundary
+    /// to maximize use of the fast path. Writing page-aligned 0xFF bytes
+    /// to already-erased flash is harmless (no state change) but allows
+    /// the entire write to go through the bulk transfer path.
+    ///
+    /// Returns 1 if the device has no alignment preference.
+    fn page_size(&self) -> u32 {
+        1
+    }
+
     /// Read flash contents into the provided buffer
     ///
     /// # Arguments
