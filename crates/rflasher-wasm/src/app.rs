@@ -9,7 +9,9 @@ use rflasher_ch341a::Ch341a;
 use rflasher_ch347::{Ch347, SpiSpeed};
 use rflasher_core::chip::{ChipDatabase, FlashChip};
 use rflasher_core::flash::unified::{smart_write, WriteProgress, WriteStats};
-use rflasher_core::flash::{FlashContext, FlashDevice, HybridFlashDevice, ProbeResult, SpiFlashDevice};
+use rflasher_core::flash::{
+    FlashContext, FlashDevice, HybridFlashDevice, ProbeResult, SpiFlashDevice,
+};
 use rflasher_dediprog::{Dediprog, DediprogConfig};
 use rflasher_ftdi::{Ftdi, FtdiConfig, FtdiDeviceType, FtdiInterface};
 use rflasher_serprog::Serprog;
@@ -930,10 +932,7 @@ impl RflasherApp {
             match Dediprog::request_device().await {
                 Ok(device_info) => match Dediprog::open(device_info, config).await {
                     Ok(dediprog) => {
-                        let name = format!(
-                            "Dediprog {}",
-                            dediprog.device_string()
-                        );
+                        let name = format!("Dediprog {}", dediprog.device_string());
                         let mut state = shared.borrow_mut();
                         state.programmer = Some(Programmer::Dediprog(dediprog));
                         state.messages.push(AsyncMessage::Connected {
@@ -1340,8 +1339,7 @@ impl RflasherApp {
                             Ok(()) => {
                                 let expected = &data[offset..offset + chunk_size];
                                 if buf != expected {
-                                    for (i, (a, b)) in buf.iter().zip(expected.iter()).enumerate()
-                                    {
+                                    for (i, (a, b)) in buf.iter().zip(expected.iter()).enumerate() {
                                         if a != b {
                                             verify_error = Some(format!(
                                                 "Mismatch at 0x{:X}: read 0x{:02X}, expected 0x{:02X}",
