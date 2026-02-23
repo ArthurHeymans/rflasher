@@ -30,6 +30,25 @@ pub const MAX_CMD_SIZE: usize = 15;
 pub const ASYNC_TRANSFERS: usize = 8;
 pub const BULK_CHUNK_SIZE: usize = 512;
 
+/// Maximum number of pages per CMD_WRITE + bulk OUT cycle.
+///
+/// Each 256-byte page occupies 512 bytes on the USB wire (data + padding),
+/// so the USB buffer is `MAX_WRITE_PAGES * 512` bytes. We cap this to keep
+/// the URB allocation well within Linux usbfs limits (~16 MiB default for
+/// all outstanding URBs combined).
+///
+/// 4096 pages = 1 MiB data = 2 MiB USB buffer.
+///
+/// For a 16 MiB flash this means ~16 CMD_WRITE + bulk cycles, each adding
+/// a negligible control transfer versus the bulk data time.
+pub const MAX_WRITE_PAGES: usize = 4096;
+
+/// Maximum number of 512-byte blocks per CMD_READ + bulk IN cycle.
+///
+/// The read USB buffer is `MAX_READ_BLOCKS * 512` bytes (no padding needed).
+/// 8192 blocks = 4 MiB USB buffer.
+pub const MAX_READ_BLOCKS: usize = 8192;
+
 /// Firmware version encoding (same as flashprog)
 #[inline]
 pub const fn firmware_version(major: u32, minor: u32, patch: u32) -> u32 {

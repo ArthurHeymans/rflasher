@@ -2974,9 +2974,14 @@ name = "rflasher-dediprog"
 version = "0.1.0"
 dependencies = [
  "futures-lite",
+ "js-sys",
  "log",
+ "maybe-async",
  "nusb",
  "rflasher-core",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -3134,6 +3139,7 @@ dependencies = [
  "rflasher-ch341a",
  "rflasher-ch347",
  "rflasher-core",
+ "rflasher-dediprog",
  "rflasher-ftdi",
  "rflasher-serprog",
  "wasm-bindgen",

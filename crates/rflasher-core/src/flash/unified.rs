@@ -13,7 +13,9 @@ use alloc::vec::Vec;
 
 use crate::error::{Error, Result};
 use crate::flash::device::FlashDevice;
-use crate::flash::operations::{plan_optimal_erase, plan_optimal_erase_region};
+use crate::flash::operations::{
+    coalesce_write_ranges, plan_optimal_erase, plan_optimal_erase_region,
+};
 use crate::layout::{Layout, LayoutError, Region};
 use maybe_async::maybe_async;
 
@@ -34,8 +36,23 @@ pub use crate::flash::operations::{
 /// The erased value for flash memory (all bits set)
 const ERASED_VALUE: u8 = 0xFF;
 
-/// Default read chunk size
-const READ_CHUNK_SIZE: usize = 4096;
+/// Default read chunk size for progress reporting.
+///
+/// Each chunk results in a separate `FlashDevice::read()` call, which for
+/// hardware-accelerated programmers (e.g. Dediprog) issues a new CMD_READ
+/// control transfer. Larger chunks amortize that overhead.
+/// 256 KiB gives ~64 progress updates for a 16 MiB flash.
+const READ_CHUNK_SIZE: usize = 256 * 1024;
+
+/// Maximum size per `FlashDevice::write()` call during smart write.
+///
+/// After coalescing, write ranges can be very large (potentially the entire
+/// flash). Splitting them into sub-chunks ensures regular progress updates
+/// and keeps USB transfers manageable. Must be a multiple of the page size
+/// (256 bytes) so writes stay page-aligned for the bulk transfer path.
+///
+/// 256 KiB = 1024 pages, giving ~64 progress updates for a 16 MiB flash.
+const WRITE_CHUNK_SIZE: usize = 256 * 1024;
 
 // =============================================================================
 // Unified operations
@@ -103,6 +120,7 @@ pub async fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
     // Clone erase blocks to avoid borrow checker issues
     let erase_blocks: Vec<_> = device.erase_blocks().to_vec();
     let granularity = device.write_granularity();
+    let page_size = device.page_size();
 
     let mut stats = WriteStats::default();
 
@@ -171,9 +189,12 @@ pub async fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
         stats.flash_modified = true;
     }
 
-    // Step 4: Write bytes that differ
-    // Re-calculate write ranges after erasing
+    // Step 4: Write pages that differ
+    // Re-calculate write ranges after erasing, then coalesce to page boundaries
+    // so that hardware-accelerated programmers (like Dediprog) can use their fast
+    // bulk transfer path instead of slow byte-at-a-time SPI command sequencing.
     let write_ranges = get_all_write_ranges(&current, data);
+    let write_ranges = coalesce_write_ranges(&write_ranges, page_size, flash_size);
 
     if !write_ranges.is_empty() {
         let bytes_to_write: usize = write_ranges.iter().map(|r| r.len as usize).sum();
@@ -182,12 +203,22 @@ pub async fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
         let mut bytes_written = 0;
 
         for range in &write_ranges {
-            let write_data = &data[range.start as usize..(range.start + range.len) as usize];
-            device.write(range.start, write_data).await?;
+            // Split large ranges into sub-chunks for progress reporting.
+            // Each chunk stays page-aligned so the bulk transfer path is used.
+            let range_start = range.start as usize;
+            let range_end = range_start + range.len as usize;
+            let mut offset = range_start;
 
-            bytes_written += range.len as usize;
-            progress.write_progress(bytes_written);
-            stats.writes_performed += 1;
+            while offset < range_end {
+                let chunk_len = (range_end - offset).min(WRITE_CHUNK_SIZE);
+                device
+                    .write(offset as u32, &data[offset..offset + chunk_len])
+                    .await?;
+                offset += chunk_len;
+                bytes_written += chunk_len;
+                stats.writes_performed += 1;
+                progress.write_progress(bytes_written);
+            }
         }
 
         stats.bytes_written = bytes_written;
@@ -224,6 +255,7 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
     let erase_blocks: Vec<_> = device.erase_blocks().to_vec();
     let granularity = device.write_granularity();
     // Safe: data.len() > 0 guaranteed by the early return above
+    let page_size = device.page_size();
     let region_end = addr + data.len() as u32 - 1;
 
     let mut stats = WriteStats::default();
@@ -343,8 +375,11 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
         stats.flash_modified = true;
     }
 
-    // Step 4: Write changed bytes
+    // Step 4: Write pages that differ
+    // Coalesce to page boundaries so bulk transfer paths are used.
     let write_ranges = get_all_write_ranges(&current, data);
+    let data_len = data.len() as u32;
+    let write_ranges = coalesce_write_ranges(&write_ranges, page_size, data_len);
 
     if !write_ranges.is_empty() {
         let bytes_to_write: usize = write_ranges.iter().map(|r| r.len as usize).sum();
@@ -353,12 +388,21 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
         let mut bytes_written = 0;
 
         for range in &write_ranges {
-            let write_data = &data[range.start as usize..(range.start + range.len) as usize];
-            device.write(addr + range.start, write_data).await?;
+            // Split large ranges into sub-chunks for progress reporting.
+            let range_start = range.start as usize;
+            let range_end = range_start + range.len as usize;
+            let mut offset = range_start;
 
-            bytes_written += range.len as usize;
-            progress.write_progress(bytes_written);
-            stats.writes_performed += 1;
+            while offset < range_end {
+                let chunk_len = (range_end - offset).min(WRITE_CHUNK_SIZE);
+                device
+                    .write(addr + offset as u32, &data[offset..offset + chunk_len])
+                    .await?;
+                offset += chunk_len;
+                bytes_written += chunk_len;
+                stats.writes_performed += 1;
+                progress.write_progress(bytes_written);
+            }
         }
 
         stats.bytes_written = bytes_written;

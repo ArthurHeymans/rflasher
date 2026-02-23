@@ -44,23 +44,37 @@
             rustTarget = "armv7-unknown-linux-gnueabihf";
             cargoLinkerEnv = "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER";
           };
+          aarch64-musl = {
+            config = "aarch64-unknown-linux-musl";
+            rustTarget = "aarch64-unknown-linux-musl";
+            cargoLinkerEnv = "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER";
+            isMusl = true;
+          };
         };
 
         # Generate cross pkgs for each target
         mkCrossPkgs =
           target:
-          import nixpkgs {
-            inherit system overlays;
-            crossSystem.config = target.config;
-          };
+          let
+            basePkgs = import nixpkgs {
+              inherit system overlays;
+              crossSystem.config = target.config;
+            };
+          in
+          if target.isMusl or false then basePkgs.pkgsStatic else basePkgs;
 
-        # Build inputs as a function of pkgs
+        # Build inputs as a function of pkgs (musl targets skip C system libs)
         mkBuildInputs =
-          p: with p; [
-            udev
-            libftdi1
-            pciutils
-          ];
+          p:
+          if p.stdenv.hostPlatform.isMusl then
+            [ ]
+          else
+            with p;
+            [
+              udev
+              libftdi1
+              pciutils
+            ];
 
         # Base rust toolchain with WASM target for web builds
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
@@ -86,57 +100,98 @@
           let
             crossPkgs = mkCrossPkgs target;
             crossBuildInputs = mkBuildInputs crossPkgs;
+            isMusl = target.isMusl or false;
           in
-          pkgs.mkShell {
-            buildInputs = crossBuildInputs;
-            nativeBuildInputs = [
-              pkgs.pkg-config
-              rustToolchainCross
-            ];
+          pkgs.mkShell (
+            {
+              buildInputs = crossBuildInputs;
+              nativeBuildInputs = [
+                pkgs.pkg-config
+                rustToolchainCross
+              ];
 
-            PKG_CONFIG_PATH = lib.makeSearchPath "lib/pkgconfig" crossBuildInputs;
-            PKG_CONFIG_SYSROOT_DIR = "${crossPkgs.stdenv.cc.libc}";
-            LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+              LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
-            "${target.cargoLinkerEnv}" = "${crossPkgs.stdenv.cc}/bin/${crossPkgs.stdenv.cc.targetPrefix}cc";
+              "${target.cargoLinkerEnv}" = "${crossPkgs.stdenv.cc}/bin/${crossPkgs.stdenv.cc.targetPrefix}cc";
 
-            shellHook = ''
-              echo "rflasher cross-compilation environment (${target.rustTarget})"
-              echo "Rust version: $(rustc --version)"
-              echo ""
-              echo "Build with:"
-              echo "  cargo build --target ${target.rustTarget}"
-              echo ""
-            '';
-          };
+              shellHook = ''
+                echo "rflasher cross-compilation environment (${target.rustTarget})"
+                echo "Rust version: $(rustc --version)"
+                echo ""
+                echo "Build with:"
+                ${
+                  if isMusl then
+                    ''
+                      echo "  cargo build --target ${target.rustTarget} --no-default-features --features dummy,ch341a,ch347,dediprog,serprog,ft4222,ftdi-native,linux-spi,linux-mtd,internal,raiden"
+                      echo ""
+                      echo "Note: This is a musl static build. Uses pure-Rust backends (ftdi-native)"
+                      echo "to avoid C library dependencies. Binaries are fully statically linked."
+                    ''
+                  else
+                    ''
+                      echo "  cargo build --target ${target.rustTarget}"
+                    ''
+                }
+                echo ""
+              '';
+            }
+            // lib.optionalAttrs (!isMusl) {
+              PKG_CONFIG_PATH = lib.makeSearchPath "lib/pkgconfig" crossBuildInputs;
+              PKG_CONFIG_SYSROOT_DIR = "${crossPkgs.stdenv.cc.libc}";
+            }
+            // lib.optionalAttrs isMusl {
+              RUSTFLAGS = "-C target-feature=+crt-static";
+            }
+          );
 
         # Create a cross-compiled package for a given target
         mkCrossPackage =
           name: target:
           let
             crossPkgs = mkCrossPkgs target;
+            isMusl = target.isMusl or false;
           in
-          crossPkgs.rustPlatform.buildRustPackage {
-            pname = "rflasher";
-            version = "0.1.0";
-            src = ./.;
+          crossPkgs.rustPlatform.buildRustPackage (
+            {
+              pname = "rflasher";
+              version = "0.1.0";
+              src = ./.;
 
-            cargoLock.lockFile = ./Cargo.lock;
+              cargoLock.lockFile = ./Cargo.lock;
 
-            buildInputs = mkBuildInputs crossPkgs;
-            nativeBuildInputs = [
-              pkgs.pkg-config
-              rustToolchainCross
-            ];
+              buildInputs = mkBuildInputs crossPkgs;
+              nativeBuildInputs = [
+                pkgs.pkg-config
+                rustToolchainCross
+              ];
 
-            CARGO_BUILD_TARGET = target.rustTarget;
+              CARGO_BUILD_TARGET = target.rustTarget;
 
-            meta = with lib; {
-              description = "A modern Rust port of flashprog for reading, writing, and erasing flash chips";
-              homepage = "https://github.com/user/rflasher";
-              license = licenses.gpl2Plus;
-            };
-          };
+              meta = with lib; {
+                description = "A modern Rust port of flashprog for reading, writing, and erasing flash chips";
+                homepage = "https://github.com/user/rflasher";
+                license = licenses.gpl2Plus;
+              };
+            }
+            // lib.optionalAttrs isMusl {
+              # For musl static builds, use pure-Rust backends to avoid C library dependencies
+              buildNoDefaultFeatures = true;
+              buildFeatures = [
+                "dummy"
+                "ch341a"
+                "ch347"
+                "dediprog"
+                "serprog"
+                "ft4222"
+                "ftdi-native"
+                "linux-spi"
+                "linux-mtd"
+                "internal"
+                "raiden"
+              ];
+              RUSTFLAGS = "-C target-feature=+crt-static";
+            }
+          );
 
         # Generate all cross dev shells and packages
         crossDevShells = lib.mapAttrs' (
@@ -176,9 +231,10 @@
               echo "  cd crates/rflasher-wasm && trunk build  - Production build"
               echo ""
               echo "Cross-compilation shells:"
-              echo "  nix develop .#cross-i686    - i686-unknown-linux-gnu"
-              echo "  nix develop .#cross-aarch64 - aarch64-unknown-linux-gnu"
-              echo "  nix develop .#cross-armv7   - armv7-unknown-linux-gnueabihf"
+              echo "  nix develop .#cross-i686         - i686-unknown-linux-gnu"
+              echo "  nix develop .#cross-aarch64      - aarch64-unknown-linux-gnu"
+              echo "  nix develop .#cross-armv7        - armv7-unknown-linux-gnueabihf"
+              echo "  nix develop .#cross-aarch64-musl - aarch64-unknown-linux-musl (static)"
               echo ""
             '';
           };

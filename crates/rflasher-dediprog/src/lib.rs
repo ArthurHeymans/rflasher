@@ -16,6 +16,10 @@
 //! - V2: Extended protocol (SF100/SF200 >= 5.5, SF600 6.9-7.2.21)
 //! - V3: Latest protocol (SF600 >= 7.2.22, SF600PG2, SF700)
 //!
+//! Uses `maybe_async` to support both sync and async modes:
+//! - With `is_sync` feature (native CLI): blocking/synchronous
+//! - Without `is_sync` (WASM): async with WebUSB
+//!
 //! # Example
 //!
 //! ```no_run
@@ -59,18 +63,20 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(any(feature = "std", feature = "wasm")), no_std)]
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod device;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod error;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod protocol;
 
 #[cfg(feature = "std")]
-pub use device::{parse_options, Dediprog, DediprogConfig, DediprogDeviceInfo};
-#[cfg(feature = "std")]
+pub use device::DediprogDeviceInfo;
+#[cfg(any(feature = "std", feature = "wasm"))]
+pub use device::{parse_options, Dediprog, DediprogConfig};
+#[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{DediprogError, Result};
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 pub use protocol::{DeviceType, Protocol};

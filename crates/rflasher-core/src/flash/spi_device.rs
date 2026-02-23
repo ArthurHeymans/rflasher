@@ -95,6 +95,10 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         self.context().chip.erase_blocks()
     }
 
+    fn page_size(&self) -> u32 {
+        self.ctx.page_size() as u32
+    }
+
     // Write protection support
     #[cfg(feature = "alloc")]
     fn wp_supported(&self) -> bool {
