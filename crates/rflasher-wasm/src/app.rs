@@ -9,7 +9,8 @@ use rflasher_ch341a::Ch341a;
 use rflasher_ch347::{Ch347, SpiSpeed};
 use rflasher_core::chip::{ChipDatabase, FlashChip};
 use rflasher_core::flash::unified::{smart_write, WriteProgress, WriteStats};
-use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult, SpiFlashDevice};
+use rflasher_core::flash::{FlashContext, FlashDevice, HybridFlashDevice, ProbeResult, SpiFlashDevice};
+use rflasher_dediprog::{Dediprog, DediprogConfig};
 use rflasher_ftdi::{Ftdi, FtdiConfig, FtdiDeviceType, FtdiInterface};
 use rflasher_serprog::Serprog;
 
@@ -48,6 +49,8 @@ enum ProgrammerType {
     Ch347,
     /// FTDI MPSSE via WebUSB (FT2232H, FT4232H, FT232H, etc.)
     Ftdi,
+    /// Dediprog SF100/SF200/SF600/SF700 via WebUSB
+    Dediprog,
 }
 
 impl ProgrammerType {
@@ -57,6 +60,7 @@ impl ProgrammerType {
             ProgrammerType::Ch341a => "CH341A (WebUSB)",
             ProgrammerType::Ch347 => "CH347 (WebUSB)",
             ProgrammerType::Ftdi => "FTDI MPSSE (WebUSB)",
+            ProgrammerType::Dediprog => "Dediprog (WebUSB)",
         }
     }
 
@@ -64,18 +68,22 @@ impl ProgrammerType {
     fn is_webusb(&self) -> bool {
         matches!(
             self,
-            ProgrammerType::Ch341a | ProgrammerType::Ch347 | ProgrammerType::Ftdi
+            ProgrammerType::Ch341a
+                | ProgrammerType::Ch347
+                | ProgrammerType::Ftdi
+                | ProgrammerType::Dediprog
         )
     }
 }
 
-/// Connected programmer - wraps a serprog, CH341A, CH347, or FTDI device
+/// Connected programmer - wraps a serprog, CH341A, CH347, FTDI, or Dediprog device
 #[allow(clippy::large_enum_variant)]
 enum Programmer {
     Serprog(Serprog<WebSerialTransport>),
     Ch341a(Ch341a),
     Ch347(Ch347),
     Ftdi(Ftdi),
+    Dediprog(Dediprog),
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +121,64 @@ macro_rules! with_programmer {
             Programmer::Ftdi(mut $name) => {
                 let result = $body;
                 $shared.borrow_mut().programmer = Some(Programmer::Ftdi($name));
+                result
+            }
+            Programmer::Dediprog(mut $name) => {
+                let result = $body;
+                $shared.borrow_mut().programmer = Some(Programmer::Dediprog($name));
+                result
+            }
+        }
+    };
+}
+
+/// Like [`with_programmer!`], but wraps the programmer in a [`FlashDevice`]
+/// for operations that need chip-level read/write/erase.
+///
+/// For Dediprog: creates [`HybridFlashDevice`] (fast bulk read/write via
+/// `OpaqueMaster`) and calls `set_flash_size()` first.
+/// For all others: creates [`SpiFlashDevice`].
+///
+/// The body receives `$device` as `&mut impl FlashDevice`. The macro handles
+/// extracting the master back via `into_parts()` and putting the Programmer
+/// wrapper back into shared state.
+macro_rules! with_flash_device {
+    ($shared:expr, $programmer:expr, $ctx_flash:expr, $device:ident, $body:expr) => {
+        match $programmer {
+            Programmer::Serprog(master) => {
+                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                let result = { $body };
+                let (master, _) = $device.into_parts();
+                $shared.borrow_mut().programmer = Some(Programmer::Serprog(master));
+                result
+            }
+            Programmer::Ch341a(master) => {
+                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                let result = { $body };
+                let (master, _) = $device.into_parts();
+                $shared.borrow_mut().programmer = Some(Programmer::Ch341a(master));
+                result
+            }
+            Programmer::Ch347(master) => {
+                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                let result = { $body };
+                let (master, _) = $device.into_parts();
+                $shared.borrow_mut().programmer = Some(Programmer::Ch347(master));
+                result
+            }
+            Programmer::Ftdi(master) => {
+                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                let result = { $body };
+                let (master, _) = $device.into_parts();
+                $shared.borrow_mut().programmer = Some(Programmer::Ftdi(master));
+                result
+            }
+            Programmer::Dediprog(mut master) => {
+                master.set_flash_size($ctx_flash.total_size() as u32);
+                let mut $device = HybridFlashDevice::new(master, $ctx_flash);
+                let result = { $body };
+                let (master, _) = $device.into_parts();
+                $shared.borrow_mut().programmer = Some(Programmer::Dediprog(master));
                 result
             }
         }
@@ -647,6 +713,7 @@ impl RflasherApp {
             ProgrammerType::Ch341a => self.spawn_connect_ch341a(),
             ProgrammerType::Ch347 => self.spawn_connect_ch347(),
             ProgrammerType::Ftdi => self.spawn_connect_ftdi(),
+            ProgrammerType::Dediprog => self.spawn_connect_dediprog(),
         }
     }
 
@@ -849,6 +916,52 @@ impl RflasherApp {
         });
     }
 
+    fn spawn_connect_dediprog(&mut self) {
+        let shared = self.shared.clone();
+        let ctx = self.ctx.clone();
+        let config = DediprogConfig::default();
+
+        self.connection = ConnectionState::Connecting;
+        self.status.info("Requesting Dediprog device via WebUSB...");
+
+        wasm_bindgen_futures::spawn_local(async move {
+            shared.borrow_mut().busy = true;
+
+            match Dediprog::request_device().await {
+                Ok(device_info) => match Dediprog::open(device_info, config).await {
+                    Ok(dediprog) => {
+                        let name = format!(
+                            "Dediprog {}",
+                            dediprog.device_string()
+                        );
+                        let mut state = shared.borrow_mut();
+                        state.programmer = Some(Programmer::Dediprog(dediprog));
+                        state.messages.push(AsyncMessage::Connected {
+                            programmer_name: name,
+                        });
+                    }
+                    Err(e) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                    }
+                },
+                Err(e) => {
+                    shared
+                        .borrow_mut()
+                        .messages
+                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                }
+            }
+
+            shared.borrow_mut().busy = false;
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+    }
+
     fn spawn_disconnect(&mut self) {
         let shared = self.shared.clone();
 
@@ -871,6 +984,9 @@ impl RflasherApp {
                     }
                     Programmer::Ftdi(mut ftdi) => {
                         ftdi.shutdown().await;
+                    }
+                    Programmer::Dediprog(mut dediprog) => {
+                        dediprog.shutdown().await;
                     }
                 }
 
@@ -958,26 +1074,62 @@ impl RflasherApp {
             let programmer = shared.borrow_mut().programmer.take();
 
             if let Some(programmer) = programmer {
-                use rflasher_core::flash::unified::read_with_progress;
-
                 let ctx_flash = FlashContext::new(chip);
                 let mut buf = vec![0u8; size];
-                let mut progress = SharedProgress::new(shared.clone(), ctx.clone());
 
-                with_programmer!(shared, programmer, master, {
-                    let mut device = SpiFlashDevice::new(master, ctx_flash);
-                    let result = read_with_progress(&mut device, &mut buf, &mut progress).await;
-                    let (m, _) = device.into_parts();
-                    master = m;
+                /// Read chunk size.  Larger chunks reduce per-chunk overhead
+                /// (each chunk requires a new CMD_READ control transfer for
+                /// Dediprog, plus a yield/repaint cycle).  2 MiB gives ~8
+                /// progress updates for a 16 MiB flash while keeping overhead
+                /// low (8 CMD_READs instead of 64 with 256 KiB chunks).
+                const READ_CHUNK_SIZE: usize = 2 * 1024 * 1024;
+                /// Yield to browser every 2 MiB to keep the UI responsive.
+                const YIELD_INTERVAL: usize = 2 * 1024 * 1024;
 
-                    match result {
-                        Ok(()) => {
+                with_flash_device!(shared, programmer, ctx_flash, device, {
+                    let total = buf.len();
+                    let mut offset = 0usize;
+                    let mut last_yield = 0usize;
+                    let mut read_error: Option<rflasher_core::error::Error> = None;
+
+                    while offset < total {
+                        let chunk_size = core::cmp::min(READ_CHUNK_SIZE, total - offset);
+                        match device
+                            .read(offset as u32, &mut buf[offset..offset + chunk_size])
+                            .await
+                        {
+                            Ok(()) => {}
+                            Err(e) => {
+                                read_error = Some(e);
+                                break;
+                            }
+                        }
+                        offset += chunk_size;
+
+                        shared.borrow_mut().messages.push(AsyncMessage::Progress(
+                            ProgressUpdate::Reading {
+                                done: offset,
+                                total,
+                            },
+                        ));
+
+                        if offset >= last_yield + YIELD_INTERVAL {
+                            last_yield = offset;
+                            if let Some(ref ctx) = ctx {
+                                ctx.request_repaint();
+                            }
+                            yield_to_browser().await;
+                        }
+                    }
+
+                    match read_error {
+                        None => {
                             shared
                                 .borrow_mut()
                                 .messages
                                 .push(AsyncMessage::ReadComplete(buf));
                         }
-                        Err(e) => {
+                        Some(e) => {
                             shared
                                 .borrow_mut()
                                 .messages
@@ -1041,11 +1193,8 @@ impl RflasherApp {
                 let ctx_flash = FlashContext::new(chip);
                 let mut progress = SharedProgress::new(shared.clone(), ctx.clone());
 
-                with_programmer!(shared, programmer, master, {
-                    let mut device = SpiFlashDevice::new(master, ctx_flash);
+                with_flash_device!(shared, programmer, ctx_flash, device, {
                     let result = smart_write(&mut device, &data, &mut progress).await;
-                    let (m, _) = device.into_parts();
-                    master = m;
 
                     match result {
                         Ok(stats) => {
@@ -1101,11 +1250,8 @@ impl RflasherApp {
             if let Some(programmer) = programmer {
                 let ctx_flash = FlashContext::new(chip);
 
-                with_programmer!(shared, programmer, master, {
-                    let mut device = SpiFlashDevice::new(master, ctx_flash);
+                with_flash_device!(shared, programmer, ctx_flash, device, {
                     let result = device.erase(0, size).await;
-                    let (m, _) = device.into_parts();
-                    master = m;
 
                     match result {
                         Ok(()) => {
@@ -1176,18 +1322,10 @@ impl RflasherApp {
             if let Some(programmer) = programmer {
                 let ctx_flash = FlashContext::new(chip);
 
-                // Helper closure-like async block for verification
-                async fn do_verify<M: rflasher_core::programmer::SpiMaster>(
-                    master: M,
-                    ctx_flash: FlashContext,
-                    data: &[u8],
-                    shared: &SharedStateRef,
-                    ctx: &Option<egui::Context>,
-                ) -> (M, Option<String>) {
-                    let mut device = SpiFlashDevice::new(master, ctx_flash);
+                const CHUNK_SIZE: usize = 4096;
+                const YIELD_INTERVAL: usize = 65536;
 
-                    const CHUNK_SIZE: usize = 4096;
-                    const YIELD_INTERVAL: usize = 65536;
+                with_flash_device!(shared, programmer, ctx_flash, device, {
                     let total = data.len();
                     let mut offset = 0usize;
                     let mut last_repaint = 0usize;
@@ -1202,7 +1340,8 @@ impl RflasherApp {
                             Ok(()) => {
                                 let expected = &data[offset..offset + chunk_size];
                                 if buf != expected {
-                                    for (i, (a, b)) in buf.iter().zip(expected.iter()).enumerate() {
+                                    for (i, (a, b)) in buf.iter().zip(expected.iter()).enumerate()
+                                    {
                                         if a != b {
                                             verify_error = Some(format!(
                                                 "Mismatch at 0x{:X}: read 0x{:02X}, expected 0x{:02X}",
@@ -1241,15 +1380,6 @@ impl RflasherApp {
                             yield_to_browser().await;
                         }
                     }
-
-                    let (master, _) = device.into_parts();
-                    (master, verify_error)
-                }
-
-                with_programmer!(shared, programmer, master, {
-                    let (m, verify_error) =
-                        do_verify(master, ctx_flash, &data, &shared, &ctx).await;
-                    master = m;
 
                     match verify_error {
                         None => {
@@ -1363,6 +1493,11 @@ impl RflasherApp {
                         &mut self.programmer_type,
                         ProgrammerType::Ftdi,
                         ProgrammerType::Ftdi.label(),
+                    );
+                    ui.selectable_value(
+                        &mut self.programmer_type,
+                        ProgrammerType::Dediprog,
+                        ProgrammerType::Dediprog.label(),
                     );
                 });
         });
@@ -1800,6 +1935,12 @@ impl RflasherApp {
                     ui.monospace(concat!(
                         "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0403\", ",
                         "ATTR{idProduct}==\"6014\", MODE=\"0666\"",
+                    ));
+                    ui.add_space(3.0);
+                    ui.monospace("# Dediprog SF100/SF200/SF600/SF700 (VID:0483 PID:dada)");
+                    ui.monospace(concat!(
+                        "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0483\", ",
+                        "ATTR{idProduct}==\"dada\", MODE=\"0666\"",
                     ));
                 });
 
