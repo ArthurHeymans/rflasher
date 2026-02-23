@@ -47,9 +47,15 @@ pub enum Error {
     /// Erase operation failed
     EraseError(EraseFailure),
     /// Write/program operation failed
-    WriteError,
+    WriteError {
+        /// Address where write failed
+        addr: u32,
+    },
     /// Verify operation failed (data mismatch)
-    VerifyError,
+    VerifyError {
+        /// Address where mismatch was detected
+        addr: u32,
+    },
     /// Operation timed out
     Timeout,
 
@@ -77,7 +83,10 @@ pub enum Error {
 
     // I/O errors
     /// Read operation failed
-    ReadError,
+    ReadError {
+        /// Address where read failed
+        addr: u32,
+    },
     /// I/O error occurred
     IoError,
 
@@ -114,8 +123,12 @@ impl fmt::Display for Error {
             Self::ChipNotSupported => write!(f, "flash chip not supported"),
             Self::JedecIdMismatch => write!(f, "JEDEC ID mismatch"),
             Self::EraseError(failure) => write!(f, "{}", failure),
-            Self::WriteError => write!(f, "write operation failed"),
-            Self::VerifyError => write!(f, "verify failed: data mismatch"),
+            Self::WriteError { addr } => {
+                write!(f, "write operation failed at address 0x{addr:08X}")
+            }
+            Self::VerifyError { addr } => {
+                write!(f, "verify failed: data mismatch at address 0x{addr:08X}")
+            }
             Self::Timeout => write!(f, "operation timed out"),
             Self::AddressOutOfBounds => write!(f, "address out of bounds"),
             Self::InvalidAlignment => write!(f, "invalid alignment"),
@@ -125,7 +138,7 @@ impl fmt::Display for Error {
             Self::ProgrammerNotReady => write!(f, "programmer not ready"),
             Self::ProgrammerError => write!(f, "programmer error"),
             Self::IoModeNotSupported => write!(f, "I/O mode not supported by programmer"),
-            Self::ReadError => write!(f, "read operation failed"),
+            Self::ReadError { addr } => write!(f, "read operation failed at address 0x{addr:08X}"),
             Self::IoError => write!(f, "I/O error"),
             Self::LayoutError => write!(f, "layout validation failed"),
         }

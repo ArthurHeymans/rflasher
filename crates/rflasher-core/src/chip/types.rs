@@ -309,10 +309,13 @@ impl FlashChip {
         self.jedec_manufacturer == manufacturer && self.jedec_device == device
     }
 
+    /// Maximum addressable size with 3-byte addresses (16 MiB)
+    const MAX_3BYTE_ADDR_SIZE: u32 = 16 * 1024 * 1024;
+
     /// Check if this chip requires 4-byte addressing
     #[must_use]
     pub fn requires_4byte_addr(&self) -> bool {
-        self.total_size > 16 * 1024 * 1024
+        self.total_size > Self::MAX_3BYTE_ADDR_SIZE
     }
 
     /// Get the smallest erase block size across all erase operations

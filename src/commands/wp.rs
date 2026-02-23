@@ -77,8 +77,8 @@ fn parse_range(spec: &str) -> Result<WpRange, Box<dyn Error>> {
 /// Parse a number that may be decimal or hex
 fn parse_number(s: &str) -> Result<u32, Box<dyn Error>> {
     let s = s.trim();
-    if s.starts_with("0x") || s.starts_with("0X") {
-        u32::from_str_radix(&s[2..], 16)
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u32::from_str_radix(hex, 16)
             .map_err(|e| format!("Invalid hex number '{}': {}", s, e).into())
     } else {
         s.parse::<u32>()
@@ -89,8 +89,7 @@ fn parse_number(s: &str) -> Result<u32, Box<dyn Error>> {
 /// Show current write protection status
 pub fn cmd_status(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
-        eprintln!("Error: Write protection operations are not supported for this chip.");
-        std::process::exit(1);
+        return Err("Write protection operations are not supported for this chip".into());
     }
 
     let config = handle
@@ -112,8 +111,7 @@ pub fn cmd_status(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
 /// List available protection ranges
 pub fn cmd_list(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
-        eprintln!("Error: Write protection operations are not supported for this chip.");
-        std::process::exit(1);
+        return Err("Write protection operations are not supported for this chip".into());
     }
 
     let ranges = handle.get_available_wp_ranges();
@@ -140,8 +138,7 @@ pub fn cmd_list(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
 /// Enable hardware write protection
 pub fn cmd_enable(handle: &mut FlashHandle, temporary: bool) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
-        eprintln!("Error: Write protection operations are not supported for this chip.");
-        std::process::exit(1);
+        return Err("Write protection operations are not supported for this chip".into());
     }
 
     let options = WriteOptions {
@@ -162,8 +159,7 @@ pub fn cmd_enable(handle: &mut FlashHandle, temporary: bool) -> Result<(), Box<d
 /// Disable write protection
 pub fn cmd_disable(handle: &mut FlashHandle, temporary: bool) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
-        eprintln!("Error: Write protection operations are not supported for this chip.");
-        std::process::exit(1);
+        return Err("Write protection operations are not supported for this chip".into());
     }
 
     let options = WriteOptions {
@@ -188,8 +184,7 @@ pub fn cmd_range(
     temporary: bool,
 ) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
-        eprintln!("Error: Write protection operations are not supported for this chip.");
-        std::process::exit(1);
+        return Err("Write protection operations are not supported for this chip".into());
     }
 
     let range = parse_range(range_spec)?;
@@ -229,8 +224,7 @@ pub fn cmd_region(
     temporary: bool,
 ) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
-        eprintln!("Error: Write protection operations are not supported for this chip.");
-        std::process::exit(1);
+        return Err("Write protection operations are not supported for this chip".into());
     }
 
     // Find the region in the layout

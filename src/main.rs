@@ -45,13 +45,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Load chip database
-    let db = match load_chip_database(cli.chip_db.as_deref()) {
-        Ok(db) => db,
-        Err(e) => {
-            eprintln!("Failed to load chip database: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let db = load_chip_database(cli.chip_db.as_deref())
+        .map_err(|e| format!("Failed to load chip database: {}", e))?;
 
     log::info!("Loaded {} chip definitions", db.len());
 
@@ -350,20 +345,11 @@ fn print_chip_info(handle: &mut FlashHandle) {
             "JEDEC ID:        {:02X} {:04X}",
             info.jedec_manufacturer, info.jedec_device
         );
-        if info.total_size >= 1024 * 1024 {
-            println!(
-                "Size:            {} bytes ({} KiB / {} MiB)",
-                info.total_size,
-                info.total_size / 1024,
-                info.total_size / (1024 * 1024)
-            );
-        } else {
-            println!(
-                "Size:            {} bytes ({} KiB)",
-                info.total_size,
-                info.total_size / 1024,
-            );
-        }
+        println!(
+            "Size:            {} bytes ({})",
+            info.total_size,
+            commands::format_size(info.total_size)
+        );
         println!("Page size:       {} bytes", info.page_size);
 
         // Show SFDP status
@@ -387,29 +373,17 @@ fn print_chip_info(handle: &mut FlashHandle) {
                 if eb.is_uniform() {
                     // Uniform erase block - single size
                     let size = eb.uniform_size().unwrap_or(0);
-                    let size_str = if size >= 1024 * 1024 {
-                        format!("{} MiB", size / (1024 * 1024))
-                    } else if size >= 1024 {
-                        format!("{} KiB", size / 1024)
-                    } else {
-                        format!("{} bytes", size)
-                    };
-                    println!("  Opcode 0x{:02X}: {}", eb.opcode, size_str);
+                    println!(
+                        "  Opcode 0x{:02X}: {}",
+                        eb.opcode,
+                        commands::format_size(size)
+                    );
                 } else {
                     // Non-uniform erase block - show all regions
                     let regions: Vec<String> = eb
                         .regions()
                         .iter()
-                        .map(|r| {
-                            let size_str = if r.size >= 1024 * 1024 {
-                                format!("{}MiB", r.size / (1024 * 1024))
-                            } else if r.size >= 1024 {
-                                format!("{}KiB", r.size / 1024)
-                            } else {
-                                format!("{}B", r.size)
-                            };
-                            format!("{}x{}", r.count, size_str)
-                        })
+                        .map(|r| format!("{}x{}", r.count, commands::format_size(r.size)))
                         .collect();
                     println!("  Opcode 0x{:02X}: {}", eb.opcode, regions.join(" + "));
                 }
@@ -435,9 +409,9 @@ fn print_chip_info(handle: &mut FlashHandle) {
         println!("=====================================");
         println!();
         println!(
-            "Size: {} bytes ({} MiB)",
+            "Size: {} bytes ({})",
             flash_size,
-            flash_size / (1024 * 1024)
+            commands::format_size(flash_size)
         );
         println!();
 
@@ -448,11 +422,11 @@ fn print_chip_info(handle: &mut FlashHandle) {
                 println!("Intel Flash Descriptor regions:");
                 for region in &layout.regions {
                     println!(
-                        "  {:12} 0x{:08X} - 0x{:08X} ({} KiB)",
+                        "  {:12} 0x{:08X} - 0x{:08X} ({})",
                         region.name,
                         region.start,
                         region.end,
-                        (region.end - region.start + 1) / 1024
+                        commands::format_size(region.end - region.start + 1)
                     );
                 }
             } else {

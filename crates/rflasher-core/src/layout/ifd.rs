@@ -147,7 +147,7 @@ impl Layout {
 
     /// Parse layout from Intel Flash Descriptor in a file
     pub fn from_ifd_file(path: impl AsRef<std::path::Path>) -> Result<Self, LayoutError> {
-        let data = std::fs::read(path).map_err(|_| LayoutError::IoError)?;
+        let data = std::fs::read(path).map_err(|e| LayoutError::IoError(e.to_string()))?;
         parse_ifd(&data)
     }
 }

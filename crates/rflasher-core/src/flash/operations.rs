@@ -24,6 +24,7 @@ use super::context::{AddressMode, FlashContext};
 // =============================================================================
 
 /// The erased value for flash memory (all bits set)
+#[cfg(feature = "alloc")]
 const ERASED_VALUE: u8 = 0xFF;
 
 /// Determine if an erase is required to transition from `have` to `want`
@@ -42,7 +43,11 @@ const ERASED_VALUE: u8 = 0xFF;
 /// `true` if erasing is required, `false` if the write can proceed without erase
 #[cfg(feature = "alloc")]
 pub fn need_erase(have: &[u8], want: &[u8], granularity: WriteGranularity) -> bool {
-    assert_eq!(have.len(), want.len());
+    assert_eq!(
+        have.len(),
+        want.len(),
+        "need_erase: have and want must be the same length"
+    );
 
     match granularity {
         WriteGranularity::Bit => {
@@ -109,7 +114,11 @@ pub struct WriteRange {
 /// `Some(WriteRange)` if there are changes, `None` if no more changes from `offset`
 #[cfg(feature = "alloc")]
 pub fn get_next_write_range(have: &[u8], want: &[u8], offset: u32) -> Option<WriteRange> {
-    assert_eq!(have.len(), want.len());
+    assert_eq!(
+        have.len(),
+        want.len(),
+        "get_next_write_range: have and want must be the same length"
+    );
 
     let start_offset = offset as usize;
     if start_offset >= have.len() {
@@ -752,6 +761,7 @@ pub async fn read<M: SpiMaster + ?Sized>(
         IoMode::Qpi => {
             // QPI mode requires special handling - fall back to single for now
             // TODO: Implement QPI read when needed
+            log::warn!("QPI read mode not yet implemented, falling back to single I/O");
             if use_4byte {
                 protocol::read_4b(master, addr, buf).await
             } else {
@@ -762,7 +772,9 @@ pub async fn read<M: SpiMaster + ?Sized>(
 
     // Exit 4-byte mode if we entered it
     if enter_exit_4byte {
-        let _ = protocol::exit_4byte_mode(master).await;
+        if let Err(e) = protocol::exit_4byte_mode(master).await {
+            log::warn!("Failed to exit 4-byte address mode: {}", e);
+        }
     }
 
     result
@@ -772,6 +784,10 @@ pub async fn read<M: SpiMaster + ?Sized>(
 ///
 /// This function handles page alignment and splitting large writes
 /// into page-sized chunks. The target region must be erased first.
+///
+/// Respects the programmer's `max_write_len()` to avoid sending chunks
+/// larger than the hardware can handle (e.g., Intel swseq is limited to
+/// 64 bytes).
 #[maybe_async]
 pub async fn write<M: SpiMaster + ?Sized>(
     master: &mut M,
@@ -787,6 +803,10 @@ pub async fn write<M: SpiMaster + ?Sized>(
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
     let use_native = ctx.use_native_4byte;
 
+    // Get the master's maximum write length - some controllers have limits
+    // smaller than a full page (e.g., Intel swseq is limited to 64 bytes)
+    let max_write = master.max_write_len();
+
     // Enter 4-byte mode if needed and not using native commands
     if use_4byte && !use_native {
         protocol::enter_4byte_mode(master).await?;
@@ -800,7 +820,8 @@ pub async fn write<M: SpiMaster + ?Sized>(
         let page_offset = (current_addr as usize) % page_size;
         let bytes_to_page_end = page_size - page_offset;
         let remaining = data.len() - offset;
-        let chunk_size = core::cmp::min(bytes_to_page_end, remaining);
+        // Respect both page boundaries and the master's maximum write length
+        let chunk_size = core::cmp::min(core::cmp::min(bytes_to_page_end, remaining), max_write);
 
         let chunk = &data[offset..offset + chunk_size];
 
@@ -813,7 +834,9 @@ pub async fn write<M: SpiMaster + ?Sized>(
         if result.is_err() {
             // Try to exit 4-byte mode before returning error
             if use_4byte && !use_native {
-                let _ = protocol::exit_4byte_mode(master).await;
+                if let Err(e) = protocol::exit_4byte_mode(master).await {
+                    log::warn!("Failed to exit 4-byte address mode: {}", e);
+                }
             }
             return result;
         }

@@ -152,7 +152,7 @@ impl FmapSearchable for &[u8] {
         let end = offset + buf.len();
 
         if end > self.len() {
-            return Err(LayoutError::IoError);
+            return Err(LayoutError::IoError("read beyond end of buffer".into()));
         }
 
         buf.copy_from_slice(&self[offset..end]);
@@ -341,7 +341,7 @@ impl Layout {
 
     /// Parse layout from FMAP in a file
     pub fn from_fmap_file(path: impl AsRef<std::path::Path>) -> Result<Self, LayoutError> {
-        let data = std::fs::read(path).map_err(|_| LayoutError::IoError)?;
+        let data = std::fs::read(path).map_err(|e| LayoutError::IoError(e.to_string()))?;
         parse_fmap(&data)
     }
 }

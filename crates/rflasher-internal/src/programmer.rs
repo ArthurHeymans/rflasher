@@ -260,6 +260,7 @@ impl SpiMaster for InternalProgrammer {
 pub fn programmer_info() -> rflasher_core::programmer::ProgrammerInfo {
     rflasher_core::programmer::ProgrammerInfo {
         name: "internal",
+        aliases: &[],
         description: "Intel ICH/PCH and AMD SPI100 internal flash programmer",
         requires_root: true,
     }

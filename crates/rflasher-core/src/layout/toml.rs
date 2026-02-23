@@ -22,7 +22,7 @@
 use std::format;
 use std::fs;
 use std::path::Path;
-use std::string::String;
+use std::string::{String, ToString};
 use std::vec::Vec;
 
 use super::{Layout, LayoutError, LayoutSource, Region};
@@ -127,7 +127,7 @@ fn parse_size(s: &str) -> Result<u32, String> {
 impl Layout {
     /// Load a layout from a TOML file
     pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Self, LayoutError> {
-        let content = fs::read_to_string(path).map_err(|_| LayoutError::IoError)?;
+        let content = fs::read_to_string(path).map_err(|e| LayoutError::IoError(e.to_string()))?;
         Self::from_toml_str(&content)
     }
 
@@ -174,7 +174,7 @@ impl Layout {
     /// Save layout to a TOML file
     pub fn to_toml_file(&self, path: impl AsRef<Path>) -> Result<(), LayoutError> {
         let content = self.to_toml_string()?;
-        fs::write(path, content).map_err(|_| LayoutError::IoError)
+        fs::write(path, content).map_err(|e| LayoutError::IoError(e.to_string()))
     }
 
     /// Convert layout to TOML string
