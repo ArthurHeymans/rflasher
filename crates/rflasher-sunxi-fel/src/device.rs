@@ -484,18 +484,6 @@ impl SpiMaster for SunxiFel {
             .map_err(|_| CoreError::ProgrammerError)
     }
 
-    fn native_erase_block(
-        &mut self,
-        opcode: u8,
-        addr: u32,
-        use_4byte: bool,
-    ) -> Option<CoreResult<()>> {
-        Some(
-            self.erase_block_bytecode(opcode, addr, use_4byte)
-                .map_err(|_| CoreError::ProgrammerError),
-        )
-    }
-
     fn delay_us(&mut self, us: u32) {
         std::thread::sleep(std::time::Duration::from_micros(us as u64));
     }
@@ -524,9 +512,32 @@ impl OpaqueMaster for SunxiFel {
             .map_err(|_| CoreError::WriteError { addr })
     }
 
-    fn erase(&mut self, _addr: u32, _len: u32) -> CoreResult<()> {
-        // Erase is handled by HybridFlashDevice through SpiMaster
-        // (with native_erase_block acceleration). Not used directly.
-        Err(CoreError::ProgrammerError)
+    fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
+        // Erase using on-SoC bytecodes (FAST for WREN + erase, SPINOR_WAIT).
+        // Pick the largest erase block size that aligns with the range.
+        // Standard SPI NOR erase sizes: 4KB (0x20), 32KB (0x52), 64KB (0xD8).
+        let use_4byte = self.use_4byte_addr;
+        let end = addr + len;
+        let mut current = addr;
+
+        while current < end {
+            let remaining = end - current;
+
+            // Pick the largest aligned erase block that fits
+            let (opcode, block_size) = if remaining >= 65536 && current % 65536 == 0 {
+                (0xD8u8, 65536u32) // 64KB block erase
+            } else if remaining >= 32768 && current % 32768 == 0 {
+                (0x52u8, 32768u32) // 32KB block erase
+            } else {
+                (0x20u8, 4096u32) // 4KB sector erase
+            };
+
+            self.erase_block_bytecode(opcode, current, use_4byte)
+                .map_err(|_| CoreError::ProgrammerError)?;
+
+            current += block_size;
+        }
+
+        Ok(())
     }
 }

@@ -127,26 +127,6 @@ pub trait SpiMaster {
         true
     }
 
-    /// Native erase block with on-device busy-waiting.
-    ///
-    /// Programmers with firmware-level busy-wait (e.g., `SPI_CMD_SPINOR_WAIT`)
-    /// should override this to avoid host-side status register polling.
-    ///
-    /// Returns `None` if not supported (caller falls back to the generic path).
-    ///
-    /// # Arguments
-    /// * `opcode` - Erase opcode (e.g., 0x20 for 4KB, 0xD8 for 64KB)
-    /// * `addr` - Block address to erase
-    /// * `use_4byte` - Whether to use 4-byte addressing
-    fn native_erase_block(
-        &mut self,
-        _opcode: u8,
-        _addr: u32,
-        _use_4byte: bool,
-    ) -> Option<Result<()>> {
-        None
-    }
-
     /// Delay for the specified number of microseconds
     async fn delay_us(&mut self, us: u32);
 }
@@ -205,15 +185,6 @@ impl SpiMaster for alloc::boxed::Box<dyn SpiMaster + Send> {
 
     fn probe_opcode(&self, opcode: u8) -> bool {
         (**self).probe_opcode(opcode)
-    }
-
-    fn native_erase_block(
-        &mut self,
-        opcode: u8,
-        addr: u32,
-        use_4byte: bool,
-    ) -> Option<Result<()>> {
-        (**self).native_erase_block(opcode, addr, use_4byte)
     }
 
     fn delay_us(&mut self, us: u32) {
