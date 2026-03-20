@@ -72,7 +72,7 @@ impl FelTransport {
         if mps == 0 {
             return len;
         }
-        (len + mps - 1) / mps * mps
+        len.div_ceil(mps) * mps
     }
 
     fn usb_bulk_send(&mut self, data: &[u8]) -> Result<()> {

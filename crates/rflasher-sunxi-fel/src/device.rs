@@ -367,7 +367,7 @@ impl SunxiFel {
             // Pack as many pages as will fit (matching xfel's loop bounds:
             //   clen < cmdlen - 19 - 1  AND  txlen < swaplen - granularity - addr_overhead)
             while remaining > 0
-                && cbuf.len() + per_page_cbuf + 1 <= cmdlen
+                && cbuf.len() + per_page_cbuf < cmdlen
                 && txbuf.len() + max_tx_per_page <= swaplen
             {
                 // Respect page boundaries

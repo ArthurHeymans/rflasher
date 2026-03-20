@@ -193,7 +193,10 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         // (block selection, busy-wait, etc.). If it returns Ok, we're done.
         // Programmers without firmware erase (e.g., Dediprog) return Err,
         // triggering the SPI fallback below.
-        if OpaqueMaster::erase(&mut self.master, addr, len).await.is_ok() {
+        if OpaqueMaster::erase(&mut self.master, addr, len)
+            .await
+            .is_ok()
+        {
             return Ok(());
         }
 
