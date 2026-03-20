@@ -217,15 +217,24 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
                 .block_size_at_offset(offset_in_layout)
                 .unwrap_or(max_block_size);
 
-            let result = protocol::erase_block(
-                self.master(),
-                opcode,
-                current_addr,
-                use_4byte && use_native,
-                poll_delay_us,
-                timeout_us,
-            )
-            .await;
+            // Try native erase first (on-device busy-wait, e.g. SPI_CMD_SPINOR_WAIT).
+            // Falls back to generic WREN + erase + host-side RDSR polling.
+            let result = if let Some(r) =
+                self.master()
+                    .native_erase_block(opcode, current_addr, use_4byte && use_native)
+            {
+                r
+            } else {
+                protocol::erase_block(
+                    self.master(),
+                    opcode,
+                    current_addr,
+                    use_4byte && use_native,
+                    poll_delay_us,
+                    timeout_us,
+                )
+                .await
+            };
 
             if result.is_err() {
                 if use_4byte && !use_native {

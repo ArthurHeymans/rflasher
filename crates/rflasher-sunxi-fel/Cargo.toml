@@ -1,0 +1,17 @@
+[package]
+name = "rflasher-sunxi-fel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Allwinner sunxi FEL SPI NOR programmer support for rflasher"
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std", "is_sync", "nusb"]
+is_sync = ["rflasher-core/is_sync", "maybe-async/is_sync"]
+
+[dependencies]
+rflasher-core.workspace = true
+nusb = { workspace = true, optional = true }
+maybe-async.workspace = true
+log.workspace = true

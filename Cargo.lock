@@ -3010,6 +3010,7 @@ dependencies = [
  "rflasher-linux-spi",
  "rflasher-raiden",
  "rflasher-serprog",
+ "rflasher-sunxi-fel",
 ]
 
 [[package]]
@@ -3121,6 +3122,16 @@ dependencies = [
  "thiserror 2.0.17",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "rflasher-sunxi-fel"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "maybe-async",
+ "nusb",
+ "rflasher-core",
 ]
 
 [[package]]
