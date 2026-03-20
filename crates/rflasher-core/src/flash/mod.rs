@@ -55,7 +55,7 @@ pub use spi_device::SpiFlashDevice;
 
 // Re-export low-level SPI operations (work with SpiMaster directly)
 // For high-level operations that work with any FlashDevice, use the `unified` module
-pub use operations::{read, write};
+pub use operations::{read, select_erase_block, write};
 
 // Re-export detailed probe result
 #[cfg(feature = "std")]

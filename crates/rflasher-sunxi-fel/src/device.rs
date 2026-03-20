@@ -19,12 +19,14 @@
 //!   xfel's `spinor_helper_write` approach.
 //!
 //! Use with `HybridFlashDevice` for optimal performance:
-//! - read/write → OpaqueMaster (fast bulk path)
-//! - erase/WP  → SpiMaster (with `native_erase_block` for on-SoC busy-wait)
+//! - read/write/erase → OpaqueMaster (firmware-accelerated)
+//! - WP/status regs   → SpiMaster (generic SPI commands)
 
 use nusb::transfer::{Bulk, In, Out};
 use nusb::MaybeFuture;
+use rflasher_core::chip::EraseBlock;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
+use rflasher_core::flash::select_erase_block;
 use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
 use rflasher_core::spi::SpiCommand;
 
@@ -42,6 +44,10 @@ pub struct SunxiFel {
     /// Whether to use 4-byte addressing for OpaqueMaster read/write.
     /// Set after probing via `set_use_4byte_addr()` when the flash is >16MB.
     use_4byte_addr: bool,
+    /// Chip erase block table, set after probing via `set_erase_blocks()`.
+    /// Used by `OpaqueMaster::erase()` to select the correct opcode and
+    /// block size from the chip's actual capabilities (from RON database or SFDP).
+    erase_blocks: Vec<EraseBlock>,
 }
 
 impl SunxiFel {
@@ -136,7 +142,17 @@ impl SunxiFel {
             spi_info,
             _interface: interface,
             use_4byte_addr: false,
+            erase_blocks: Vec::new(),
         })
+    }
+
+    /// Set the chip's erase block table for `OpaqueMaster::erase()`.
+    ///
+    /// Call this after probing with the chip's erase blocks from the RON
+    /// database or SFDP. Without this, `OpaqueMaster::erase()` will return
+    /// an error and the hybrid adapter falls back to SPI-based erase.
+    pub fn set_erase_blocks(&mut self, blocks: Vec<EraseBlock>) {
+        self.erase_blocks = blocks;
     }
 
     /// Set whether to use 4-byte addressing for bulk read/write operations.
@@ -513,26 +529,28 @@ impl OpaqueMaster for SunxiFel {
     }
 
     fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
-        // Erase using on-SoC bytecodes (FAST for WREN + erase, SPINOR_WAIT).
-        // Pick the largest erase block size that aligns with the range.
-        // Standard SPI NOR erase sizes: 4KB (0x20), 32KB (0x52), 64KB (0xD8).
+        // Use the chip's actual erase block table (from RON/SFDP) to select
+        // the right opcode and block size. If no erase blocks are configured,
+        // return Err so the hybrid adapter falls back to SPI-based erase.
+        if self.erase_blocks.is_empty() {
+            return Err(CoreError::ProgrammerError);
+        }
+
+        let erase_block =
+            select_erase_block(&self.erase_blocks, addr, len).ok_or(CoreError::ProgrammerError)?;
+
         let use_4byte = self.use_4byte_addr;
-        let end = addr + len;
+        let max_block_size = erase_block.max_block_size();
         let mut current = addr;
+        let end = addr + len;
 
         while current < end {
-            let remaining = end - current;
+            let offset_in_layout = current - addr;
+            let block_size = erase_block
+                .block_size_at_offset(offset_in_layout)
+                .unwrap_or(max_block_size);
 
-            // Pick the largest aligned erase block that fits
-            let (opcode, block_size) = if remaining >= 65536 && current % 65536 == 0 {
-                (0xD8u8, 65536u32) // 64KB block erase
-            } else if remaining >= 32768 && current % 32768 == 0 {
-                (0x52u8, 32768u32) // 32KB block erase
-            } else {
-                (0x20u8, 4096u32) // 4KB sector erase
-            };
-
-            self.erase_block_bytecode(opcode, current, use_4byte)
+            self.erase_block_bytecode(erase_block.opcode, current, use_4byte)
                 .map_err(|_| CoreError::ProgrammerError)?;
 
             current += block_size;
