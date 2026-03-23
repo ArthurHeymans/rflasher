@@ -267,6 +267,7 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
 // Write Protection Support (delegates to SpiMaster, identical to SpiFlashDevice)
 // =============================================================================
 
+#[cfg(feature = "alloc")]
 impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     fn wp_bit_map(&self) -> WpRegBitMap {
         let features = self.ctx.chip.features;

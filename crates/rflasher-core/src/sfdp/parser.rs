@@ -529,6 +529,30 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         .map(|et| EraseBlock::with_count(et.opcode, et.size, total_size / et.size))
         .collect();
 
+    // If the chip has a 4-byte address instruction table, add the 4BA erase opcodes.
+    // These correspond 1-to-1 with the BFPT erase types (type 1..4 in order) but use
+    // the 4BA opcode variants (e.g. 0x21 for 4KB, 0x5C for 32KB, 0xDC for 64KB).
+    // JESD216B §6.4.19: DWORD 2 of the 4BA table contains the erase opcodes for types 1-4.
+    if let Some(ref four_byte_table) = info.four_byte_addr_table {
+        let valid_types: Vec<_> = params
+            .erase_types
+            .iter()
+            .enumerate()
+            .filter(|(_, et)| et.is_valid())
+            .collect();
+        for (type_index, et) in valid_types {
+            if let Some(opcode_4ba) = four_byte_table.erase_opcodes.opcode_for_type(type_index) {
+                if opcode_4ba != et.opcode {
+                    erase_blocks.push(EraseBlock::with_count(
+                        opcode_4ba,
+                        et.size,
+                        total_size / et.size,
+                    ));
+                }
+            }
+        }
+    }
+
     // Sort by size (smallest first)
     erase_blocks.sort_by_key(|eb| eb.min_block_size());
 
@@ -1031,6 +1055,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "is_sync")]
     fn test_parse_mx25l6436e_sfdp() {
         let mut mock = MockSfdpFlash::new();
         let info = probe(&mut mock).expect("SFDP probe should succeed");
@@ -1255,6 +1280,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "is_sync")]
     fn test_mx25l6436e_fast_read_params() {
         let mut mock = MockSfdpFlash::new();
         let info = probe(&mut mock).expect("SFDP probe should succeed");
