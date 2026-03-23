@@ -12,6 +12,7 @@
             features: (otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 256)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 2)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 1)]),
@@ -26,6 +27,7 @@
             features: (otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 256)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 2)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 1)]),
@@ -40,6 +42,7 @@
             features: (otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 512)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 4)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 2)]),
@@ -54,6 +57,7 @@
             features: (otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 512)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 4)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 2)]),
@@ -68,6 +72,7 @@
             features: (otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 1024)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 8)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 4)]),
@@ -82,6 +87,7 @@
             features: (otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 1024)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 8)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 4)]),
@@ -96,6 +102,7 @@
             features: (otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 2048)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 16)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 8)]),
@@ -110,6 +117,7 @@
             features: (otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 2048)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 16)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 8)]),
@@ -124,6 +132,7 @@
             features: (otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 4096)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 32)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 16)]),
@@ -138,6 +147,7 @@
             features: (otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 4096)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 32)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 16)]),
@@ -152,6 +162,7 @@
             features: (otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 8192)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 64)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 32)]),
@@ -166,6 +177,7 @@
             features: (otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 8192)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 64)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 32)]),
@@ -180,6 +192,7 @@
             features: (otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 16384)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 128)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 64)]),
@@ -194,6 +207,7 @@
             features: (otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 16384)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 128)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 64)]),
@@ -208,6 +222,7 @@
             features: (otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 32768)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 256)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 128)]),
@@ -222,6 +237,7 @@
             features: (otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 32768)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 256)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 128)]),
@@ -236,6 +252,7 @@
             features: (otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
+                (opcode: 0x81, regions: [(size: B(256), count: 65536)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 512)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 256)]),

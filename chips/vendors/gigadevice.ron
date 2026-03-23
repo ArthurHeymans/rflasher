@@ -31,7 +31,6 @@
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 2)]),
-                (opcode: 0xD8, regions: [(size: KiB(64), count: 1)]),
                 (opcode: 0x60, regions: [(size: KiB(64), count: 1)]),
                 (opcode: 0xC7, regions: [(size: KiB(64), count: 1)]),
             ],
@@ -293,7 +292,7 @@
             device_id: 0x6015,
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
-            voltage: (min: 1650, max: 2000),
+            voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 64)]),
@@ -307,7 +306,7 @@
             device_id: 0x6016,
             total_size: MiB(4),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
-            voltage: (min: 1650, max: 2000),
+            voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 128)]),
@@ -321,7 +320,7 @@
             device_id: 0x6017,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
-            voltage: (min: 1650, max: 2000),
+            voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 256)]),
@@ -335,7 +334,7 @@
             device_id: 0x6018,
             total_size: MiB(16),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
-            voltage: (min: 1650, max: 2000),
+            voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 512)]),
@@ -365,7 +364,7 @@
             device_id: 0x6314,
             total_size: MiB(1),
             features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
-            voltage: (min: 1650, max: 1950),
+            voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 32)]),
@@ -379,7 +378,7 @@
             device_id: 0x6315,
             total_size: MiB(2),
             features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
-            voltage: (min: 1650, max: 1950),
+            voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 64)]),
@@ -393,7 +392,7 @@
             device_id: 0x6316,
             total_size: MiB(4),
             features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
-            voltage: (min: 1650, max: 1950),
+            voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 128)]),
@@ -407,7 +406,7 @@
             device_id: 0x6317,
             total_size: MiB(8),
             features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
-            voltage: (min: 1650, max: 1950),
+            voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 256)]),
@@ -421,7 +420,7 @@
             device_id: 0x6318,
             total_size: MiB(16),
             features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
-            voltage: (min: 1650, max: 1950),
+            voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 512)]),
@@ -437,7 +436,7 @@
             device_id: 0x6514,
             total_size: MiB(1),
             features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
-            voltage: (min: 1650, max: 2000),
+            voltage: (min: 1650, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
                 (opcode: 0x52, regions: [(size: KiB(32), count: 32)]),
@@ -542,6 +541,8 @@
                 (opcode: 0x52, regions: [(size: KiB(32), count: 2048)]),
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 1024)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 1024)]),
+                (opcode: 0x60, regions: [(size: MiB(64), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(64), count: 1)]),
             ],
             tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
         ),
@@ -558,6 +559,8 @@
                 (opcode: 0x5C, regions: [(size: KiB(32), count: 2048)]),
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 1024)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 1024)]),
+                (opcode: 0x60, regions: [(size: MiB(64), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(64), count: 1)]),
             ],
         ),
         (
@@ -573,6 +576,8 @@
                 (opcode: 0x52, regions: [(size: KiB(32), count: 4096)]),
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 2048)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 2048)]),
+                (opcode: 0x60, regions: [(size: MiB(128), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(128), count: 1)]),
             ],
         ),
         (
@@ -588,6 +593,8 @@
                 (opcode: 0x5C, regions: [(size: KiB(32), count: 4096)]),
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 2048)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 2048)]),
+                (opcode: 0x60, regions: [(size: MiB(128), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(128), count: 1)]),
             ],
         ),
         (
@@ -603,6 +610,8 @@
                 (opcode: 0x52, regions: [(size: KiB(32), count: 8192)]),
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 4096)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 4096)]),
+                (opcode: 0x60, regions: [(size: MiB(256), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(256), count: 1)]),
             ],
         ),
         (
@@ -618,6 +627,8 @@
                 (opcode: 0x5C, regions: [(size: KiB(32), count: 8192)]),
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 4096)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 4096)]),
+                (opcode: 0x60, regions: [(size: MiB(256), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(256), count: 1)]),
             ],
         ),
         (
@@ -848,6 +859,8 @@
                 (opcode: 0x52, regions: [(size: KiB(32), count: 4096)]),
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 2048)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 2048)]),
+                (opcode: 0x60, regions: [(size: MiB(128), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(128), count: 1)]),
             ],
         ),
         (
@@ -863,6 +876,8 @@
                 (opcode: 0x52, regions: [(size: KiB(32), count: 4096)]),
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 2048)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 2048)]),
+                (opcode: 0x60, regions: [(size: MiB(128), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(128), count: 1)]),
             ],
         ),
         (
@@ -878,6 +893,8 @@
                 (opcode: 0x52, regions: [(size: KiB(32), count: 8192)]),
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 4096)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 4096)]),
+                (opcode: 0x60, regions: [(size: MiB(256), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(256), count: 1)]),
             ],
         ),
         (
@@ -893,6 +910,8 @@
                 (opcode: 0x52, regions: [(size: KiB(32), count: 8192)]),
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 4096)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 4096)]),
+                (opcode: 0x60, regions: [(size: MiB(256), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(256), count: 1)]),
             ],
         ),
 
