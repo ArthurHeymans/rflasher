@@ -143,6 +143,7 @@ pub fn cmd_enable(handle: &mut FlashHandle, temporary: bool) -> Result<(), Box<d
 
     let options = WriteOptions {
         volatile: temporary,
+        ..Default::default()
     };
 
     handle
@@ -164,6 +165,7 @@ pub fn cmd_disable(handle: &mut FlashHandle, temporary: bool) -> Result<(), Box<
 
     let options = WriteOptions {
         volatile: temporary,
+        ..Default::default()
     };
 
     handle
@@ -190,6 +192,7 @@ pub fn cmd_range(
     let range = parse_range(range_spec)?;
     let options = WriteOptions {
         volatile: temporary,
+        ..Default::default()
     };
     let total_size = handle.size();
 
@@ -237,6 +240,7 @@ pub fn cmd_region(
     let range = WpRange::new(region.start, region.end - region.start + 1);
     let options = WriteOptions {
         volatile: temporary,
+        ..Default::default()
     };
     let total_size = handle.size();
 

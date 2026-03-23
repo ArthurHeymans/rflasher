@@ -223,14 +223,27 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+        use crate::chip::{Features, WriteGranularity};
+
         let ctx = self.context();
         if !ctx.is_valid_range(addr, data.len()) {
             return Err(Error::AddressOutOfBounds);
         }
 
+        let features = ctx.chip.features;
+        let write_granularity = ctx.chip.write_granularity;
         let page_size = ctx.page_size();
         let use_4byte = ctx.address_mode == AddressMode::FourByte;
         let use_native = ctx.use_native_4byte;
+
+        // SST25 AAI word program: chip database sets AAI_WORD for SST25VFxxxB/SST25WFxxx.
+        // These chips require a streaming protocol (0xAD) rather than page program (0x02).
+        // AAI uses 3-byte addressing only — 4-byte mode is irrelevant for SST25 chips.
+        // Note: SFDP-probed chips may report WriteGranularity::Byte (BFPT DWORD1 bit[2]=0)
+        // without AAI_WORD being set; those fall through to single-byte page program below.
+        if features.contains(Features::AAI_WORD) {
+            return protocol::aai_word_program(self.master(), addr, data).await;
+        }
 
         // Get the master's maximum write length - some controllers have limits
         // smaller than a full page (e.g., Intel swseq is limited to 64 bytes)
@@ -245,13 +258,20 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         let mut current_addr = addr;
 
         while offset < data.len() {
-            // Calculate how many bytes until the next page boundary
-            let page_offset = (current_addr as usize) % page_size;
-            let bytes_to_page_end = page_size - page_offset;
             let remaining = data.len() - offset;
-            // Respect both page boundaries and the master's maximum write length
-            let chunk_size =
-                core::cmp::min(core::cmp::min(bytes_to_page_end, remaining), max_write);
+
+            let chunk_size = if write_granularity == WriteGranularity::Byte {
+                // Single-byte page program: one byte per WREN+PP+WIP cycle.
+                // Used for SFDP-detected chips reporting byte granularity (BFPT DWORD1
+                // bit[2]=0) that don't have AAI_WORD — matches flashprog spi_chip_write_1.
+                1
+            } else {
+                // Page-granularity program: up to a full page per command, respecting
+                // page boundaries and the master's maximum write length.
+                let page_offset = (current_addr as usize) % page_size;
+                let bytes_to_page_end = page_size - page_offset;
+                core::cmp::min(core::cmp::min(bytes_to_page_end, remaining), max_write)
+            };
 
             let chunk = &data[offset..offset + chunk_size];
 
@@ -262,7 +282,6 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             };
 
             if result.is_err() {
-                // Try to exit 4-byte mode before returning error
                 if use_4byte && !use_native {
                     if let Err(e) = protocol::exit_4byte_mode(self.master()).await {
                         log::warn!("Failed to exit 4-byte address mode: {}", e);
@@ -284,10 +303,25 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
+        use crate::chip::Features;
+
         let ctx = self.context();
         if !ctx.is_valid_range(addr, len as usize) {
             return Err(Error::AddressOutOfBounds);
         }
+
+        // Extract what we need from ctx before taking a mutable borrow on self.master()
+        let needs_sst26_unprotect = ctx.chip.features.contains(Features::SST26_BPR);
+
+        // SST26 chips use a per-block protection register (not SR BP bits).
+        // A global unlock (WREN + ULBPR 0x98) is required before any erase succeeds.
+        // This is equivalent to flashprog's ssi_disable_blockprotect_sst26_global_unprotect().
+        if needs_sst26_unprotect {
+            protocol::sst26_global_unprotect(self.master()).await?;
+        }
+
+        // Re-borrow ctx after the mutable borrow above is released
+        let ctx = self.context();
 
         // Find the best erase block size for this operation
         let erase_block = select_erase_block(ctx.chip.erase_blocks(), addr, len)
@@ -448,10 +482,26 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
         wp::read_wp_config(&mut self.master, &bit_map, total_size, decoder).await
     }
 
+    /// Augment `WriteOptions` with chip-specific settings derived from feature flags.
+    ///
+    /// Injects `use_ewsr = true` when the chip has `WRSR_EWSR` (legacy SST25 chips
+    /// that require EWSR (0x50) instead of WREN (0x06) before status register writes).
+    fn chip_write_options(&self, options: WriteOptions) -> WriteOptions {
+        WriteOptions {
+            use_ewsr: self
+                .ctx
+                .chip
+                .features
+                .contains(crate::chip::Features::WRSR_EWSR),
+            ..options
+        }
+    }
+
     /// Write write protection bits
     #[maybe_async]
     pub async fn write_wp_bits(&mut self, bits: &WpBits, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
+        let options = self.chip_write_options(options);
         wp::write_wp_bits(&mut self.master, bits, &bit_map, options).await
     }
 
@@ -465,6 +515,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
+        let options = self.chip_write_options(options);
         wp::write_wp_config(
             &mut self.master,
             config,
@@ -480,6 +531,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     #[maybe_async]
     pub async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
+        let options = self.chip_write_options(options);
         wp::set_wp_mode(&mut self.master, mode, &bit_map, options).await
     }
 
@@ -489,6 +541,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
+        let options = self.chip_write_options(options);
         wp::set_wp_range(
             &mut self.master,
             range,
@@ -504,6 +557,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     #[maybe_async]
     pub async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
+        let options = self.chip_write_options(options);
         wp::disable_wp(&mut self.master, &bit_map, options).await
     }
 

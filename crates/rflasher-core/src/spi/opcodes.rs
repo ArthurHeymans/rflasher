@@ -11,8 +11,24 @@
 pub const WREN: u8 = 0x06;
 /// Write Disable - clears WEL bit in status register
 pub const WRDI: u8 = 0x04;
-/// Enable Write Status Register (legacy SST command)
+/// Enable Write Status Register (legacy SST command, used instead of WREN before WRSR)
 pub const EWSR: u8 = 0x50;
+
+// ============================================================================
+// SST-specific opcodes
+// ============================================================================
+
+/// AAI Word Program (SST25 series) - Auto Address Increment, writes 2 bytes per command
+///
+/// First invocation: opcode + 3-byte address + 2 data bytes (after WREN)
+/// Subsequent invocations: opcode + 2 data bytes only (address auto-increments)
+/// Exit: WRDI (0x04)
+pub const AAI_WP: u8 = 0xAD;
+
+/// Unlock Block-Protection Register (SST26 series) - global unprotect
+///
+/// Must be preceded by WREN (0x06). Clears all per-block protection bits.
+pub const ULBPR: u8 = 0x98;
 
 // ============================================================================
 // Status register operations

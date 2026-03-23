@@ -118,6 +118,8 @@ pub struct FeaturesDef {
     pub write_byte: bool,
     /// Supports AAI (Auto Address Increment) word program
     pub aai_word: bool,
+    /// SST26-style per-block protection register (requires WREN + ULBPR to unlock)
+    pub sst26_bpr: bool,
 
     // Status register features
     /// Has status register 2
@@ -192,6 +194,9 @@ impl FeaturesDef {
         }
         if self.aai_word {
             flags.push(quote!(Features::AAI_WORD));
+        }
+        if self.sst26_bpr {
+            flags.push(quote!(Features::SST26_BPR));
         }
         if self.status_reg_2 {
             flags.push(quote!(Features::STATUS_REG_2));
