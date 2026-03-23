@@ -175,15 +175,33 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
     }
 
     // =========================================================================
-    // Erase: use SpiMaster (no bulk erase command on Dediprog)
+    // Erase: try OpaqueMaster first, fall back to SpiMaster
+    //
+    // Following flashprog's architecture: erase is a first-class operation
+    // on the opaque interface. Programmers with firmware-accelerated erase
+    // (e.g., SPI_CMD_SPINOR_WAIT) implement OpaqueMaster::erase(). Those
+    // without (e.g., Dediprog) return Err, triggering the SPI fallback.
     // =========================================================================
 
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
-        let ctx = self.context();
-        if !ctx.is_valid_range(addr, len as usize) {
+        // Bounds check (borrow ctx briefly, then drop before mutable borrow)
+        if !self.context().is_valid_range(addr, len as usize) {
             return Err(Error::AddressOutOfBounds);
         }
 
+        // Try opaque erase first — the programmer handles everything internally
+        // (block selection, busy-wait, etc.). If it returns Ok, we're done.
+        // Programmers without firmware erase (e.g., Dediprog) return Err,
+        // triggering the SPI fallback below.
+        if OpaqueMaster::erase(&mut self.master, addr, len)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        // Opaque erase not supported — fall back to SPI-based erase
+        let ctx = self.context();
         let erase_block = select_erase_block(ctx.chip.erase_blocks(), addr, len)
             .ok_or(Error::InvalidAlignment)?;
 

@@ -16,6 +16,7 @@ members = [
     "crates/rflasher-linux-gpio",
     "crates/rflasher-dummy",
     "crates/rflasher-raiden",
+    "crates/rflasher-sunxi-fel",
     "crates/rflasher-repl",
     "crates/rflasher-wasm",
 ]
@@ -37,6 +38,7 @@ default-members = [
     "crates/rflasher-linux-gpio",
     "crates/rflasher-dummy",
     "crates/rflasher-raiden",
+    "crates/rflasher-sunxi-fel",
     "crates/rflasher-repl",
 ]
 
@@ -85,7 +87,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden"]
+default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden", "sunxi-fel"]
 
 # Programmer features (passed through to rflasher-flash)
 dummy = ["rflasher-flash/dummy"]
@@ -102,14 +104,15 @@ linux-mtd = ["rflasher-flash/linux-mtd"]
 linux-gpio = ["rflasher-flash/linux-gpio"]
 internal = ["rflasher-flash/internal"]
 raiden = ["rflasher-flash/raiden"]
+sunxi-fel = ["rflasher-flash/sunxi-fel"]
 
 # REPL feature for scripting with Steel Scheme
 repl = ["dep:rflasher-repl"]
 
 # Enable all programmers
-all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden"]
+all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "sunxi-fel"]
 # Enable all programmers with pure-Rust FTDI backend
-all-programmers-native = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi-native", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden"]
+all-programmers-native = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi-native", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "sunxi-fel"]
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std", "is_sync"] }

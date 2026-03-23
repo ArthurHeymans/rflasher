@@ -365,6 +365,18 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
             Ok(Box::new(master))
         }
 
+        #[cfg(feature = "sunxi-fel")]
+        "sunxi_fel" | "sunxi-fel" | "fel" => {
+            log::info!("Opening sunxi FEL programmer for REPL...");
+            let master = rflasher_sunxi_fel::SunxiFel::open().map_err(|e| {
+                format!(
+                    "Failed to open sunxi FEL device: {}\nMake sure the device is in FEL mode and you have USB permissions.",
+                    e
+                )
+            })?;
+            Ok(Box::new(master))
+        }
+
         // Internal and MTD are opaque-only or not SPI-based
         #[cfg(feature = "internal")]
         "internal" => {
@@ -451,6 +463,9 @@ pub fn open_flash(
 
         #[cfg(feature = "raiden")]
         "raiden_debug_spi" | "raiden" | "raiden_spi" => open_raiden(&params, db),
+
+        #[cfg(feature = "sunxi-fel")]
+        "sunxi_fel" | "sunxi-fel" | "fel" => open_sunxi_fel(&params, db),
 
         _ => Err(format!("Unknown programmer: {}", params.name).into()),
     }
@@ -864,6 +879,41 @@ fn open_raiden(
     probe_and_create_handle(master, db)
 }
 
+#[cfg(feature = "sunxi-fel")]
+fn open_sunxi_fel(
+    _params: &ProgrammerParams,
+    db: &ChipDatabase,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    log::info!("Opening sunxi FEL programmer...");
+
+    let mut master = rflasher_sunxi_fel::SunxiFel::open().map_err(|e| {
+        format!(
+            "Failed to open sunxi FEL device: {}\n\
+             Make sure the device is in FEL mode (hold FEL button while plugging in USB)\n\
+             and you have USB permissions (VID:1F3A PID:EFE8).",
+            e
+        )
+    })?;
+
+    log::info!("Connected to: {}", master.soc_name());
+
+    // Probe the flash chip via SpiMaster
+    let result = probe_detailed(&mut master, db)?;
+    log_probe_result(&result);
+    let chip_info = ChipInfo::from(result);
+    let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone().unwrap());
+
+    // Configure OpaqueMaster with chip info discovered during probe
+    master.set_use_4byte_addr(ctx.total_size() > 16 * 1024 * 1024);
+    master.set_erase_blocks(ctx.chip.erase_blocks().to_vec());
+
+    // Use HybridFlashDevice: OpaqueMaster for fast bulk read/write/erase
+    // (batched SPI commands with on-SoC busy-wait), SpiMaster for WP and
+    // status register access
+    let device = HybridFlashDevice::new(master, ctx);
+    Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
+}
+
 // Programmer information and listing
 /// Information about a programmer
 pub struct ProgrammerInfo {
@@ -964,6 +1014,13 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "raiden_debug_spi",
         aliases: &["raiden", "raiden_spi"],
         description: "Chrome OS EC USB SPI (serial=<sn>,target=<ap|ec|h1>)",
+    });
+
+    #[cfg(feature = "sunxi-fel")]
+    programmers.push(ProgrammerInfo {
+        name: "sunxi_fel",
+        aliases: &["sunxi-fel", "fel"],
+        description: "Allwinner sunxi FEL USB SPI NOR programmer (VID:1F3A PID:EFE8)",
     });
 
     programmers
