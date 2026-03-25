@@ -186,6 +186,8 @@
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 512)]),
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 32)]),
+                (opcode: 0x60, regions: [(size: MiB(2), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(2), count: 1)]),
             ],
         ),
         (
