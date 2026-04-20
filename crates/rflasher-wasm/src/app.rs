@@ -2005,6 +2005,12 @@ impl RflasherApp {
                         "ATTR{idProduct}==\"6014\", MODE=\"0666\"",
                     ));
                     ui.add_space(3.0);
+                    ui.monospace("# FTDI FT4222H (VID:0403 PID:601c)");
+                    ui.monospace(concat!(
+                        "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0403\", ",
+                        "ATTR{idProduct}==\"601c\", MODE=\"0666\"",
+                    ));
+                    ui.add_space(3.0);
                     ui.monospace("# Dediprog SF100/SF200/SF600/SF700 (VID:0483 PID:dada)");
                     ui.monospace(concat!(
                         "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0483\", ",
