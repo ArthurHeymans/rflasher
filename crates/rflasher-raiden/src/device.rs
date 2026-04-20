@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use maybe_async::maybe_async;
 use nusb::transfer::{Buffer, Bulk, In, Out};
-use nusb::{Endpoint, Interface};
 #[cfg(feature = "is_sync")]
 use nusb::MaybeFuture;
+use nusb::{Endpoint, Interface};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{check_io_mode_supported, SpiCommand};
