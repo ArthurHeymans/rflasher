@@ -174,12 +174,36 @@ impl<'a> SpiCommand<'a> {
         self.address.is_some()
     }
 
+    /// Number of dummy bytes to emit between the address phase and the
+    /// read/write data phase, in this command's I/O mode.
+    ///
+    /// The dummy phase is encoded as N clock cycles in the I/O mode's lane
+    /// count, so the number of bytes on the wire depends on how many lanes
+    /// are active:
+    ///
+    /// - Single / DualOut / QuadOut: the dummy is on a single line → each
+    ///   byte on the wire covers 8 clock cycles.
+    /// - DualIo: 2 lines active → each byte covers 4 clock cycles.
+    /// - QuadIo / Qpi: 4 lines active → each byte covers 2 clock cycles.
+    ///
+    /// Dummy clocks for fast-read opcodes conventionally include the mode
+    /// byte (M7-M0) for 1-2-2 / 1-4-4 / 4-4-4 commands; the bytes are
+    /// filled with 0xFF which both acts as a safe "no continuous mode"
+    /// M-byte on typical chips and as harmless dummy clocks.
+    pub fn dummy_bytes(&self) -> usize {
+        let clocks = self.dummy_cycles as usize;
+        match self.io_mode {
+            IoMode::Single | IoMode::DualOut | IoMode::QuadOut => clocks.div_ceil(8),
+            IoMode::DualIo => (clocks * 2).div_ceil(8),
+            IoMode::QuadIo | IoMode::Qpi => (clocks * 4).div_ceil(8),
+        }
+    }
+
     /// Calculate the total number of bytes to transfer (for timing/buffer allocation)
     pub fn total_bytes(&self) -> usize {
         let mut total = 1; // opcode
         total += self.address_width.bytes() as usize;
-        // Dummy cycles are in clock cycles, not bytes - depends on I/O mode
-        total += (self.dummy_cycles as usize) / 8;
+        total += self.dummy_bytes();
         total += self.write_data.len();
         total += self.read_buf.len();
         total
@@ -189,7 +213,7 @@ impl<'a> SpiCommand<'a> {
     ///
     /// This is useful for pre-allocating buffers in programmer implementations.
     pub fn header_len(&self) -> usize {
-        1 + self.address_width.bytes() as usize + self.dummy_cycles.div_ceil(8) as usize
+        1 + self.address_width.bytes() as usize + self.dummy_bytes()
     }
 
     /// Encode the command header (opcode + address + dummy bytes) into a buffer
@@ -226,8 +250,8 @@ impl<'a> SpiCommand<'a> {
             offset += self.address_width.bytes() as usize;
         }
 
-        // Dummy bytes (cycles / 8, rounded up, filled with 0xFF)
-        let dummy_bytes = self.dummy_cycles.div_ceil(8) as usize;
+        // Dummy bytes (io-mode-dependent, filled with 0xFF).
+        let dummy_bytes = self.dummy_bytes();
         buf[offset..offset + dummy_bytes].fill(0xFF);
         offset += dummy_bytes;
 
