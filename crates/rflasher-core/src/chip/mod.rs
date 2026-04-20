@@ -9,7 +9,7 @@ mod types;
 #[cfg(feature = "std")]
 mod database;
 
-pub use features::Features;
+pub use features::{Features, QeMethod};
 pub use types::*;
 
 #[cfg(feature = "std")]

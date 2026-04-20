@@ -475,7 +475,7 @@ pub async fn is_supported<M: SpiMaster + ?Sized>(master: &mut M) -> bool {
 use alloc::{string::String, vec::Vec};
 
 #[cfg(feature = "alloc")]
-use crate::chip::{EraseBlock, Features, FlashChip, WriteGranularity};
+use crate::chip::{EraseBlock, Features, FlashChip, QeMethod, WriteGranularity};
 
 /// Convert SFDP info to a FlashChip structure
 ///
@@ -489,11 +489,23 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     // Build feature flags from SFDP data
     let mut features = Features::SFDP;
 
-    if params.fast_read_112 || params.fast_read_122 {
-        features |= Features::DUAL_IO;
+    if params.fast_read_112 {
+        features |= Features::FAST_READ_DOUT;
     }
-    if params.fast_read_114 || params.fast_read_144 || params.fast_read_444 {
-        features |= Features::QUAD_IO;
+    if params.fast_read_122 {
+        features |= Features::FAST_READ_DIO;
+    }
+    if params.fast_read_114 {
+        features |= Features::FAST_READ_QOUT;
+    }
+    if params.fast_read_144 {
+        features |= Features::FAST_READ_QIO;
+    }
+    if params.fast_read_444 {
+        // QPI 4-4-4 read support implies at least one QPI entry mechanism.
+        // SFDP-only chips rarely advertise which opcode; default to 0x38/0xFF
+        // (the more common modern choice). The chip-DB entry overrides.
+        features |= Features::QPI_38_FF;
     }
     if params.address_mode.supports_4byte() {
         features |= Features::FOUR_BYTE_ADDR;
@@ -515,9 +527,15 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     } else {
         features |= Features::WRSR_EWSR;
     }
-    if params.quad_enable.is_needed() {
-        features |= Features::QE_SR2;
-    }
+    // QE method is now a separate field (not a feature flag).
+    let qe_method = match params.quad_enable {
+        QuadEnableRequirement::None => QeMethod::None,
+        QuadEnableRequirement::Sr2Bit1_WriteCmd01
+        | QuadEnableRequirement::Sr2Bit1_WriteCmd01_StatusSplit => QeMethod::Sr2Bit1WriteSr,
+        QuadEnableRequirement::Sr1Bit6_WriteCmd01 => QeMethod::Sr1Bit6,
+        QuadEnableRequirement::Sr2Bit7_WriteCmdSpecial => QeMethod::Sr2Bit7,
+        QuadEnableRequirement::Sr2Bit1_WriteCmd31 => QeMethod::Sr2Bit1WriteSr2,
+    };
 
     // Build erase blocks from SFDP data
     // Each erase type covers the entire chip uniformly, so count = total_size / block_size
@@ -576,6 +594,12 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         write_granularity,
         erase_blocks,
         tested: Default::default(),
+        qe_method,
+        dummy_cycles_112: 0,
+        dummy_cycles_122: 0,
+        dummy_cycles_114: 0,
+        dummy_cycles_144: 0,
+        dummy_cycles_qpi: 0,
     }
 }
 

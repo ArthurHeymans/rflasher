@@ -3,7 +3,7 @@
 #[cfg(feature = "alloc")]
 use alloc::{string::String, vec::Vec};
 
-use super::features::Features;
+use super::features::{Features, QeMethod};
 
 /// Maximum number of erase regions per erase block (for no_std)
 pub const MAX_ERASE_REGIONS: usize = 8;
@@ -252,6 +252,27 @@ pub struct FlashChip {
     /// Test status
     #[cfg_attr(feature = "std", serde(default))]
     pub tested: ChipTestStatus,
+    /// Quad-Enable method for this chip (None if no QE bit)
+    #[cfg_attr(feature = "std", serde(default))]
+    pub qe_method: QeMethod,
+    /// Number of dummy cycles for 1-1-2 fast read (Dual Output, 0x3B)
+    ///
+    /// 0 means "use JEDEC default" (8 cycles for 1-1-2, 4 for 1-2-2,
+    /// 8 for 1-1-4, 6 for 1-4-4). Chip-specific values override.
+    #[cfg_attr(feature = "std", serde(default))]
+    pub dummy_cycles_112: u8,
+    /// Number of dummy cycles for 1-2-2 fast read (Dual I/O, 0xBB)
+    #[cfg_attr(feature = "std", serde(default))]
+    pub dummy_cycles_122: u8,
+    /// Number of dummy cycles for 1-1-4 fast read (Quad Output, 0x6B)
+    #[cfg_attr(feature = "std", serde(default))]
+    pub dummy_cycles_114: u8,
+    /// Number of dummy cycles for 1-4-4 fast read (Quad I/O, 0xEB)
+    #[cfg_attr(feature = "std", serde(default))]
+    pub dummy_cycles_144: u8,
+    /// Number of dummy cycles for QPI 4-4-4 fast read (with current parameters)
+    #[cfg_attr(feature = "std", serde(default))]
+    pub dummy_cycles_qpi: u8,
 }
 
 #[cfg(feature = "std")]
@@ -294,6 +315,18 @@ pub struct FlashChip {
     pub erase_blocks: &'static [EraseBlock],
     /// Test status
     pub tested: ChipTestStatus,
+    /// Quad-Enable method for this chip (None if no QE bit)
+    pub qe_method: QeMethod,
+    /// Number of dummy cycles for 1-1-2 fast read (Dual Output, 0x3B)
+    pub dummy_cycles_112: u8,
+    /// Number of dummy cycles for 1-2-2 fast read (Dual I/O, 0xBB)
+    pub dummy_cycles_122: u8,
+    /// Number of dummy cycles for 1-1-4 fast read (Quad Output, 0x6B)
+    pub dummy_cycles_114: u8,
+    /// Number of dummy cycles for 1-4-4 fast read (Quad I/O, 0xEB)
+    pub dummy_cycles_144: u8,
+    /// Number of dummy cycles for QPI 4-4-4 fast read (with current parameters)
+    pub dummy_cycles_qpi: u8,
 }
 
 impl FlashChip {

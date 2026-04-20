@@ -13,7 +13,7 @@ use std::path::Path;
 use super::types::{
     ChipTestStatus, EraseBlock, EraseRegion, FlashChip, TestStatus, WriteGranularity,
 };
-use super::Features;
+use super::{Features, QeMethod};
 
 /// Error type for chip database operations
 #[derive(Debug, thiserror::Error)]
@@ -55,7 +55,13 @@ impl Size {
     }
 }
 
-/// Feature flags for flash chips (RON format)
+/// Feature flags for flash chips (RON format).
+///
+/// The RON schema uses fine-grained flags for each JEDEC multi-IO read mode
+/// (`fast_read_dout`, `fast_read_dio`, `fast_read_qout`, `fast_read_qio`,
+/// `fast_read_qpi4b`), QPI entry variants (`qpi_35_f5`, `qpi_38_ff`), and
+/// the Set-Read-Params command (`set_read_params`). These mirror flashprog's
+/// `FEATURE_FAST_READ_*` bit layout.
 #[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
 #[serde(default)]
 struct FeaturesDef {
@@ -63,14 +69,22 @@ struct FeaturesDef {
     wrsr_ewsr: bool,
     wrsr_ext: bool,
     fast_read: bool,
-    dual_io: bool,
-    quad_io: bool,
+
+    // Multi-IO read flags, one per JEDEC mode.
+    fast_read_dout: bool,
+    fast_read_dio: bool,
+    fast_read_qout: bool,
+    fast_read_qio: bool,
+    fast_read_qpi4b: bool,
+    qpi_35_f5: bool,
+    qpi_38_ff: bool,
+    set_read_params: bool,
+
     four_byte_addr: bool,
     four_byte_enter: bool,
     four_byte_native: bool,
     ext_addr_reg: bool,
     otp: bool,
-    qpi: bool,
     security_reg: bool,
     sfdp: bool,
     write_byte: bool,
@@ -78,11 +92,14 @@ struct FeaturesDef {
     sst26_bpr: bool,
     status_reg_2: bool,
     status_reg_3: bool,
-    qe_sr2: bool,
     deep_power_down: bool,
     wp_tb: bool,
     wp_sec: bool,
     wp_cmp: bool,
+    wp_srl: bool,
+    wp_volatile: bool,
+    wp_bp3: bool,
+    wp_wps: bool,
 }
 
 impl From<FeaturesDef> for Features {
@@ -92,14 +109,19 @@ impl From<FeaturesDef> for Features {
             (def.wrsr_ewsr, Features::WRSR_EWSR),
             (def.wrsr_ext, Features::WRSR_EXT),
             (def.fast_read, Features::FAST_READ),
-            (def.dual_io, Features::DUAL_IO),
-            (def.quad_io, Features::QUAD_IO),
+            (def.fast_read_dout, Features::FAST_READ_DOUT),
+            (def.fast_read_dio, Features::FAST_READ_DIO),
+            (def.fast_read_qout, Features::FAST_READ_QOUT),
+            (def.fast_read_qio, Features::FAST_READ_QIO),
+            (def.fast_read_qpi4b, Features::FAST_READ_QPI4B),
+            (def.qpi_35_f5, Features::QPI_35_F5),
+            (def.qpi_38_ff, Features::QPI_38_FF),
+            (def.set_read_params, Features::SET_READ_PARAMS),
             (def.four_byte_addr, Features::FOUR_BYTE_ADDR),
             (def.four_byte_enter, Features::FOUR_BYTE_ENTER),
             (def.four_byte_native, Features::FOUR_BYTE_NATIVE),
             (def.ext_addr_reg, Features::EXT_ADDR_REG),
             (def.otp, Features::OTP),
-            (def.qpi, Features::QPI),
             (def.security_reg, Features::SECURITY_REG),
             (def.sfdp, Features::SFDP),
             (def.write_byte, Features::WRITE_BYTE),
@@ -107,11 +129,14 @@ impl From<FeaturesDef> for Features {
             (def.sst26_bpr, Features::SST26_BPR),
             (def.status_reg_2, Features::STATUS_REG_2),
             (def.status_reg_3, Features::STATUS_REG_3),
-            (def.qe_sr2, Features::QE_SR2),
             (def.deep_power_down, Features::DEEP_POWER_DOWN),
             (def.wp_tb, Features::WP_TB),
             (def.wp_sec, Features::WP_SEC),
             (def.wp_cmp, Features::WP_CMP),
+            (def.wp_srl, Features::WP_SRL),
+            (def.wp_volatile, Features::WP_VOLATILE),
+            (def.wp_bp3, Features::WP_BP3),
+            (def.wp_wps, Features::WP_WPS),
         ]
         .into_iter()
         .fold(
@@ -124,6 +149,29 @@ impl From<FeaturesDef> for Features {
                 }
             },
         )
+    }
+}
+
+/// Quad-Enable method (RON format). Mirrors `QeMethod`.
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+enum QeMethodDef {
+    #[default]
+    None,
+    Sr2Bit1WriteSr,
+    Sr2Bit1WriteSr2,
+    Sr1Bit6,
+    Sr2Bit7,
+}
+
+impl From<QeMethodDef> for QeMethod {
+    fn from(v: QeMethodDef) -> Self {
+        match v {
+            QeMethodDef::None => QeMethod::None,
+            QeMethodDef::Sr2Bit1WriteSr => QeMethod::Sr2Bit1WriteSr,
+            QeMethodDef::Sr2Bit1WriteSr2 => QeMethod::Sr2Bit1WriteSr2,
+            QeMethodDef::Sr1Bit6 => QeMethod::Sr1Bit6,
+            QeMethodDef::Sr2Bit7 => QeMethod::Sr2Bit7,
+        }
     }
 }
 
@@ -237,6 +285,22 @@ struct ChipDef {
     erase_blocks: Vec<EraseBlockDef>,
     #[serde(default)]
     tested: TestStatusesDef,
+    /// Quad-Enable method; defaults to `None`. Must be set explicitly on
+    /// any chip that asserts a quad-IO capability (FAST_READ_QOUT /
+    /// FAST_READ_QIO / QPI_*) so that the chip can be unlocked before the
+    /// first quad read.
+    #[serde(default)]
+    qe_method: QeMethodDef,
+    #[serde(default)]
+    dummy_cycles_112: u8,
+    #[serde(default)]
+    dummy_cycles_122: u8,
+    #[serde(default)]
+    dummy_cycles_114: u8,
+    #[serde(default)]
+    dummy_cycles_144: u8,
+    #[serde(default)]
+    dummy_cycles_qpi: u8,
 }
 
 fn default_page_size() -> u16 {
@@ -303,6 +367,9 @@ impl ChipDatabase {
         let count = vendor_def.chips.len();
 
         for chip_def in vendor_def.chips {
+            let features: Features = chip_def.features.into();
+            let qe_method: QeMethod = chip_def.qe_method.into();
+
             let chip = FlashChip {
                 vendor: vendor_def.vendor.clone(),
                 name: chip_def.name,
@@ -310,7 +377,7 @@ impl ChipDatabase {
                 jedec_device: chip_def.device_id,
                 total_size: chip_def.total_size.to_bytes(),
                 page_size: chip_def.page_size,
-                features: chip_def.features.into(),
+                features,
                 voltage_min_mv: chip_def.voltage.min,
                 voltage_max_mv: chip_def.voltage.max,
                 write_granularity: chip_def.write_granularity.into(),
@@ -327,6 +394,12 @@ impl ChipDatabase {
                     })
                     .collect(),
                 tested: chip_def.tested.into(),
+                qe_method,
+                dummy_cycles_112: chip_def.dummy_cycles_112,
+                dummy_cycles_122: chip_def.dummy_cycles_122,
+                dummy_cycles_114: chip_def.dummy_cycles_114,
+                dummy_cycles_144: chip_def.dummy_cycles_144,
+                dummy_cycles_qpi: chip_def.dummy_cycles_qpi,
             };
             self.chips.push(chip);
         }
@@ -415,9 +488,12 @@ mod tests {
                     features: (
                         wrsr_wren: true,
                         fast_read: true,
-                        dual_io: true,
-                        quad_io: true,
+                        fast_read_dout: true,
+                        fast_read_dio: true,
+                        fast_read_qout: true,
+                        fast_read_qio: true,
                     ),
+                    qe_method: Sr2Bit1WriteSr2,
                     voltage: (min: 2700, max: 3600),
                     erase_blocks: [
                         (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -443,6 +519,47 @@ mod tests {
         assert_eq!(chip.total_size, 16 * 1024 * 1024);
         assert!(chip.features.contains(Features::WRSR_WREN));
         assert!(chip.features.contains(Features::FAST_READ));
+        assert!(chip.features.contains(Features::FAST_READ_DOUT));
+        assert!(chip.features.contains(Features::FAST_READ_DIO));
+        assert!(chip.features.contains(Features::FAST_READ_QOUT));
+        assert!(chip.features.contains(Features::FAST_READ_QIO));
+        assert_eq!(chip.qe_method, QeMethod::Sr2Bit1WriteSr2);
+    }
+
+    #[test]
+    fn test_fine_grained_flags() {
+        let ron = r#"
+        (
+            vendor: "Macronix",
+            manufacturer_id: 0xC2,
+            chips: [
+                (
+                    name: "MX25L12835F",
+                    device_id: 0x2018,
+                    total_size: MiB(16),
+                    features: (
+                        wrsr_wren: true, fast_read: true,
+                        fast_read_dout: true, fast_read_dio: true,
+                        fast_read_qout: true, fast_read_qio: true,
+                        qpi_38_ff: true, set_read_params: true,
+                    ),
+                    qe_method: Sr1Bit6,
+                    erase_blocks: [
+                        (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
+                    ],
+                ),
+            ],
+        )
+        "#;
+
+        let mut db = ChipDatabase::empty();
+        db.load_ron(ron).unwrap();
+        let chip = db.find_by_jedec_id(0xC2, 0x2018).unwrap();
+        assert_eq!(chip.qe_method, QeMethod::Sr1Bit6);
+        assert!(chip.features.contains(Features::FAST_READ_QIO));
+        assert!(chip.features.contains(Features::QPI_38_FF));
+        assert!(chip.features.contains(Features::SET_READ_PARAMS));
+        assert!(!chip.features.contains(Features::QPI_35_F5));
     }
 
     #[test]

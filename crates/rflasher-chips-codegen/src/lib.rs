@@ -73,73 +73,62 @@ impl Size {
 // Feature flags - structured instead of string array
 // ============================================================================
 
-/// Feature flags for flash chips (structured for better RON ergonomics)
+/// Feature flags for flash chips (structured for better RON ergonomics).
+///
+/// One field per JEDEC multi-IO mode — mirrors flashprog's
+/// `FEATURE_FAST_READ_*` bit layout exactly.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(default)]
 pub struct FeaturesDef {
     // Write enable behavior
-    /// Use WREN (0x06) before WRSR
     pub wrsr_wren: bool,
-    /// Use EWSR (0x50) before WRSR (legacy SST)
     pub wrsr_ewsr: bool,
-    /// WRSR writes both SR1 and SR2 with one command
     pub wrsr_ext: bool,
 
     // Read capabilities
-    /// Supports Fast Read (0x0B)
     pub fast_read: bool,
-    /// Supports Dual I/O read commands
-    pub dual_io: bool,
-    /// Supports Quad I/O read commands
-    pub quad_io: bool,
+
+    // Multi-IO read flags, one per JEDEC mode.
+    pub fast_read_dout: bool,
+    pub fast_read_dio: bool,
+    pub fast_read_qout: bool,
+    pub fast_read_qio: bool,
+    pub fast_read_qpi4b: bool,
+    pub qpi_35_f5: bool,
+    pub qpi_38_ff: bool,
+    pub set_read_params: bool,
 
     // 4-byte addressing
-    /// Supports 4-byte address mode
     pub four_byte_addr: bool,
-    /// Can enter 4BA mode with EN4B (0xB7)
     pub four_byte_enter: bool,
-    /// Has native 4BA commands (0x13, 0x12, etc.)
     pub four_byte_native: bool,
-    /// Supports extended address register
     pub ext_addr_reg: bool,
 
     // Special features
-    /// Has OTP (One-Time Programmable) area
     pub otp: bool,
-    /// Supports QPI mode (4-4-4)
-    pub qpi: bool,
-    /// Has security registers
     pub security_reg: bool,
-    /// Supports SFDP (Serial Flash Discoverable Parameters)
     pub sfdp: bool,
 
     // Write behavior
-    /// Byte-granularity writes (can write single bytes)
     pub write_byte: bool,
-    /// Supports AAI (Auto Address Increment) word program
     pub aai_word: bool,
-    /// SST26-style per-block protection register (requires WREN + ULBPR to unlock)
     pub sst26_bpr: bool,
 
     // Status register features
-    /// Has status register 2
     pub status_reg_2: bool,
-    /// Has status register 3
     pub status_reg_3: bool,
-    /// Quad Enable bit is in SR2
-    pub qe_sr2: bool,
 
     // Power management
-    /// Supports deep power down
     pub deep_power_down: bool,
 
     // Write protection
-    /// Top/Bottom protect bit available
     pub wp_tb: bool,
-    /// Sector/Block protect bit available
     pub wp_sec: bool,
-    /// Complement (CMP) bit available
     pub wp_cmp: bool,
+    pub wp_srl: bool,
+    pub wp_volatile: bool,
+    pub wp_bp3: bool,
+    pub wp_wps: bool,
 }
 
 impl FeaturesDef {
@@ -147,78 +136,46 @@ impl FeaturesDef {
     fn to_tokens(self) -> TokenStream {
         let mut flags = Vec::new();
 
-        if self.wrsr_wren {
-            flags.push(quote!(Features::WRSR_WREN));
+        macro_rules! emit {
+            ($field:ident, $flag:ident) => {
+                if self.$field {
+                    flags.push(quote!(Features::$flag));
+                }
+            };
         }
-        if self.wrsr_ewsr {
-            flags.push(quote!(Features::WRSR_EWSR));
-        }
-        if self.wrsr_ext {
-            flags.push(quote!(Features::WRSR_EXT));
-        }
-        if self.fast_read {
-            flags.push(quote!(Features::FAST_READ));
-        }
-        if self.dual_io {
-            flags.push(quote!(Features::DUAL_IO));
-        }
-        if self.quad_io {
-            flags.push(quote!(Features::QUAD_IO));
-        }
-        if self.four_byte_addr {
-            flags.push(quote!(Features::FOUR_BYTE_ADDR));
-        }
-        if self.four_byte_enter {
-            flags.push(quote!(Features::FOUR_BYTE_ENTER));
-        }
-        if self.four_byte_native {
-            flags.push(quote!(Features::FOUR_BYTE_NATIVE));
-        }
-        if self.ext_addr_reg {
-            flags.push(quote!(Features::EXT_ADDR_REG));
-        }
-        if self.otp {
-            flags.push(quote!(Features::OTP));
-        }
-        if self.qpi {
-            flags.push(quote!(Features::QPI));
-        }
-        if self.security_reg {
-            flags.push(quote!(Features::SECURITY_REG));
-        }
-        if self.sfdp {
-            flags.push(quote!(Features::SFDP));
-        }
-        if self.write_byte {
-            flags.push(quote!(Features::WRITE_BYTE));
-        }
-        if self.aai_word {
-            flags.push(quote!(Features::AAI_WORD));
-        }
-        if self.sst26_bpr {
-            flags.push(quote!(Features::SST26_BPR));
-        }
-        if self.status_reg_2 {
-            flags.push(quote!(Features::STATUS_REG_2));
-        }
-        if self.status_reg_3 {
-            flags.push(quote!(Features::STATUS_REG_3));
-        }
-        if self.qe_sr2 {
-            flags.push(quote!(Features::QE_SR2));
-        }
-        if self.deep_power_down {
-            flags.push(quote!(Features::DEEP_POWER_DOWN));
-        }
-        if self.wp_tb {
-            flags.push(quote!(Features::WP_TB));
-        }
-        if self.wp_sec {
-            flags.push(quote!(Features::WP_SEC));
-        }
-        if self.wp_cmp {
-            flags.push(quote!(Features::WP_CMP));
-        }
+
+        emit!(wrsr_wren, WRSR_WREN);
+        emit!(wrsr_ewsr, WRSR_EWSR);
+        emit!(wrsr_ext, WRSR_EXT);
+        emit!(fast_read, FAST_READ);
+        emit!(fast_read_dout, FAST_READ_DOUT);
+        emit!(fast_read_dio, FAST_READ_DIO);
+        emit!(fast_read_qout, FAST_READ_QOUT);
+        emit!(fast_read_qio, FAST_READ_QIO);
+        emit!(fast_read_qpi4b, FAST_READ_QPI4B);
+        emit!(qpi_35_f5, QPI_35_F5);
+        emit!(qpi_38_ff, QPI_38_FF);
+        emit!(set_read_params, SET_READ_PARAMS);
+        emit!(four_byte_addr, FOUR_BYTE_ADDR);
+        emit!(four_byte_enter, FOUR_BYTE_ENTER);
+        emit!(four_byte_native, FOUR_BYTE_NATIVE);
+        emit!(ext_addr_reg, EXT_ADDR_REG);
+        emit!(otp, OTP);
+        emit!(security_reg, SECURITY_REG);
+        emit!(sfdp, SFDP);
+        emit!(write_byte, WRITE_BYTE);
+        emit!(aai_word, AAI_WORD);
+        emit!(sst26_bpr, SST26_BPR);
+        emit!(status_reg_2, STATUS_REG_2);
+        emit!(status_reg_3, STATUS_REG_3);
+        emit!(deep_power_down, DEEP_POWER_DOWN);
+        emit!(wp_tb, WP_TB);
+        emit!(wp_sec, WP_SEC);
+        emit!(wp_cmp, WP_CMP);
+        emit!(wp_srl, WP_SRL);
+        emit!(wp_volatile, WP_VOLATILE);
+        emit!(wp_bp3, WP_BP3);
+        emit!(wp_wps, WP_WPS);
 
         if flags.is_empty() {
             quote!(Features::empty())
@@ -226,6 +183,29 @@ impl FeaturesDef {
             let first = &flags[0];
             let rest = &flags[1..];
             quote!(#first #(.union(#rest))*)
+        }
+    }
+}
+
+/// Quad-Enable method (RON format). Mirrors `QeMethod`.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub enum QeMethodDef {
+    #[default]
+    None,
+    Sr2Bit1WriteSr,
+    Sr2Bit1WriteSr2,
+    Sr1Bit6,
+    Sr2Bit7,
+}
+
+impl QeMethodDef {
+    fn to_tokens(self) -> TokenStream {
+        match self {
+            QeMethodDef::None => quote!(QeMethod::None),
+            QeMethodDef::Sr2Bit1WriteSr => quote!(QeMethod::Sr2Bit1WriteSr),
+            QeMethodDef::Sr2Bit1WriteSr2 => quote!(QeMethod::Sr2Bit1WriteSr2),
+            QeMethodDef::Sr1Bit6 => quote!(QeMethod::Sr1Bit6),
+            QeMethodDef::Sr2Bit7 => quote!(QeMethod::Sr2Bit7),
         }
     }
 }
@@ -371,6 +351,21 @@ pub struct ChipDef {
     /// Test status
     #[serde(default)]
     pub tested: TestStatusDef,
+    /// Quad-Enable method (optional; guessed from vendor ID if omitted and
+    /// the chip has any quad-IO feature set).
+    #[serde(default)]
+    pub qe_method: QeMethodDef,
+    /// Dummy cycles for each mode (0 = use JEDEC default for that mode).
+    #[serde(default)]
+    pub dummy_cycles_112: u8,
+    #[serde(default)]
+    pub dummy_cycles_122: u8,
+    #[serde(default)]
+    pub dummy_cycles_114: u8,
+    #[serde(default)]
+    pub dummy_cycles_144: u8,
+    #[serde(default)]
+    pub dummy_cycles_qpi: u8,
 }
 
 fn default_page_size() -> u16 {
@@ -508,6 +503,14 @@ impl ChipDatabase {
                 let write_gran = chip.write_granularity.to_tokens();
                 let tested = chip.tested.to_tokens();
 
+                let qe_method = chip.qe_method.to_tokens();
+
+                let dc_112 = Literal::u8_unsuffixed(chip.dummy_cycles_112);
+                let dc_122 = Literal::u8_unsuffixed(chip.dummy_cycles_122);
+                let dc_114 = Literal::u8_unsuffixed(chip.dummy_cycles_114);
+                let dc_144 = Literal::u8_unsuffixed(chip.dummy_cycles_144);
+                let dc_qpi = Literal::u8_unsuffixed(chip.dummy_cycles_qpi);
+
                 chip_defs.push(quote! {
                     FlashChip {
                         vendor: #vendor_name.to_string(),
@@ -522,6 +525,12 @@ impl ChipDatabase {
                         write_granularity: #write_gran,
                         erase_blocks: vec![#(#erase_blocks),*],
                         tested: #tested,
+                        qe_method: #qe_method,
+                        dummy_cycles_112: #dc_112,
+                        dummy_cycles_122: #dc_122,
+                        dummy_cycles_114: #dc_114,
+                        dummy_cycles_144: #dc_144,
+                        dummy_cycles_qpi: #dc_qpi,
                     }
                 });
             }
