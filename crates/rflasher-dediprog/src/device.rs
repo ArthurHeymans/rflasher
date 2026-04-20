@@ -17,7 +17,8 @@ use nusb::Endpoint;
 use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
-use rflasher_core::spi::{check_io_mode_supported, opcodes, SpiCommand};
+use rflasher_core::protocol::SpiReadOp;
+use rflasher_core::spi::{check_io_mode_supported, opcodes, IoMode as CoreIoMode, SpiCommand};
 
 use crate::error::{DediprogError, Result};
 use crate::protocol::*;
@@ -89,6 +90,25 @@ macro_rules! platform_sleep {
     }};
 }
 
+/// User-facing I/O-mode override policy for the programmer.
+///
+/// - `Auto`: advertise full multi-IO capability to the flash layer and let it
+///   pick the best op from chip features (the default; matches `iomode=auto`).
+/// - `Force(m)`: cap at the given mode regardless of chip capabilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoModePolicy {
+    /// Let the flash layer decide based on chip + programmer capabilities.
+    Auto,
+    /// Force a specific upper bound.
+    Force(DpIoMode),
+}
+
+impl Default for IoModePolicy {
+    fn default() -> Self {
+        IoModePolicy::Auto
+    }
+}
+
 /// Configuration options for opening a Dediprog device
 #[derive(Debug, Clone)]
 pub struct DediprogConfig {
@@ -102,8 +122,8 @@ pub struct DediprogConfig {
     pub spi_speed_index: usize,
     /// Voltage in millivolts (0, 1800, 2500, 3500)
     pub voltage_mv: u16,
-    /// I/O mode (Single, Dual, Quad)
-    pub io_mode: DpIoMode,
+    /// I/O mode policy (auto or forced cap)
+    pub io_mode_policy: IoModePolicy,
 }
 
 impl Default for DediprogConfig {
@@ -114,7 +134,7 @@ impl Default for DediprogConfig {
             target: Target::ApplicationFlash1,
             spi_speed_index: DEFAULT_SPI_SPEED_INDEX,
             voltage_mv: DEFAULT_VOLTAGE_MV,
-            io_mode: DpIoMode::Single,
+            io_mode_policy: IoModePolicy::Auto,
         }
     }
 }
@@ -150,17 +170,20 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<DediprogConfig> {
                     DediprogError::InvalidParameter(format!("voltage: {}", value))
                 })?;
             }
-            "iomode" => match value.to_lowercase().as_str() {
-                "single" | "1" => config.io_mode = DpIoMode::Single,
-                "dual" | "2" => config.io_mode = DpIoMode::DualIo,
-                "quad" | "4" => config.io_mode = DpIoMode::QuadIo,
-                _ => {
-                    return Err(DediprogError::InvalidParameter(format!(
-                        "iomode: {}",
-                        value
-                    )));
-                }
-            },
+            "iomode" => {
+                config.io_mode_policy = match value.to_lowercase().as_str() {
+                    "auto" => IoModePolicy::Auto,
+                    "single" | "1" => IoModePolicy::Force(DpIoMode::Single),
+                    "dual" | "2" => IoModePolicy::Force(DpIoMode::DualIo),
+                    "quad" | "4" => IoModePolicy::Force(DpIoMode::QuadIo),
+                    _ => {
+                        return Err(DediprogError::InvalidParameter(format!(
+                            "iomode: {}",
+                            value
+                        )));
+                    }
+                };
+            }
             _ => {
                 return Err(DediprogError::InvalidParameter(format!(
                     "unknown option: {}",
@@ -197,8 +220,12 @@ pub struct Dediprog {
     io_mode: DpIoMode,
     /// Configured maximum I/O mode
     max_io_mode: DpIoMode,
+    /// User-selected I/O-mode policy (auto or forced)
+    io_mode_policy: IoModePolicy,
     /// Flash size in bytes (set after probing, needed for OpaqueMaster)
     flash_size: Option<u32>,
+    /// Chip-selected read op (set via `set_read_op`); None until prepared.
+    selected_read_op: Option<SpiReadOp>,
 }
 
 impl Dediprog {
@@ -292,8 +319,10 @@ impl Dediprog {
             device_string: String::new(),
             protocol: Protocol::Unknown,
             io_mode: DpIoMode::Single,
-            max_io_mode: config.io_mode,
+            max_io_mode: DpIoMode::Single, // set by init_device() below
+            io_mode_policy: config.io_mode_policy,
             flash_size: None,
+            selected_read_op: None,
         };
 
         dediprog.init_device(config)?;
@@ -428,8 +457,10 @@ impl Dediprog {
             device_string: String::new(),
             protocol: Protocol::Unknown,
             io_mode: DpIoMode::Single,
-            max_io_mode: config.io_mode,
+            max_io_mode: DpIoMode::Single, // set by init_device() below
+            io_mode_policy: config.io_mode_policy,
             flash_size: None,
+            selected_read_op: None,
         };
 
         dediprog.init_device(&config).await?;
@@ -501,7 +532,10 @@ impl Dediprog {
 
         // Determine multi-I/O support
         if self.device_type.is_sf600_class() && self.protocol >= Protocol::V2 {
-            self.max_io_mode = config.io_mode;
+            self.max_io_mode = match self.io_mode_policy {
+                IoModePolicy::Auto => DpIoMode::QuadIo,
+                IoModePolicy::Force(m) => m,
+            };
         } else {
             self.max_io_mode = DpIoMode::Single;
         }
@@ -1020,10 +1054,21 @@ impl Dediprog {
                 *idx = 0;
 
                 if is_read {
-                    // For V2 reads, use standard read mode with fast read opcode
-                    // The firmware handles the SPI read command internally
-                    cmd_buf[3] = ReadMode::Fast as u8;
-                    cmd_buf[4] = opcodes::FAST_READ;
+                    // For V2 reads, translate the selected SpiReadOp into the
+                    // right ReadMode + opcode. V2 can't express dummy cycles
+                    // other than the fixed defaults so we pick the closest.
+                    let op = self.selected_read_op.unwrap_or(SpiReadOp {
+                        opcode: opcodes::FAST_READ,
+                        io_mode: CoreIoMode::Single,
+                        dummy_cycles: 8,
+                        native_4ba: false,
+                    });
+                    if op.native_4ba {
+                        cmd_buf[3] = ReadMode::FourByteAddrFast as u8;
+                    } else {
+                        cmd_buf[3] = ReadMode::Fast as u8;
+                    }
+                    cmd_buf[4] = op.opcode;
                 } else {
                     // For V2 writes, use page program mode
                     cmd_buf[3] = WriteMode::PagePgm as u8;
@@ -1048,10 +1093,41 @@ impl Dediprog {
                 cmd_buf[9] = ((start >> 24) & 0xFF) as u8;
 
                 if is_read {
+                    // V3 supports ReadMode::Configurable which lets us pass
+                    // opcode + address width + dummy half-cycles, which the
+                    // firmware uses with the currently-configured IO mode.
+                    let op = self.selected_read_op.unwrap_or(SpiReadOp {
+                        opcode: opcodes::FAST_READ,
+                        io_mode: CoreIoMode::Single,
+                        dummy_cycles: 8,
+                        native_4ba: false,
+                    });
                     cmd_buf[3] = ReadMode::Configurable as u8;
-                    cmd_buf[4] = opcodes::FAST_READ;
-                    cmd_buf[10] = if start >> 24 != 0 { 4 } else { 3 }; // address length
-                    cmd_buf[11] = 4; // dummy half-cycles (8 clocks / 2 for fast read)
+                    cmd_buf[4] = op.opcode;
+                    cmd_buf[10] = if op.native_4ba || start >> 24 != 0 {
+                        4
+                    } else {
+                        3
+                    };
+                    // dediprog firmware handles the mode byte for opcodes
+                    // that require one (0xBB/0xEB/0xBC/0xEC). Our
+                    // SpiReadOp.dummy_cycles counts total SCLK cycles
+                    // between end-of-address and start-of-data, which
+                    // includes mode-byte time for 1-x-x / QPI. flashprog's
+                    // spi_dummy_cycles subtracts the mode-byte time before
+                    // passing to the firmware — do the same here.
+                    let mode_byte_clocks = match op.io_mode {
+                        CoreIoMode::DualIo => 4, // 8 bits / 2 wires
+                        CoreIoMode::QuadIo | CoreIoMode::Qpi => 2, // 8 bits / 4 wires
+                        _ => 0,
+                    };
+                    let dummy_after_mode =
+                        op.dummy_cycles.saturating_sub(mode_byte_clocks);
+                    // cmd_buf[11] encodes dummy time in units of 2 SCLK
+                    // (flashprog divides spi_dummy_cycles by 2 when writing
+                    // this byte). Round up so a chip expecting an odd
+                    // number of dummy clocks still gets at least that many.
+                    cmd_buf[11] = dummy_after_mode.div_ceil(2);
                     Ok(12)
                 } else {
                     cmd_buf[3] = WriteMode::PagePgm as u8;
@@ -1084,8 +1160,13 @@ impl Dediprog {
 
         let count = (len / BULK_CHUNK_SIZE) as u16;
 
-        // Set I/O mode for reads (single for now, can add multi-IO later)
-        self.set_io_mode(DpIoMode::Single).await?;
+        // Pick the dediprog IO mode from the selected read op (if any).
+        // Fall back to Single if nothing was set.
+        let dp_mode = match self.selected_read_op {
+            Some(op) => DpIoMode::from(op.io_mode),
+            None => DpIoMode::Single,
+        };
+        self.set_io_mode(dp_mode).await?;
 
         // Build and send the CMD_READ command packet
         let mut cmd_buf = [0u8; MAX_CMD_SIZE];
@@ -1275,6 +1356,17 @@ impl OpaqueMaster for Dediprog {
         self.flash_size.unwrap_or(0) as usize
     }
 
+    fn set_read_op(&mut self, op: SpiReadOp) {
+        log::debug!(
+            "Dediprog: set_read_op opcode=0x{:02X} io_mode={:?} dummy={} native_4ba={}",
+            op.opcode,
+            op.io_mode,
+            op.dummy_cycles,
+            op.native_4ba
+        );
+        self.selected_read_op = Some(op);
+    }
+
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
         let len = buf.len();
         if len == 0 {
@@ -1414,23 +1506,29 @@ impl SpiMaster for Dediprog {
             features |= SpiFeatures::FOUR_BYTE_ADDR;
         }
 
-        // Multi-I/O support for SF600 class with protocol V2+
+        // Multi-I/O support for SF600 class with protocol V2+.
+        // Cap by `max_io_mode` (from IoModePolicy::Auto defaults to Quad, or
+        // IoModePolicy::Force(X) caps at X).
         if self.device_type.is_sf600_class() && self.protocol >= Protocol::V2 {
-            match self.max_io_mode {
-                DpIoMode::DualOut | DpIoMode::DualIo => {
-                    features |= SpiFeatures::DUAL_IN;
-                    // V2 has issues with DUAL_IO, V3 works
-                    if self.protocol >= Protocol::V3 {
-                        features |= SpiFeatures::DUAL_IO;
-                    }
-                }
-                DpIoMode::QuadOut | DpIoMode::QuadIo | DpIoMode::Qpi => {
-                    features |= SpiFeatures::DUAL_IN | SpiFeatures::QUAD_IN;
-                    if self.protocol >= Protocol::V3 {
-                        features |= SpiFeatures::DUAL_IO | SpiFeatures::QUAD_IO;
-                    }
-                }
-                _ => {}
+            // Dual output (1-1-2) is safe on V2+ for SF600 class.
+            if self.max_io_mode >= DpIoMode::DualOut {
+                features |= SpiFeatures::DUAL_IN;
+            }
+            // Dual I/O (1-2-2) is V3+ only (V2 has dummy-cycle bugs per flashprog).
+            if self.max_io_mode >= DpIoMode::DualIo && self.protocol >= Protocol::V3 {
+                features |= SpiFeatures::DUAL_IO;
+            }
+            // Quad output (1-1-4)
+            if self.max_io_mode >= DpIoMode::QuadOut {
+                features |= SpiFeatures::QUAD_IN;
+            }
+            // Quad I/O (1-4-4) is V3+ only
+            if self.max_io_mode >= DpIoMode::QuadIo && self.protocol >= Protocol::V3 {
+                features |= SpiFeatures::QUAD_IO;
+            }
+            // QPI (4-4-4) requires V3+ and explicit Qpi configuration
+            if self.max_io_mode >= DpIoMode::Qpi && self.protocol >= Protocol::V3 {
+                features |= SpiFeatures::QPI;
             }
         }
 
@@ -1457,8 +1555,22 @@ impl SpiMaster for Dediprog {
     }
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        // Check I/O mode support
+        // Check I/O mode support against advertised master features first.
         check_io_mode_supported(cmd.io_mode, self.features())?;
+
+        // The dediprog's generic `spi_transceive` command is single-IO only
+        // regardless of what `features()` advertises (multi-IO is reachable
+        // only via `OpaqueMaster::read` / `CMD_READ`). Reject multi-IO here
+        // loudly rather than silently downgrading and producing wrong data.
+        if cmd.io_mode != CoreIoMode::Single {
+            log::error!(
+                "Dediprog::execute called with io_mode={:?}; only Single is \
+                 supported via the generic SPI transceive path. Multi-IO \
+                 reads must go through OpaqueMaster::read.",
+                cmd.io_mode,
+            );
+            return Err(CoreError::ProgrammerError);
+        }
 
         // For simple commands, use transceive
         let header_len = cmd.header_len();
