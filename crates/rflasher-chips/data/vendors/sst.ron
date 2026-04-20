@@ -486,7 +486,8 @@
             name: "SST26VF064B",
             device_id: 0x2603,
             total_size: MiB(8),
-            features: (wrsr_wren: true, quad_io: true, otp: true, sst26_bpr: true),
+            features: (wrsr_wren: true, otp: true, sst26_bpr: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
