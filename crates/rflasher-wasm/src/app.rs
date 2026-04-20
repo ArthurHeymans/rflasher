@@ -1224,14 +1224,13 @@ impl RflasherApp {
                 let ctx_flash = FlashContext::new(chip);
                 let mut buf = vec![0u8; size];
 
-                /// Read chunk size.  Larger chunks reduce per-chunk overhead
-                /// (each chunk requires a new CMD_READ control transfer for
-                /// Dediprog, plus a yield/repaint cycle).  2 MiB gives ~8
-                /// progress updates for a 16 MiB flash while keeping overhead
-                /// low (8 CMD_READs instead of 64 with 256 KiB chunks).
-                const READ_CHUNK_SIZE: usize = 2 * 1024 * 1024;
-                /// Yield to browser every 2 MiB to keep the UI responsive.
-                const YIELD_INTERVAL: usize = 2 * 1024 * 1024;
+                /// Read chunk size. Larger chunks reduce per-chunk overhead,
+                /// but 2 MiB only gives ~8 updates for a 16 MiB flash. Use
+                /// 1 MiB as a compromise so the UI refreshes roughly every 6%.
+                const READ_CHUNK_SIZE: usize = 1024 * 1024;
+                /// Yield to the browser after each read chunk so progress is
+                /// visible promptly during long WebUSB reads.
+                const YIELD_INTERVAL: usize = READ_CHUNK_SIZE;
 
                 with_flash_device!(shared, programmer, ctx_flash, device, {
                     let total = buf.len();
@@ -1260,11 +1259,12 @@ impl RflasherApp {
                             },
                         ));
 
+                        if let Some(ref ctx) = ctx {
+                            ctx.request_repaint();
+                        }
+
                         if offset >= last_yield + YIELD_INTERVAL {
                             last_yield = offset;
-                            if let Some(ref ctx) = ctx {
-                                ctx.request_repaint();
-                            }
                             yield_to_browser().await;
                         }
                     }
