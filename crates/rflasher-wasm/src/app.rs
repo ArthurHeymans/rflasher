@@ -15,6 +15,7 @@ use rflasher_core::flash::{
 use rflasher_dediprog::{Dediprog, DediprogConfig};
 use rflasher_ft4222::{Ft4222, SpiConfig as Ft4222SpiConfig};
 use rflasher_ftdi::{Ftdi, FtdiConfig, FtdiDeviceType, FtdiInterface};
+use rflasher_raiden::{RaidenConfig, RaidenDebugSpi, Target as RaidenTarget};
 use rflasher_serprog::Serprog;
 
 use crate::transport::WebSerialTransport;
@@ -56,6 +57,8 @@ enum ProgrammerType {
     Ft4222,
     /// Dediprog SF100/SF200/SF600/SF700 via WebUSB
     Dediprog,
+    /// Raiden Debug SPI via WebUSB
+    Raiden,
 }
 
 impl ProgrammerType {
@@ -67,6 +70,7 @@ impl ProgrammerType {
             ProgrammerType::Ftdi => "FTDI MPSSE (WebUSB)",
             ProgrammerType::Ft4222 => "FT4222H (WebUSB)",
             ProgrammerType::Dediprog => "Dediprog (WebUSB)",
+            ProgrammerType::Raiden => "Raiden Debug SPI (WebUSB)",
         }
     }
 
@@ -79,11 +83,22 @@ impl ProgrammerType {
                 | ProgrammerType::Ftdi
                 | ProgrammerType::Ft4222
                 | ProgrammerType::Dediprog
+                | ProgrammerType::Raiden
         )
     }
 }
 
-/// Connected programmer - wraps a serprog, CH341A, CH347, FTDI, FT4222H, or Dediprog device
+fn raiden_target_label(target: RaidenTarget) -> &'static str {
+    match target {
+        RaidenTarget::Ap => "AP",
+        RaidenTarget::Ec => "EC",
+        RaidenTarget::H1 => "H1 / Cr50",
+        RaidenTarget::ApCustom => "AP custom",
+    }
+}
+
+/// Connected programmer - wraps a serprog, CH341A, CH347, FTDI, FT4222H,
+/// Dediprog, or Raiden device
 #[allow(clippy::large_enum_variant)]
 enum Programmer {
     Serprog(Serprog<WebSerialTransport>),
@@ -92,6 +107,7 @@ enum Programmer {
     Ftdi(Ftdi),
     Ft4222(Ft4222),
     Dediprog(Dediprog),
+    Raiden(RaidenDebugSpi),
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +155,11 @@ macro_rules! with_programmer {
             Programmer::Dediprog(mut $name) => {
                 let result = $body;
                 $shared.borrow_mut().programmer = Some(Programmer::Dediprog($name));
+                result
+            }
+            Programmer::Raiden(mut $name) => {
+                let result = $body;
+                $shared.borrow_mut().programmer = Some(Programmer::Raiden($name));
                 result
             }
         }
@@ -199,6 +220,13 @@ macro_rules! with_flash_device {
                 let result = { $body };
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Dediprog(master));
+                result
+            }
+            Programmer::Raiden(master) => {
+                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                let result = { $body };
+                let (master, _) = $device.into_parts();
+                $shared.borrow_mut().programmer = Some(Programmer::Raiden(master));
                 result
             }
         }
@@ -421,6 +449,8 @@ pub struct RflasherApp {
     ftdi_interface: FtdiInterface,
     /// Selected FTDI clock divisor
     ftdi_divisor: u16,
+    /// Selected Raiden target
+    raiden_target: RaidenTarget,
     /// Chip database
     chip_db: ChipDatabase,
     /// Detected chip info
@@ -546,6 +576,7 @@ impl Default for RflasherApp {
             ftdi_device_type: FtdiDeviceType::default(),
             ftdi_interface: FtdiInterface::default(),
             ftdi_divisor: 2,
+            raiden_target: RaidenTarget::H1,
             chip_db: ChipDatabase::new(),
             chip_info: None,
             ctx: None,
@@ -735,6 +766,7 @@ impl RflasherApp {
             ProgrammerType::Ftdi => self.spawn_connect_ftdi(),
             ProgrammerType::Ft4222 => self.spawn_connect_ft4222(),
             ProgrammerType::Dediprog => self.spawn_connect_dediprog(),
+            ProgrammerType::Raiden => self.spawn_connect_raiden(),
         }
     }
 
@@ -1023,6 +1055,54 @@ impl RflasherApp {
         });
     }
 
+    fn spawn_connect_raiden(&mut self) {
+        let shared = self.shared.clone();
+        let ctx = self.ctx.clone();
+        let config = RaidenConfig {
+            serial: None,
+            target: self.raiden_target,
+        };
+
+        self.connection = ConnectionState::Connecting;
+        self.status.info("Requesting Raiden device via WebUSB...");
+
+        wasm_bindgen_futures::spawn_local(async move {
+            shared.borrow_mut().busy = true;
+
+            match RaidenDebugSpi::request_device().await {
+                Ok(device_info) => match RaidenDebugSpi::open(device_info, &config).await {
+                    Ok(raiden) => {
+                        let mut state = shared.borrow_mut();
+                        state.programmer = Some(Programmer::Raiden(raiden));
+                        state.messages.push(AsyncMessage::Connected {
+                            programmer_name: format!(
+                                "Raiden ({})",
+                                raiden_target_label(config.target)
+                            ),
+                        });
+                    }
+                    Err(e) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                    }
+                },
+                Err(e) => {
+                    shared
+                        .borrow_mut()
+                        .messages
+                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                }
+            }
+
+            shared.borrow_mut().busy = false;
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+    }
+
     fn spawn_disconnect(&mut self) {
         let shared = self.shared.clone();
 
@@ -1051,6 +1131,9 @@ impl RflasherApp {
                     }
                     Programmer::Dediprog(mut dediprog) => {
                         dediprog.shutdown().await;
+                    }
+                    Programmer::Raiden(mut raiden) => {
+                        raiden.shutdown().await;
                     }
                 }
 
@@ -1141,14 +1224,13 @@ impl RflasherApp {
                 let ctx_flash = FlashContext::new(chip);
                 let mut buf = vec![0u8; size];
 
-                /// Read chunk size.  Larger chunks reduce per-chunk overhead
-                /// (each chunk requires a new CMD_READ control transfer for
-                /// Dediprog, plus a yield/repaint cycle).  2 MiB gives ~8
-                /// progress updates for a 16 MiB flash while keeping overhead
-                /// low (8 CMD_READs instead of 64 with 256 KiB chunks).
-                const READ_CHUNK_SIZE: usize = 2 * 1024 * 1024;
-                /// Yield to browser every 2 MiB to keep the UI responsive.
-                const YIELD_INTERVAL: usize = 2 * 1024 * 1024;
+                /// Read chunk size. Larger chunks reduce per-chunk overhead,
+                /// but 2 MiB only gives ~8 updates for a 16 MiB flash. Use
+                /// 1 MiB as a compromise so the UI refreshes roughly every 6%.
+                const READ_CHUNK_SIZE: usize = 1024 * 1024;
+                /// Yield to the browser after each read chunk so progress is
+                /// visible promptly during long WebUSB reads.
+                const YIELD_INTERVAL: usize = READ_CHUNK_SIZE;
 
                 with_flash_device!(shared, programmer, ctx_flash, device, {
                     let total = buf.len();
@@ -1177,11 +1259,12 @@ impl RflasherApp {
                             },
                         ));
 
+                        if let Some(ref ctx) = ctx {
+                            ctx.request_repaint();
+                        }
+
                         if offset >= last_yield + YIELD_INTERVAL {
                             last_yield = offset;
-                            if let Some(ref ctx) = ctx {
-                                ctx.request_repaint();
-                            }
                             yield_to_browser().await;
                         }
                     }
@@ -1567,6 +1650,11 @@ impl RflasherApp {
                         ProgrammerType::Dediprog,
                         ProgrammerType::Dediprog.label(),
                     );
+                    ui.selectable_value(
+                        &mut self.programmer_type,
+                        ProgrammerType::Raiden,
+                        ProgrammerType::Raiden.label(),
+                    );
                 });
         });
 
@@ -1706,6 +1794,42 @@ impl RflasherApp {
             });
             if connected {
                 ui.label("Reconnect to change FTDI settings");
+            }
+        }
+
+        if self.programmer_type == ProgrammerType::Raiden {
+            let connected = self.is_connected();
+            ui.add_enabled_ui(!connected, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Target:");
+                    egui::ComboBox::from_id_salt("raiden_target")
+                        .selected_text(raiden_target_label(self.raiden_target))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.raiden_target,
+                                RaidenTarget::Ap,
+                                raiden_target_label(RaidenTarget::Ap),
+                            );
+                            ui.selectable_value(
+                                &mut self.raiden_target,
+                                RaidenTarget::Ec,
+                                raiden_target_label(RaidenTarget::Ec),
+                            );
+                            ui.selectable_value(
+                                &mut self.raiden_target,
+                                RaidenTarget::H1,
+                                raiden_target_label(RaidenTarget::H1),
+                            );
+                            ui.selectable_value(
+                                &mut self.raiden_target,
+                                RaidenTarget::ApCustom,
+                                raiden_target_label(RaidenTarget::ApCustom),
+                            );
+                        });
+                });
+            });
+            if connected {
+                ui.label("Reconnect to change Raiden target");
             }
         }
 
@@ -1964,6 +2088,9 @@ impl RflasherApp {
                 ui.label(
                     "Create the file below and replug the device (or run the reload commands).",
                 );
+                ui.label(
+                    "Raiden Debug SPI / Cr50 uses Google VID 18d1. Product IDs vary between SuzyQ, Servo, C2D2, uServo, and Servo Micro, so the example rule below matches Google debug hardware broadly.",
+                );
                 ui.add_space(5.0);
 
                 egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -2015,6 +2142,14 @@ impl RflasherApp {
                     ui.monospace(concat!(
                         "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0483\", ",
                         "ATTR{idProduct}==\"dada\", MODE=\"0666\"",
+                    ));
+                    ui.add_space(3.0);
+                    ui.monospace(
+                        "# Raiden Debug SPI / Cr50 (Google debug hardware, VID:18d1; product ID varies)",
+                    );
+                    ui.monospace(concat!(
+                        "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"18d1\", ",
+                        "MODE=\"0666\"",
                     ));
                 });
 

@@ -55,18 +55,18 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(any(feature = "std", feature = "wasm")), no_std)]
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod device;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod error;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 mod protocol;
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 pub use device::{parse_options, RaidenConfig, RaidenDebugSpi, RaidenDeviceInfo};
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{RaidenError, Result};
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "wasm"))]
 pub use protocol::Target;

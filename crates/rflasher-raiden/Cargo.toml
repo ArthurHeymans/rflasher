@@ -7,10 +7,26 @@ description = "Raiden Debug SPI (Chrome OS EC USB) programmer support for rflash
 
 [features]
 default = ["std"]
-std = ["rflasher-core/std", "nusb", "futures-lite"]
+std = ["rflasher-core/std", "is_sync", "nusb", "futures-lite"]
+is_sync = ["rflasher-core/is_sync", "maybe-async/is_sync"]
+wasm = ["rflasher-core/std", "nusb", "web-sys", "wasm-bindgen", "wasm-bindgen-futures", "js-sys"]
 
 [dependencies]
 rflasher-core.workspace = true
 nusb = { workspace = true, optional = true }
 futures-lite = { version = "2", optional = true }
+maybe-async.workspace = true
 log.workspace = true
+
+web-sys = { version = "0.3", optional = true, features = [
+    "Navigator",
+    "Window",
+    "console",
+    "Usb",
+    "UsbDevice",
+    "UsbDeviceFilter",
+    "UsbDeviceRequestOptions",
+] }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
