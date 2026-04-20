@@ -83,14 +83,24 @@ pub async fn read_status3<M: SpiMaster + ?Sized>(master: &mut M) -> Result<u8> {
     Ok(buf[0])
 }
 
-/// Send the Write Enable command
+/// Send the Write Enable command (WREN, 0x06)
 #[maybe_async]
 pub async fn write_enable<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     let mut cmd = SpiCommand::simple(opcodes::WREN);
     master.execute(&mut cmd).await
 }
 
-/// Send the Write Disable command
+/// Send the Enable Write Status Register command (EWSR, 0x50)
+///
+/// Used on legacy SST25 chips instead of WREN before a WRSR command.
+/// Not a general write-enable — it only enables the next WRSR to succeed.
+#[maybe_async]
+pub async fn write_enable_ewsr<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
+    let mut cmd = SpiCommand::simple(opcodes::EWSR);
+    master.execute(&mut cmd).await
+}
+
+/// Send the Write Disable command (WRDI, 0x04)
 #[maybe_async]
 pub async fn write_disable<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     let mut cmd = SpiCommand::simple(opcodes::WRDI);
@@ -117,7 +127,6 @@ pub async fn wait_ready<M: SpiMaster + ?Sized>(
     poll_delay_us: u32,
     timeout_us: u32,
 ) -> Result<()> {
-    // Fall back to polling once per microsecond if poll_delay_us is 0
     let max_polls = timeout_us.checked_div(poll_delay_us).unwrap_or(timeout_us);
 
     for _ in 0..max_polls {
@@ -135,7 +144,8 @@ pub async fn wait_ready<M: SpiMaster + ?Sized>(
 
 /// Write the status register 1
 ///
-/// Automatically sends WREN before writing.
+/// Sends WREN (0x06) before writing. For chips that require EWSR (0x50)
+/// instead (legacy SST25 chips), use [`write_status1_ewsr`].
 #[maybe_async]
 pub async fn write_status1<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> Result<()> {
     write_enable(master).await?;
@@ -146,9 +156,22 @@ pub async fn write_status1<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> 
     wait_ready(master, WRSR_POLL_US, WRSR_TIMEOUT_US).await
 }
 
+/// Write the status register 1, using EWSR (0x50) instead of WREN
+///
+/// Required for legacy SST25 chips (those with the `WRSR_EWSR` feature flag).
+#[maybe_async]
+pub async fn write_status1_ewsr<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> Result<()> {
+    write_enable_ewsr(master).await?;
+    let data = [value];
+    let mut cmd = SpiCommand::write_reg(opcodes::WRSR, &data);
+    master.execute(&mut cmd).await?;
+    wait_ready(master, WRSR_POLL_US, WRSR_TIMEOUT_US).await
+}
+
 /// Write status registers 1 and 2 together
 ///
 /// Some chips require writing both registers in a single command.
+/// For chips that require EWSR, use [`write_status12_ewsr`].
 #[maybe_async]
 pub async fn write_status12<M: SpiMaster + ?Sized>(master: &mut M, sr1: u8, sr2: u8) -> Result<()> {
     write_enable(master).await?;
@@ -156,6 +179,20 @@ pub async fn write_status12<M: SpiMaster + ?Sized>(master: &mut M, sr1: u8, sr2:
     let mut cmd = SpiCommand::write_reg(opcodes::WRSR, &data);
     master.execute(&mut cmd).await?;
     // Status register write typically takes 5-200ms, poll every 10ms
+    wait_ready(master, WRSR_POLL_US, WRSR_TIMEOUT_US).await
+}
+
+/// Write status registers 1 and 2 together, using EWSR (0x50) instead of WREN
+#[maybe_async]
+pub async fn write_status12_ewsr<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    sr1: u8,
+    sr2: u8,
+) -> Result<()> {
+    write_enable_ewsr(master).await?;
+    let data = [sr1, sr2];
+    let mut cmd = SpiCommand::write_reg(opcodes::WRSR, &data);
+    master.execute(&mut cmd).await?;
     wait_ready(master, WRSR_POLL_US, WRSR_TIMEOUT_US).await
 }
 
@@ -235,6 +272,107 @@ pub async fn program_page_4b<M: SpiMaster + ?Sized>(
 
     // Page program: poll every 10us, timeout after 10ms (typical is 0.7-5ms)
     wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await
+}
+
+// ============================================================================
+// SST-specific write functions
+// ============================================================================
+
+/// AAI (Auto Address Increment) word program for SST25 chips
+///
+/// Used for SST25VFxxxB chips (those with the `AAI_WORD` feature flag). These
+/// chips do not support standard page program (0x02) for multi-byte writes;
+/// instead they use a streaming protocol:
+///
+/// 1. WREN + AAI_WP (0xAD) + 3-byte addr + 2 data bytes → poll WIP
+/// 2. Repeat: AAI_WP (0xAD) + 2 data bytes (no addr, no WREN) → poll WIP
+/// 3. WRDI (0x04) to exit AAI mode
+///
+/// Any leading byte at an odd start address, and any trailing byte when `data`
+/// has odd length, are written individually via single-byte page program
+/// (WREN + PP (0x02) + addr + 1 byte), which SST25 chips support alongside AAI.
+///
+/// Note: AAI uses 3-byte addressing only. 4-byte address mode is irrelevant
+/// for SST25 chips (all are ≤8 MiB).
+///
+/// # Arguments
+/// * `addr` - Start address
+/// * `data` - Data to write
+#[maybe_async]
+pub async fn aai_word_program<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    addr: u32,
+    data: &[u8],
+) -> Result<()> {
+    if data.is_empty() {
+        return Ok(());
+    }
+
+    let mut pos = 0usize;
+    let mut current_addr = addr;
+
+    // Handle leading odd byte: single byte-program (WREN + PP + addr + 1 byte)
+    if !current_addr.is_multiple_of(2) {
+        write_enable(master).await?;
+        let mut cmd = SpiCommand::write_3b(opcodes::PP, current_addr, &data[pos..pos + 1]);
+        master.execute(&mut cmd).await?;
+        wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await?;
+        pos += 1;
+        current_addr += 1;
+    }
+
+    // AAI streaming: requires at least 2 bytes remaining
+    if pos + 1 < data.len() {
+        // First AAI command: WREN then AAI_WP + 3-byte address + 2 data bytes
+        write_enable(master).await?;
+        let mut cmd = SpiCommand::write_3b(opcodes::AAI_WP, current_addr, &data[pos..pos + 2]);
+        master.execute(&mut cmd).await?;
+        if let Err(e) = wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await {
+            // Best-effort exit from AAI mode before propagating the error
+            let _ = write_disable(master).await;
+            return Err(e);
+        }
+        pos += 2;
+        current_addr += 2;
+
+        // Continuation: AAI_WP + 2 bytes only — no address, no WREN
+        while pos + 1 < data.len() {
+            let mut cmd = SpiCommand::write_reg(opcodes::AAI_WP, &data[pos..pos + 2]);
+            master.execute(&mut cmd).await?;
+            if let Err(e) = wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await
+            {
+                let _ = write_disable(master).await;
+                return Err(e);
+            }
+            pos += 2;
+            current_addr += 2;
+        }
+
+        // Always exit AAI mode with WRDI before issuing any other command
+        write_disable(master).await?;
+    }
+
+    // Handle trailing odd byte (when original data length was odd)
+    if pos < data.len() {
+        write_enable(master).await?;
+        let mut cmd = SpiCommand::write_3b(opcodes::PP, current_addr, &data[pos..pos + 1]);
+        master.execute(&mut cmd).await?;
+        wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await?;
+    }
+
+    Ok(())
+}
+
+/// Global block-protection unlock for SST26 chips (ULBPR, 0x98)
+///
+/// SST26 chips use a separate block-protection register (not SR BP bits).
+/// This function sends WREN + ULBPR to clear all per-block protection bits.
+/// Must be called before writing to any region that may be protected.
+#[maybe_async]
+pub async fn sst26_global_unprotect<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
+    write_enable(master).await?;
+    let mut cmd = SpiCommand::simple(opcodes::ULBPR);
+    master.execute(&mut cmd).await
 }
 
 /// Erase a sector/block at the given address

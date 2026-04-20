@@ -51,6 +51,12 @@ bitflags! {
         const WRITE_BYTE      = 1 << 14;
         /// Supports AAI (Auto Address Increment) word program
         const AAI_WORD        = 1 << 15;
+        /// SST26-style per-block protection register (not SR BP bits)
+        ///
+        /// These chips require WREN + ULBPR (0x98) to globally unlock before
+        /// any erase or write can succeed, rather than clearing BP bits in the
+        /// status register.  Set for all SST26VF/SST26WF series chips.
+        const SST26_BPR       = 1 << 16;
 
         // Status register features
         /// Has status register 2

@@ -254,6 +254,11 @@ fn build_register_masks(bit_map: &WpRegBitMap, bits: &WpBits) -> (u8, u8, u8) {
 pub struct WriteOptions {
     /// Use volatile write (doesn't persist across power cycle)
     pub volatile: bool,
+    /// Use EWSR (0x50) instead of WREN (0x06) before status register writes.
+    ///
+    /// Required for legacy SST25 chips. Set automatically by `SpiFlashDevice`
+    /// when the chip has the `WRSR_EWSR` feature flag.
+    pub use_ewsr: bool,
 }
 
 /// Write WP bits to the chip
@@ -284,15 +289,19 @@ pub async fn write_wp_bits<M: SpiMaster + ?Sized>(
         return Ok(());
     }
 
-    // Perform the write
-    // TODO: Implement proper volatile write support using EWSR (0x50) instead of WREN
-    // For now, both volatile and non-volatile writes use the same mechanism.
-    // Volatile writes on some chips require:
-    // 1. EWSR (Enable Write Status Register) instead of WREN
-    // 2. Or writing to volatile SR copies that reset on power cycle
-    let _ = options.volatile; // Acknowledge the option for future use
+    // Perform the write, selecting EWSR vs WREN based on chip requirements.
+    // SST25 chips need EWSR (0x50) before WRSR rather than standard WREN (0x06).
+    // TODO: Implement separate volatile/non-volatile paths: volatile writes on
+    // some chips require a separate SR copy that resets on power cycle.
+    let _ = options.volatile;
     if need_sr2 {
-        protocol::write_status12(master, final_sr1, final_sr2).await?;
+        if options.use_ewsr {
+            protocol::write_status12_ewsr(master, final_sr1, final_sr2).await?;
+        } else {
+            protocol::write_status12(master, final_sr1, final_sr2).await?;
+        }
+    } else if options.use_ewsr {
+        protocol::write_status1_ewsr(master, final_sr1).await?;
     } else {
         protocol::write_status1(master, final_sr1).await?;
     }

@@ -157,5 +157,52 @@
                 (opcode: 0xC7, regions: [(size: MiB(1), count: 1)]),
             ],
         ),
+
+        // SST25WF020A / SST25WF040B / SST25WF080B
+        //
+        // Despite the SST brand name, these chips report SANYO_ID (0x62) as
+        // their JEDEC manufacturer byte.  They use standard 256-byte page
+        // program (unlike the older SST25VFxxxB AAI chips) and WREN before WRSR.
+        // Source: flashprog flashchips.c, manufacture_id = SANYO_ID.
+        (
+            name: "SST25WF020A",
+            device_id: 0x1612,
+            total_size: KiB(256),
+            features: (wrsr_wren: true),
+            voltage: (min: 1650, max: 1950),
+            erase_blocks: [
+                (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 4)]),
+                (opcode: 0x60, regions: [(size: KiB(256), count: 1)]),
+                (opcode: 0xC7, regions: [(size: KiB(256), count: 1)]),
+            ],
+        ),
+        (
+            name: "SST25WF040B",
+            device_id: 0x1613,
+            total_size: KiB(512),
+            features: (wrsr_wren: true),
+            voltage: (min: 1650, max: 1950),
+            erase_blocks: [
+                (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 8)]),
+                (opcode: 0x60, regions: [(size: KiB(512), count: 1)]),
+                (opcode: 0xC7, regions: [(size: KiB(512), count: 1)]),
+            ],
+        ),
+        (
+            name: "SST25WF080B",
+            device_id: 0x1614,
+            total_size: MiB(1),
+            features: (wrsr_wren: true),
+            voltage: (min: 1650, max: 1950),
+            erase_blocks: [
+                (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 16)]),
+                (opcode: 0x60, regions: [(size: MiB(1), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(1), count: 1)]),
+            ],
+            tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
+        ),
     ],
 )

@@ -51,6 +51,14 @@ pub struct Ft4222 {
     out_ep: u8,
     /// Current I/O lines mode
     io_lines: u8,
+    /// Cached bulk OUT endpoint. Held for the lifetime of the device so each SPI
+    /// transfer doesn't pay the cost of descriptor lookup, Arc allocation, and
+    /// the interface-level mutex that `Interface::endpoint` acquires.
+    out_endpoint: Option<Endpoint<Bulk, Out>>,
+    /// Cached bulk IN endpoint (see `out_endpoint`).
+    in_endpoint: Option<Endpoint<Bulk, In>>,
+    /// Cached `max_packet_size` for the bulk IN endpoint.
+    in_max_packet_size: usize,
 }
 
 impl Ft4222 {
@@ -174,7 +182,25 @@ impl Ft4222 {
             in_ep,
             out_ep,
             io_lines: 1, // Start with single I/O
+            out_endpoint: None,
+            in_endpoint: None,
+            in_max_packet_size: 0,
         };
+
+        // Claim the bulk endpoints up-front. `Interface::endpoint` allocates and
+        // takes an internal mutex on every call, so we want to hit it exactly
+        // once per device lifetime rather than once per SPI transfer.
+        let out_endpoint: Endpoint<Bulk, Out> = ft4222
+            .interface
+            .endpoint(ft4222.out_ep)
+            .map_err(|e| Ft4222Error::OpenFailed(format!("Failed to claim OUT endpoint: {e}")))?;
+        let in_endpoint: Endpoint<Bulk, In> = ft4222
+            .interface
+            .endpoint(ft4222.in_ep)
+            .map_err(|e| Ft4222Error::OpenFailed(format!("Failed to claim IN endpoint: {e}")))?;
+        ft4222.in_max_packet_size = in_endpoint.max_packet_size();
+        ft4222.out_endpoint = Some(out_endpoint);
+        ft4222.in_endpoint = Some(in_endpoint);
 
         // Initialize the device
         ft4222.init()?;
@@ -551,16 +577,19 @@ impl Ft4222 {
             return Ok(Vec::new());
         }
 
-        // Get endpoints
-        let mut out_ep: Endpoint<Bulk, Out> = self
-            .interface
-            .endpoint(self.out_ep)
-            .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
-
-        let mut in_ep: Endpoint<Bulk, In> = self
-            .interface
-            .endpoint(self.in_ep)
-            .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
+        let max_packet_size = self.in_max_packet_size;
+        // Borrow the cached endpoints. These are claimed once at open() time rather
+        // than re-acquired per call: `Interface::endpoint` allocates a fresh Arc +
+        // VecDeque + Notify and takes an internal mutex on every invocation, which
+        // is disastrous when called millions of times (e.g. 262144 AAI words).
+        let out_ep = self
+            .out_endpoint
+            .as_mut()
+            .ok_or_else(|| Ft4222Error::TransferFailed("OUT endpoint missing".into()))?;
+        let in_ep = self
+            .in_endpoint
+            .as_mut()
+            .ok_or_else(|| Ft4222Error::TransferFailed("IN endpoint missing".into()))?;
 
         // === OUTBOUND PHASE ===
         // Mirror flashprog's ft4222_spi_send_command: send three OUT transfers:
@@ -590,7 +619,6 @@ impl Ft4222 {
         // modem-status-only packets that must be discarded. A bulk transfer terminates
         // early on a short packet, so these stale packets can truncate a larger URB;
         // re-submitting until we have all the real bytes handles that cleanly.
-        let max_packet_size = in_ep.max_packet_size();
         let mut raw = Vec::<u8>::with_capacity(total_len);
         let mut real_bytes = 0usize;
 
@@ -782,8 +810,25 @@ impl SpiMaster for Ft4222 {
     }
 
     fn delay_us(&mut self, us: u32) {
-        // Simple sleep-based delay
-        if us > 0 {
+        if us == 0 {
+            return;
+        }
+        // For short delays (<100 us), thread::sleep is unusable: Linux timer granularity
+        // and scheduler wake-up latency push actual sleep time to ~50-100 us minimum.
+        // That's catastrophic inside tight SPI polling loops (e.g. AAI word program,
+        // which polls WIP every 10 us between 2-byte writes) — we'd lose tens of
+        // seconds per flash MiB to scheduler jitter alone.
+        //
+        // Match flashprog's approach: busy-wait using clock_gettime for sub-100 us
+        // delays, and fall back to thread::sleep for longer ones where precision
+        // doesn't matter.
+        const SPIN_THRESHOLD_US: u32 = 100;
+        if us < SPIN_THRESHOLD_US {
+            let deadline = std::time::Instant::now() + Duration::from_micros(us as u64);
+            while std::time::Instant::now() < deadline {
+                std::hint::spin_loop();
+            }
+        } else {
             std::thread::sleep(Duration::from_micros(us as u64));
         }
     }
