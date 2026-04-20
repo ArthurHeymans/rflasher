@@ -7,10 +7,16 @@ description = "FT4222H USB SPI programmer support for rflasher"
 
 [features]
 default = ["std"]
-std = ["rflasher-core/std", "nusb", "futures-lite"]
+# The FT4222 device layer is implemented against the blocking nusb API and
+# uses `SpiMaster` as a synchronous trait, so `std` implies `is_sync`. If an
+# async build is ever needed, split this coupling and add the `.await` points
+# in `device.rs` explicitly.
+std = ["rflasher-core/std", "is_sync", "nusb", "futures-lite"]
+is_sync = ["rflasher-core/is_sync", "maybe-async/is_sync"]
 
 [dependencies]
 rflasher-core.workspace = true
 nusb = { workspace = true, optional = true }
 futures-lite = { version = "2", optional = true }
 log.workspace = true
+maybe-async.workspace = true

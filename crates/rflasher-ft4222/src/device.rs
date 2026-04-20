@@ -14,7 +14,7 @@ use nusb::{Endpoint, Interface, MaybeFuture};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::default_execute_with_vec;
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::SpiCommand;
+use rflasher_core::spi::{IoMode as CoreIoMode, SpiCommand};
 
 use crate::error::{Ft4222Error, Result};
 use crate::protocol::*;
@@ -469,95 +469,6 @@ impl Ft4222 {
         Ok(())
     }
 
-    /// Write data to bulk OUT endpoint
-    ///
-    /// For large transfers, we split into smaller chunks to avoid USB stalls.
-    fn bulk_write(&mut self, data: &[u8]) -> Result<()> {
-        let mut out_ep: Endpoint<Bulk, Out> = self
-            .interface
-            .endpoint(self.out_ep)
-            .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
-
-        // For empty packet (CS deassert), just send it directly
-        if data.is_empty() {
-            let out_buf = Buffer::new(0);
-            let completion = out_ep.transfer_blocking(out_buf, Duration::from_secs(30));
-            completion
-                .into_result()
-                .map_err(|e| Ft4222Error::TransferFailed(format!("Empty packet failed: {}", e)))?;
-            log::trace!("Bulk write empty packet (CS deassert)");
-            return Ok(());
-        }
-
-        // Split large transfers into chunks (max 2048 bytes per transfer)
-        const MAX_CHUNK: usize = 2048;
-        let mut offset = 0;
-
-        while offset < data.len() {
-            let chunk_len = std::cmp::min(MAX_CHUNK, data.len() - offset);
-            let chunk = &data[offset..offset + chunk_len];
-
-            let mut out_buf = Buffer::new(chunk_len);
-            out_buf.extend_from_slice(chunk);
-
-            // Use longer timeout (matching flashprog's 16*2000ms = 32s)
-            let completion = out_ep.transfer_blocking(out_buf, Duration::from_secs(30));
-
-            completion.into_result().map_err(|e| {
-                Ft4222Error::TransferFailed(format!(
-                    "Bulk write failed at offset {}: {}",
-                    offset, e
-                ))
-            })?;
-
-            offset += chunk_len;
-        }
-
-        log::trace!("Bulk write {} bytes", data.len());
-        Ok(())
-    }
-
-    /// Read data from bulk IN endpoint
-    fn bulk_read(&mut self, len: usize) -> Result<Vec<u8>> {
-        let mut in_ep: Endpoint<Bulk, In> = self
-            .interface
-            .endpoint(self.in_ep)
-            .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
-
-        let max_packet_size = in_ep.max_packet_size();
-        let mut result = Vec::new();
-        let mut remaining = len;
-
-        while remaining > 0 {
-            let request_len = std::cmp::min(remaining + MODEM_STATUS_SIZE, READ_BUFFER_SIZE);
-            // Request length must be multiple of max packet size
-            let aligned_len = request_len.div_ceil(max_packet_size) * max_packet_size;
-
-            let mut in_buf = Buffer::new(aligned_len);
-            in_buf.set_requested_len(aligned_len);
-
-            // Use longer timeout (matching flashprog's approach)
-            let completion = in_ep.transfer_blocking(in_buf, Duration::from_secs(30));
-
-            let data = completion
-                .into_result()
-                .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk read failed: {}", e)))?;
-
-            if data.len() < MODEM_STATUS_SIZE {
-                return Err(Ft4222Error::InvalidResponse("Response too short".into()));
-            }
-
-            // Skip modem status bytes
-            let payload = &data[MODEM_STATUS_SIZE..];
-            let to_copy = std::cmp::min(payload.len(), remaining);
-            result.extend_from_slice(&payload[..to_copy]);
-            remaining -= to_copy;
-        }
-
-        log::trace!("Bulk read {} bytes", result.len());
-        Ok(result)
-    }
-
     /// Perform a single-I/O SPI transfer (full duplex) with pipelined USB transfers
     ///
     /// This is used for standard 1-1-1 mode transfers. Uses pipelining to submit
@@ -690,18 +601,145 @@ impl Ft4222 {
         }
     }
 
-    /// Perform a multi-I/O SPI transfer (half duplex)
+    /// Execute a `SpiCommand` in dual/quad/QPI mode.
     ///
-    /// This is used for dual/quad mode transfers with separate write and read phases.
-    /// Format: | single-I/O phase | multi-I/O write phase | multi-I/O read phase |
-    #[allow(dead_code)]
-    fn spi_transfer_multi(
+    /// Mirrors flashprog's `ft4222_spi_send_multi_io`. The key points:
+    ///
+    /// - The dummy phase is represented as `high_z_bytes` skipped from the
+    ///   READ buffer, NOT as data in the write phase. This is because after
+    ///   the mode byte / opcode, the chip owns the I/O lines — any extra
+    ///   write bytes would collide with the chip's output.
+    /// - The mode byte (when applicable for 1-2-2 / 1-4-4 / 4-4-4) is emitted
+    ///   as one write byte at the multi-IO rate.
+    /// - `cmd.dummy_cycles` is interpreted as total clock cycles at the
+    ///   I/O mode's lane count between end-of-address and start-of-data
+    ///   (i.e. it includes the mode byte time when one is sent).
+    fn execute_multi_io(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        // io_width is the number of lanes during the multi phase.
+        let io_width: usize = match cmd.io_mode {
+            CoreIoMode::Single => 1,
+            CoreIoMode::DualOut | CoreIoMode::DualIo => 2,
+            CoreIoMode::QuadOut | CoreIoMode::QuadIo | CoreIoMode::Qpi => 4,
+        };
+        let io_lines = io_width as u8;
+
+        // Opcode and address are built explicitly — we do not use
+        // cmd.encode_header because it adds dummy bytes into the write phase,
+        // which is wrong for multi-IO (they must go on the read side as
+        // high-Z to be skipped).
+        let opcode = [cmd.opcode];
+        let addr_width = cmd.address_width.bytes() as usize;
+        let mut addr_bytes = [0u8; 4];
+        if let Some(addr) = cmd.address {
+            cmd.address_width.encode(addr, &mut addr_bytes);
+        }
+        let addr_slice = &addr_bytes[..addr_width];
+
+        // Compute dummy time at the multi-IO rate. dummy_cycles is the total
+        // lane-clocks of non-data time between address end and data start
+        // (includes mode byte, if any).
+        let dummy_bytes_total = (cmd.dummy_cycles as usize * io_width).div_ceil(8);
+
+        // Which modes use a mode byte (M7-M0). DIO/QIO/QPI do; DOUT/QOUT
+        // do not. For the ones that do, we use 0xFF — its top nibble
+        // (0xF) is NOT 0xA, so continuous-read mode is not enabled on
+        // Winbond-family chips.
+        let uses_mode_byte = matches!(
+            cmd.io_mode,
+            CoreIoMode::DualIo | CoreIoMode::QuadIo | CoreIoMode::Qpi
+        );
+        let mode_byte_len = if uses_mode_byte && dummy_bytes_total > 0 {
+            1
+        } else {
+            0
+        };
+        let mode_byte = [0xFFu8];
+
+        // The remaining dummy bytes go on the read side and get skipped.
+        let high_z_bytes = dummy_bytes_total.saturating_sub(mode_byte_len);
+
+        // Split into single-IO and multi-IO write phases per io_mode:
+        //   1-1-x: opcode + addr + write_data -> single;    multi empty.
+        //   1-x-x: opcode -> single;   addr + M + write_data -> multi.
+        //   4-4-4: empty single;       opcode + addr + M + write_data -> multi.
+        let (single_slice, multi_slice): (Vec<u8>, Vec<u8>) = match cmd.io_mode {
+            CoreIoMode::Single => (opcode.to_vec(), Vec::new()),
+            CoreIoMode::DualOut | CoreIoMode::QuadOut => {
+                // 1-1-x: everything in the write phase is single-wire.
+                let mut s = Vec::with_capacity(1 + addr_width + cmd.write_data.len());
+                s.extend_from_slice(&opcode);
+                s.extend_from_slice(addr_slice);
+                s.extend_from_slice(cmd.write_data);
+                (s, Vec::new())
+            }
+            CoreIoMode::DualIo | CoreIoMode::QuadIo => {
+                // 1-x-x: opcode single, rest multi.
+                let s = opcode.to_vec();
+                let mut m = Vec::with_capacity(addr_width + mode_byte_len + cmd.write_data.len());
+                m.extend_from_slice(addr_slice);
+                if mode_byte_len > 0 {
+                    m.extend_from_slice(&mode_byte);
+                }
+                m.extend_from_slice(cmd.write_data);
+                (s, m)
+            }
+            CoreIoMode::Qpi => {
+                // 4-4-4: all multi.
+                let mut m =
+                    Vec::with_capacity(1 + addr_width + mode_byte_len + cmd.write_data.len());
+                m.extend_from_slice(&opcode);
+                m.extend_from_slice(addr_slice);
+                if mode_byte_len > 0 {
+                    m.extend_from_slice(&mode_byte);
+                }
+                m.extend_from_slice(cmd.write_data);
+                (Vec::new(), m)
+            }
+        };
+
+        log::trace!(
+            "ft4222 multi-io: opcode=0x{:02X} io_lines={} single={}B multi={}B high_z={}B read={}B",
+            cmd.opcode,
+            io_lines,
+            single_slice.len(),
+            multi_slice.len(),
+            high_z_bytes,
+            cmd.read_buf.len(),
+        );
+
+        self.spi_transfer_multi_into(
+            &single_slice,
+            &multi_slice,
+            cmd.read_buf,
+            high_z_bytes,
+            io_lines,
+        )
+        .map_err(|e| {
+            log::error!("ft4222 multi-io transfer failed: {e}");
+            CoreError::ProgrammerError
+        })?;
+        Ok(())
+    }
+
+    /// Perform a multi-I/O SPI transfer (half duplex) writing the read data
+    /// directly into `read_buf` with `high_z_bytes` of dummy skip.
+    ///
+    /// Format on the wire:
+    /// `| header(5B) | single_data | multi_write_data |` (bulk OUT),
+    /// then `high_z_bytes` bytes + `read_buf.len()` bytes on bulk IN, with
+    /// the first `high_z_bytes` discarded.
+    ///
+    /// Mirrors flashprog's `ft4222_spi_send_multi_io`.
+    fn spi_transfer_multi_into(
         &mut self,
         single_data: &[u8],
         multi_write_data: &[u8],
-        multi_read_len: usize,
+        read_buf: &mut [u8],
+        high_z_bytes: usize,
         io_lines: u8,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<()> {
+        let read_total = high_z_bytes + read_buf.len();
+
         // Validate lengths
         if single_data.len() > MULTI_IO_MAX_SINGLE {
             return Err(Ft4222Error::InvalidParameter(format!(
@@ -717,44 +755,120 @@ impl Ft4222 {
                 MULTI_IO_MAX_DATA
             )));
         }
-        if multi_read_len > MULTI_IO_MAX_DATA {
+        if read_total > MULTI_IO_MAX_DATA {
             return Err(Ft4222Error::InvalidParameter(format!(
-                "Multi-read phase too long: {} > {}",
-                multi_read_len, MULTI_IO_MAX_DATA
+                "Multi-read total too long: {} > {}",
+                read_total, MULTI_IO_MAX_DATA
             )));
         }
 
         // Set I/O lines for multi-I/O phase
         self.set_io_lines(io_lines)?;
 
-        // Build multi-I/O header
-        // Format: | 0x8 | single_len (4 bits) | multi_write_len (16 bits) | multi_read_len (16 bits) |
+        // Build multi-I/O header (big-endian lengths, matching flashprog's
+        // ft4222_spi_send_multi_io):
+        //   byte 0: 0x80 | single_len (4 bits)
+        //   bytes 1-2: multi_write_len (big-endian u16)
+        //   bytes 3-4: read_total (big-endian u16) — includes high_z skip
         let mut header = [0u8; MULTI_IO_HEADER_SIZE];
         header[0] = MULTI_IO_MAGIC | (single_data.len() as u8 & 0x0F);
-        header[1] = (multi_write_data.len() & 0xFF) as u8;
-        header[2] = ((multi_write_data.len() >> 8) & 0xFF) as u8;
-        header[3] = (multi_read_len & 0xFF) as u8;
-        header[4] = ((multi_read_len >> 8) & 0xFF) as u8;
+        header[1] = ((multi_write_data.len() >> 8) & 0xFF) as u8;
+        header[2] = (multi_write_data.len() & 0xFF) as u8;
+        header[3] = ((read_total >> 8) & 0xFF) as u8;
+        header[4] = (read_total & 0xFF) as u8;
 
-        // Build complete output buffer
-        let mut out_buf =
-            Vec::with_capacity(MULTI_IO_HEADER_SIZE + single_data.len() + multi_write_data.len());
+        // Assemble the single-shot write: header + single phase + multi phase.
+        let write_total = MULTI_IO_HEADER_SIZE + single_data.len() + multi_write_data.len();
+
+        // Use the cached endpoints (claimed once at open()). Creating fresh
+        // `Endpoint` instances via `self.interface.endpoint()` while the
+        // cached ones are held fails with "endpoint already in use".
+        let max_packet_size = self.in_max_packet_size;
+        let out_ep = self
+            .out_endpoint
+            .as_mut()
+            .ok_or_else(|| Ft4222Error::TransferFailed("OUT endpoint missing".into()))?;
+
+        let mut out_buf = Buffer::new(write_total);
         out_buf.extend_from_slice(&header);
         out_buf.extend_from_slice(single_data);
         out_buf.extend_from_slice(multi_write_data);
+        out_ep.submit(out_buf);
 
-        // Write data
-        self.bulk_write(&out_buf)?;
-
-        // Send empty packet to deassert CS
-        self.bulk_write(&[])?;
-
-        // Read response
-        if multi_read_len > 0 {
-            self.bulk_read(multi_read_len)
-        } else {
-            Ok(Vec::new())
+        // If nothing to read, wait for the write completion and return.
+        if read_total == 0 {
+            let completion = out_ep
+                .wait_next_complete(Duration::from_secs(30))
+                .ok_or(Ft4222Error::Timeout)?;
+            completion
+                .status
+                .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk write failed: {e}")))?;
+            return Ok(());
         }
+
+        // Pipeline: submit write, kick off reads, then drain both.
+        let in_ep = self
+            .in_endpoint
+            .as_mut()
+            .ok_or_else(|| Ft4222Error::TransferFailed("IN endpoint missing".into()))?;
+
+        // Collect into `raw` then split high_z vs payload.
+        let mut raw = Vec::<u8>::with_capacity(read_total);
+        let mut real_bytes = 0usize;
+
+        while real_bytes < read_total {
+            let remaining = read_total - real_bytes;
+            let bytes_per_packet = max_packet_size - MODEM_STATUS_SIZE;
+            let packets_needed = remaining.div_ceil(bytes_per_packet);
+            let request_len = (packets_needed * max_packet_size).min(READ_BUFFER_SIZE);
+
+            let mut in_buf = Buffer::new(request_len);
+            in_buf.set_requested_len(request_len);
+            in_ep.submit(in_buf);
+
+            let completion = in_ep
+                .wait_next_complete(Duration::from_secs(30))
+                .ok_or(Ft4222Error::Timeout)?;
+            completion
+                .status
+                .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk read failed: {e}")))?;
+
+            let data = &completion.buffer[..completion.actual_len];
+            for packet in data.chunks(max_packet_size) {
+                if packet.len() <= MODEM_STATUS_SIZE {
+                    continue;
+                }
+                let payload = &packet[MODEM_STATUS_SIZE..];
+                let to_copy = payload.len().min(read_total - real_bytes);
+                raw.extend_from_slice(&payload[..to_copy]);
+                real_bytes += to_copy;
+                if real_bytes >= read_total {
+                    break;
+                }
+            }
+        }
+
+        // Drain the write completion.
+        let out_ep = self
+            .out_endpoint
+            .as_mut()
+            .ok_or_else(|| Ft4222Error::TransferFailed("OUT endpoint missing".into()))?;
+        let completion = out_ep
+            .wait_next_complete(Duration::from_secs(30))
+            .ok_or(Ft4222Error::Timeout)?;
+        completion
+            .status
+            .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk write failed: {e}")))?;
+
+        if raw.len() < read_total {
+            return Err(Ft4222Error::InvalidResponse(format!(
+                "short read: wanted {read_total}, got {}",
+                raw.len()
+            )));
+        }
+        // Skip high-Z bytes, copy actual data.
+        read_buf.copy_from_slice(&raw[high_z_bytes..high_z_bytes + read_buf.len()]);
+        Ok(())
     }
 
     /// List all connected FT4222H devices
@@ -785,28 +899,49 @@ impl Ft4222 {
 
 impl SpiMaster for Ft4222 {
     fn features(&self) -> SpiFeatures {
-        // FT4222H supports 4-byte addressing (software handled)
-        // Dual I/O is supported but we only implement single mode for now
-        SpiFeatures::FOUR_BYTE_ADDR
+        // FT4222H always does 4-byte addressing in software. Multi-IO
+        // capability depends on how the user configured the device:
+        //   IoMode::Single -> only single
+        //   IoMode::Dual   -> single + dual (both 1-1-2 and 1-2-2)
+        //   IoMode::Quad   -> single + dual + quad + QPI (4-4-4)
+        let mut f = SpiFeatures::FOUR_BYTE_ADDR;
+        match self.config.io_mode {
+            IoMode::Single => {}
+            IoMode::Dual => {
+                f |= SpiFeatures::DUAL_IN | SpiFeatures::DUAL_IO;
+            }
+            IoMode::Quad => {
+                f |= SpiFeatures::DUAL_IN
+                    | SpiFeatures::DUAL_IO
+                    | SpiFeatures::QUAD_IN
+                    | SpiFeatures::QUAD_IO
+                    | SpiFeatures::QPI;
+            }
+        }
+        f
     }
 
     fn max_read_len(&self) -> usize {
         // With pipelined transfers, we can use much larger chunks since
         // read and write happen concurrently, preventing RX buffer overflow.
-        // flashprog uses 65530, we use a similar large value.
-        65535
+        // flashprog uses 65530.
+        65530
     }
 
     fn max_write_len(&self) -> usize {
-        // With pipelined transfers, writes can also be much larger
-        65535
+        65530
     }
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        default_execute_with_vec(cmd, self.features(), |write_data, read_len| {
-            self.spi_transfer_single(write_data, read_len)
-                .map_err(|_| CoreError::ProgrammerError)
-        })
+        match cmd.io_mode {
+            CoreIoMode::Single => {
+                default_execute_with_vec(cmd, self.features(), |write_data, read_len| {
+                    self.spi_transfer_single(write_data, read_len)
+                        .map_err(|_| CoreError::ProgrammerError)
+                })
+            }
+            _ => self.execute_multi_io(cmd),
+        }
     }
 
     fn delay_us(&mut self, us: u32) {
@@ -819,9 +954,8 @@ impl SpiMaster for Ft4222 {
         // which polls WIP every 10 us between 2-byte writes) — we'd lose tens of
         // seconds per flash MiB to scheduler jitter alone.
         //
-        // Match flashprog's approach: busy-wait using clock_gettime for sub-100 us
-        // delays, and fall back to thread::sleep for longer ones where precision
-        // doesn't matter.
+        // Match flashprog's approach: busy-wait for sub-100 us delays, and fall
+        // back to thread::sleep for longer ones where precision doesn't matter.
         const SPIN_THRESHOLD_US: u32 = 100;
         if us < SPIN_THRESHOLD_US {
             let deadline = std::time::Instant::now() + Duration::from_micros(us as u64);
