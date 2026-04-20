@@ -23,7 +23,7 @@
             name: "B.25D05AS",
             device_id: 0x4010,
             total_size: KiB(64),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
@@ -37,7 +37,7 @@
             name: "B.25D10AS",
             device_id: 0x4011,
             total_size: KiB(128),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
@@ -51,7 +51,7 @@
             name: "B.25D20AS",
             device_id: 0x4012,
             total_size: KiB(256),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -65,7 +65,7 @@
             name: "B.25D40AS/BY25D40ES",
             device_id: 0x4013,
             total_size: KiB(512),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -79,7 +79,7 @@
             name: "B.25D80AS/BY25Q80BS/BY25Q80ES",
             device_id: 0x4014,
             total_size: MiB(1),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -93,7 +93,7 @@
             name: "B.25D16AS/BY25Q16BS/BY25Q16ES",
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -107,7 +107,8 @@
             name: "B.25Q32BS/BY25Q32CS/BY25Q32ES",
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -121,7 +122,8 @@
             name: "B.25Q64AS/BY25Q64ES",
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -135,7 +137,8 @@
             name: "B.25Q128AS/BY25Q128ES",
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),

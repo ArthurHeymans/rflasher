@@ -293,7 +293,8 @@
             name: "AT25SF128A",
             device_id: 0x8901,
             total_size: MiB(16),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wrsr_wren: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2500, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -321,7 +322,8 @@
             name: "AT25SF321",
             device_id: 0x8701,
             total_size: MiB(4),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wrsr_wren: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2500, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -336,7 +338,8 @@
             name: "AT25SL128A",
             device_id: 0x4218,
             total_size: MiB(16),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wrsr_wren: true, fast_read_dout: true, fast_read: true, set_read_params: true, fast_read_qio: true, fast_read_qout: true, qpi_38_ff: true, fast_read_dio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 1700, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),

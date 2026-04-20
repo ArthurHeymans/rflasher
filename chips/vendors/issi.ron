@@ -85,7 +85,8 @@
             name: "IS25WP016D",
             device_id: 0x7015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wrsr_wren: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -98,7 +99,8 @@
             name: "IS25WP032",
             device_id: 0x7016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wrsr_wren: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -113,7 +115,8 @@
             name: "IS25WP064",
             device_id: 0x7017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wrsr_wren: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -128,7 +131,8 @@
             name: "IS25WP128",
             device_id: 0x7018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wrsr_wren: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -143,7 +147,8 @@
             name: "IS25WP256",
             device_id: 0x7019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true),
+            features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),

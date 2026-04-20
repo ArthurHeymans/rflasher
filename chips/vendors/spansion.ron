@@ -131,7 +131,8 @@
             name: "S25FL116K",
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -145,7 +146,8 @@
             name: "S25FL132K",
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -159,7 +161,8 @@
             name: "S25FL164K",
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
