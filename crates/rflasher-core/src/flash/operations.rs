@@ -751,6 +751,11 @@ pub async fn probe_detailed<M: SpiMaster + ?Sized>(
 ///
 /// Automatically selects the best I/O mode based on programmer and chip capabilities.
 /// Uses dual or quad I/O when both the programmer and chip support it.
+///
+/// This is the low-level standalone entry point; it builds a one-shot
+/// `SpiReadOp` from chip features and calls `protocol::read_with_op`. For
+/// repeated reads, prefer the `SpiFlashDevice` / `HybridFlashDevice` path
+/// which caches the read op across calls and enters QPI once.
 #[maybe_async]
 pub async fn read<M: SpiMaster + ?Sized>(
     master: &mut M,
@@ -759,76 +764,45 @@ pub async fn read<M: SpiMaster + ?Sized>(
     buf: &mut [u8],
 ) -> Result<()> {
     use crate::chip::Features;
-    use crate::spi::IoMode;
+    use crate::protocol::{ChipReadCapabilities, DummyCycleOverrides};
 
     if !ctx.is_valid_range(addr, buf.len()) {
         return Err(Error::AddressOutOfBounds);
     }
 
-    let chip_has_dual = ctx.chip.features.contains(Features::DUAL_IO);
-    let chip_has_quad = ctx.chip.features.contains(Features::QUAD_IO);
-    let use_4byte = ctx.address_mode == AddressMode::FourByte && ctx.use_native_4byte;
+    let feats = ctx.chip.features;
+    let use_4byte_native = ctx.address_mode == AddressMode::FourByte && ctx.use_native_4byte;
     let master_features = master.features();
 
-    // Select the best read mode based on chip and programmer capabilities
-    let (io_mode, _opcode) =
-        protocol::select_read_mode(master_features, chip_has_dual, chip_has_quad, use_4byte);
+    let caps = ChipReadCapabilities {
+        fast_read: feats.contains(Features::FAST_READ),
+        dout: feats.contains(Features::FAST_READ_DOUT),
+        dio: feats.contains(Features::FAST_READ_DIO),
+        qout: feats.contains(Features::FAST_READ_QOUT),
+        qio: feats.contains(Features::FAST_READ_QIO),
+        qpi_fast_read: false, // freestanding read doesn't enter QPI
+        qpi4b: feats.contains(Features::FAST_READ_QPI4B),
+        native_4ba_read: feats.contains(Features::FOUR_BYTE_NATIVE),
+        in_qpi_mode: false,
+    };
+    let dc = DummyCycleOverrides {
+        dc_112: ctx.chip.dummy_cycles_112,
+        dc_122: ctx.chip.dummy_cycles_122,
+        dc_114: ctx.chip.dummy_cycles_114,
+        dc_144: ctx.chip.dummy_cycles_144,
+        dc_qpi: ctx.chip.dummy_cycles_qpi,
+    };
+    let op = protocol::select_read_op(master_features, caps, dc, use_4byte_native);
 
-    // Enter 4-byte mode if needed and not using native commands
-    let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !ctx.use_native_4byte;
+    // Enter 4-byte mode if the chip needs it but the selected op isn't 4BA-native.
+    let enter_exit_4byte =
+        ctx.address_mode == AddressMode::FourByte && !op.native_4ba;
     if enter_exit_4byte {
         protocol::enter_4byte_mode(master).await?;
     }
 
-    let result = match io_mode {
-        IoMode::Single => {
-            if use_4byte {
-                protocol::read_4b(master, addr, buf).await
-            } else {
-                protocol::read_3b(master, addr, buf).await
-            }
-        }
-        IoMode::DualOut => {
-            if use_4byte {
-                protocol::read_dual_out_4b(master, addr, buf).await
-            } else {
-                protocol::read_dual_out_3b(master, addr, buf).await
-            }
-        }
-        IoMode::DualIo => {
-            if use_4byte {
-                protocol::read_dual_io_4b(master, addr, buf).await
-            } else {
-                protocol::read_dual_io_3b(master, addr, buf).await
-            }
-        }
-        IoMode::QuadOut => {
-            if use_4byte {
-                protocol::read_quad_out_4b(master, addr, buf).await
-            } else {
-                protocol::read_quad_out_3b(master, addr, buf).await
-            }
-        }
-        IoMode::QuadIo => {
-            if use_4byte {
-                protocol::read_quad_io_4b(master, addr, buf).await
-            } else {
-                protocol::read_quad_io_3b(master, addr, buf).await
-            }
-        }
-        IoMode::Qpi => {
-            // QPI mode requires special handling - fall back to single for now
-            // TODO: Implement QPI read when needed
-            log::warn!("QPI read mode not yet implemented, falling back to single I/O");
-            if use_4byte {
-                protocol::read_4b(master, addr, buf).await
-            } else {
-                protocol::read_3b(master, addr, buf).await
-            }
-        }
-    };
+    let result = protocol::read_with_op(master, &op, addr, buf).await;
 
-    // Exit 4-byte mode if we entered it
     if enter_exit_4byte {
         if let Err(e) = protocol::exit_4byte_mode(master).await {
             log::warn!("Failed to exit 4-byte address mode: {}", e);

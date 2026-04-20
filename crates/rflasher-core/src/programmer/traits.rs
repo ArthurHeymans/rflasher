@@ -161,6 +161,14 @@ pub trait OpaqueMaster {
     /// * `addr` - Starting address to erase
     /// * `len` - Number of bytes to erase
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
+
+    /// Push a chip-selected `SpiReadOp` to the programmer.
+    ///
+    /// Programmers that handle flash reads internally (e.g. Dediprog CMD_READ)
+    /// need to know the chip's read opcode, IO mode and dummy cycles to
+    /// configure the firmware correctly. The default is a no-op for
+    /// programmers that derive everything from probing (e.g. Intel swseq).
+    fn set_read_op(&mut self, _op: crate::protocol::SpiReadOp) {}
 }
 
 // Blanket impl for boxed SPI masters to allow trait objects (sync mode only)

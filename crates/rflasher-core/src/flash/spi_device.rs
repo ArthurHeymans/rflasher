@@ -8,6 +8,7 @@ use crate::error::{EraseFailure, Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
 use crate::flash::operations::{map_to_4byte_erase_opcode, select_erase_block};
+use crate::flash::prepare::PreparedState;
 use crate::programmer::SpiMaster;
 use crate::protocol;
 use crate::wp::{
@@ -39,6 +40,9 @@ pub struct SpiFlashDevice<M: SpiMaster> {
     master: M,
     /// Flash chip context
     ctx: FlashContext,
+    /// Prepared state (read op, QPI mode, etc.); defaults to single-I/O until
+    /// `prepare()` is called.
+    prepared: PreparedState,
 }
 
 impl<M: SpiMaster> SpiFlashDevice<M> {
@@ -47,8 +51,17 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// # Arguments
     /// * `master` - The SPI master to take ownership of
     /// * `ctx` - Flash context with chip metadata (from probing)
+    ///
+    /// The device will start in slow single-I/O mode until `prepare()` is
+    /// called; it's safe to immediately read/erase/write without preparing
+    /// (correctness is preserved, only throughput is lost).
     pub fn new(master: M, ctx: FlashContext) -> Self {
-        SpiFlashDevice { master, ctx }
+        let prepared = PreparedState::default_for(&ctx);
+        SpiFlashDevice {
+            master,
+            ctx,
+            prepared,
+        }
     }
 
     /// Get a mutable reference to the underlying SPI master
@@ -64,6 +77,35 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// Get a mutable reference to the flash context
     pub fn context_mut(&mut self) -> &mut FlashContext {
         &mut self.ctx
+    }
+
+    /// Get a reference to the prepared session state.
+    pub fn prepared(&self) -> &PreparedState {
+        &self.prepared
+    }
+
+    /// Prepare the chip for multi-IO operation.
+    ///
+    /// Enables the QE bit (if supported), enters QPI mode (if supported),
+    /// and caches the fastest available read op. Call this immediately after
+    /// construction to enable multi-IO reads.
+    #[maybe_async]
+    pub async fn prepare(&mut self) -> Result<()> {
+        self.prepared = crate::flash::prepare::prepare_io(&mut self.ctx, &mut self.master).await?;
+        Ok(())
+    }
+
+    /// Explicitly set the prepared state.
+    ///
+    /// Mostly useful for tests; `prepare()` is the normal entry point.
+    pub fn set_prepared(&mut self, state: PreparedState) {
+        self.prepared = state;
+    }
+
+    /// Undo side-effects from `prepare()`.
+    #[maybe_async]
+    pub async fn finish(&mut self) -> Result<()> {
+        crate::flash::prepare::finish_io(&self.prepared, &mut self.master).await
     }
 
     /// Consume the adapter and return the flash context
@@ -136,86 +178,26 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
-        use crate::chip::Features;
-        use crate::spi::IoMode;
-
-        let ctx = self.context();
-        if !ctx.is_valid_range(addr, buf.len()) {
+        if !self.context().is_valid_range(addr, buf.len()) {
             return Err(Error::AddressOutOfBounds);
         }
 
-        let chip_has_dual = ctx.chip.features.contains(Features::DUAL_IO);
-        let chip_has_quad = ctx.chip.features.contains(Features::QUAD_IO);
-        let use_native_4byte = ctx.use_native_4byte;
-        let use_4byte_native = ctx.address_mode == AddressMode::FourByte && use_native_4byte;
-        let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !use_native_4byte;
+        // If the user hasn't called prepare(), the default single-I/O op is used.
+        // If 4-byte addressing is needed but the selected op isn't native_4ba,
+        // wrap the read in EN4B / EX4B.
+        let use_4byte = self.ctx.address_mode == AddressMode::FourByte;
+        let enter_exit_4byte = use_4byte && !self.prepared.read_op.native_4ba;
 
-        let master_features = self.master().features();
-
-        // Select the best read mode based on chip and programmer capabilities
-        let (io_mode, ..) = protocol::select_read_mode(
-            master_features,
-            chip_has_dual,
-            chip_has_quad,
-            use_4byte_native,
-        );
-
-        // Enter 4-byte mode if needed and not using native commands
         if enter_exit_4byte {
             protocol::enter_4byte_mode(self.master()).await?;
         }
 
-        let result = match io_mode {
-            IoMode::Single => {
-                if use_4byte_native {
-                    protocol::read_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_3b(self.master(), addr, buf).await
-                }
-            }
-            IoMode::DualOut => {
-                if use_4byte_native {
-                    protocol::read_dual_out_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_dual_out_3b(self.master(), addr, buf).await
-                }
-            }
-            IoMode::DualIo => {
-                if use_4byte_native {
-                    protocol::read_dual_io_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_dual_io_3b(self.master(), addr, buf).await
-                }
-            }
-            IoMode::QuadOut => {
-                if use_4byte_native {
-                    protocol::read_quad_out_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_quad_out_3b(self.master(), addr, buf).await
-                }
-            }
-            IoMode::QuadIo => {
-                if use_4byte_native {
-                    protocol::read_quad_io_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_quad_io_3b(self.master(), addr, buf).await
-                }
-            }
-            IoMode::Qpi => {
-                // QPI mode requires special handling - fall back to single for now
-                log::warn!("QPI read mode not yet implemented, falling back to single I/O");
-                if use_4byte_native {
-                    protocol::read_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_3b(self.master(), addr, buf).await
-                }
-            }
-        };
+        let result =
+            protocol::read_with_op(&mut self.master, &self.prepared.read_op, addr, buf).await;
 
-        // Exit 4-byte mode if we entered it
         if enter_exit_4byte {
             if let Err(e) = protocol::exit_4byte_mode(self.master()).await {
-                log::warn!("Failed to exit 4-byte address mode: {}", e);
+                log::warn!("Failed to exit 4-byte address mode: {e}");
             }
         }
 

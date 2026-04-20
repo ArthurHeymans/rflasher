@@ -41,6 +41,7 @@ mod device;
 mod hybrid_device;
 mod opaque_device;
 mod operations;
+mod prepare;
 mod spi_device;
 #[cfg(feature = "alloc")]
 pub mod unified;
@@ -51,6 +52,7 @@ pub use device::FlashDevice;
 pub use device::FlashDeviceExt;
 pub use hybrid_device::HybridFlashDevice;
 pub use opaque_device::OpaqueFlashDevice;
+pub use prepare::{finish_io, prepare_io, PreparedState};
 pub use spi_device::SpiFlashDevice;
 
 // Re-export low-level SPI operations (work with SpiMaster directly)
