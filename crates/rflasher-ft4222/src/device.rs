@@ -3,21 +3,60 @@
 //! This module provides the main `Ft4222` struct that implements USB
 //! communication with the FT4222H SPI master and the `SpiMaster` trait.
 //!
-//! The FT4222H uses a vendor-specific USB protocol (not MPSSE/libftdi).
-//! This implementation is based on flashprog's ft4222_spi.c which uses
-//! raw libusb without the proprietary LibFT4222.
+//! Uses `maybe_async` to support both sync and async modes from a single
+//! codebase:
+//! - With `is_sync` feature (native CLI): all async is stripped, blocking USB
+//! - Without `is_sync` (WASM): full async with WebUSB
 
 use std::time::Duration;
 
+use maybe_async::maybe_async;
 use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Out, Recipient};
-use nusb::{Endpoint, Interface, MaybeFuture};
+#[cfg(feature = "std")]
+use nusb::MaybeFuture;
+use nusb::{Endpoint, Interface};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
-use rflasher_core::programmer::default_execute_with_vec;
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::SpiCommand;
 
 use crate::error::{Ft4222Error, Result};
 use crate::protocol::*;
+
+// ---------------------------------------------------------------------------
+// Platform-specific endpoint/future helpers
+// ---------------------------------------------------------------------------
+
+/// Wait for the next completion on an endpoint, with timeout.
+/// In sync mode: blocks with the given timeout.
+/// In async mode: awaits indefinitely (timeout is ignored).
+macro_rules! ep_wait {
+    ($ep:expr, $timeout:expr) => {{
+        #[cfg(feature = "is_sync")]
+        {
+            $ep.wait_next_complete($timeout)
+        }
+        #[cfg(not(feature = "is_sync"))]
+        {
+            Some($ep.next_complete().await)
+        }
+    }};
+}
+
+/// Resolve an nusb `MaybeFuture` to its output.
+/// In sync mode: calls `.wait()`.
+/// In async mode: awaits the future.
+macro_rules! nusb_await {
+    ($expr:expr) => {{
+        #[cfg(feature = "is_sync")]
+        {
+            $expr.wait()
+        }
+        #[cfg(not(feature = "is_sync"))]
+        {
+            $expr.await
+        }
+    }};
+}
 
 /// FT4222H USB SPI Master programmer
 ///
@@ -37,54 +76,51 @@ use crate::protocol::*;
 /// - Multiple I/O modes: single (1-1-1), dual (1-1-2, 1-2-2), quad (1-1-4, 1-4-4, 4-4-4)
 /// - Pure USB implementation (no vendor library required)
 pub struct Ft4222 {
-    /// USB interface
+    /// USB interface handle. In WASM this is also kept alive to maintain the claim.
     interface: Interface,
-    /// Current SPI configuration
+    /// Current SPI configuration.
     config: SpiConfig,
-    /// Selected clock configuration
+    /// Selected clock configuration.
     clock_config: ClockConfig,
-    /// Control interface index (from USB descriptor)
+    /// Control interface index (from USB descriptor).
     control_index: u8,
-    /// Bulk IN endpoint address
+    /// Bulk IN endpoint address.
     in_ep: u8,
-    /// Bulk OUT endpoint address
+    /// Bulk OUT endpoint address.
     out_ep: u8,
-    /// Current I/O lines mode
+    /// Current I/O lines mode.
     io_lines: u8,
-    /// Cached bulk OUT endpoint. Held for the lifetime of the device so each SPI
-    /// transfer doesn't pay the cost of descriptor lookup, Arc allocation, and
-    /// the interface-level mutex that `Interface::endpoint` acquires.
+    /// Cached bulk OUT endpoint.
     out_endpoint: Option<Endpoint<Bulk, Out>>,
-    /// Cached bulk IN endpoint (see `out_endpoint`).
+    /// Cached bulk IN endpoint.
     in_endpoint: Option<Endpoint<Bulk, In>>,
     /// Cached `max_packet_size` for the bulk IN endpoint.
     in_max_packet_size: usize,
 }
 
+// ---------------------------------------------------------------------------
+// Native-only methods (device enumeration)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "std")]
 impl Ft4222 {
-    /// Open an FT4222H device with default configuration
-    ///
-    /// Searches for an FT4222H device (VID:0403 PID:601c) and opens it.
-    /// Returns an error if no device is found or if the device cannot be opened.
+    /// Open an FT4222H device with default configuration.
     pub fn open() -> Result<Self> {
         Self::open_with_config(SpiConfig::default())
     }
 
-    /// Open an FT4222H device with custom configuration
+    /// Open an FT4222H device with custom configuration.
     pub fn open_with_config(config: SpiConfig) -> Result<Self> {
         Self::open_nth_with_config(0, config)
     }
 
-    /// Open the nth FT4222H device (0-indexed) with default configuration
-    ///
-    /// Useful when multiple FT4222H devices are connected.
+    /// Open the nth FT4222H device (0-indexed) with default configuration.
     pub fn open_nth(index: usize) -> Result<Self> {
         Self::open_nth_with_config(index, SpiConfig::default())
     }
 
-    /// Open the nth FT4222H device with custom configuration
+    /// Open the nth FT4222H device with custom configuration.
     pub fn open_nth_with_config(index: usize, config: SpiConfig) -> Result<Self> {
-        // Find FT4222H devices
         let devices: Vec<_> = nusb::list_devices()
             .wait()
             .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?
@@ -92,17 +128,128 @@ impl Ft4222 {
             .collect();
 
         let device_info = devices.get(index).ok_or(Ft4222Error::DeviceNotFound)?;
+        Self::open_device(device_info, config)
+    }
 
+    /// List all connected FT4222H devices.
+    pub fn list_devices() -> Result<Vec<Ft4222DeviceInfo>> {
+        let devices: Vec<_> = nusb::list_devices()
+            .wait()
+            .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?
+            .filter(|d| d.vendor_id() == FTDI_VID && d.product_id() == FT4222H_PID)
+            .map(|d| Ft4222DeviceInfo {
+                bus: d.busnum(),
+                address: d.device_address(),
+            })
+            .collect();
+
+        Ok(devices)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WASM-only methods (WebUSB device picker, async open, shutdown)
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+impl Ft4222 {
+    /// Request an FT4222H device via the WebUSB permission prompt.
+    ///
+    /// This must be called from a user gesture (e.g., button click) in the browser.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn request_device() -> Result<nusb::DeviceInfo> {
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen_futures::JsFuture;
+        use web_sys::{UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
+
+        let usb = web_sys::window()
+            .ok_or(Ft4222Error::DeviceNotFound)?
+            .navigator()
+            .usb();
+
+        let filter = UsbDeviceFilter::new();
+        filter.set_vendor_id(FTDI_VID);
+        filter.set_product_id(FT4222H_PID);
+
+        let filters = js_sys::Array::new();
+        filters.push(&filter);
+
+        let options = UsbDeviceRequestOptions::new(&filters);
+
+        log::info!("Requesting FT4222H device via WebUSB picker...");
+
+        let device_promise = usb.request_device(&options);
+        let device_js = JsFuture::from(device_promise)
+            .await
+            .map_err(|e| Ft4222Error::OpenFailed(format!("WebUSB request failed: {:?}", e)))?;
+
+        let device: UsbDevice = device_js
+            .dyn_into()
+            .map_err(|_| Ft4222Error::OpenFailed("Failed to get USB device".to_string()))?;
+
+        log::info!(
+            "FT4222H device selected: VID={:04X} PID={:04X}",
+            device.vendor_id(),
+            device.product_id()
+        );
+
+        nusb::device_info_from_webusb(device)
+            .await
+            .map_err(|e| Ft4222Error::OpenFailed(format!("Failed to get device info: {}", e)))
+    }
+
+    /// Open an FT4222H device from a WebUSB-selected `DeviceInfo`.
+    pub async fn open(device_info: nusb::DeviceInfo, config: SpiConfig) -> Result<Self> {
+        Self::open_device(&device_info, config).await
+    }
+
+    /// Shutdown the device and drain pending endpoint state.
+    pub async fn shutdown(&mut self) {
+        let _ = self.set_io_lines(1).await;
+        let _ = self.flush().await;
+
+        if let Some(out_ep) = self.out_endpoint.as_mut() {
+            out_ep.cancel_all();
+            while out_ep.pending() > 0 {
+                let _ = ep_wait!(out_ep, Duration::from_secs(1));
+            }
+        }
+
+        if let Some(in_ep) = self.in_endpoint.as_mut() {
+            in_ep.cancel_all();
+            while in_ep.pending() > 0 {
+                let _ = ep_wait!(in_ep, Duration::from_secs(1));
+            }
+        }
+
+        log::info!("FT4222H shutdown complete");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared methods (sync or async via maybe_async)
+// ---------------------------------------------------------------------------
+
+#[cfg_attr(all(feature = "wasm", feature = "is_sync"), allow(dead_code))]
+impl Ft4222 {
+    /// Open a specific FT4222H device.
+    #[maybe_async]
+    async fn open_device(device_info: &nusb::DeviceInfo, config: SpiConfig) -> Result<Self> {
+        #[cfg(feature = "is_sync")]
         log::info!(
             "Opening FT4222H device at bus {} address {}",
             device_info.busnum(),
             device_info.device_address()
         );
+        #[cfg(not(feature = "is_sync"))]
+        log::info!(
+            "Opening FT4222H device VID={:04X} PID={:04X}",
+            device_info.vendor_id(),
+            device_info.product_id()
+        );
 
-        let device = device_info
-            .open()
-            .wait()
-            .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?;
+        let device =
+            nusb_await!(device_info.open()).map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?;
 
         log::debug!(
             "Device: VID={:04X} PID={:04X}",
@@ -110,18 +257,15 @@ impl Ft4222 {
             device_info.product_id()
         );
 
-        // Get configuration descriptor to find endpoints
         let config_desc = device
             .active_configuration()
             .map_err(|e| Ft4222Error::OpenFailed(format!("Failed to get config: {}", e)))?;
 
-        // Find the vendor-specific interface for SPI
-        let mut spi_interface: Option<u8> = None;
-        let mut in_ep: Option<u8> = None;
-        let mut out_ep: Option<u8> = None;
+        let mut spi_interface = None;
+        let mut in_ep = None;
+        let mut out_ep = None;
 
         for iface in config_desc.interface_alt_settings() {
-            // Look for vendor-specific class (0xFF) or interface 0
             if iface.class() == 0xFF || iface.interface_number() == 0 {
                 for ep in iface.endpoints() {
                     if ep.transfer_type() == nusb::descriptors::TransferType::Bulk {
@@ -154,17 +298,10 @@ impl Ft4222 {
             out_ep
         );
 
-        // Claim interface
-        let interface = device
-            .claim_interface(iface_num)
-            .wait()
+        let interface = nusb_await!(device.claim_interface(iface_num))
             .map_err(|e| Ft4222Error::ClaimFailed(e.to_string()))?;
 
-        // Calculate clock configuration
         let clock_config = find_clock_config(config.speed_khz);
-
-        // Determine control index based on number of interfaces (matching flashprog)
-        // LibFT4222 sets control_index = 1 if there are multiple interfaces, 0 otherwise
         let num_interfaces = config_desc.num_interfaces();
         let control_index = if num_interfaces > 1 { 1 } else { 0 };
 
@@ -181,37 +318,32 @@ impl Ft4222 {
             control_index,
             in_ep,
             out_ep,
-            io_lines: 1, // Start with single I/O
+            io_lines: 1,
             out_endpoint: None,
             in_endpoint: None,
             in_max_packet_size: 0,
         };
 
-        // Claim the bulk endpoints up-front. `Interface::endpoint` allocates and
-        // takes an internal mutex on every call, so we want to hit it exactly
-        // once per device lifetime rather than once per SPI transfer.
-        let out_endpoint: Endpoint<Bulk, Out> = ft4222
+        let out_endpoint = ft4222
             .interface
-            .endpoint(ft4222.out_ep)
+            .endpoint::<Bulk, Out>(ft4222.out_ep)
             .map_err(|e| Ft4222Error::OpenFailed(format!("Failed to claim OUT endpoint: {e}")))?;
-        let in_endpoint: Endpoint<Bulk, In> = ft4222
+        let in_endpoint = ft4222
             .interface
-            .endpoint(ft4222.in_ep)
+            .endpoint::<Bulk, In>(ft4222.in_ep)
             .map_err(|e| Ft4222Error::OpenFailed(format!("Failed to claim IN endpoint: {e}")))?;
         ft4222.in_max_packet_size = in_endpoint.max_packet_size();
         ft4222.out_endpoint = Some(out_endpoint);
         ft4222.in_endpoint = Some(in_endpoint);
 
-        // Initialize the device
-        ft4222.init()?;
-
+        ft4222.init().await?;
         Ok(ft4222)
     }
 
-    /// Initialize the FT4222H for SPI master mode
-    fn init(&mut self) -> Result<()> {
-        // Query version info
-        let (chip_version, version2, version3) = self.get_version()?;
+    /// Initialize the FT4222H for SPI master mode.
+    #[maybe_async]
+    async fn init(&mut self) -> Result<()> {
+        let (chip_version, version2, version3) = self.get_version().await?;
         log::info!(
             "FT4222H version: chip=0x{:08X} (0x{:08X} 0x{:08X})",
             chip_version,
@@ -219,11 +351,9 @@ impl Ft4222 {
             version3
         );
 
-        // Query number of channels
-        let channels = self.get_num_channels()?;
+        let channels = self.get_num_channels().await?;
         log::debug!("FT4222H channels: {}", channels);
 
-        // Validate CS selection
         if self.config.cs >= channels {
             return Err(Ft4222Error::InvalidParameter(format!(
                 "CS{} not available (device has {} channels)",
@@ -231,14 +361,9 @@ impl Ft4222 {
             )));
         }
 
-        // Reset the device
-        self.reset()?;
-
-        // Set system clock
-        self.set_sys_clock(self.clock_config.sys_clock)?;
-
-        // Configure SPI master mode
-        self.configure_spi_master()?;
+        self.reset().await?;
+        self.set_sys_clock(self.clock_config.sys_clock).await?;
+        self.configure_spi_master().await?;
 
         log::info!(
             "FT4222H configured: SPI clock = {} kHz, CS = {}, I/O mode = {:?}",
@@ -250,25 +375,21 @@ impl Ft4222 {
         Ok(())
     }
 
-    /// Get device version information (matching flashprog's ft4222_get_version)
-    ///
-    /// Returns (chip_version, version2, version3) - flashprog reads 12 bytes
-    fn get_version(&self) -> Result<(u32, u32, u32)> {
-        let data = self
-            .interface
-            .control_in(
-                ControlIn {
-                    control_type: ControlType::Vendor,
-                    recipient: Recipient::Device,
-                    request: FT4222_INFO_REQUEST,
-                    value: FT4222_GET_VERSION,
-                    index: self.control_index as u16,
-                    length: 12, // flashprog requests 12 bytes
-                },
-                Duration::from_secs(5),
-            )
-            .wait()
-            .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get version: {}", e)))?;
+    /// Get device version information (matching flashprog's `ft4222_get_version`).
+    #[maybe_async]
+    async fn get_version(&self) -> Result<(u32, u32, u32)> {
+        let data = nusb_await!(self.interface.control_in(
+            ControlIn {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Device,
+                request: FT4222_INFO_REQUEST,
+                value: FT4222_GET_VERSION,
+                index: self.control_index as u16,
+                length: 12,
+            },
+            Duration::from_secs(5),
+        ))
+        .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get version: {}", e)))?;
 
         if data.len() < 12 {
             return Err(Ft4222Error::InvalidResponse(format!(
@@ -277,7 +398,6 @@ impl Ft4222 {
             )));
         }
 
-        // flashprog reads these as big-endian
         let chip_version = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
         let version2 = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
         let version3 = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
@@ -285,25 +405,21 @@ impl Ft4222 {
         Ok((chip_version, version2, version3))
     }
 
-    /// Get number of CS channels available (matching flashprog's ft4222_get_num_channels)
-    ///
-    /// This queries GET_CONFIG and parses the mode byte to determine channel count.
-    fn get_num_channels(&self) -> Result<u8> {
-        let data = self
-            .interface
-            .control_in(
-                ControlIn {
-                    control_type: ControlType::Vendor,
-                    recipient: Recipient::Device,
-                    request: FT4222_INFO_REQUEST,
-                    value: FT4222_GET_CONFIG,
-                    index: self.control_index as u16,
-                    length: 13,
-                },
-                Duration::from_secs(5),
-            )
-            .wait()
-            .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get config: {}", e)))?;
+    /// Get the number of CS channels available.
+    #[maybe_async]
+    async fn get_num_channels(&self) -> Result<u8> {
+        let data = nusb_await!(self.interface.control_in(
+            ControlIn {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Device,
+                request: FT4222_INFO_REQUEST,
+                value: FT4222_GET_CONFIG,
+                index: self.control_index as u16,
+                length: 13,
+            },
+            Duration::from_secs(5),
+        ))
+        .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get config: {}", e)))?;
 
         if data.is_empty() {
             return Err(Ft4222Error::InvalidResponse(
@@ -311,17 +427,16 @@ impl Ft4222 {
             ));
         }
 
-        // Parse mode byte to determine number of channels (matching flashprog)
         let channels = match data[0] {
-            0 => 1, // Mode 0
-            1 => 3, // Mode 1
-            2 => 4, // Mode 2
-            3 => 1, // Mode 3
+            0 => 1,
+            1 => 3,
+            2 => 4,
+            3 => 1,
             mode => {
                 return Err(Ft4222Error::InvalidResponse(format!(
                     "Unknown mode byte: 0x{:02x}",
                     mode
-                )))
+                )));
             }
         };
 
@@ -329,167 +444,159 @@ impl Ft4222 {
         Ok(channels)
     }
 
-    /// Reset the device (matching flashprog's ft4222_reset)
-    fn reset(&self) -> Result<()> {
-        // Reset SIO - note: wIndex = 0, not control_index
-        self.control_out_with_index(FT4222_RESET_REQUEST, FT4222_RESET_SIO, 0, &[])?;
-
-        // Flush output buffer multiple times (flashprog does this 6 times)
-        self.flush()?;
-
+    /// Reset the device (matching flashprog's `ft4222_reset`).
+    #[maybe_async]
+    async fn reset(&self) -> Result<()> {
+        self.control_out_with_index(FT4222_RESET_REQUEST, FT4222_RESET_SIO, 0, &[])
+            .await?;
+        self.flush().await?;
         log::debug!("FT4222H reset complete");
         Ok(())
     }
 
-    /// Flush buffers (matching flashprog's ft4222_flush)
-    fn flush(&self) -> Result<()> {
-        // Flush output buffer 6 times (as flashprog does)
+    /// Flush device buffers.
+    #[maybe_async]
+    async fn flush(&self) -> Result<()> {
         for _ in 0..6 {
-            if let Err(e) = self.control_out(FT4222_RESET_REQUEST, FT4222_OUTPUT_FLUSH, &[]) {
+            if let Err(e) = self
+                .control_out(FT4222_RESET_REQUEST, FT4222_OUTPUT_FLUSH, &[])
+                .await
+            {
                 log::warn!("FT4222 output flush failed: {}", e);
                 break;
             }
         }
 
-        // Flush input buffer once
-        if let Err(e) = self.control_out(FT4222_RESET_REQUEST, FT4222_INPUT_FLUSH, &[]) {
+        if let Err(e) = self
+            .control_out(FT4222_RESET_REQUEST, FT4222_INPUT_FLUSH, &[])
+            .await
+        {
             log::warn!("FT4222 input flush failed: {}", e);
         }
 
         Ok(())
     }
 
-    /// Set system clock
-    fn set_sys_clock(&self, clock: SystemClock) -> Result<()> {
-        self.config_request(FT4222_SET_CLOCK, clock.index() as u8)?;
+    /// Set the FT4222 system clock.
+    #[maybe_async]
+    async fn set_sys_clock(&self, clock: SystemClock) -> Result<()> {
+        self.config_request(FT4222_SET_CLOCK, clock.index() as u8)
+            .await?;
         log::debug!("Set system clock to {} MHz", clock.to_khz() / 1000);
         Ok(())
     }
 
-    /// Configure SPI master mode (matching flashprog's ft4222_configure_spi_master)
-    fn configure_spi_master(&mut self) -> Result<()> {
+    /// Configure the FT4222 for SPI master mode.
+    #[maybe_async]
+    async fn configure_spi_master(&mut self) -> Result<()> {
         let cs = self.config.cs;
 
-        // Reset transaction for this CS (idx => cs)
-        self.config_request(FT4222_SPI_RESET_TRANSACTION, cs)?;
-
-        // Set I/O lines (start with single)
+        self.config_request(FT4222_SPI_RESET_TRANSACTION, cs)
+            .await?;
         self.io_lines = 1;
-        self.config_request(FT4222_SPI_SET_IO_LINES, 1)?;
-
-        // Set clock divisor
+        self.config_request(FT4222_SPI_SET_IO_LINES, 1).await?;
         self.config_request(
             FT4222_SPI_SET_CLK_DIV,
             self.clock_config.divisor.value() as u8,
-        )?;
-
-        // Set clock polarity (idle low for SPI mode 0)
-        self.config_request(FT4222_SPI_SET_CLK_IDLE, FT4222_CLK_IDLE_LOW)?;
-
-        // Set clock phase (capture on leading edge for SPI mode 0)
-        self.config_request(FT4222_SPI_SET_CAPTURE, FT4222_CLK_CAPTURE_LEADING)?;
-
-        // Set CS polarity (active low)
-        self.config_request(FT4222_SPI_SET_CS_ACTIVE, FT4222_CS_ACTIVE_LOW)?;
-
-        // Set CS mask for selected chip select
-        self.config_request(FT4222_SPI_SET_CS_MASK, 1 << cs)?;
-
-        // Set mode to SPI Master
-        self.config_request(FT4222_SET_MODE, FT4222_MODE_SPI_MASTER)?;
+        )
+        .await?;
+        self.config_request(FT4222_SPI_SET_CLK_IDLE, FT4222_CLK_IDLE_LOW)
+            .await?;
+        self.config_request(FT4222_SPI_SET_CAPTURE, FT4222_CLK_CAPTURE_LEADING)
+            .await?;
+        self.config_request(FT4222_SPI_SET_CS_ACTIVE, FT4222_CS_ACTIVE_LOW)
+            .await?;
+        self.config_request(FT4222_SPI_SET_CS_MASK, 1 << cs).await?;
+        self.config_request(FT4222_SET_MODE, FT4222_MODE_SPI_MASTER)
+            .await?;
 
         Ok(())
     }
 
-    /// Set I/O lines mode (matching flashprog's ft4222_spi_set_io_lines)
-    fn set_io_lines(&mut self, lines: u8) -> Result<()> {
+    /// Change the active number of SPI I/O lines.
+    #[maybe_async]
+    async fn set_io_lines(&mut self, lines: u8) -> Result<()> {
         if lines != self.io_lines {
-            self.config_request(FT4222_SPI_SET_IO_LINES, lines)?;
-            // Reset line number after changing I/O lines
-            self.config_request(FT4222_SPI_RESET, FT4222_SPI_RESET_LINE_NUM)?;
+            self.config_request(FT4222_SPI_SET_IO_LINES, lines).await?;
+            self.config_request(FT4222_SPI_RESET, FT4222_SPI_RESET_LINE_NUM)
+                .await?;
             self.io_lines = lines;
             log::trace!("Set I/O lines to {}", lines);
         }
         Ok(())
     }
 
-    /// Send a control OUT transfer with default control_index
-    fn control_out(&self, request: u8, value: u16, data: &[u8]) -> Result<()> {
+    /// Send a control OUT transfer with the default `control_index`.
+    #[maybe_async]
+    async fn control_out(&self, request: u8, value: u16, data: &[u8]) -> Result<()> {
         self.control_out_with_index(request, value, self.control_index as u16, data)
+            .await
     }
 
-    /// Send a control OUT transfer with explicit index
-    fn control_out_with_index(
+    /// Send a control OUT transfer with an explicit index.
+    #[maybe_async]
+    async fn control_out_with_index(
         &self,
         request: u8,
         value: u16,
         index: u16,
         data: &[u8],
     ) -> Result<()> {
-        self.interface
-            .control_out(
-                ControlOut {
-                    control_type: ControlType::Vendor,
-                    recipient: Recipient::Device,
-                    request,
-                    value,
-                    index,
-                    data,
-                },
-                Duration::from_secs(5),
-            )
-            .wait()
-            .map_err(|e| Ft4222Error::TransferFailed(format!("Control transfer failed: {}", e)))?;
+        nusb_await!(self.interface.control_out(
+            ControlOut {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Device,
+                request,
+                value,
+                index,
+                data,
+            },
+            Duration::from_secs(5),
+        ))
+        .map_err(|e| Ft4222Error::TransferFailed(format!("Control transfer failed: {}", e)))?;
 
         Ok(())
     }
 
-    /// Send a config request (matching flashprog's ft4222_config_request)
-    ///
-    /// The FT4222H encodes config commands with:
-    /// - wValue = (data << 8) | cmd
-    /// - wIndex = control_index
-    fn config_request(&self, cmd: u8, data: u8) -> Result<()> {
+    /// Send an FT4222 config request.
+    #[maybe_async]
+    async fn config_request(&self, cmd: u8, data: u8) -> Result<()> {
         let value = ((data as u16) << 8) | (cmd as u16);
-        self.interface
-            .control_out(
-                ControlOut {
-                    control_type: ControlType::Vendor,
-                    recipient: Recipient::Device,
-                    request: FT4222_CONFIG_REQUEST,
-                    value,
-                    index: self.control_index as u16,
-                    data: &[],
-                },
-                Duration::from_secs(5),
-            )
-            .wait()
-            .map_err(|e| Ft4222Error::TransferFailed(format!("Control transfer failed: {}", e)))?;
+        nusb_await!(self.interface.control_out(
+            ControlOut {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Device,
+                request: FT4222_CONFIG_REQUEST,
+                value,
+                index: self.control_index as u16,
+                data: &[],
+            },
+            Duration::from_secs(5),
+        ))
+        .map_err(|e| Ft4222Error::TransferFailed(format!("Control transfer failed: {}", e)))?;
 
         Ok(())
     }
 
-    /// Write data to bulk OUT endpoint
-    ///
-    /// For large transfers, we split into smaller chunks to avoid USB stalls.
-    fn bulk_write(&mut self, data: &[u8]) -> Result<()> {
-        let mut out_ep: Endpoint<Bulk, Out> = self
-            .interface
-            .endpoint(self.out_ep)
-            .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
+    /// Write data to the bulk OUT endpoint.
+    #[maybe_async]
+    async fn bulk_write(&mut self, data: &[u8]) -> Result<()> {
+        let out_ep = self
+            .out_endpoint
+            .as_mut()
+            .ok_or_else(|| Ft4222Error::TransferFailed("OUT endpoint missing".into()))?;
 
-        // For empty packet (CS deassert), just send it directly
         if data.is_empty() {
-            let out_buf = Buffer::new(0);
-            let completion = out_ep.transfer_blocking(out_buf, Duration::from_secs(30));
+            out_ep.submit(Buffer::new(0));
+            let completion =
+                ep_wait!(out_ep, Duration::from_secs(30)).ok_or(Ft4222Error::Timeout)?;
             completion
-                .into_result()
+                .status
                 .map_err(|e| Ft4222Error::TransferFailed(format!("Empty packet failed: {}", e)))?;
             log::trace!("Bulk write empty packet (CS deassert)");
             return Ok(());
         }
 
-        // Split large transfers into chunks (max 2048 bytes per transfer)
         const MAX_CHUNK: usize = 2048;
         let mut offset = 0;
 
@@ -499,11 +606,11 @@ impl Ft4222 {
 
             let mut out_buf = Buffer::new(chunk_len);
             out_buf.extend_from_slice(chunk);
+            out_ep.submit(out_buf);
 
-            // Use longer timeout (matching flashprog's 16*2000ms = 32s)
-            let completion = out_ep.transfer_blocking(out_buf, Duration::from_secs(30));
-
-            completion.into_result().map_err(|e| {
+            let completion =
+                ep_wait!(out_ep, Duration::from_secs(30)).ok_or(Ft4222Error::Timeout)?;
+            completion.status.map_err(|e| {
                 Ft4222Error::TransferFailed(format!(
                     "Bulk write failed at offset {}: {}",
                     offset, e
@@ -517,12 +624,13 @@ impl Ft4222 {
         Ok(())
     }
 
-    /// Read data from bulk IN endpoint
-    fn bulk_read(&mut self, len: usize) -> Result<Vec<u8>> {
-        let mut in_ep: Endpoint<Bulk, In> = self
-            .interface
-            .endpoint(self.in_ep)
-            .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
+    /// Read data from the bulk IN endpoint.
+    #[maybe_async]
+    async fn bulk_read(&mut self, len: usize) -> Result<Vec<u8>> {
+        let in_ep = self
+            .in_endpoint
+            .as_mut()
+            .ok_or_else(|| Ft4222Error::TransferFailed("IN endpoint missing".into()))?;
 
         let max_packet_size = in_ep.max_packet_size();
         let mut result = Vec::new();
@@ -530,24 +638,23 @@ impl Ft4222 {
 
         while remaining > 0 {
             let request_len = std::cmp::min(remaining + MODEM_STATUS_SIZE, READ_BUFFER_SIZE);
-            // Request length must be multiple of max packet size
             let aligned_len = request_len.div_ceil(max_packet_size) * max_packet_size;
 
             let mut in_buf = Buffer::new(aligned_len);
             in_buf.set_requested_len(aligned_len);
+            in_ep.submit(in_buf);
 
-            // Use longer timeout (matching flashprog's approach)
-            let completion = in_ep.transfer_blocking(in_buf, Duration::from_secs(30));
-
-            let data = completion
-                .into_result()
+            let completion =
+                ep_wait!(in_ep, Duration::from_secs(30)).ok_or(Ft4222Error::Timeout)?;
+            completion
+                .status
                 .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk read failed: {}", e)))?;
 
+            let data = &completion.buffer[..completion.actual_len];
             if data.len() < MODEM_STATUS_SIZE {
                 return Err(Ft4222Error::InvalidResponse("Response too short".into()));
             }
 
-            // Skip modem status bytes
             let payload = &data[MODEM_STATUS_SIZE..];
             let to_copy = std::cmp::min(payload.len(), remaining);
             result.extend_from_slice(&payload[..to_copy]);
@@ -558,30 +665,17 @@ impl Ft4222 {
         Ok(result)
     }
 
-    /// Perform a single-I/O SPI transfer (full duplex) with pipelined USB transfers
-    ///
-    /// This is used for standard 1-1-1 mode transfers. Uses pipelining to submit
-    /// all USB transfers before waiting, which prevents RX buffer overflow and
-    /// maximizes throughput.
-    fn spi_transfer_single(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
-        // Set to single I/O mode
-        self.set_io_lines(1)?;
+    /// Perform a single-I/O SPI transfer using pipelined USB transfers.
+    #[maybe_async]
+    async fn spi_transfer_single(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
+        self.set_io_lines(1).await?;
 
-        // Total number of real SPI bytes we expect to clock (write phase + read phase).
-        // In single-I/O mode the FT4222H is full-duplex: it clocks out whatever we send
-        // and clocks in continuously. We'll discard the first `write_data.len()` bytes
-        // (collected while our command was being sent) and keep the remaining `read_len`.
         let total_len = write_data.len() + read_len;
-
         if total_len == 0 {
             return Ok(Vec::new());
         }
 
         let max_packet_size = self.in_max_packet_size;
-        // Borrow the cached endpoints. These are claimed once at open() time rather
-        // than re-acquired per call: `Interface::endpoint` allocates a fresh Arc +
-        // VecDeque + Notify and takes an internal mutex on every invocation, which
-        // is disastrous when called millions of times (e.g. 262144 AAI words).
         let out_ep = self
             .out_endpoint
             .as_mut()
@@ -590,14 +684,6 @@ impl Ft4222 {
             .in_endpoint
             .as_mut()
             .ok_or_else(|| Ft4222Error::TransferFailed("IN endpoint missing".into()))?;
-
-        // === OUTBOUND PHASE ===
-        // Mirror flashprog's ft4222_spi_send_command: send three OUT transfers:
-        //   1. `write_data`                — real command bytes
-        //   2. `read_len` dummy bytes      — to clock out the response
-        //   3. empty packet                — to deassert CS
-        // These are submitted back-to-back so the FT4222H executes them as one
-        // continuous SPI transaction.
 
         let mut write_buf = Buffer::new(write_data.len());
         write_buf.extend_from_slice(write_data);
@@ -609,35 +695,23 @@ impl Ft4222 {
             out_ep.submit(dummy_buf);
         }
 
-        out_ep.submit(Buffer::new(0)); // CS deassert
+        out_ep.submit(Buffer::new(0));
 
-        // === INBOUND PHASE ===
-        // Following flashprog's ft4222_async_read loop: keep submitting IN transfers
-        // and accumulating real payload bytes until we have `total_len`. Each USB IN
-        // packet is 512 bytes long and starts with a 2-byte modem-status header. When
-        // the FT4222H is idle (e.g. between wait_ready polls) it emits periodic 2-byte
-        // modem-status-only packets that must be discarded. A bulk transfer terminates
-        // early on a short packet, so these stale packets can truncate a larger URB;
-        // re-submitting until we have all the real bytes handles that cleanly.
         let mut raw = Vec::<u8>::with_capacity(total_len);
         let mut real_bytes = 0usize;
 
         while real_bytes < total_len {
             let remaining = total_len - real_bytes;
-            // Request size = enough USB packets to cover the remaining real bytes,
-            // bounded by READ_BUFFER_SIZE (matches flashprog).
             let bytes_per_packet = max_packet_size - MODEM_STATUS_SIZE;
             let packets_needed = remaining.div_ceil(bytes_per_packet);
-            let request_len =
-                (packets_needed * max_packet_size).min(crate::protocol::READ_BUFFER_SIZE);
+            let request_len = (packets_needed * max_packet_size).min(READ_BUFFER_SIZE);
 
             let mut in_buf = Buffer::new(request_len);
             in_buf.set_requested_len(request_len);
             in_ep.submit(in_buf);
 
-            let completion = in_ep
-                .wait_next_complete(Duration::from_secs(30))
-                .ok_or(Ft4222Error::Timeout)?;
+            let completion =
+                ep_wait!(in_ep, Duration::from_secs(30)).ok_or(Ft4222Error::Timeout)?;
             completion
                 .status
                 .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk read failed: {e}")))?;
@@ -645,7 +719,6 @@ impl Ft4222 {
             let data = &completion.buffer[..completion.actual_len];
             for packet in data.chunks(max_packet_size) {
                 if packet.len() <= MODEM_STATUS_SIZE {
-                    // Modem-status-only packet: no payload, just drop it.
                     continue;
                 }
                 let payload = &packet[MODEM_STATUS_SIZE..];
@@ -658,13 +731,10 @@ impl Ft4222 {
             }
         }
 
-        // === WAIT FOR OUTBOUND COMPLETIONS ===
-        // Drain OUT completions. All transfers are expected to succeed.
         let expected_out = if read_len > 0 { 3 } else { 2 };
         for _ in 0..expected_out {
-            let completion = out_ep
-                .wait_next_complete(Duration::from_secs(30))
-                .ok_or(Ft4222Error::Timeout)?;
+            let completion =
+                ep_wait!(out_ep, Duration::from_secs(30)).ok_or(Ft4222Error::Timeout)?;
             completion
                 .status
                 .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk write failed: {e}")))?;
@@ -676,33 +746,28 @@ impl Ft4222 {
             read_len,
             raw.len()
         );
-        let result = raw;
 
-        // Skip bytes received during write phase, return only read data
-        if result.len() >= total_len {
-            Ok(result[write_data.len()..].to_vec())
+        if raw.len() >= total_len {
+            Ok(raw[write_data.len()..].to_vec())
         } else {
             Err(Ft4222Error::InvalidResponse(format!(
                 "Expected {} bytes, got {}",
                 total_len,
-                result.len()
+                raw.len()
             )))
         }
     }
 
-    /// Perform a multi-I/O SPI transfer (half duplex)
-    ///
-    /// This is used for dual/quad mode transfers with separate write and read phases.
-    /// Format: | single-I/O phase | multi-I/O write phase | multi-I/O read phase |
+    /// Perform a multi-I/O SPI transfer (half duplex).
     #[allow(dead_code)]
-    fn spi_transfer_multi(
+    #[maybe_async]
+    async fn spi_transfer_multi(
         &mut self,
         single_data: &[u8],
         multi_write_data: &[u8],
         multi_read_len: usize,
         io_lines: u8,
     ) -> Result<Vec<u8>> {
-        // Validate lengths
         if single_data.len() > MULTI_IO_MAX_SINGLE {
             return Err(Ft4222Error::InvalidParameter(format!(
                 "Single phase too long: {} > {}",
@@ -724,11 +789,8 @@ impl Ft4222 {
             )));
         }
 
-        // Set I/O lines for multi-I/O phase
-        self.set_io_lines(io_lines)?;
+        self.set_io_lines(io_lines).await?;
 
-        // Build multi-I/O header
-        // Format: | 0x8 | single_len (4 bits) | multi_write_len (16 bits) | multi_read_len (16 bits) |
         let mut header = [0u8; MULTI_IO_HEADER_SIZE];
         header[0] = MULTI_IO_MAGIC | (single_data.len() as u8 & 0x0F);
         header[1] = (multi_write_data.len() & 0xFF) as u8;
@@ -736,110 +798,115 @@ impl Ft4222 {
         header[3] = (multi_read_len & 0xFF) as u8;
         header[4] = ((multi_read_len >> 8) & 0xFF) as u8;
 
-        // Build complete output buffer
         let mut out_buf =
             Vec::with_capacity(MULTI_IO_HEADER_SIZE + single_data.len() + multi_write_data.len());
         out_buf.extend_from_slice(&header);
         out_buf.extend_from_slice(single_data);
         out_buf.extend_from_slice(multi_write_data);
 
-        // Write data
-        self.bulk_write(&out_buf)?;
+        self.bulk_write(&out_buf).await?;
+        self.bulk_write(&[]).await?;
 
-        // Send empty packet to deassert CS
-        self.bulk_write(&[])?;
-
-        // Read response
         if multi_read_len > 0 {
-            self.bulk_read(multi_read_len)
+            self.bulk_read(multi_read_len).await
         } else {
             Ok(Vec::new())
         }
     }
 
-    /// List all connected FT4222H devices
-    pub fn list_devices() -> Result<Vec<Ft4222DeviceInfo>> {
-        let devices: Vec<_> = nusb::list_devices()
-            .wait()
-            .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?
-            .filter(|d| d.vendor_id() == FTDI_VID && d.product_id() == FT4222H_PID)
-            .map(|d| Ft4222DeviceInfo {
-                bus: d.busnum(),
-                address: d.device_address(),
-            })
-            .collect();
-
-        Ok(devices)
-    }
-
-    /// Get the current SPI configuration
+    /// Get the current SPI configuration.
     pub fn config(&self) -> &SpiConfig {
         &self.config
     }
 
-    /// Get the actual SPI clock speed in kHz
+    /// Get the actual SPI clock speed in kHz.
     pub fn actual_speed_khz(&self) -> u32 {
         self.clock_config.spi_clock_khz()
     }
 }
 
+#[maybe_async(AFIT)]
 impl SpiMaster for Ft4222 {
     fn features(&self) -> SpiFeatures {
-        // FT4222H supports 4-byte addressing (software handled)
-        // Dual I/O is supported but we only implement single mode for now
         SpiFeatures::FOUR_BYTE_ADDR
     }
 
     fn max_read_len(&self) -> usize {
-        // With pipelined transfers, we can use much larger chunks since
-        // read and write happen concurrently, preventing RX buffer overflow.
-        // flashprog uses 65530, we use a similar large value.
         65535
     }
 
     fn max_write_len(&self) -> usize {
-        // With pipelined transfers, writes can also be much larger
         65535
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        default_execute_with_vec(cmd, self.features(), |write_data, read_len| {
-            self.spi_transfer_single(write_data, read_len)
-                .map_err(|_| CoreError::ProgrammerError)
-        })
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        let header_len = cmd.header_len();
+        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
+        cmd.encode_header(&mut write_data);
+        write_data[header_len..].copy_from_slice(cmd.write_data);
+
+        let read_len = cmd.read_buf.len();
+        if read_len == 0 {
+            self.spi_transfer_single(&write_data, 0)
+                .await
+                .map_err(|_| CoreError::ProgrammerError)?;
+            return Ok(());
+        }
+
+        let result = self
+            .spi_transfer_single(&write_data, read_len)
+            .await
+            .map_err(|_| CoreError::ProgrammerError)?;
+
+        cmd.read_buf.copy_from_slice(&result[..read_len]);
+        Ok(())
     }
 
-    fn delay_us(&mut self, us: u32) {
+    async fn delay_us(&mut self, us: u32) {
         if us == 0 {
             return;
         }
-        // For short delays (<100 us), thread::sleep is unusable: Linux timer granularity
-        // and scheduler wake-up latency push actual sleep time to ~50-100 us minimum.
-        // That's catastrophic inside tight SPI polling loops (e.g. AAI word program,
-        // which polls WIP every 10 us between 2-byte writes) — we'd lose tens of
-        // seconds per flash MiB to scheduler jitter alone.
-        //
-        // Match flashprog's approach: busy-wait using clock_gettime for sub-100 us
-        // delays, and fall back to thread::sleep for longer ones where precision
-        // doesn't matter.
+
+        #[cfg(feature = "is_sync")]
         const SPIN_THRESHOLD_US: u32 = 100;
+        #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+        const SPIN_THRESHOLD_US: u32 = 1_000;
+
         if us < SPIN_THRESHOLD_US {
             let deadline = std::time::Instant::now() + Duration::from_micros(us as u64);
             while std::time::Instant::now() < deadline {
                 std::hint::spin_loop();
             }
-        } else {
+            return;
+        }
+
+        #[cfg(feature = "is_sync")]
+        {
             std::thread::sleep(Duration::from_micros(us as u64));
+        }
+
+        #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+        {
+            let delay_ms = ((us as f64) / 1000.0).ceil() as i32;
+            if delay_ms > 0 {
+                let promise = js_sys::Promise::new(&mut |resolve, _| {
+                    let window = web_sys::window().unwrap();
+                    window
+                        .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, delay_ms)
+                        .unwrap();
+                });
+                let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+            }
         }
     }
 }
 
-/// Information about a connected FT4222H device
+/// Information about a connected FT4222H device.
 #[derive(Debug, Clone)]
 pub struct Ft4222DeviceInfo {
-    /// USB bus number
+    /// USB bus number.
     pub bus: u8,
-    /// USB device address
+    /// USB device address.
     pub address: u8,
 }
 
@@ -849,19 +916,12 @@ impl std::fmt::Display for Ft4222DeviceInfo {
     }
 }
 
-/// Parse programmer options for FT4222
+/// Parse programmer options for FT4222.
 ///
 /// Supported options:
 /// - `spispeed=<khz>`: Target SPI clock speed in kHz (default: 10000)
 /// - `cs=<0-3>`: Which chip select to use (default: 0)
 /// - `iomode=<single|dual|quad>`: I/O mode (default: single)
-///
-/// # Example
-///
-/// ```ignore
-/// let options = [("spispeed", "30000"), ("cs", "1")];
-/// let config = parse_options(&options)?;
-/// ```
 pub fn parse_options(options: &[(&str, &str)]) -> Result<SpiConfig> {
     let mut config = SpiConfig::default();
 
