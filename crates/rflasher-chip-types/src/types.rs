@@ -3,7 +3,7 @@
 #[cfg(feature = "alloc")]
 use alloc::{string::String, vec::Vec};
 
-use super::features::Features;
+use super::features::{Features, QeMethod};
 
 /// Maximum number of erase regions per erase block (for no_std)
 pub const MAX_ERASE_REGIONS: usize = 8;
@@ -249,6 +249,15 @@ pub struct ChipTestStatus {
 /// This structure contains all the information needed to identify and
 /// interact with a specific flash chip model. Uses owned types (String, Vec)
 /// for runtime flexibility.
+///
+/// # Migrating from 0.1
+///
+/// `qe_method` and the per-mode `dummy_cycles_*` fields were added in 0.2.0.
+/// They are required in struct literals: external constructors must
+/// initialize them (use `QeMethod::None` and `0` for "unknown" — zero
+/// selects the JEDEC-default dummy cycles). The `serde(default)` attributes
+/// only affect deserialization of older chip databases; they do not provide
+/// defaults for struct literals.
 #[derive(Debug, Clone)]
 #[cfg(feature = "alloc")]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -282,6 +291,24 @@ pub struct FlashChip {
     /// Test status
     #[cfg_attr(feature = "serde", serde(default))]
     pub tested: ChipTestStatus,
+    /// Quad-enable method for this chip.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub qe_method: QeMethod,
+    /// Dummy cycles for 1-1-2 reads; zero selects the JEDEC default.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub dummy_cycles_112: u8,
+    /// Dummy cycles for 1-2-2 reads; zero selects the JEDEC default.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub dummy_cycles_122: u8,
+    /// Dummy cycles for 1-1-4 reads; zero selects the JEDEC default.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub dummy_cycles_114: u8,
+    /// Dummy cycles for 1-4-4 reads; zero selects the JEDEC default.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub dummy_cycles_144: u8,
+    /// Dummy cycles for QPI reads; zero selects the JEDEC default.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub dummy_cycles_qpi: u8,
 }
 
 #[cfg(feature = "serde")]
@@ -297,6 +324,12 @@ fn default_voltage_max() -> u16 {
 /// Flash chip definition (static/const version for no_std)
 ///
 /// This structure uses static references for zero-cost embedded use.
+///
+/// # Migrating from 0.1
+///
+/// `qe_method` and the per-mode `dummy_cycles_*` fields were added in 0.2.0
+/// and are required in struct literals (use `QeMethod::None` and `0` for
+/// "unknown" — zero selects the JEDEC-default dummy cycles).
 #[derive(Debug, Clone, Copy)]
 #[cfg(not(feature = "alloc"))]
 pub struct FlashChip {
@@ -324,6 +357,18 @@ pub struct FlashChip {
     pub erase_blocks: &'static [EraseBlock],
     /// Test status
     pub tested: ChipTestStatus,
+    /// Quad-enable method for this chip.
+    pub qe_method: QeMethod,
+    /// Dummy cycles for 1-1-2 reads; zero selects the JEDEC default.
+    pub dummy_cycles_112: u8,
+    /// Dummy cycles for 1-2-2 reads; zero selects the JEDEC default.
+    pub dummy_cycles_122: u8,
+    /// Dummy cycles for 1-1-4 reads; zero selects the JEDEC default.
+    pub dummy_cycles_114: u8,
+    /// Dummy cycles for 1-4-4 reads; zero selects the JEDEC default.
+    pub dummy_cycles_144: u8,
+    /// Dummy cycles for QPI reads; zero selects the JEDEC default.
+    pub dummy_cycles_qpi: u8,
 }
 
 impl FlashChip {
@@ -472,6 +517,12 @@ mod tests {
             write_granularity: WriteGranularity::Page,
             erase_blocks: alloc::vec![EraseBlock::with_count(0x20, 4096, 4096)],
             tested: ChipTestStatus::default(),
+            qe_method: QeMethod::default(),
+            dummy_cycles_112: 0,
+            dummy_cycles_122: 0,
+            dummy_cycles_114: 0,
+            dummy_cycles_144: 0,
+            dummy_cycles_qpi: 0,
         };
 
         let encoded = ron::to_string(&chip).unwrap();
