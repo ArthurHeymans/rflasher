@@ -117,11 +117,8 @@ pub async fn wait_ready<M: SpiMaster + ?Sized>(
     poll_delay_us: u32,
     timeout_us: u32,
 ) -> Result<()> {
-    let max_polls = if poll_delay_us > 0 {
-        timeout_us / poll_delay_us
-    } else {
-        timeout_us // Fall back to polling once per microsecond
-    };
+    // Fall back to polling once per microsecond if poll_delay_us is 0
+    let max_polls = timeout_us.checked_div(poll_delay_us).unwrap_or(timeout_us);
 
     for _ in 0..max_polls {
         let status = read_status1(master).await?;
