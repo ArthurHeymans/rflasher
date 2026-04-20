@@ -13,6 +13,7 @@ use rflasher_core::flash::{
     FlashContext, FlashDevice, HybridFlashDevice, ProbeResult, SpiFlashDevice,
 };
 use rflasher_dediprog::{Dediprog, DediprogConfig};
+use rflasher_ft4222::{Ft4222, SpiConfig as Ft4222SpiConfig};
 use rflasher_ftdi::{Ftdi, FtdiConfig, FtdiDeviceType, FtdiInterface};
 use rflasher_serprog::Serprog;
 
@@ -51,6 +52,8 @@ enum ProgrammerType {
     Ch347,
     /// FTDI MPSSE via WebUSB (FT2232H, FT4232H, FT232H, etc.)
     Ftdi,
+    /// FT4222H via WebUSB
+    Ft4222,
     /// Dediprog SF100/SF200/SF600/SF700 via WebUSB
     Dediprog,
 }
@@ -62,6 +65,7 @@ impl ProgrammerType {
             ProgrammerType::Ch341a => "CH341A (WebUSB)",
             ProgrammerType::Ch347 => "CH347 (WebUSB)",
             ProgrammerType::Ftdi => "FTDI MPSSE (WebUSB)",
+            ProgrammerType::Ft4222 => "FT4222H (WebUSB)",
             ProgrammerType::Dediprog => "Dediprog (WebUSB)",
         }
     }
@@ -73,18 +77,20 @@ impl ProgrammerType {
             ProgrammerType::Ch341a
                 | ProgrammerType::Ch347
                 | ProgrammerType::Ftdi
+                | ProgrammerType::Ft4222
                 | ProgrammerType::Dediprog
         )
     }
 }
 
-/// Connected programmer - wraps a serprog, CH341A, CH347, FTDI, or Dediprog device
+/// Connected programmer - wraps a serprog, CH341A, CH347, FTDI, FT4222H, or Dediprog device
 #[allow(clippy::large_enum_variant)]
 enum Programmer {
     Serprog(Serprog<WebSerialTransport>),
     Ch341a(Ch341a),
     Ch347(Ch347),
     Ftdi(Ftdi),
+    Ft4222(Ft4222),
     Dediprog(Dediprog),
 }
 
@@ -123,6 +129,11 @@ macro_rules! with_programmer {
             Programmer::Ftdi(mut $name) => {
                 let result = $body;
                 $shared.borrow_mut().programmer = Some(Programmer::Ftdi($name));
+                result
+            }
+            Programmer::Ft4222(mut $name) => {
+                let result = $body;
+                $shared.borrow_mut().programmer = Some(Programmer::Ft4222($name));
                 result
             }
             Programmer::Dediprog(mut $name) => {
@@ -173,6 +184,13 @@ macro_rules! with_flash_device {
                 let result = { $body };
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Ftdi(master));
+                result
+            }
+            Programmer::Ft4222(master) => {
+                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                let result = { $body };
+                let (master, _) = $device.into_parts();
+                $shared.borrow_mut().programmer = Some(Programmer::Ft4222(master));
                 result
             }
             Programmer::Dediprog(mut master) => {
@@ -715,6 +733,7 @@ impl RflasherApp {
             ProgrammerType::Ch341a => self.spawn_connect_ch341a(),
             ProgrammerType::Ch347 => self.spawn_connect_ch347(),
             ProgrammerType::Ftdi => self.spawn_connect_ftdi(),
+            ProgrammerType::Ft4222 => self.spawn_connect_ft4222(),
             ProgrammerType::Dediprog => self.spawn_connect_dediprog(),
         }
     }
@@ -918,6 +937,49 @@ impl RflasherApp {
         });
     }
 
+    fn spawn_connect_ft4222(&mut self) {
+        let shared = self.shared.clone();
+        let ctx = self.ctx.clone();
+        let config = Ft4222SpiConfig::default();
+
+        self.connection = ConnectionState::Connecting;
+        self.status.info("Requesting FT4222H device via WebUSB...");
+
+        wasm_bindgen_futures::spawn_local(async move {
+            shared.borrow_mut().busy = true;
+
+            match Ft4222::request_device().await {
+                Ok(device_info) => match Ft4222::open(device_info, config).await {
+                    Ok(ft4222) => {
+                        let name = format!("FT4222H @ {} kHz", ft4222.actual_speed_khz());
+                        let mut state = shared.borrow_mut();
+                        state.programmer = Some(Programmer::Ft4222(ft4222));
+                        state.messages.push(AsyncMessage::Connected {
+                            programmer_name: name,
+                        });
+                    }
+                    Err(e) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                    }
+                },
+                Err(e) => {
+                    shared
+                        .borrow_mut()
+                        .messages
+                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+                }
+            }
+
+            shared.borrow_mut().busy = false;
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+    }
+
     fn spawn_connect_dediprog(&mut self) {
         let shared = self.shared.clone();
         let ctx = self.ctx.clone();
@@ -983,6 +1045,9 @@ impl RflasherApp {
                     }
                     Programmer::Ftdi(mut ftdi) => {
                         ftdi.shutdown().await;
+                    }
+                    Programmer::Ft4222(mut ft4222) => {
+                        ft4222.shutdown().await;
                     }
                     Programmer::Dediprog(mut dediprog) => {
                         dediprog.shutdown().await;
@@ -1491,6 +1556,11 @@ impl RflasherApp {
                         &mut self.programmer_type,
                         ProgrammerType::Ftdi,
                         ProgrammerType::Ftdi.label(),
+                    );
+                    ui.selectable_value(
+                        &mut self.programmer_type,
+                        ProgrammerType::Ft4222,
+                        ProgrammerType::Ft4222.label(),
                     );
                     ui.selectable_value(
                         &mut self.programmer_type,
