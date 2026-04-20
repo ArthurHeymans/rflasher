@@ -112,7 +112,8 @@ You can also specify a custom path with `--chip-db <path>`.
 
 ### USB Device Permissions
 
-For CH341A and FTDI programmers, you may need to set up udev rules:
+For WebUSB programmers, you may need to set up udev rules. This includes
+CH341A, CH347, FTDI, Dediprog, and Raiden Debug SPI / Cr50 devices.
 
 ```bash
 # Copy udev rules (create this file based on your needs)
@@ -121,10 +122,13 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```
 
-Example udev rule for CH341A:
+Example udev rules:
 ```
 # CH341A USB programmer
 SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5512", MODE="0666"
+
+# Raiden Debug SPI / Cr50 (Google debug hardware, VID:18d1; product ID varies)
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", MODE="0666"
 ```
 
 ### Man Page

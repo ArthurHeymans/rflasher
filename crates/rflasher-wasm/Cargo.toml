@@ -21,6 +21,7 @@ rflasher-ch347 = { path = "../rflasher-ch347", default-features = false, feature
 rflasher-ftdi = { path = "../rflasher-ftdi", default-features = false, features = ["wasm"] }
 rflasher-ft4222 = { path = "../rflasher-ft4222", default-features = false, features = ["wasm"] }
 rflasher-dediprog = { path = "../rflasher-dediprog", default-features = false, features = ["wasm"] }
+rflasher-raiden = { path = "../rflasher-raiden", default-features = false, features = ["wasm"] }
 
 # GUI
 eframe = { version = "0.33", default-features = false, features = [
