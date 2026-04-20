@@ -541,14 +541,17 @@ impl Ft4222 {
         // Set to single I/O mode
         self.set_io_lines(1)?;
 
-        // Total transfer length (we need to clock out dummy bytes for read)
+        // Total number of real SPI bytes we expect to clock (write phase + read phase).
+        // In single-I/O mode the FT4222H is full-duplex: it clocks out whatever we send
+        // and clocks in continuously. We'll discard the first `write_data.len()` bytes
+        // (collected while our command was being sent) and keep the remaining `read_len`.
         let total_len = write_data.len() + read_len;
 
         if total_len == 0 {
             return Ok(Vec::new());
         }
 
-        // Get endpoints for pipelined transfers
+        // Get endpoints
         let mut out_ep: Endpoint<Bulk, Out> = self
             .interface
             .endpoint(self.out_ep)
@@ -559,83 +562,93 @@ impl Ft4222 {
             .endpoint(self.in_ep)
             .map_err(|e| Ft4222Error::TransferFailed(e.to_string()))?;
 
+        // === OUTBOUND PHASE ===
+        // Mirror flashprog's ft4222_spi_send_command: send three OUT transfers:
+        //   1. `write_data`                — real command bytes
+        //   2. `read_len` dummy bytes      — to clock out the response
+        //   3. empty packet                — to deassert CS
+        // These are submitted back-to-back so the FT4222H executes them as one
+        // continuous SPI transaction.
+
+        let mut write_buf = Buffer::new(write_data.len());
+        write_buf.extend_from_slice(write_data);
+        out_ep.submit(write_buf);
+
+        if read_len > 0 {
+            let mut dummy_buf = Buffer::new(read_len);
+            dummy_buf.extend_fill(read_len, 0xff);
+            out_ep.submit(dummy_buf);
+        }
+
+        out_ep.submit(Buffer::new(0)); // CS deassert
+
+        // === INBOUND PHASE ===
+        // Following flashprog's ft4222_async_read loop: keep submitting IN transfers
+        // and accumulating real payload bytes until we have `total_len`. Each USB IN
+        // packet is 512 bytes long and starts with a 2-byte modem-status header. When
+        // the FT4222H is idle (e.g. between wait_ready polls) it emits periodic 2-byte
+        // modem-status-only packets that must be discarded. A bulk transfer terminates
+        // early on a short packet, so these stale packets can truncate a larger URB;
+        // re-submitting until we have all the real bytes handles that cleanly.
         let max_packet_size = in_ep.max_packet_size();
+        let mut raw = Vec::<u8>::with_capacity(total_len);
+        let mut real_bytes = 0usize;
 
-        // Build output buffer: write data + dummy bytes for read
-        let mut out_buf = Buffer::new(total_len);
-        out_buf.extend_from_slice(write_data);
-        out_buf.extend_fill(read_len, 0x00);
+        while real_bytes < total_len {
+            let remaining = total_len - real_bytes;
+            // Request size = enough USB packets to cover the remaining real bytes,
+            // bounded by READ_BUFFER_SIZE (matches flashprog).
+            let bytes_per_packet = max_packet_size - MODEM_STATUS_SIZE;
+            let packets_needed = remaining.div_ceil(bytes_per_packet);
+            let request_len =
+                (packets_needed * max_packet_size).min(crate::protocol::READ_BUFFER_SIZE);
 
-        // Calculate read buffer size (must be multiple of max packet size)
-        // Each USB packet has a 2-byte modem status header
-        let bytes_per_packet = max_packet_size - MODEM_STATUS_SIZE;
-        let packets_needed = total_len.div_ceil(bytes_per_packet);
-        let total_read_size = packets_needed * max_packet_size;
+            let mut in_buf = Buffer::new(request_len);
+            in_buf.set_requested_len(request_len);
+            in_ep.submit(in_buf);
 
-        // Prepare read buffer
-        let mut in_buf = Buffer::new(total_read_size);
-        in_buf.set_requested_len(total_read_size);
+            let completion = in_ep
+                .wait_next_complete(Duration::from_secs(30))
+                .ok_or(Ft4222Error::Timeout)?;
+            completion
+                .status
+                .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk read failed: {e}")))?;
 
-        // === PIPELINED TRANSFER SUBMISSION ===
-        // Submit all transfers before waiting - this is the key to performance!
-        // The USB bus stays busy instead of waiting for each operation.
-
-        // 1. Submit write transfer
-        out_ep.submit(out_buf);
-
-        // 2. Submit read transfer (pipelined - submitted before write completes!)
-        in_ep.submit(in_buf);
-
-        // 3. Prepare and submit CS deassert (empty packet)
-        let cs_buf = Buffer::new(0);
-        out_ep.submit(cs_buf);
-
-        // === WAIT FOR COMPLETIONS ===
-        // Now wait for all transfers to complete
-
-        // Wait for write
-        let write_completion = out_ep
-            .wait_next_complete(Duration::from_secs(30))
-            .ok_or(Ft4222Error::Timeout)?;
-        write_completion
-            .status
-            .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk write failed: {e}")))?;
-
-        // Wait for CS deassert
-        let cs_completion = out_ep
-            .wait_next_complete(Duration::from_secs(30))
-            .ok_or(Ft4222Error::Timeout)?;
-        cs_completion
-            .status
-            .map_err(|e| Ft4222Error::TransferFailed(format!("CS deassert failed: {e}")))?;
-
-        // Wait for read
-        let read_completion = in_ep
-            .wait_next_complete(Duration::from_secs(30))
-            .ok_or(Ft4222Error::Timeout)?;
-        read_completion
-            .status
-            .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk read failed: {e}")))?;
-
-        // Parse response: skip modem status bytes from each packet
-        let raw_data = &read_completion.buffer[..read_completion.actual_len];
-        let mut result = Vec::with_capacity(total_len);
-
-        for chunk in raw_data.chunks(max_packet_size) {
-            if chunk.len() > MODEM_STATUS_SIZE {
-                let payload = &chunk[MODEM_STATUS_SIZE..];
-                let remaining = total_len.saturating_sub(result.len());
-                let to_copy = std::cmp::min(payload.len(), remaining);
-                result.extend_from_slice(&payload[..to_copy]);
+            let data = &completion.buffer[..completion.actual_len];
+            for packet in data.chunks(max_packet_size) {
+                if packet.len() <= MODEM_STATUS_SIZE {
+                    // Modem-status-only packet: no payload, just drop it.
+                    continue;
+                }
+                let payload = &packet[MODEM_STATUS_SIZE..];
+                let to_copy = payload.len().min(total_len - real_bytes);
+                raw.extend_from_slice(&payload[..to_copy]);
+                real_bytes += to_copy;
+                if real_bytes >= total_len {
+                    break;
+                }
             }
+        }
+
+        // === WAIT FOR OUTBOUND COMPLETIONS ===
+        // Drain OUT completions. All transfers are expected to succeed.
+        let expected_out = if read_len > 0 { 3 } else { 2 };
+        for _ in 0..expected_out {
+            let completion = out_ep
+                .wait_next_complete(Duration::from_secs(30))
+                .ok_or(Ft4222Error::Timeout)?;
+            completion
+                .status
+                .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk write failed: {e}")))?;
         }
 
         log::trace!(
             "SPI transfer: wrote {} bytes, read {} bytes (got {} payload bytes)",
             write_data.len(),
             read_len,
-            result.len()
+            raw.len()
         );
+        let result = raw;
 
         // Skip bytes received during write phase, return only read data
         if result.len() >= total_len {

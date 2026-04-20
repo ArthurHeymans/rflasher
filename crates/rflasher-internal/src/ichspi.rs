@@ -1967,34 +1967,26 @@ impl IchSpiController {
 
         // Validate command format based on opcode type
         match spi_type {
-            SPI_OPCODE_TYPE_READ_WITH_ADDRESS => {
-                if writecnt != 4 {
-                    return Err(InternalError::Io(
-                        "Read with address requires exactly 4 write bytes",
-                    ));
-                }
+            SPI_OPCODE_TYPE_READ_WITH_ADDRESS if writecnt != 4 => {
+                return Err(InternalError::Io(
+                    "Read with address requires exactly 4 write bytes",
+                ));
             }
-            SPI_OPCODE_TYPE_READ_NO_ADDRESS => {
-                if writecnt != 1 {
-                    return Err(InternalError::Io(
-                        "Read without address requires exactly 1 write byte",
-                    ));
-                }
+            SPI_OPCODE_TYPE_READ_NO_ADDRESS if writecnt != 1 => {
+                return Err(InternalError::Io(
+                    "Read without address requires exactly 1 write byte",
+                ));
             }
-            SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS => {
-                if writecnt < 4 {
-                    return Err(InternalError::Io(
-                        "Write with address requires at least 4 write bytes",
-                    ));
-                }
-                if readcnt > 0 {
-                    return Err(InternalError::Io("Write commands cannot have read data"));
-                }
+            SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS if writecnt < 4 => {
+                return Err(InternalError::Io(
+                    "Write with address requires at least 4 write bytes",
+                ));
             }
-            SPI_OPCODE_TYPE_WRITE_NO_ADDRESS => {
-                if readcnt > 0 {
-                    return Err(InternalError::Io("Write commands cannot have read data"));
-                }
+            SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS if readcnt > 0 => {
+                return Err(InternalError::Io("Write commands cannot have read data"));
+            }
+            SPI_OPCODE_TYPE_WRITE_NO_ADDRESS if readcnt > 0 => {
+                return Err(InternalError::Io("Write commands cannot have read data"));
             }
             _ => {}
         }
@@ -2224,34 +2216,26 @@ impl IchSpiController {
 
         // Validate command format based on opcode type
         match spi_type {
-            SPI_OPCODE_TYPE_READ_WITH_ADDRESS => {
-                if writecnt != 4 {
-                    return Err(InternalError::Io(
-                        "Read with address requires exactly 4 write bytes",
-                    ));
-                }
+            SPI_OPCODE_TYPE_READ_WITH_ADDRESS if writecnt != 4 => {
+                return Err(InternalError::Io(
+                    "Read with address requires exactly 4 write bytes",
+                ));
             }
-            SPI_OPCODE_TYPE_READ_NO_ADDRESS => {
-                if writecnt != 1 {
-                    return Err(InternalError::Io(
-                        "Read without address requires exactly 1 write byte",
-                    ));
-                }
+            SPI_OPCODE_TYPE_READ_NO_ADDRESS if writecnt != 1 => {
+                return Err(InternalError::Io(
+                    "Read without address requires exactly 1 write byte",
+                ));
             }
-            SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS => {
-                if writecnt < 4 {
-                    return Err(InternalError::Io(
-                        "Write with address requires at least 4 write bytes",
-                    ));
-                }
-                if readcnt > 0 {
-                    return Err(InternalError::Io("Write commands cannot have read data"));
-                }
+            SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS if writecnt < 4 => {
+                return Err(InternalError::Io(
+                    "Write with address requires at least 4 write bytes",
+                ));
             }
-            SPI_OPCODE_TYPE_WRITE_NO_ADDRESS => {
-                if readcnt > 0 {
-                    return Err(InternalError::Io("Write commands cannot have read data"));
-                }
+            SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS if readcnt > 0 => {
+                return Err(InternalError::Io("Write commands cannot have read data"));
+            }
+            SPI_OPCODE_TYPE_WRITE_NO_ADDRESS if readcnt > 0 => {
+                return Err(InternalError::Io("Write commands cannot have read data"));
             }
             _ => {}
         }
