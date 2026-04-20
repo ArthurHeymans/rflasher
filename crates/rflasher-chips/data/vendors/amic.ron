@@ -220,7 +220,8 @@
             name: "A25LQ032/A25LQ32A",
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wrsr_wren: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -235,7 +236,8 @@
             name: "A25LQ16",
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wrsr_wren: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -250,7 +252,8 @@
             name: "A25LQ64",
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wrsr_wren: true, qpi_35_f5: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_dio: true, fast_read_qout: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
