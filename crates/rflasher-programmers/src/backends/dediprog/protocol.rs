@@ -265,7 +265,7 @@ pub enum StandaloneMode {
 
 /// Dediprog I/O mode for multi-I/O commands
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DpIoMode {
     Single = 0,
     DualOut = 1,
