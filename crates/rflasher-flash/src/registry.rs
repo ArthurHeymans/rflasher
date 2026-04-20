@@ -122,7 +122,12 @@ where
 
     let chip_info = ChipInfo::from(result);
     let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone().unwrap());
-    let device = SpiFlashDevice::new(master, ctx);
+    let mut device = SpiFlashDevice::new(master, ctx);
+    // Enable QE bit, enter QPI if available, pick the fastest read op.
+    // Failure here is non-fatal — the default PreparedState keeps single I/O.
+    if let Err(e) = device.prepare() {
+        log::warn!("flash prepare failed: {e:?}; continuing in single I/O mode");
+    }
     Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
 }
 
@@ -581,7 +586,13 @@ fn open_dediprog(
 
     // Use HybridFlashDevice: OpaqueMaster for fast bulk read/write (CMD_READ/CMD_WRITE),
     // SpiMaster for erase, status register access, and write protection
-    let device = HybridFlashDevice::new(master, ctx);
+    let mut device = HybridFlashDevice::new(master, ctx);
+    // Run multi-IO preparation: enables QE bit on the chip, enters QPI mode
+    // when supported, and pushes the selected read op to the Dediprog via
+    // OpaqueMaster::set_read_op so that CMD_READ uses the right IO mode.
+    if let Err(e) = device.prepare() {
+        log::warn!("flash prepare failed: {e:?}; continuing in single I/O mode");
+    }
     Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
 }
 
@@ -910,7 +921,10 @@ fn open_sunxi_fel(
     // Use HybridFlashDevice: OpaqueMaster for fast bulk read/write/erase
     // (batched SPI commands with on-SoC busy-wait), SpiMaster for WP and
     // status register access
-    let device = HybridFlashDevice::new(master, ctx);
+    let mut device = HybridFlashDevice::new(master, ctx);
+    if let Err(e) = device.prepare() {
+        log::warn!("flash prepare failed: {e:?}; continuing in single I/O mode");
+    }
     Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
 }
 
