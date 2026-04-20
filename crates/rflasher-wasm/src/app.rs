@@ -182,6 +182,12 @@ macro_rules! with_flash_device {
         match $programmer {
             Programmer::Serprog(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                if let Err(error) = $device.prepare().await {
+                    log::error!("flash prepare failed: {error}");
+                    let (master, _) = $device.into_parts();
+                    $shared.borrow_mut().programmer = Some(Programmer::Serprog(master));
+                    return;
+                }
                 let result = { $body };
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Serprog(master));
@@ -189,6 +195,12 @@ macro_rules! with_flash_device {
             }
             Programmer::Ch341a(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                if let Err(error) = $device.prepare().await {
+                    log::error!("flash prepare failed: {error}");
+                    let (master, _) = $device.into_parts();
+                    $shared.borrow_mut().programmer = Some(Programmer::Ch341a(master));
+                    return;
+                }
                 let result = { $body };
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Ch341a(master));
@@ -196,6 +208,12 @@ macro_rules! with_flash_device {
             }
             Programmer::Ch347(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                if let Err(error) = $device.prepare().await {
+                    log::error!("flash prepare failed: {error}");
+                    let (master, _) = $device.into_parts();
+                    $shared.borrow_mut().programmer = Some(Programmer::Ch347(master));
+                    return;
+                }
                 let result = { $body };
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Ch347(master));
@@ -203,6 +221,12 @@ macro_rules! with_flash_device {
             }
             Programmer::Ftdi(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                if let Err(error) = $device.prepare().await {
+                    log::error!("flash prepare failed: {error}");
+                    let (master, _) = $device.into_parts();
+                    $shared.borrow_mut().programmer = Some(Programmer::Ftdi(master));
+                    return;
+                }
                 let result = { $body };
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Ftdi(master));
@@ -210,6 +234,12 @@ macro_rules! with_flash_device {
             }
             Programmer::Ft4222(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                if let Err(error) = $device.prepare().await {
+                    log::error!("flash prepare failed: {error}");
+                    let (master, _) = $device.into_parts();
+                    $shared.borrow_mut().programmer = Some(Programmer::Ft4222(master));
+                    return;
+                }
                 let result = { $body };
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Ft4222(master));
@@ -218,6 +248,12 @@ macro_rules! with_flash_device {
             Programmer::Dediprog(mut master) => {
                 master.set_flash_size($ctx_flash.total_size() as u32);
                 let mut $device = HybridFlashDevice::new(master, $ctx_flash);
+                if let Err(error) = $device.prepare().await {
+                    log::error!("flash prepare failed: {error}");
+                    let (master, _) = $device.into_parts();
+                    $shared.borrow_mut().programmer = Some(Programmer::Dediprog(master));
+                    return;
+                }
                 let result = { $body };
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Dediprog(master));
@@ -225,6 +261,12 @@ macro_rules! with_flash_device {
             }
             Programmer::Raiden(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
+                if let Err(error) = $device.prepare().await {
+                    log::error!("flash prepare failed: {error}");
+                    let (master, _) = $device.into_parts();
+                    $shared.borrow_mut().programmer = Some(Programmer::Raiden(master));
+                    return;
+                }
                 let result = { $body };
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Raiden(master));

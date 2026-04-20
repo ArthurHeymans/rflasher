@@ -38,6 +38,7 @@ trait DynFlashDevice {
     fn read<'a>(&'a mut self, addr: u32, buf: &'a mut [u8]) -> BoxFuture<'a, Result<()>>;
     fn write<'a>(&'a mut self, addr: u32, data: &'a [u8]) -> BoxFuture<'a, Result<()>>;
     fn erase(&mut self, addr: u32, len: u32) -> BoxFuture<'_, Result<()>>;
+    fn finish(&mut self) -> BoxFuture<'_, Result<()>>;
     fn wp_supported(&self) -> bool;
     fn read_wp_config(&mut self) -> BoxFuture<'_, WpResult<WpConfig>>;
     fn write_wp_config<'a>(
@@ -82,6 +83,9 @@ impl<D: FlashDevice> DynFlashDevice for D {
     }
     fn erase(&mut self, addr: u32, len: u32) -> BoxFuture<'_, Result<()>> {
         Box::pin(FlashDevice::erase(self, addr, len))
+    }
+    fn finish(&mut self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(FlashDevice::finish(self))
     }
     fn wp_supported(&self) -> bool {
         FlashDevice::wp_supported(self)
@@ -159,6 +163,9 @@ impl FlashDevice for ErasedFlashDevice {
     }
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
         self.inner.erase(addr, len).await
+    }
+    async fn finish(&mut self) -> Result<()> {
+        self.inner.finish().await
     }
     fn wp_supported(&self) -> bool {
         self.inner.wp_supported()
