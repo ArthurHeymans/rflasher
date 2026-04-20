@@ -4,11 +4,11 @@
 //! `FlashDevice` for SPI-based programmers.
 
 use crate::chip::{EraseBlock, WriteGranularity};
-use crate::error::{Error, Result};
+use crate::error::{EraseFailure, Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
-use crate::flash::operations::addressing_for_4byte_operation;
-use crate::flash::{operations, select_erase_block};
+use crate::flash::operations::{addressing_for_4byte_operation, select_erase_block};
+use crate::flash::prepare::PreparedState;
 use crate::programmer::{SpiFeatures, SpiMaster};
 use crate::protocol::{self, CommandAddressing};
 use crate::wp::{
@@ -39,6 +39,9 @@ pub struct SpiFlashDevice<M: SpiMaster> {
     master: M,
     /// Flash chip context
     ctx: FlashContext,
+    /// Prepared state (read op, QPI mode, etc.); defaults to single-I/O until
+    /// `prepare()` is called.
+    prepared: PreparedState,
 }
 
 impl<M: SpiMaster> SpiFlashDevice<M> {
@@ -47,8 +50,17 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// # Arguments
     /// * `master` - The SPI master to take ownership of
     /// * `ctx` - Flash context with chip metadata (from probing)
+    ///
+    /// The device will start in slow single-I/O mode until `prepare()` is
+    /// called; it's safe to immediately read/erase/write without preparing
+    /// (correctness is preserved, only throughput is lost).
     pub fn new(master: M, ctx: FlashContext) -> Self {
-        SpiFlashDevice { master, ctx }
+        let prepared = PreparedState::default_for(&ctx);
+        SpiFlashDevice {
+            master,
+            ctx,
+            prepared,
+        }
     }
 
     /// Get a mutable reference to the underlying SPI master
@@ -64,6 +76,33 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// Get a mutable reference to the flash context
     pub fn context_mut(&mut self) -> &mut FlashContext {
         &mut self.ctx
+    }
+
+    /// Get a reference to the prepared session state.
+    pub fn prepared(&self) -> &PreparedState {
+        &self.prepared
+    }
+
+    /// Prepare the chip for multi-IO operation.
+    ///
+    /// Enables the QE bit (if supported), enters QPI mode (if supported),
+    /// and caches the fastest available read op. Call this immediately after
+    /// construction to enable multi-IO reads.
+    pub async fn prepare(&mut self) -> Result<()> {
+        self.prepared = crate::flash::prepare::prepare_io(&mut self.ctx, &mut self.master).await?;
+        Ok(())
+    }
+
+    /// Explicitly set the prepared state.
+    ///
+    /// Mostly useful for tests; `prepare()` is the normal entry point.
+    pub fn set_prepared(&mut self, state: PreparedState) {
+        self.prepared = state;
+    }
+
+    /// Undo side-effects from `prepare()`.
+    pub async fn finish(&mut self) -> Result<()> {
+        crate::flash::prepare::finish_io(&self.prepared, &mut self.master).await
     }
 
     /// Consume the adapter and return the flash context
@@ -138,17 +177,131 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         if !self.context().is_valid_range(addr, buf.len()) {
             return Err(Error::AddressOutOfBounds);
         }
-        // Delegate to the canonical free function to avoid divergent duplicates
-        operations::read(&mut self.master, &self.ctx, addr, buf).await
+
+        let features = self.ctx.chip.features;
+        let enter_exit_4byte = self.ctx.address_mode == AddressMode::FourByte
+            && self.prepared.read_addressing == CommandAddressing::FourByte
+            && !self.prepared.read_op.native_4ba
+            && !self.prepared.entered_4ba;
+        if enter_exit_4byte {
+            protocol::enter_4byte_mode_with_features(&mut self.master, features).await?;
+        }
+
+        let result = protocol::read_io_with_addressing(
+            &mut self.master,
+            self.prepared.read_op.opcode,
+            addr,
+            buf,
+            self.prepared.read_addressing,
+            self.prepared.read_op.io_mode,
+            self.prepared.read_op.dummy_cycles,
+        )
+        .await;
+
+        if enter_exit_4byte
+            && let Err(e) =
+                protocol::exit_4byte_mode_with_features(&mut self.master, features).await
+        {
+            log::warn!("Failed to exit 4-byte address mode: {e}");
+        }
+        result
     }
 
     async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
-        if !self.context().is_valid_range(addr, data.len()) {
+        use crate::chip::{Features, WriteGranularity};
+
+        let ctx = self.context();
+        if !ctx.is_valid_range(addr, data.len()) {
             return Err(Error::AddressOutOfBounds);
         }
-        // Delegate to the canonical free function (handles AAI word program,
-        // byte-granularity chips, page splitting and 4-byte addressing)
-        operations::write(&mut self.master, &self.ctx, addr, data).await
+
+        let features = ctx.chip.features;
+        let write_granularity = ctx.chip.write_granularity;
+        let page_size = ctx.page_size();
+        let use_4byte = ctx.address_mode == AddressMode::FourByte;
+        let master_features = self.master.features();
+        let use_native = use_4byte
+            && features.supports_4ba_program()
+            && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
+            && self.master.probe_opcode(crate::spi::opcodes::PP_4B);
+        let (addressing, enter_exit_4byte) = if use_4byte {
+            addressing_for_4byte_operation(use_native, features, master_features)?
+        } else {
+            (CommandAddressing::ThreeByte, false)
+        };
+        let enter_exit_4byte = enter_exit_4byte && !self.prepared.entered_4ba;
+        let opcode = if use_native {
+            crate::spi::opcodes::PP_4B
+        } else {
+            crate::spi::opcodes::PP
+        };
+
+        // SST25 AAI word program: chip database sets AAI_WORD for SST25VFxxxB/SST25WFxxx.
+        // These chips require a streaming protocol (0xAD) rather than page program (0x02).
+        // AAI uses 3-byte addressing only — 4-byte mode is irrelevant for SST25 chips.
+        // Note: SFDP-probed chips may report WriteGranularity::Byte (BFPT DWORD1 bit[2]=0)
+        // without AAI_WORD being set; those fall through to single-byte page program below.
+        if features.contains(Features::AAI_WORD) {
+            return protocol::aai_word_program(self.master(), addr, data).await;
+        }
+
+        // Get the master's maximum write length - some controllers have limits
+        // smaller than a full page (e.g., Intel swseq is limited to 64 bytes)
+        let max_write = self.master().max_write_len();
+
+        if enter_exit_4byte {
+            protocol::enter_4byte_mode_with_features(self.master(), features).await?;
+        }
+
+        let mut offset = 0usize;
+        let mut current_addr = addr;
+
+        while offset < data.len() {
+            let remaining = data.len() - offset;
+
+            let chunk_size = if write_granularity == WriteGranularity::Byte {
+                // Single-byte page program: one byte per WREN+PP+WIP cycle.
+                // Used for SFDP-detected chips reporting byte granularity (BFPT DWORD1
+                // bit[2]=0) that don't have AAI_WORD — matches flashprog spi_chip_write_1.
+                1
+            } else {
+                // Page-granularity program: up to a full page per command, respecting
+                // page boundaries and the master's maximum write length.
+                let page_offset = (current_addr as usize) % page_size;
+                let bytes_to_page_end = page_size - page_offset;
+                core::cmp::min(core::cmp::min(bytes_to_page_end, remaining), max_write)
+            };
+
+            let chunk = &data[offset..offset + chunk_size];
+
+            let result = protocol::program_page_with_addressing(
+                self.master(),
+                opcode,
+                current_addr,
+                chunk,
+                addressing,
+            )
+            .await;
+
+            if result.is_err() {
+                if enter_exit_4byte
+                    && let Err(e) =
+                        protocol::exit_4byte_mode_with_features(self.master(), features).await
+                {
+                    log::warn!("Failed to exit 4-byte address mode: {}", e);
+                }
+                return result;
+            }
+
+            offset += chunk_size;
+            current_addr += chunk_size as u32;
+        }
+
+        if enter_exit_4byte {
+            protocol::exit_4byte_mode_with_features(self.master(), features).await?;
+        }
+
+        Ok(())
     }
 
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
@@ -190,9 +343,13 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         } else {
             (CommandAddressing::ThreeByte, false)
         };
+        let enter_exit_4byte = enter_exit_4byte && !self.prepared.entered_4ba;
 
         if enter_exit_4byte {
             protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
+            // Keep verification reads from independently exiting 4BA mode
+            // while this multi-block erase session is active.
+            self.prepared.entered_4ba = true;
         }
 
         let mut current_addr = addr;
@@ -233,28 +390,76 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
                 {
                     log::warn!("Failed to exit 4-byte address mode: {}", e);
                 }
+                if enter_exit_4byte {
+                    self.prepared.entered_4ba = false;
+                }
                 return result;
+            }
+
+            // Verify the block was erased
+            if let Err(e) = self.check_erased_range(current_addr, block_size).await {
+                if enter_exit_4byte
+                    && let Err(exit_e) =
+                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
+                {
+                    log::warn!("Failed to exit 4-byte address mode: {}", exit_e);
+                }
+                if enter_exit_4byte {
+                    self.prepared.entered_4ba = false;
+                }
+                return Err(e);
             }
 
             current_addr += block_size;
         }
 
         if enter_exit_4byte {
-            protocol::exit_4byte_mode_with_features(self.master(), chip_features).await?;
+            let exit_result =
+                protocol::exit_4byte_mode_with_features(self.master(), chip_features).await;
+            self.prepared.entered_4ba = false;
+            exit_result?;
         }
 
-        // Verify only after the erase loop has left its persistent 4-byte
-        // mode. The read helper manages 4-byte mode itself; calling it inside
-        // the loop would exit that mode and make the next legacy erase opcode
-        // target the wrong address.
-        self.check_erased_range(addr, len).await
+        Ok(())
+    }
+
+    async fn finish(&mut self) -> Result<()> {
+        SpiFlashDevice::finish(self).await
     }
 }
 
 impl<M: SpiMaster> SpiFlashDevice<M> {
     /// Check that a range of flash has been erased (all bytes are 0xFF)
+    ///
+    /// Uses the `FlashDevice::read` trait method, which differs from
+    /// `operations::check_erased_range` that uses the free function `read()`.
     async fn check_erased_range(&mut self, addr: u32, len: u32) -> Result<()> {
-        operations::check_erased_range(&mut self.master, &self.ctx, addr, len).await
+        const ERASED_VALUE: u8 = 0xFF;
+        const CHUNK_SIZE: usize = 4096;
+        let mut buf = [0u8; CHUNK_SIZE];
+
+        let mut offset = 0u32;
+        while offset < len {
+            let chunk_len = core::cmp::min(CHUNK_SIZE as u32, len - offset) as usize;
+            let chunk_buf = &mut buf[..chunk_len];
+
+            FlashDevice::read(self, addr + offset, chunk_buf).await?;
+
+            if let Some((idx, &found)) = chunk_buf
+                .iter()
+                .enumerate()
+                .find(|&(_, &b)| b != ERASED_VALUE)
+            {
+                return Err(Error::EraseError(EraseFailure::VerifyFailed {
+                    addr: addr + offset + idx as u32,
+                    found,
+                }));
+            }
+
+            offset += chunk_len as u32;
+        }
+
+        Ok(())
     }
 }
 

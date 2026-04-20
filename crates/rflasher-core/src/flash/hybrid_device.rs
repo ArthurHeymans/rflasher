@@ -26,6 +26,7 @@ use crate::flash::device::FlashDevice;
 use crate::flash::operations::{
     addressing_for_4byte_operation, check_erased_range, select_erase_block,
 };
+use crate::flash::prepare::PreparedState;
 use crate::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
 use crate::protocol::{self, CommandAddressing};
 #[cfg(feature = "alloc")]
@@ -55,6 +56,8 @@ pub struct HybridFlashDevice<M: SpiMaster + OpaqueMaster> {
     master: M,
     /// Flash chip context (from probing via SpiMaster)
     ctx: FlashContext,
+    /// Prepared session state (read op + QPI mode + 4BA state)
+    prepared: PreparedState,
 }
 
 impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
@@ -64,7 +67,12 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     /// * `master` - The programmer (must implement both SpiMaster and OpaqueMaster)
     /// * `ctx` - Flash context with chip metadata (from probing via SpiMaster)
     pub fn new(master: M, ctx: FlashContext) -> Self {
-        HybridFlashDevice { master, ctx }
+        let prepared = PreparedState::default_for(&ctx);
+        HybridFlashDevice {
+            master,
+            ctx,
+            prepared,
+        }
     }
 
     /// Get a mutable reference to the underlying master
@@ -80,6 +88,47 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     /// Get a mutable reference to the flash context
     pub fn context_mut(&mut self) -> &mut FlashContext {
         &mut self.ctx
+    }
+
+    /// Get a reference to the prepared session state.
+    pub fn prepared(&self) -> &PreparedState {
+        &self.prepared
+    }
+
+    /// Prepare the chip for multi-IO operation.
+    ///
+    /// For hybrid programmers (e.g. Dediprog), this also pushes the selected
+    /// read op into the programmer via `set_read_op` so that the opaque
+    /// bulk-read path uses multi-IO framing.
+    pub async fn prepare(&mut self) -> Result<()> {
+        self.prepared = crate::flash::prepare::prepare_io(&mut self.ctx, &mut self.master).await?;
+        // Push read op down to OpaqueMaster so bulk reads can use multi-IO.
+        OpaqueMaster::set_read_op(
+            &mut self.master,
+            self.prepared.read_op,
+            self.ctx.chip.features,
+            self.prepared.read_addressing,
+        );
+        Ok(())
+    }
+
+    /// Set the prepared state directly (mostly for tests).
+    ///
+    /// Also pushes the read op down to the `OpaqueMaster` so the device and
+    /// the programmer stay in agreement.
+    pub fn set_prepared(&mut self, state: PreparedState) {
+        self.prepared = state;
+        OpaqueMaster::set_read_op(
+            &mut self.master,
+            self.prepared.read_op,
+            self.ctx.chip.features,
+            self.prepared.read_addressing,
+        );
+    }
+
+    /// Undo side-effects from `prepare()`.
+    pub async fn finish(&mut self) -> Result<()> {
+        crate::flash::prepare::finish_io(&self.prepared, &mut self.master).await
     }
 
     /// Consume the adapter and return the flash context
@@ -235,6 +284,7 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         } else {
             (CommandAddressing::ThreeByte, false)
         };
+        let enter_exit_4byte = enter_exit_4byte && !self.prepared.entered_4ba;
 
         if enter_exit_4byte {
             protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
@@ -289,6 +339,10 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         // the loop would exit that mode and make the next legacy erase opcode
         // target the wrong address.
         check_erased_range(&mut self.master, &self.ctx, addr, len).await
+    }
+
+    async fn finish(&mut self) -> Result<()> {
+        HybridFlashDevice::finish(self).await
     }
 }
 

@@ -52,17 +52,6 @@ pub(crate) fn addressing_for_4byte_operation(
     }
 }
 
-pub(crate) fn read_dummy_cycles(io_mode: crate::spi::IoMode) -> u8 {
-    match io_mode {
-        crate::spi::IoMode::Single => 0,
-        crate::spi::IoMode::DualOut => 8,
-        crate::spi::IoMode::DualIo => 4,
-        crate::spi::IoMode::QuadOut => 8,
-        crate::spi::IoMode::QuadIo => 6,
-        crate::spi::IoMode::Qpi => 0,
-    }
-}
-
 // =============================================================================
 // Smart erase/write support
 // =============================================================================
@@ -780,27 +769,66 @@ where
 ///
 /// Automatically selects the best I/O mode based on programmer and chip capabilities.
 /// Uses dual or quad I/O when both the programmer and chip support it.
+///
+/// This is the low-level standalone entry point; it builds a one-shot
+/// `SpiReadOp` from chip features and calls
+/// `protocol::read_io_with_addressing`. For repeated reads, prefer the
+/// `SpiFlashDevice` / `HybridFlashDevice` path, which caches the read op
+/// across calls and enters QPI once.
 pub async fn read<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
     buf: &mut [u8],
 ) -> Result<()> {
+    use crate::chip::Features;
+    use crate::protocol::{ChipReadCapabilities, DummyCycleOverrides};
+
     if !ctx.is_valid_range(addr, buf.len()) {
         return Err(Error::AddressOutOfBounds);
     }
     let features = ctx.chip.features;
     let master_features = master.features();
-    let try_native_4byte =
-        ctx.address_mode == AddressMode::FourByte && features.supports_4ba_read();
-
-    let (io_mode, opcode, native_4byte) =
-        protocol::select_read_mode(master_features, features, try_native_4byte, |opcode| {
-            master.probe_opcode(opcode)
-        });
-
-    let (addressing, enter_exit_4byte) = if ctx.address_mode == AddressMode::FourByte {
-        addressing_for_4byte_operation(native_4byte, features, master_features)?
+    let use_4byte = ctx.address_mode == AddressMode::FourByte;
+    let caps = ChipReadCapabilities {
+        fast_read: features.contains(Features::FAST_READ),
+        dout: features.contains(Features::FAST_READ_DOUT),
+        dio: features.contains(Features::FAST_READ_DIO),
+        // This standalone path never establishes the QE bit, so IO2/IO3
+        // remain WP#/HOLD#: cap it at dual I/O. The prepared path
+        // (`prepare_io`) is responsible for quad reads.
+        qout: false,
+        qio: false,
+        qpi_fast_read: false,
+        qpi4b: false,
+        native_4ba_read: features.contains(Features::FOUR_BYTE_READ),
+        native_4ba_fast_read: features.contains(Features::FOUR_BYTE_FAST_READ),
+        native_4ba_dout: features.contains(Features::FOUR_BYTE_DUAL_OUT_READ),
+        native_4ba_dio: features.contains(Features::FOUR_BYTE_DUAL_IO_READ),
+        native_4ba_qout: false,
+        native_4ba_qio: false,
+        in_qpi_mode: false,
+    };
+    let dc = DummyCycleOverrides {
+        dc_112: ctx.chip.dummy_cycles_112,
+        dc_122: ctx.chip.dummy_cycles_122,
+        dc_114: ctx.chip.dummy_cycles_114,
+        dc_144: ctx.chip.dummy_cycles_144,
+        dc_qpi: ctx.chip.dummy_cycles_qpi,
+    };
+    let allow_compatibility_4ba =
+        !use_4byte || compatible_4byte_addressing(features, master_features).is_ok();
+    let op = protocol::select_read_op(
+        master_features,
+        caps,
+        dc,
+        use_4byte,
+        allow_compatibility_4ba,
+        |opcode| master.probe_opcode(opcode),
+    )
+    .ok_or(Error::ChipNotSupported)?;
+    let (addressing, enter_exit_4byte) = if use_4byte {
+        addressing_for_4byte_operation(op.native_4ba, features, master_features)?
     } else {
         (CommandAddressing::ThreeByte, false)
     };
@@ -808,24 +836,21 @@ pub async fn read<M: SpiMaster + ?Sized>(
     if enter_exit_4byte {
         protocol::enter_4byte_mode_with_features(master, features).await?;
     }
-
     let result = protocol::read_io_with_addressing(
         master,
-        opcode,
+        op.opcode,
         addr,
         buf,
         addressing,
-        io_mode,
-        read_dummy_cycles(io_mode),
+        op.io_mode,
+        op.dummy_cycles,
     )
     .await;
-
     if enter_exit_4byte
         && let Err(e) = protocol::exit_4byte_mode_with_features(master, features).await
     {
-        log::warn!("Failed to exit 4-byte address mode: {}", e);
+        log::warn!("Failed to exit 4-byte address mode: {e}");
     }
-
     result
 }
 
