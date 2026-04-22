@@ -2925,6 +2925,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rflasher-ati-spi"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "maybe-async",
+ "rflasher-core",
+ "rflasher-pci",
+ "tock-registers",
+]
+
+[[package]]
 name = "rflasher-ch341a"
 version = "0.1.0"
 dependencies = [
@@ -3032,6 +3043,7 @@ name = "rflasher-flash"
 version = "0.1.0"
 dependencies = [
  "log",
+ "rflasher-ati-spi",
  "rflasher-ch341a",
  "rflasher-ch347",
  "rflasher-core",
@@ -3692,6 +3704,12 @@ dependencies = [
  "displaydoc",
  "zerovec",
 ]
+
+[[package]]
+name = "tock-registers"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d2d250f87fb3fb6f225c907cf54381509f47b40b74b1d1f12d2dccbc915bdfe"
 
 [[package]]
 name = "toml"
