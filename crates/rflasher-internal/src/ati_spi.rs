@@ -503,8 +503,8 @@ impl AtiSpiController {
         self.mmio_write(r600_regs::ROM_SW_STATUS, 0);
 
         // Read response data byte-by-byte
-        for j in 0..readcnt {
-            readarr[j] = self.mmio_read_byte(r600_regs::rom_sw_data(j));
+        for (j, byte) in readarr[..readcnt].iter_mut().enumerate() {
+            *byte = self.mmio_read_byte(r600_regs::rom_sw_data(j));
         }
 
         Ok(())
@@ -552,7 +552,7 @@ impl AtiSpiController {
 
             // Bonaire has a gap between 0xD8 and 0xE8
             if self.spi_type == AtiSpiType::Bonaire && i >= 0xdc {
-                self.smc_write(ci_regs::rom_sw_data(i + 0x0C - 4), value);
+                self.smc_write(ci_regs::rom_sw_data(i + 0x0C), value);
             } else {
                 self.smc_write(ci_regs::rom_sw_data(i - 4), value);
             }

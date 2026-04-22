@@ -378,6 +378,22 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
         }
 
         // Internal and MTD are opaque-only or not SPI-based
+        #[cfg(feature = "ati-spi")]
+        "ati_spi" | "ati-spi" | "ati" | "amdgpu" => {
+            log::info!("Opening ATI/AMD GPU SPI programmer for REPL...");
+            let gpu = rflasher_internal::find_ati_gpu()
+                .map_err(|e| format!("Failed to scan for ATI GPUs: {}", e))?
+                .ok_or("No supported ATI/AMD GPU found on PCI bus")?;
+            let master = gpu.create_controller().map_err(|e| {
+                format!(
+                    "Failed to initialize ATI SPI controller: {}\n\
+                     Make sure you have root privileges and the GPU driver isn't blocking access.",
+                    e
+                )
+            })?;
+            Ok(Box::new(master))
+        }
+
         #[cfg(feature = "internal")]
         "internal" => {
             Err("The REPL is only supported for SPI-based programmers. \
@@ -460,6 +476,9 @@ pub fn open_flash(
 
         #[cfg(feature = "internal")]
         "internal" => open_internal(&params, db),
+
+        #[cfg(feature = "ati-spi")]
+        "ati_spi" | "ati-spi" | "ati" | "amdgpu" => open_ati_spi(&params, db),
 
         #[cfg(feature = "raiden")]
         "raiden_debug_spi" | "raiden" | "raiden_spi" => open_raiden(&params, db),
@@ -810,6 +829,40 @@ fn open_linux_gpio_spi(
     probe_and_create_handle(master, db)
 }
 
+#[cfg(feature = "ati-spi")]
+fn open_ati_spi(
+    _params: &ProgrammerParams,
+    db: &ChipDatabase,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    log::info!("Opening ATI/AMD GPU SPI programmer...");
+
+    let gpu = rflasher_internal::find_ati_gpu()
+        .map_err(|e| format!("Failed to scan for ATI GPUs: {}", e))?
+        .ok_or(
+            "No supported ATI/AMD GPU found on PCI bus.\n\
+                Supported: Radeon HD 2000 through RX 500 series (R600 → Polaris).",
+        )?;
+
+    log::info!(
+        "Using GPU: {} ({}) at {:02x}:{:02x}.{:x}",
+        gpu.name(),
+        gpu.family(),
+        gpu.bus,
+        gpu.dev,
+        gpu.function
+    );
+
+    let master = gpu.create_controller().map_err(|e| {
+        format!(
+            "Failed to initialize ATI SPI controller: {}\n\
+             Make sure you have root privileges and the GPU driver isn't blocking MMIO access.",
+            e
+        )
+    })?;
+
+    probe_and_create_handle(master, db)
+}
+
 #[cfg(feature = "internal")]
 fn open_internal(
     params: &ProgrammerParams,
@@ -1007,6 +1060,13 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "internal",
         aliases: &[],
         description: "Intel PCH internal SPI/FWH controller (ich_spi_mode=<auto|swseq|hwseq>)",
+    });
+
+    #[cfg(feature = "ati-spi")]
+    programmers.push(ProgrammerInfo {
+        name: "ati_spi",
+        aliases: &["ati-spi", "ati", "amdgpu"],
+        description: "ATI/AMD Radeon GPU VBIOS SPI flash (R600 through Polaris)",
     });
 
     #[cfg(feature = "raiden")]

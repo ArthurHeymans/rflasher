@@ -1,45 +1,45 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/rflasher-core",
-    "crates/rflasher-flash",
-    "crates/rflasher-chips-codegen",
-    "crates/rflasher-ch341a",
-    "crates/rflasher-ch347",
-    "crates/rflasher-dediprog",
-    "crates/rflasher-serprog",
-    "crates/rflasher-ftdi",
-    "crates/rflasher-ft4222",
-    "crates/rflasher-internal",
-    "crates/rflasher-linux-spi",
-    "crates/rflasher-linux-mtd",
-    "crates/rflasher-linux-gpio",
-    "crates/rflasher-dummy",
-    "crates/rflasher-raiden",
-    "crates/rflasher-sunxi-fel",
-    "crates/rflasher-repl",
-    "crates/rflasher-wasm",
+  "crates/rflasher-core",
+  "crates/rflasher-flash",
+  "crates/rflasher-chips-codegen",
+  "crates/rflasher-ch341a",
+  "crates/rflasher-ch347",
+  "crates/rflasher-dediprog",
+  "crates/rflasher-serprog",
+  "crates/rflasher-ftdi",
+  "crates/rflasher-ft4222",
+  "crates/rflasher-internal",
+  "crates/rflasher-linux-spi",
+  "crates/rflasher-linux-mtd",
+  "crates/rflasher-linux-gpio",
+  "crates/rflasher-dummy",
+  "crates/rflasher-raiden",
+  "crates/rflasher-sunxi-fel",
+  "crates/rflasher-repl",
+  "crates/rflasher-wasm",
 ]
 # Exclude WASM crate from default build (requires wasm32 target)
 default-members = [
-    ".",
-    "crates/rflasher-core",
-    "crates/rflasher-flash",
-    "crates/rflasher-chips-codegen",
-    "crates/rflasher-ch341a",
-    "crates/rflasher-ch347",
-    "crates/rflasher-dediprog",
-    "crates/rflasher-serprog",
-    "crates/rflasher-ftdi",
-    "crates/rflasher-ft4222",
-    "crates/rflasher-internal",
-    "crates/rflasher-linux-spi",
-    "crates/rflasher-linux-mtd",
-    "crates/rflasher-linux-gpio",
-    "crates/rflasher-dummy",
-    "crates/rflasher-raiden",
-    "crates/rflasher-sunxi-fel",
-    "crates/rflasher-repl",
+  ".",
+  "crates/rflasher-core",
+  "crates/rflasher-flash",
+  "crates/rflasher-chips-codegen",
+  "crates/rflasher-ch341a",
+  "crates/rflasher-ch347",
+  "crates/rflasher-dediprog",
+  "crates/rflasher-serprog",
+  "crates/rflasher-ftdi",
+  "crates/rflasher-ft4222",
+  "crates/rflasher-internal",
+  "crates/rflasher-linux-spi",
+  "crates/rflasher-linux-mtd",
+  "crates/rflasher-linux-gpio",
+  "crates/rflasher-dummy",
+  "crates/rflasher-raiden",
+  "crates/rflasher-sunxi-fel",
+  "crates/rflasher-repl",
 ]
 
 [workspace.package]
@@ -87,7 +87,21 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden", "sunxi-fel"]
+default = [
+  "dummy",
+  "ch341a",
+  "ch347",
+  "dediprog",
+  "serprog",
+  "ft4222",
+  "ftdi",
+  "linux-spi",
+  "linux-mtd",
+  "internal",
+  "ati-spi",
+  "raiden",
+  "sunxi-fel",
+]
 
 # Programmer features (passed through to rflasher-flash)
 dummy = ["rflasher-flash/dummy"]
@@ -103,6 +117,7 @@ linux-spi = ["rflasher-flash/linux-spi"]
 linux-mtd = ["rflasher-flash/linux-mtd"]
 linux-gpio = ["rflasher-flash/linux-gpio"]
 internal = ["rflasher-flash/internal"]
+ati-spi = ["rflasher-flash/ati-spi"]
 raiden = ["rflasher-flash/raiden"]
 sunxi-fel = ["rflasher-flash/sunxi-fel"]
 
@@ -110,13 +125,46 @@ sunxi-fel = ["rflasher-flash/sunxi-fel"]
 repl = ["dep:rflasher-repl"]
 
 # Enable all programmers
-all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "sunxi-fel"]
+all-programmers = [
+  "dummy",
+  "ch341a",
+  "ch347",
+  "dediprog",
+  "serprog",
+  "ftdi",
+  "ft4222",
+  "linux-spi",
+  "linux-mtd",
+  "linux-gpio",
+  "internal",
+  "ati-spi",
+  "raiden",
+  "sunxi-fel",
+]
 # Enable all programmers with pure-Rust FTDI backend
-all-programmers-native = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi-native", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "sunxi-fel"]
+all-programmers-native = [
+  "dummy",
+  "ch341a",
+  "ch347",
+  "dediprog",
+  "serprog",
+  "ftdi-native",
+  "ft4222",
+  "linux-spi",
+  "linux-mtd",
+  "linux-gpio",
+  "internal",
+  "ati-spi",
+  "raiden",
+  "sunxi-fel",
+]
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std", "is_sync"] }
-rflasher-flash = { path = "crates/rflasher-flash", features = ["std", "is_sync"] }
+rflasher-flash = { path = "crates/rflasher-flash", features = [
+  "std",
+  "is_sync",
+] }
 rflasher-repl = { path = "crates/rflasher-repl", optional = true }
 clap.workspace = true
 clap_mangen = "0.2"
