@@ -9,6 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::amd_pci::{find_chipset as find_amd_chipset_entry, AmdChipsetEnable, AMD_VID};
+use crate::ati_pci::{find_ati_spi_device, AtiSpiDevice, ATI_VID};
 use crate::error::{InternalError, PciAccessError};
 use crate::intel_pci::{find_chipset, INTEL_VID};
 use crate::DetectedChipset;
@@ -898,6 +899,160 @@ pub fn scan_for_amd_chipsets() -> Result<alloc::vec::Vec<DetectedAmdChipset>, In
 
 #[cfg(not(all(feature = "std", target_os = "linux")))]
 pub fn find_amd_chipset() -> Result<Option<DetectedAmdChipset>, InternalError> {
+    Err(InternalError::NotSupported(
+        "PCI scanning only supported on Linux",
+    ))
+}
+
+// =============================================================================
+// ATI/AMD GPU Detection (for VBIOS SPI flash access)
+// =============================================================================
+
+/// Information about a detected ATI/AMD GPU with SPI flash
+#[derive(Debug, Clone)]
+pub struct DetectedAtiGpu {
+    /// The device entry from the ATI SPI table
+    pub device: &'static AtiSpiDevice,
+    /// PCI bus number
+    pub bus: u8,
+    /// PCI device (slot) number
+    pub dev: u8,
+    /// PCI function number
+    pub function: u8,
+    /// Physical address of the MMIO BAR
+    pub io_base: u64,
+}
+
+impl DetectedAtiGpu {
+    /// GPU device name
+    pub fn name(&self) -> &'static str {
+        self.device.device_name
+    }
+
+    /// GPU family name
+    pub fn family(&self) -> &'static str {
+        self.device.spi_type.family_name()
+    }
+
+    /// Create an ATI SPI controller from this detected GPU
+    pub fn create_controller(&self) -> Result<crate::ati_spi::AtiSpiController, InternalError> {
+        crate::ati_spi::AtiSpiController::new(
+            self.device.vendor_id,
+            self.device.device_id,
+            self.io_base,
+        )
+    }
+}
+
+/// Scan the PCI bus for ATI/AMD GPUs with SPI flash interfaces
+#[cfg(all(feature = "std", target_os = "linux"))]
+pub fn scan_for_ati_gpus() -> Result<alloc::vec::Vec<DetectedAtiGpu>, InternalError> {
+    let devices = scan_pci_bus()?;
+    let mut found = alloc::vec::Vec::new();
+
+    for pci_dev in &devices {
+        if pci_dev.vendor_id != ATI_VID {
+            continue;
+        }
+
+        if let Some(ati_dev) = find_ati_spi_device(pci_dev.vendor_id, pci_dev.device_id) {
+            // Read the appropriate BAR for this GPU family
+            let bar_offset = ati_dev.spi_type.io_bar();
+            let bar_val =
+                pci_read_config32(pci_dev.bus, pci_dev.device, pci_dev.function, bar_offset)?;
+
+            let io_base = (bar_val & !0xF) as u64;
+            if io_base == 0 {
+                log::debug!(
+                    "ATI GPU {:04x}:{:04x} at {} has unconfigured BAR",
+                    pci_dev.vendor_id,
+                    pci_dev.device_id,
+                    pci_dev.bdf()
+                );
+                continue;
+            }
+
+            // For 64-bit BARs, read the upper 32 bits
+            let io_base = if bar_val & 0x4 != 0 {
+                let upper = pci_read_config32(
+                    pci_dev.bus,
+                    pci_dev.device,
+                    pci_dev.function,
+                    bar_offset + 4,
+                )?;
+                io_base | ((upper as u64) << 32)
+            } else {
+                io_base
+            };
+
+            log::debug!(
+                "Found ATI GPU {} ({}) at {} MMIO={:#x}",
+                ati_dev.device_name,
+                ati_dev.spi_type.family_name(),
+                pci_dev.bdf(),
+                io_base
+            );
+
+            found.push(DetectedAtiGpu {
+                device: ati_dev,
+                bus: pci_dev.bus,
+                dev: pci_dev.device,
+                function: pci_dev.function,
+                io_base,
+            });
+        }
+    }
+
+    Ok(found)
+}
+
+/// Find a single ATI/AMD GPU for VBIOS SPI access
+#[cfg(all(feature = "std", target_os = "linux"))]
+pub fn find_ati_gpu() -> Result<Option<DetectedAtiGpu>, InternalError> {
+    let gpus = scan_for_ati_gpus()?;
+
+    match gpus.len() {
+        0 => Ok(None),
+        1 => {
+            let gpu = &gpus[0];
+            log::info!(
+                "Found ATI GPU: {} ({}) at {:02x}:{:02x}.{:x}",
+                gpu.name(),
+                gpu.family(),
+                gpu.bus,
+                gpu.dev,
+                gpu.function
+            );
+            Ok(Some(gpus.into_iter().next().unwrap()))
+        }
+        _ => {
+            log::info!("Multiple ATI GPUs found:");
+            for gpu in &gpus {
+                log::info!(
+                    "  {} ({}) at {:02x}:{:02x}.{:x}",
+                    gpu.name(),
+                    gpu.family(),
+                    gpu.bus,
+                    gpu.dev,
+                    gpu.function
+                );
+            }
+            log::info!("Using first GPU: {}", gpus[0].name());
+            Ok(Some(gpus.into_iter().next().unwrap()))
+        }
+    }
+}
+
+// Non-Linux stubs for ATI GPU functions
+#[cfg(not(all(feature = "std", target_os = "linux")))]
+pub fn scan_for_ati_gpus() -> Result<alloc::vec::Vec<DetectedAtiGpu>, InternalError> {
+    Err(InternalError::NotSupported(
+        "PCI scanning only supported on Linux",
+    ))
+}
+
+#[cfg(not(all(feature = "std", target_os = "linux")))]
+pub fn find_ati_gpu() -> Result<Option<DetectedAtiGpu>, InternalError> {
     Err(InternalError::NotSupported(
         "PCI scanning only supported on Linux",
     ))
