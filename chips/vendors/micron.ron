@@ -364,7 +364,7 @@
             name: "N25Q256",
             device_id: 0xBA19,
             total_size: MiB(32),
-            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true),
+            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -379,7 +379,7 @@
             name: "N25Q256..1E",
             device_id: 0xBB19,
             total_size: MiB(32),
-            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true),
+            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 1700, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -393,7 +393,7 @@
             name: "N25Q512",
             device_id: 0xBA20,
             total_size: MiB(64),
-            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true),
+            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -408,7 +408,7 @@
             name: "N25Q512..1G",
             device_id: 0xBB20,
             total_size: MiB(64),
-            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true),
+            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 1700, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -436,7 +436,7 @@
             name: "MT25QL256",
             device_id: 0xBA19,
             total_size: MiB(32),
-            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true),
+            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -453,7 +453,7 @@
             name: "MT25QL512",
             device_id: 0xBA20,
             total_size: MiB(64),
-            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true),
+            features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -470,7 +470,7 @@
             name: "MT25QL01G",
             device_id: 0xBA21,
             total_size: MiB(128),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 32768)]),
@@ -487,7 +487,7 @@
             name: "MT25QU01G",
             device_id: 0xBB21,
             total_size: MiB(128),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 1700, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 32768)]),
@@ -503,7 +503,7 @@
             name: "MT25QL02G",
             device_id: 0xBA22,
             total_size: MiB(256),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 65536)]),
@@ -519,7 +519,7 @@
             name: "MT25QU02G",
             device_id: 0xBB22,
             total_size: MiB(256),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 1700, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 65536)]),
@@ -549,7 +549,7 @@
             name: "MT25QU256",
             device_id: 0xBB19,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 1700, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -567,7 +567,7 @@
             name: "MT25QU512",
             device_id: 0xBB20,
             total_size: MiB(64),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 1700, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),

@@ -338,7 +338,7 @@
             name: "MX25L25635F",
             device_id: 0x2019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, four_byte_erase_4k: true, four_byte_erase_32k: true, four_byte_erase_64k: true, ext_addr_reg_c5c8: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -356,7 +356,7 @@
             name: "MX66L51235F",
             device_id: 0x201A,
             total_size: MiB(64),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_32k: true, four_byte_erase_64k: true, ext_addr_reg_c5c8: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -374,7 +374,7 @@
             name: "MX66L1G45G",
             device_id: 0x201B,
             total_size: MiB(128),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_32k: true, four_byte_erase_64k: true, ext_addr_reg_c5c8: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 32768)]),
@@ -468,7 +468,7 @@
             name: "MX25U25635F",
             device_id: 0x2539,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, four_byte_erase_4k: true, four_byte_erase_32k: true, four_byte_erase_64k: true, ext_addr_reg_c5c8: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -486,7 +486,7 @@
             name: "MX25U51245G",
             device_id: 0x253A,
             total_size: MiB(64),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, four_byte_erase_4k: true, four_byte_erase_32k: true, four_byte_erase_64k: true, ext_addr_reg_c5c8: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -609,7 +609,7 @@
             name: "MX25L25635F/MX25L25645G",
             device_id: 0x2019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, four_byte_erase_4k: true, four_byte_erase_64k: true, dual_io: true, quad_io: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -790,7 +790,7 @@
             name: "MX66L51235F/MX25L51245G",
             device_id: 0x201A,
             total_size: MiB(64),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),

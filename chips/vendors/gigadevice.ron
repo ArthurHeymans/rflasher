@@ -160,7 +160,7 @@
             name: "GD25Q256D",
             device_id: 0x4019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, qe_sr2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, four_byte_erase_4k: true, four_byte_erase_64k: true, status_reg_3: true, wrsr_ext: true, four_byte_erase_32k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8192)]),
@@ -347,7 +347,7 @@
             name: "GD25LQ256D",
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, qe_sr2: true, wrsr_ext: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8192)]),
@@ -462,7 +462,7 @@
             name: "GD25LQ256D/GD25LE256D/GD25LB256D/GD25LQ255E",
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, wrsr_ext: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8192)]),
@@ -474,7 +474,7 @@
             name: "GD25LQ256H/GD25LE256H/GD25LB256F",
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -489,7 +489,7 @@
             name: "GD25LE255E",
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_32k: true, four_byte_erase_64k: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -504,7 +504,7 @@
             name: "GD25LB256E/GD25LR256E",
             device_id: 0x6719,
             total_size: MiB(32),
-            features: (otp: true, four_byte_addr: true),
+            features: (otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -532,7 +532,7 @@
             name: "GD25LB512ME/GD25LR512ME",
             device_id: 0x671A,
             total_size: MiB(64),
-            features: (otp: true, four_byte_addr: true),
+            features: (otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -550,7 +550,7 @@
             name: "GD25LB512MF/GD25LR512MF",
             device_id: 0x601A,
             total_size: MiB(64),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -567,7 +567,7 @@
             name: "GD55LB01GE",
             device_id: 0x671B,
             total_size: MiB(128),
-            features: (otp: true, four_byte_addr: true),
+            features: (otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 32768)]),
@@ -584,7 +584,7 @@
             name: "GD55LB01GF",
             device_id: 0x601B,
             total_size: MiB(128),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 32768)]),
@@ -601,7 +601,7 @@
             name: "GD55LB02GE",
             device_id: 0x671C,
             total_size: MiB(256),
-            features: (otp: true, four_byte_addr: true),
+            features: (otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 65536)]),
@@ -618,7 +618,7 @@
             name: "GD55LB02GF",
             device_id: 0x601C,
             total_size: MiB(256),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 65536)]),
@@ -714,7 +714,7 @@
             name: "GD25Q256D/GD25B256D",
             device_id: 0x4019,
             total_size: MiB(32),
-            features: (otp: true, four_byte_addr: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, four_byte_erase_4k: true, four_byte_erase_64k: true, status_reg_3: true, dual_io: true, quad_io: true, wrsr_ext: true, four_byte_erase_32k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -730,7 +730,7 @@
             name: "GD25Q257D/GD25B257D",
             device_id: 0x4019,
             total_size: MiB(32),
-            features: (otp: true, four_byte_addr: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -745,7 +745,7 @@
             name: "GD25Q256E/GD25B256E/GD25R256E",
             device_id: 0x4019,
             total_size: MiB(32),
-            features: (otp: true, four_byte_addr: true),
+            features: (otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -816,7 +816,7 @@
             name: "GD25B512ME/GD25R512ME",
             device_id: 0x471A,
             total_size: MiB(64),
-            features: (otp: true, four_byte_addr: true),
+            features: (otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -833,7 +833,7 @@
             name: "GD25B512MF/GD25R512MF",
             device_id: 0x401A,
             total_size: MiB(64),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -850,7 +850,7 @@
             name: "GD55B01GE",
             device_id: 0x471B,
             total_size: MiB(128),
-            features: (otp: true, four_byte_addr: true),
+            features: (otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, quad_io: true, four_byte_quad_out_read: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 32768)]),
@@ -867,7 +867,7 @@
             name: "GD55B01GF",
             device_id: 0x401B,
             total_size: MiB(128),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 32768)]),
@@ -884,7 +884,7 @@
             name: "GD55B02GE",
             device_id: 0x471C,
             total_size: MiB(256),
-            features: (otp: true, four_byte_addr: true),
+            features: (otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, quad_io: true, four_byte_quad_out_read: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 65536)]),
@@ -901,7 +901,7 @@
             name: "GD55B02GF",
             device_id: 0x401C,
             total_size: MiB(256),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 65536)]),

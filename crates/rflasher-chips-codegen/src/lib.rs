@@ -100,8 +100,36 @@ pub struct FeaturesDef {
     pub four_byte_enter: bool,
     /// Has native 4BA commands (0x13, 0x12, etc.)
     pub four_byte_native: bool,
-    /// Supports extended address register
+    /// Supports extended address register (legacy coarse flag)
     pub ext_addr_reg: bool,
+    /// Enter/exit 4BA mode requires WREN before 0xB7/0xE9
+    pub four_byte_enter_wren: bool,
+    /// Enter/exit 4BA mode by setting bit 7 of the extended address register
+    pub four_byte_enter_ear7: bool,
+    /// Extended Address Register uses 0xC5/0xC8
+    pub ext_addr_reg_c5c8: bool,
+    /// Extended Address Register uses 0x17/0x16
+    pub ext_addr_reg_1716: bool,
+    /// Native 4BA read instruction 0x13
+    pub four_byte_read: bool,
+    /// Native 4BA fast-read instruction 0x0C
+    pub four_byte_fast_read: bool,
+    /// Native 4BA page-program instruction 0x12
+    pub four_byte_program: bool,
+    /// Native 4BA dual-output read instruction 0x3C
+    pub four_byte_dual_out_read: bool,
+    /// Native 4BA dual-I/O read instruction 0xBC
+    pub four_byte_dual_io_read: bool,
+    /// Native 4BA quad-output read instruction 0x6C
+    pub four_byte_quad_out_read: bool,
+    /// Native 4BA quad-I/O read instruction 0xEC
+    pub four_byte_quad_io_read: bool,
+    /// Native 4BA 4KiB erase instruction 0x21
+    pub four_byte_erase_4k: bool,
+    /// Native 4BA 32KiB erase instruction 0x5C
+    pub four_byte_erase_32k: bool,
+    /// Native 4BA 64KiB erase instruction 0xDC
+    pub four_byte_erase_64k: bool,
 
     // Special features
     /// Has OTP (One-Time Programmable) area
@@ -174,8 +202,50 @@ impl FeaturesDef {
         if self.four_byte_native {
             flags.push(quote!(Features::FOUR_BYTE_NATIVE));
         }
-        if self.ext_addr_reg {
+        if self.ext_addr_reg || self.ext_addr_reg_c5c8 || self.ext_addr_reg_1716 {
             flags.push(quote!(Features::EXT_ADDR_REG));
+        }
+        if self.four_byte_enter_wren {
+            flags.push(quote!(Features::FOUR_BYTE_ENTER_WREN));
+        }
+        if self.four_byte_enter_ear7 {
+            flags.push(quote!(Features::FOUR_BYTE_ENTER_EAR7));
+        }
+        if self.ext_addr_reg_c5c8 {
+            flags.push(quote!(Features::EXT_ADDR_REG_C5C8));
+        }
+        if self.ext_addr_reg_1716 {
+            flags.push(quote!(Features::EXT_ADDR_REG_1716));
+        }
+        if self.four_byte_read {
+            flags.push(quote!(Features::FOUR_BYTE_READ));
+        }
+        if self.four_byte_fast_read {
+            flags.push(quote!(Features::FOUR_BYTE_FAST_READ));
+        }
+        if self.four_byte_program {
+            flags.push(quote!(Features::FOUR_BYTE_PROGRAM));
+        }
+        if self.four_byte_dual_out_read {
+            flags.push(quote!(Features::FOUR_BYTE_DUAL_OUT_READ));
+        }
+        if self.four_byte_dual_io_read {
+            flags.push(quote!(Features::FOUR_BYTE_DUAL_IO_READ));
+        }
+        if self.four_byte_quad_out_read {
+            flags.push(quote!(Features::FOUR_BYTE_QUAD_OUT_READ));
+        }
+        if self.four_byte_quad_io_read {
+            flags.push(quote!(Features::FOUR_BYTE_QUAD_IO_READ));
+        }
+        if self.four_byte_erase_4k {
+            flags.push(quote!(Features::FOUR_BYTE_ERASE_4K));
+        }
+        if self.four_byte_erase_32k {
+            flags.push(quote!(Features::FOUR_BYTE_ERASE_32K));
+        }
+        if self.four_byte_erase_64k {
+            flags.push(quote!(Features::FOUR_BYTE_ERASE_64K));
         }
         if self.otp {
             flags.push(quote!(Features::OTP));

@@ -376,7 +376,7 @@
             name: "PY25Q256HB",
             device_id: 0x2019,
             total_size: MiB(32),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -393,7 +393,7 @@
             name: "PY25F256HB",
             device_id: 0x2319,
             total_size: MiB(32),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -410,7 +410,7 @@
             name: "PY25Q512HB",
             device_id: 0x201A,
             total_size: MiB(64),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -427,7 +427,7 @@
             name: "PY25F512HB",
             device_id: 0x231A,
             total_size: MiB(64),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -444,7 +444,7 @@
             name: "PY25Q01GHB",
             device_id: 0x201B,
             total_size: MiB(128),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true),
+            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true, four_byte_erase_32k: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 32768)]),

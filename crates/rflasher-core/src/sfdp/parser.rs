@@ -501,11 +501,65 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     if params
         .four_byte_entry
         .supports(FourByteEntryMethods::INSTR_B7_E9)
-        || params
-            .four_byte_entry
-            .supports(FourByteEntryMethods::WREN_INSTR_B7_E9)
     {
         features |= Features::FOUR_BYTE_ENTER;
+    }
+    if params
+        .four_byte_entry
+        .supports(FourByteEntryMethods::WREN_INSTR_B7_E9)
+    {
+        features |= Features::FOUR_BYTE_ENTER_WREN;
+    }
+    if params
+        .four_byte_entry
+        .supports(FourByteEntryMethods::EXT_ADDR_REG)
+    {
+        features |= Features::EXT_ADDR_REG | Features::EXT_ADDR_REG_C5C8;
+    }
+    if let Some(ref four_byte_table) = info.four_byte_addr_table {
+        let instr = four_byte_table.instructions;
+        if instr.supports(FourByteAddrInstructions::READ_1S_1S_1S) {
+            features |= Features::FOUR_BYTE_READ;
+        }
+        if instr.supports(FourByteAddrInstructions::FAST_READ_1S_1S_1S) {
+            features |= Features::FOUR_BYTE_FAST_READ;
+        }
+        if instr.supports(FourByteAddrInstructions::PAGE_PROGRAM_1S_1S_1S) {
+            features |= Features::FOUR_BYTE_PROGRAM;
+        }
+        if instr.supports(FourByteAddrInstructions::FAST_READ_1S_1S_2S) {
+            features |= Features::FOUR_BYTE_DUAL_OUT_READ;
+        }
+        if instr.supports(FourByteAddrInstructions::FAST_READ_1S_2S_2S) {
+            features |= Features::FOUR_BYTE_DUAL_IO_READ;
+        }
+        if instr.supports(FourByteAddrInstructions::FAST_READ_1S_1S_4S) {
+            features |= Features::FOUR_BYTE_QUAD_OUT_READ;
+        }
+        if instr.supports(FourByteAddrInstructions::FAST_READ_1S_4S_4S) {
+            features |= Features::FOUR_BYTE_QUAD_IO_READ;
+        }
+        if instr.supports_4ba_read()
+            && instr.supports_4ba_fast_read()
+            && instr.supports_4ba_page_program()
+        {
+            features |= Features::FOUR_BYTE_NATIVE;
+        }
+        for (type_index, et) in params.erase_types.iter().enumerate() {
+            if !et.is_valid()
+                || !instr.supports(FourByteAddrInstructions::ERASE_TYPE_1 << type_index)
+            {
+                continue;
+            }
+            if let Some(opcode) = four_byte_table.erase_opcodes.opcode_for_type(type_index) {
+                match opcode {
+                    crate::spi::opcodes::SE_21 => features |= Features::FOUR_BYTE_ERASE_4K,
+                    crate::spi::opcodes::BE_5C => features |= Features::FOUR_BYTE_ERASE_32K,
+                    crate::spi::opcodes::BE_DC => features |= Features::FOUR_BYTE_ERASE_64K,
+                    _ => {}
+                }
+            }
+        }
     }
     if params.soft_reset.supports_66_99() {
         // Mark that soft reset is supported (could add a feature flag)
