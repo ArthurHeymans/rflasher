@@ -205,8 +205,9 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         let erase_block = select_erase_block(ctx.chip.erase_blocks(), addr, len)
             .ok_or(Error::InvalidAlignment)?;
 
+        let chip_features = ctx.chip.features;
         let use_4byte = ctx.address_mode == AddressMode::FourByte;
-        let use_native = ctx.use_native_4byte;
+        let use_native = chip_features.supports_4ba_erase_opcode(erase_block.opcode);
 
         let opcode = if use_4byte && use_native {
             map_to_4byte_erase_opcode(erase_block.opcode)
@@ -215,7 +216,7 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         };
 
         if use_4byte && !use_native {
-            protocol::enter_4byte_mode(self.master()).await?;
+            protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
         }
 
         let mut current_addr = addr;
@@ -247,7 +248,8 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
 
             if result.is_err() {
                 if use_4byte && !use_native {
-                    let _ = protocol::exit_4byte_mode(self.master()).await;
+                    let _ =
+                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await;
                 }
                 return result;
             }
@@ -256,7 +258,7 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         }
 
         if use_4byte && !use_native {
-            protocol::exit_4byte_mode(self.master()).await?;
+            protocol::exit_4byte_mode_with_features(self.master(), chip_features).await?;
         }
 
         Ok(())

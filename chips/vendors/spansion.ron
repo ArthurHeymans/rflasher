@@ -112,7 +112,7 @@
             name: "S25FL256L",
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -338,7 +338,7 @@
             name: "S25FL256S......0",
             device_id: 0x0219,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_ear7: true, ext_addr_reg_1716: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xDC, regions: [(size: KiB(64), count: 512)]),
@@ -352,7 +352,7 @@
             name: "S25FL512S",
             device_id: 0x0220,
             total_size: MiB(64),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_ear7: true, ext_addr_reg_1716: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xDC, regions: [(size: KiB(256), count: 256)]),

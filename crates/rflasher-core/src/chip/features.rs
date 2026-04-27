@@ -9,7 +9,7 @@ bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "std", serde(transparent))]
-    pub struct Features: u32 {
+    pub struct Features: u64 {
         // Write enable behavior
         /// Use WREN (0x06) before WRSR
         const WRSR_WREN       = 1 << 0;
@@ -31,9 +31,9 @@ bitflags! {
         const FOUR_BYTE_ADDR  = 1 << 6;
         /// Can enter 4BA mode with EN4B (0xB7)
         const FOUR_BYTE_ENTER = 1 << 7;
-        /// Has native 4BA commands (0x13, 0x12, etc.)
+        /// Has flashprog-style native 4BA commands (0x13 read, 0x0C fast read, 0x12 page program)
         const FOUR_BYTE_NATIVE = 1 << 8;
-        /// Supports extended address register
+        /// Supports extended address register (legacy coarse flag)
         const EXT_ADDR_REG    = 1 << 9;
 
         // Special features
@@ -85,6 +85,89 @@ bitflags! {
         const WP_BP3          = 1 << 28;
         /// Has Write Protect Selection (WPS) for per-sector mode
         const WP_WPS          = 1 << 29;
+
+        // Detailed 4-byte addressing behavior (flashprog / JESD216 4BA table)
+        /// Enter/exit 4BA mode with WREN + 0xB7 / WREN + 0xE9
+        const FOUR_BYTE_ENTER_WREN = 1 << 30;
+        /// Extended Address Register uses 0xC5/0xC8
+        const EXT_ADDR_REG_C5C8    = 1 << 31;
+        /// Enter/exit 4BA mode by setting bit 7 of the extended address register
+        const FOUR_BYTE_ENTER_EAR7 = 1 << 32;
+        /// Extended Address Register uses 0x17/0x16
+        const EXT_ADDR_REG_1716    = 1 << 33;
+        /// Native 4BA read instruction 0x13
+        const FOUR_BYTE_READ       = 1 << 34;
+        /// Native 4BA fast-read instruction 0x0C
+        const FOUR_BYTE_FAST_READ  = 1 << 35;
+        /// Native 4BA page-program instruction 0x12
+        const FOUR_BYTE_PROGRAM    = 1 << 36;
+        /// Native 4BA dual-output read instruction 0x3C
+        const FOUR_BYTE_DUAL_OUT_READ = 1 << 37;
+        /// Native 4BA dual-I/O read instruction 0xBC
+        const FOUR_BYTE_DUAL_IO_READ  = 1 << 38;
+        /// Native 4BA quad-output read instruction 0x6C
+        const FOUR_BYTE_QUAD_OUT_READ = 1 << 39;
+        /// Native 4BA quad-I/O read instruction 0xEC
+        const FOUR_BYTE_QUAD_IO_READ  = 1 << 40;
+        /// Native 4BA 4KiB sector erase instruction 0x21
+        const FOUR_BYTE_ERASE_4K   = 1 << 41;
+        /// Native 4BA 32KiB block erase instruction 0x5C
+        const FOUR_BYTE_ERASE_32K  = 1 << 42;
+        /// Native 4BA 64KiB block erase instruction 0xDC
+        const FOUR_BYTE_ERASE_64K  = 1 << 43;
+    }
+}
+
+impl Features {
+    /// Whether the native 4BA 0x13 read opcode is supported.
+    pub fn supports_4ba_read(self) -> bool {
+        self.contains(Self::FOUR_BYTE_READ)
+    }
+
+    /// Whether the native 4BA 0x0C fast-read opcode is supported.
+    pub fn supports_4ba_fast_read(self) -> bool {
+        self.contains(Self::FOUR_BYTE_FAST_READ)
+    }
+
+    /// Whether the native 4BA 0x12 page-program opcode is supported.
+    pub fn supports_4ba_program(self) -> bool {
+        self.contains(Self::FOUR_BYTE_PROGRAM)
+    }
+
+    /// Whether native 4BA 0x3C dual-output read is supported.
+    pub fn supports_4ba_dual_out_read(self) -> bool {
+        self.contains(Self::FOUR_BYTE_DUAL_OUT_READ)
+    }
+
+    /// Whether native 4BA 0xBC dual-I/O read is supported.
+    pub fn supports_4ba_dual_io_read(self) -> bool {
+        self.contains(Self::FOUR_BYTE_DUAL_IO_READ)
+    }
+
+    /// Whether native 4BA 0x6C quad-output read is supported.
+    pub fn supports_4ba_quad_out_read(self) -> bool {
+        self.contains(Self::FOUR_BYTE_QUAD_OUT_READ)
+    }
+
+    /// Whether native 4BA 0xEC quad-I/O read is supported.
+    pub fn supports_4ba_quad_io_read(self) -> bool {
+        self.contains(Self::FOUR_BYTE_QUAD_IO_READ)
+    }
+
+    /// Whether a native 4BA erase opcode is known for a standard 3BA erase opcode.
+    pub fn supports_4ba_erase_opcode(self, opcode: u8) -> bool {
+        match opcode {
+            crate::spi::opcodes::SE_20 | crate::spi::opcodes::SE_21 => {
+                self.contains(Self::FOUR_BYTE_ERASE_4K)
+            }
+            crate::spi::opcodes::BE_52 | crate::spi::opcodes::BE_5C => {
+                self.contains(Self::FOUR_BYTE_ERASE_32K)
+            }
+            crate::spi::opcodes::BE_D8 | crate::spi::opcodes::BE_DC => {
+                self.contains(Self::FOUR_BYTE_ERASE_64K)
+            }
+            _ => false,
+        }
     }
 }
 

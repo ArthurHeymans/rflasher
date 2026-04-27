@@ -70,7 +70,7 @@
             name: "W25Q256JV_Q",
             device_id: 0x4019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, four_byte_erase_4k: true, four_byte_erase_64k: true, ext_addr_reg_c5c8: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -87,7 +87,16 @@
             name: "W25Q512JV",
             device_id: 0x4020,
             total_size: MiB(64),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true),
+            features: (
+                wrsr_wren: true, wrsr_ext: true, fast_read: true, dual_io: true, quad_io: true, otp: true,
+                four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true,
+                four_byte_native: true, four_byte_read: true, four_byte_fast_read: true,
+                four_byte_program: true, four_byte_dual_out_read: true,
+                four_byte_dual_io_read: true, four_byte_quad_out_read: true,
+                four_byte_quad_io_read: true, four_byte_erase_4k: true,
+                four_byte_erase_64k: true, status_reg_2: true, status_reg_3: true,
+                qe_sr2: true,
+            ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -166,7 +175,7 @@
             name: "W25Q256JW",
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, four_byte_erase_4k: true, four_byte_erase_64k: true, ext_addr_reg_c5c8: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -230,7 +239,7 @@
             name: "W25Q256JV_M",
             device_id: 0x7019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true),
+            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, four_byte_erase_4k: true, four_byte_erase_64k: true, ext_addr_reg_c5c8: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -431,7 +440,7 @@
             name: "W25Q256FV",
             device_id: 0x4019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8192)]),
@@ -446,7 +455,7 @@
             name: "W25Q256JW_DTR",
             device_id: 0x8019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, four_byte_erase_4k: true, four_byte_erase_64k: true, status_reg_2: true, status_reg_3: true, dual_io: true, quad_io: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 8192)]),
@@ -626,7 +635,7 @@
             name: "W25R512NW/W74M51NW",
             device_id: 0x6020,
             total_size: MiB(64),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_erase_4k: true, four_byte_erase_64k: true),
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),
@@ -643,7 +652,7 @@
             name: "W25Q512NW-IM",
             device_id: 0x8020,
             total_size: MiB(64),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, four_byte_erase_4k: true, four_byte_erase_64k: true, status_reg_2: true, status_reg_3: true, dual_io: true, quad_io: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x21, regions: [(size: KiB(4), count: 16384)]),

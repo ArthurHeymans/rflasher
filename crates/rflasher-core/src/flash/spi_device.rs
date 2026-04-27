@@ -136,7 +136,6 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
-        use crate::chip::Features;
         use crate::spi::IoMode;
 
         let ctx = self.context();
@@ -144,25 +143,20 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             return Err(Error::AddressOutOfBounds);
         }
 
-        let chip_has_dual = ctx.chip.features.contains(Features::DUAL_IO);
-        let chip_has_quad = ctx.chip.features.contains(Features::QUAD_IO);
-        let use_native_4byte = ctx.use_native_4byte;
-        let use_4byte_native = ctx.address_mode == AddressMode::FourByte && use_native_4byte;
-        let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !use_native_4byte;
+        let chip_features = ctx.chip.features;
+        let use_4byte_native =
+            ctx.address_mode == AddressMode::FourByte && chip_features.supports_4ba_read();
+        let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !use_4byte_native;
 
         let master_features = self.master().features();
 
         // Select the best read mode based on chip and programmer capabilities
-        let (io_mode, ..) = protocol::select_read_mode(
-            master_features,
-            chip_has_dual,
-            chip_has_quad,
-            use_4byte_native,
-        );
+        let (io_mode, ..) =
+            protocol::select_read_mode(master_features, chip_features, use_4byte_native);
 
         // Enter 4-byte mode if needed and not using native commands
         if enter_exit_4byte {
-            protocol::enter_4byte_mode(self.master()).await?;
+            protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
         }
 
         let result = match io_mode {
@@ -214,7 +208,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
         // Exit 4-byte mode if we entered it
         if enter_exit_4byte {
-            if let Err(e) = protocol::exit_4byte_mode(self.master()).await {
+            if let Err(e) =
+                protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
+            {
                 log::warn!("Failed to exit 4-byte address mode: {}", e);
             }
         }
@@ -234,7 +230,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         let write_granularity = ctx.chip.write_granularity;
         let page_size = ctx.page_size();
         let use_4byte = ctx.address_mode == AddressMode::FourByte;
-        let use_native = ctx.use_native_4byte;
+        let use_native = features.supports_4ba_program();
 
         // SST25 AAI word program: chip database sets AAI_WORD for SST25VFxxxB/SST25WFxxx.
         // These chips require a streaming protocol (0xAD) rather than page program (0x02).
@@ -251,7 +247,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
         // Enter 4-byte mode if needed and not using native commands
         if use_4byte && !use_native {
-            protocol::enter_4byte_mode(self.master()).await?;
+            protocol::enter_4byte_mode_with_features(self.master(), features).await?;
         }
 
         let mut offset = 0usize;
@@ -283,7 +279,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
             if result.is_err() {
                 if use_4byte && !use_native {
-                    if let Err(e) = protocol::exit_4byte_mode(self.master()).await {
+                    if let Err(e) =
+                        protocol::exit_4byte_mode_with_features(self.master(), features).await
+                    {
                         log::warn!("Failed to exit 4-byte address mode: {}", e);
                     }
                 }
@@ -296,7 +294,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
         // Exit 4-byte mode if we entered it
         if use_4byte && !use_native {
-            protocol::exit_4byte_mode(self.master()).await?;
+            protocol::exit_4byte_mode_with_features(self.master(), features).await?;
         }
 
         Ok(())
@@ -327,8 +325,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         let erase_block = select_erase_block(ctx.chip.erase_blocks(), addr, len)
             .ok_or(Error::InvalidAlignment)?;
 
+        let chip_features = ctx.chip.features;
         let use_4byte = ctx.address_mode == AddressMode::FourByte;
-        let use_native = ctx.use_native_4byte;
+        let use_native = chip_features.supports_4ba_erase_opcode(erase_block.opcode);
 
         // Map 3-byte opcode to 4-byte opcode if needed
         let opcode = if use_4byte && use_native {
@@ -339,7 +338,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
         // Enter 4-byte mode if needed
         if use_4byte && !use_native {
-            protocol::enter_4byte_mode(self.master()).await?;
+            protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
         }
 
         let mut current_addr = addr;
@@ -375,7 +374,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
             if result.is_err() {
                 if use_4byte && !use_native {
-                    if let Err(e) = protocol::exit_4byte_mode(self.master()).await {
+                    if let Err(e) =
+                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
+                    {
                         log::warn!("Failed to exit 4-byte address mode: {}", e);
                     }
                 }
@@ -385,7 +386,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             // Verify the block was erased
             if let Err(e) = self.check_erased_range(current_addr, block_size).await {
                 if use_4byte && !use_native {
-                    if let Err(exit_e) = protocol::exit_4byte_mode(self.master()).await {
+                    if let Err(exit_e) =
+                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
+                    {
                         log::warn!("Failed to exit 4-byte address mode: {}", exit_e);
                     }
                 }
@@ -397,7 +400,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
         // Exit 4-byte mode
         if use_4byte && !use_native {
-            protocol::exit_4byte_mode(self.master()).await?;
+            protocol::exit_4byte_mode_with_features(self.master(), chip_features).await?;
         }
 
         Ok(())

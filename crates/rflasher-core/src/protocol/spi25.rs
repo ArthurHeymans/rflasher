@@ -431,6 +431,30 @@ pub async fn exit_4byte_mode<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()
     master.execute(&mut cmd).await
 }
 
+/// Enter 4-byte address mode, honoring chips that require WREN before EN4B.
+#[maybe_async]
+pub async fn enter_4byte_mode_with_features<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    features: crate::chip::Features,
+) -> Result<()> {
+    if features.contains(crate::chip::Features::FOUR_BYTE_ENTER_WREN) {
+        write_enable(master).await?;
+    }
+    enter_4byte_mode(master).await
+}
+
+/// Exit 4-byte address mode, honoring chips that require WREN before EX4B.
+#[maybe_async]
+pub async fn exit_4byte_mode_with_features<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    features: crate::chip::Features,
+) -> Result<()> {
+    if features.contains(crate::chip::Features::FOUR_BYTE_ENTER_WREN) {
+        write_enable(master).await?;
+    }
+    exit_4byte_mode(master).await
+}
+
 /// Send software reset sequence
 #[maybe_async]
 pub async fn software_reset<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
@@ -866,35 +890,53 @@ pub async fn exit_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) ->
 /// Prefers higher bandwidth modes: Quad I/O > Quad Out > Dual I/O > Dual Out > Single.
 pub fn select_read_mode(
     master_features: SpiFeatures,
-    chip_has_dual: bool,
-    chip_has_quad: bool,
+    chip_features: crate::chip::Features,
     use_4byte: bool,
 ) -> (IoMode, u8) {
+    let chip_has_dual = chip_features.contains(crate::chip::Features::DUAL_IO);
+    let chip_has_quad = chip_features.contains(crate::chip::Features::QUAD_IO);
+
     // Candidates in priority order: (chip_capable, master_feature, mode, opcode_3b, opcode_4b)
     let candidates: [(bool, SpiFeatures, IoMode, u8, u8); 4] = [
         (
-            chip_has_quad,
+            if use_4byte {
+                chip_features.supports_4ba_quad_io_read()
+            } else {
+                chip_has_quad
+            },
             SpiFeatures::QUAD_IO,
             IoMode::QuadIo,
             opcodes::QIOR,
             opcodes::QIOR_4B,
         ),
         (
-            chip_has_quad,
+            if use_4byte {
+                chip_features.supports_4ba_quad_out_read()
+            } else {
+                chip_has_quad
+            },
             SpiFeatures::QUAD_IN,
             IoMode::QuadOut,
             opcodes::QOR,
             opcodes::QOR_4B,
         ),
         (
-            chip_has_dual,
+            if use_4byte {
+                chip_features.supports_4ba_dual_io_read()
+            } else {
+                chip_has_dual
+            },
             SpiFeatures::DUAL_IO,
             IoMode::DualIo,
             opcodes::DIOR,
             opcodes::DIOR_4B,
         ),
         (
-            chip_has_dual,
+            if use_4byte {
+                chip_features.supports_4ba_dual_out_read()
+            } else {
+                chip_has_dual
+            },
             SpiFeatures::DUAL_IN,
             IoMode::DualOut,
             opcodes::DOR,
@@ -909,7 +951,8 @@ pub fn select_read_mode(
         }
     }
 
-    // Fall back to single I/O
+    // Fall back to single I/O. Callers should only request `use_4byte` when
+    // 0x13 is supported; otherwise they should enter 4BA mode and use 0x03.
     let opcode = if use_4byte {
         opcodes::READ_4B
     } else {

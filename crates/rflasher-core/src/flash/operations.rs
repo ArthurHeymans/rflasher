@@ -758,26 +758,23 @@ pub async fn read<M: SpiMaster + ?Sized>(
     addr: u32,
     buf: &mut [u8],
 ) -> Result<()> {
-    use crate::chip::Features;
     use crate::spi::IoMode;
 
     if !ctx.is_valid_range(addr, buf.len()) {
         return Err(Error::AddressOutOfBounds);
     }
 
-    let chip_has_dual = ctx.chip.features.contains(Features::DUAL_IO);
-    let chip_has_quad = ctx.chip.features.contains(Features::QUAD_IO);
-    let use_4byte = ctx.address_mode == AddressMode::FourByte && ctx.use_native_4byte;
+    let features = ctx.chip.features;
+    let use_4byte = ctx.address_mode == AddressMode::FourByte && features.supports_4ba_read();
     let master_features = master.features();
 
     // Select the best read mode based on chip and programmer capabilities
-    let (io_mode, _opcode) =
-        protocol::select_read_mode(master_features, chip_has_dual, chip_has_quad, use_4byte);
+    let (io_mode, _opcode) = protocol::select_read_mode(master_features, features, use_4byte);
 
     // Enter 4-byte mode if needed and not using native commands
-    let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !ctx.use_native_4byte;
+    let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !use_4byte;
     if enter_exit_4byte {
-        protocol::enter_4byte_mode(master).await?;
+        protocol::enter_4byte_mode_with_features(master, ctx.chip.features).await?;
     }
 
     let result = match io_mode {
@@ -830,7 +827,7 @@ pub async fn read<M: SpiMaster + ?Sized>(
 
     // Exit 4-byte mode if we entered it
     if enter_exit_4byte {
-        if let Err(e) = protocol::exit_4byte_mode(master).await {
+        if let Err(e) = protocol::exit_4byte_mode_with_features(master, ctx.chip.features).await {
             log::warn!("Failed to exit 4-byte address mode: {}", e);
         }
     }
@@ -859,7 +856,7 @@ pub async fn write<M: SpiMaster + ?Sized>(
 
     let page_size = ctx.page_size();
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
-    let use_native = ctx.use_native_4byte;
+    let use_native = ctx.chip.features.supports_4ba_program();
 
     // Get the master's maximum write length - some controllers have limits
     // smaller than a full page (e.g., Intel swseq is limited to 64 bytes)
@@ -867,7 +864,7 @@ pub async fn write<M: SpiMaster + ?Sized>(
 
     // Enter 4-byte mode if needed and not using native commands
     if use_4byte && !use_native {
-        protocol::enter_4byte_mode(master).await?;
+        protocol::enter_4byte_mode_with_features(master, ctx.chip.features).await?;
     }
 
     let mut offset = 0usize;
@@ -892,7 +889,9 @@ pub async fn write<M: SpiMaster + ?Sized>(
         if result.is_err() {
             // Try to exit 4-byte mode before returning error
             if use_4byte && !use_native {
-                if let Err(e) = protocol::exit_4byte_mode(master).await {
+                if let Err(e) =
+                    protocol::exit_4byte_mode_with_features(master, ctx.chip.features).await
+                {
                     log::warn!("Failed to exit 4-byte address mode: {}", e);
                 }
             }
@@ -905,7 +904,7 @@ pub async fn write<M: SpiMaster + ?Sized>(
 
     // Exit 4-byte mode if we entered it
     if use_4byte && !use_native {
-        protocol::exit_4byte_mode(master).await?;
+        protocol::exit_4byte_mode_with_features(master, ctx.chip.features).await?;
     }
 
     Ok(())
