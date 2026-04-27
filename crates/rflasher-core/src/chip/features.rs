@@ -109,12 +109,6 @@ bitflags! {
         const FOUR_BYTE_QUAD_OUT_READ = 1 << 39;
         /// Native 4BA quad-I/O read instruction 0xEC
         const FOUR_BYTE_QUAD_IO_READ  = 1 << 40;
-        /// Native 4BA 4KiB sector erase instruction 0x21
-        const FOUR_BYTE_ERASE_4K   = 1 << 41;
-        /// Native 4BA 32KiB block erase instruction 0x5C
-        const FOUR_BYTE_ERASE_32K  = 1 << 42;
-        /// Native 4BA 64KiB block erase instruction 0xDC
-        const FOUR_BYTE_ERASE_64K  = 1 << 43;
     }
 }
 
@@ -152,22 +146,6 @@ impl Features {
     /// Whether native 4BA 0xEC quad-I/O read is supported.
     pub fn supports_4ba_quad_io_read(self) -> bool {
         self.contains(Self::FOUR_BYTE_QUAD_IO_READ)
-    }
-
-    /// Whether a native 4BA erase opcode is known for a standard 3BA erase opcode.
-    pub fn supports_4ba_erase_opcode(self, opcode: u8) -> bool {
-        match opcode {
-            crate::spi::opcodes::SE_20 | crate::spi::opcodes::SE_21 => {
-                self.contains(Self::FOUR_BYTE_ERASE_4K)
-            }
-            crate::spi::opcodes::BE_52 | crate::spi::opcodes::BE_5C => {
-                self.contains(Self::FOUR_BYTE_ERASE_32K)
-            }
-            crate::spi::opcodes::BE_D8 | crate::spi::opcodes::BE_DC => {
-                self.contains(Self::FOUR_BYTE_ERASE_64K)
-            }
-            _ => false,
-        }
     }
 }
 
