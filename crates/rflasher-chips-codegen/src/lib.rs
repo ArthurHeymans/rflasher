@@ -124,12 +124,6 @@ pub struct FeaturesDef {
     pub four_byte_quad_out_read: bool,
     /// Native 4BA quad-I/O read instruction 0xEC
     pub four_byte_quad_io_read: bool,
-    /// Native 4BA 4KiB erase instruction 0x21
-    pub four_byte_erase_4k: bool,
-    /// Native 4BA 32KiB erase instruction 0x5C
-    pub four_byte_erase_32k: bool,
-    /// Native 4BA 64KiB erase instruction 0xDC
-    pub four_byte_erase_64k: bool,
 
     // Special features
     /// Has OTP (One-Time Programmable) area
@@ -238,15 +232,6 @@ impl FeaturesDef {
         if self.four_byte_quad_io_read {
             flags.push(quote!(Features::FOUR_BYTE_QUAD_IO_READ));
         }
-        if self.four_byte_erase_4k {
-            flags.push(quote!(Features::FOUR_BYTE_ERASE_4K));
-        }
-        if self.four_byte_erase_32k {
-            flags.push(quote!(Features::FOUR_BYTE_ERASE_32K));
-        }
-        if self.four_byte_erase_64k {
-            flags.push(quote!(Features::FOUR_BYTE_ERASE_64K));
-        }
         if self.otp {
             flags.push(quote!(Features::OTP));
         }
@@ -320,8 +305,10 @@ pub struct RegionDef {
 /// in boot sector chips like PT/PU variants).
 #[derive(Debug, Clone, Deserialize)]
 pub struct EraseBlockDef {
-    /// SPI opcode for this erase operation
+    /// Regular SPI opcode for this erase operation
     pub opcode: u8,
+    /// Native 4-byte-address SPI opcode for this erase operation, if supported
+    pub opcode_4b: Option<u8>,
     /// Regions for this erase opcode.
     /// For uniform chips: single region covering the whole chip.
     /// For non-uniform chips: multiple regions (e.g., boot sector chips).
@@ -537,8 +524,16 @@ impl ChipDatabase {
                     .iter()
                     .map(|eb| {
                         let opcode = Literal::u8_unsuffixed(eb.opcode);
+                        let has_opcode_4b = eb.opcode_4b.is_some();
+                        let opcode_4b = eb.opcode_4b.map_or_else(
+                            || quote!(None),
+                            |opcode| {
+                                let opcode = Literal::u8_unsuffixed(opcode);
+                                quote!(Some(#opcode))
+                            },
+                        );
 
-                        if eb.regions.len() == 1 {
+                        if eb.regions.len() == 1 && !has_opcode_4b {
                             // Uniform erase block - use the simple constructor
                             let size = Literal::u32_unsuffixed(eb.regions[0].size.to_bytes());
                             let count = Literal::u32_unsuffixed(eb.regions[0].count);
@@ -560,7 +555,7 @@ impl ChipDatabase {
                                     quote!(EraseRegion::new(#size, #count))
                                 })
                                 .collect();
-                            quote!(EraseBlock::with_regions(#opcode, &[#(#regions),*]))
+                            quote!(EraseBlock::with_regions_and_4b(#opcode, #opcode_4b, &[#(#regions),*]))
                         }
                     })
                     .collect();

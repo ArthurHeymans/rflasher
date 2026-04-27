@@ -939,23 +939,6 @@ pub fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> O
         .cloned()
 }
 
-/// Map a 3-byte erase opcode to its 4-byte equivalent
-///
-/// Converts standard 3-byte address erase opcodes to their 4-byte variants:
-/// - SE (0x20) -> SE_4B (0x21)
-/// - BE_32K (0x52) -> BE_32K_4B (0x5C)  
-/// - BE_64K (0xD8) -> BE_64K_4B (0xDC)
-/// - Other opcodes (like chip erase) are returned unchanged
-pub fn map_to_4byte_erase_opcode(opcode: u8) -> u8 {
-    use crate::spi::opcodes;
-    match opcode {
-        opcodes::SE_20 => opcodes::SE_21,
-        opcodes::BE_52 => opcodes::BE_5C,
-        opcodes::BE_D8 => opcodes::BE_DC,
-        _ => opcode, // Chip erase doesn't need address
-    }
-}
-
 // =============================================================================
 // Layout-aware operations
 // =============================================================================

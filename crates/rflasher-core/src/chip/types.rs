@@ -53,14 +53,21 @@ impl EraseRegion {
 ///
 /// Represents an erase operation supported by a flash chip.
 /// Each erase block has an opcode and one or more regions.
+///
+/// Some SPI NOR parts provide a native 4-byte-address erase opcode that erases
+/// the same region size as a regular 3-byte opcode (for example 0x20/0x21 for
+/// 4KiB sectors). `opcode` is the regular opcode; `opcode_4b`, when present,
+/// is the native 4-byte-address variant.
 /// For uniform chips, there's typically one region.
 /// For non-uniform chips (like PT/PU boot sector variants),
 /// there may be multiple regions with different block sizes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
 pub struct EraseBlock {
-    /// SPI opcode for this erase operation
+    /// Regular SPI opcode for this erase operation
     pub opcode: u8,
+    /// Native 4-byte-address SPI opcode for this erase operation, if supported
+    pub opcode_4b: Option<u8>,
     /// Regions for this erase operation (up to 8 regions for no_std)
     pub regions: RegionVec,
 }
@@ -86,8 +93,15 @@ impl EraseBlock {
     /// Create an erase block from multiple regions
     #[cfg(feature = "alloc")]
     pub fn with_regions(opcode: u8, regions: &[EraseRegion]) -> Self {
+        Self::with_regions_and_4b(opcode, None, regions)
+    }
+
+    /// Create an erase block from multiple regions and an optional native 4BA opcode
+    #[cfg(feature = "alloc")]
+    pub fn with_regions_and_4b(opcode: u8, opcode_4b: Option<u8>, regions: &[EraseRegion]) -> Self {
         Self {
             opcode,
+            opcode_4b,
             regions: regions.to_vec(),
         }
     }
@@ -95,13 +109,29 @@ impl EraseBlock {
     /// Create an erase block from multiple regions
     #[cfg(not(feature = "alloc"))]
     pub fn with_regions(opcode: u8, regions: &[EraseRegion]) -> Self {
+        Self::with_regions_and_4b(opcode, None, regions)
+    }
+
+    /// Create an erase block from multiple regions and an optional native 4BA opcode
+    #[cfg(not(feature = "alloc"))]
+    pub fn with_regions_and_4b(opcode: u8, opcode_4b: Option<u8>, regions: &[EraseRegion]) -> Self {
         let mut vec = RegionVec::new();
         for region in regions.iter().take(MAX_ERASE_REGIONS) {
             vec.push(*region).unwrap();
         }
         Self {
             opcode,
+            opcode_4b,
             regions: vec,
+        }
+    }
+
+    /// Get the opcode to use for this erase operation.
+    pub fn opcode_for_address_width(&self, use_native_4b: bool) -> u8 {
+        if use_native_4b {
+            self.opcode_4b.unwrap_or(self.opcode)
+        } else {
+            self.opcode
         }
     }
 

@@ -80,9 +80,6 @@ struct FeaturesDef {
     four_byte_dual_io_read: bool,
     four_byte_quad_out_read: bool,
     four_byte_quad_io_read: bool,
-    four_byte_erase_4k: bool,
-    four_byte_erase_32k: bool,
-    four_byte_erase_64k: bool,
     otp: bool,
     qpi: bool,
     security_reg: bool,
@@ -132,9 +129,6 @@ impl From<FeaturesDef> for Features {
                 Features::FOUR_BYTE_QUAD_OUT_READ,
             ),
             (def.four_byte_quad_io_read, Features::FOUR_BYTE_QUAD_IO_READ),
-            (def.four_byte_erase_4k, Features::FOUR_BYTE_ERASE_4K),
-            (def.four_byte_erase_32k, Features::FOUR_BYTE_ERASE_32K),
-            (def.four_byte_erase_64k, Features::FOUR_BYTE_ERASE_64K),
             (def.otp, Features::OTP),
             (def.qpi, Features::QPI),
             (def.security_reg, Features::SECURITY_REG),
@@ -175,6 +169,7 @@ struct RegionDef {
 #[derive(Debug, Clone, serde::Deserialize)]
 struct EraseBlockDef {
     opcode: u8,
+    opcode_4b: Option<u8>,
     regions: Vec<RegionDef>,
 }
 
@@ -360,7 +355,7 @@ impl ChipDatabase {
                             .iter()
                             .map(|r| EraseRegion::new(r.size.to_bytes(), r.count))
                             .collect();
-                        EraseBlock::with_regions(eb.opcode, &regions)
+                        EraseBlock::with_regions_and_4b(eb.opcode, eb.opcode_4b, &regions)
                     })
                     .collect(),
                 tested: chip_def.tested.into(),

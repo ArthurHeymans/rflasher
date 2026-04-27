@@ -475,7 +475,7 @@ pub async fn is_supported<M: SpiMaster + ?Sized>(master: &mut M) -> bool {
 use alloc::{string::String, vec::Vec};
 
 #[cfg(feature = "alloc")]
-use crate::chip::{EraseBlock, Features, FlashChip, WriteGranularity};
+use crate::chip::{EraseBlock, EraseRegion, Features, FlashChip, WriteGranularity};
 
 /// Convert SFDP info to a FlashChip structure
 ///
@@ -545,21 +545,6 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         {
             features |= Features::FOUR_BYTE_NATIVE;
         }
-        for (type_index, et) in params.erase_types.iter().enumerate() {
-            if !et.is_valid()
-                || !instr.supports(FourByteAddrInstructions::ERASE_TYPE_1 << type_index)
-            {
-                continue;
-            }
-            if let Some(opcode) = four_byte_table.erase_opcodes.opcode_for_type(type_index) {
-                match opcode {
-                    crate::spi::opcodes::SE_21 => features |= Features::FOUR_BYTE_ERASE_4K,
-                    crate::spi::opcodes::BE_5C => features |= Features::FOUR_BYTE_ERASE_32K,
-                    crate::spi::opcodes::BE_DC => features |= Features::FOUR_BYTE_ERASE_64K,
-                    _ => {}
-                }
-            }
-        }
     }
     if params.soft_reset.supports_66_99() {
         // Mark that soft reset is supported (could add a feature flag)
@@ -573,39 +558,33 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         features |= Features::QE_SR2;
     }
 
-    // Build erase blocks from SFDP data
-    // Each erase type covers the entire chip uniformly, so count = total_size / block_size
+    // Build erase blocks from SFDP data.
+    // Each BFPT erase type covers the entire chip uniformly; the optional 4BA
+    // instruction table supplies a native 4-byte opcode for the same erase type.
     let total_size = params.density_bytes as u32;
     let mut erase_blocks: Vec<EraseBlock> = params
         .erase_types
         .iter()
-        .filter(|et| et.is_valid())
-        .map(|et| EraseBlock::with_count(et.opcode, et.size, total_size / et.size))
+        .enumerate()
+        .filter(|(_, et)| et.is_valid())
+        .map(|(type_index, et)| {
+            let opcode_4b = info
+                .four_byte_addr_table
+                .as_ref()
+                .filter(|table| {
+                    table
+                        .instructions
+                        .supports(FourByteAddrInstructions::ERASE_TYPE_1 << type_index)
+                })
+                .and_then(|table| table.erase_opcodes.opcode_for_type(type_index))
+                .filter(|&opcode| opcode != et.opcode);
+            EraseBlock::with_regions_and_4b(
+                et.opcode,
+                opcode_4b,
+                &[EraseRegion::new(et.size, total_size / et.size)],
+            )
+        })
         .collect();
-
-    // If the chip has a 4-byte address instruction table, add the 4BA erase opcodes.
-    // These correspond 1-to-1 with the BFPT erase types (type 1..4 in order) but use
-    // the 4BA opcode variants (e.g. 0x21 for 4KB, 0x5C for 32KB, 0xDC for 64KB).
-    // JESD216B §6.4.19: DWORD 2 of the 4BA table contains the erase opcodes for types 1-4.
-    if let Some(ref four_byte_table) = info.four_byte_addr_table {
-        let valid_types: Vec<_> = params
-            .erase_types
-            .iter()
-            .enumerate()
-            .filter(|(_, et)| et.is_valid())
-            .collect();
-        for (type_index, et) in valid_types {
-            if let Some(opcode_4ba) = four_byte_table.erase_opcodes.opcode_for_type(type_index) {
-                if opcode_4ba != et.opcode {
-                    erase_blocks.push(EraseBlock::with_count(
-                        opcode_4ba,
-                        et.size,
-                        total_size / et.size,
-                    ));
-                }
-            }
-        }
-    }
 
     // Sort by size (smallest first)
     erase_blocks.sort_by_key(|eb| eb.min_block_size());

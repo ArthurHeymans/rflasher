@@ -23,7 +23,7 @@ use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
-use crate::flash::operations::{map_to_4byte_erase_opcode, select_erase_block};
+use crate::flash::operations::select_erase_block;
 use crate::programmer::{OpaqueMaster, SpiMaster};
 use crate::protocol;
 #[cfg(feature = "alloc")]
@@ -207,13 +207,8 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
 
         let chip_features = ctx.chip.features;
         let use_4byte = ctx.address_mode == AddressMode::FourByte;
-        let use_native = chip_features.supports_4ba_erase_opcode(erase_block.opcode);
-
-        let opcode = if use_4byte && use_native {
-            map_to_4byte_erase_opcode(erase_block.opcode)
-        } else {
-            erase_block.opcode
-        };
+        let use_native = use_4byte && erase_block.opcode_4b.is_some();
+        let opcode = erase_block.opcode_for_address_width(use_native);
 
         if use_4byte && !use_native {
             protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
@@ -240,7 +235,7 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
                 self.master(),
                 opcode,
                 current_addr,
-                use_4byte && use_native,
+                use_4byte,
                 poll_delay_us,
                 timeout_us,
             )
