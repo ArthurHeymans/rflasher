@@ -5,7 +5,7 @@
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rflasher_core::flash::unified::{WriteProgress, WriteStats};
-use rflasher_core::flash::{unified, FlashDevice};
+use rflasher_core::flash::{FlashDevice, unified};
 use rflasher_core::layout::Layout;
 use std::fs::File;
 use std::io::{Read, Write};

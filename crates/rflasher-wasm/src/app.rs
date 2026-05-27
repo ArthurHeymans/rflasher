@@ -8,7 +8,7 @@ use std::rc::Rc;
 use rflasher_ch341a::Ch341a;
 use rflasher_ch347::{Ch347, SpiSpeed};
 use rflasher_core::chip::{ChipDatabase, FlashChip};
-use rflasher_core::flash::unified::{smart_write, WriteProgress, WriteStats};
+use rflasher_core::flash::unified::{WriteProgress, WriteStats, smart_write};
 use rflasher_core::flash::{
     FlashContext, FlashDevice, HybridFlashDevice, ProbeResult, SpiFlashDevice,
 };
@@ -1491,7 +1491,9 @@ impl RflasherApp {
                                         if a != b {
                                             verify_error = Some(format!(
                                                 "Mismatch at 0x{:X}: read 0x{:02X}, expected 0x{:02X}",
-                                                offset + i, a, b
+                                                offset + i,
+                                                a,
+                                                b
                                             ));
                                             break;
                                         }
@@ -2167,8 +2169,8 @@ impl RflasherApp {
 // File I/O using browser APIs
 // =============================================================================
 
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 
 /// Load a file using the browser's file input dialog
 async fn load_file_dialog() -> Result<Vec<u8>, String> {

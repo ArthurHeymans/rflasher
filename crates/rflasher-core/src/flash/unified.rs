@@ -26,7 +26,7 @@ use maybe_async::maybe_async;
 // Re-export smart write support types from operations.rs
 // These are the canonical definitions - no duplication needed
 pub use crate::flash::operations::{
-    get_all_write_ranges, need_write, NoProgress, WriteProgress, WriteRange, WriteStats,
+    NoProgress, WriteProgress, WriteRange, WriteStats, get_all_write_ranges, need_write,
 };
 
 // =============================================================================

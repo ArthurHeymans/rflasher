@@ -72,7 +72,7 @@ mod protocol;
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use device::Ch347;
 #[cfg(feature = "std")]
-pub use device::{parse_options, Ch347DeviceInfo};
+pub use device::{Ch347DeviceInfo, parse_options};
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{Ch347Error, Result};
 #[cfg(any(feature = "std", feature = "wasm"))]

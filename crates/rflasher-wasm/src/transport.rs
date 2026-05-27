@@ -9,8 +9,8 @@
 #![allow(deprecated)]
 
 use maybe_async::maybe_async;
-use rflasher_serprog::error::{Result, SerprogError};
 use rflasher_serprog::Transport;
+use rflasher_serprog::error::{Result, SerprogError};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{

@@ -78,7 +78,7 @@ pub mod device;
 pub mod error;
 
 // Re-exports
-pub use device::{parse_options, LinuxMtd, LinuxMtdConfig, MtdInfo};
+pub use device::{LinuxMtd, LinuxMtdConfig, MtdInfo, parse_options};
 pub use error::{LinuxMtdError, Result};
 
 /// Open a Linux MTD device and return a boxed OpaqueMaster

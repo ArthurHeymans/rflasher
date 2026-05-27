@@ -55,19 +55,19 @@ pub mod pci;
 pub mod physmap;
 pub mod programmer;
 
-pub use amd_enable::{enable_amd_spi100, AmdSpi100Info};
-pub use amd_pci::{AmdChipset, AmdChipsetEnable, AMD_CHIPSETS, AMD_VID};
+pub use amd_enable::{AmdSpi100Info, enable_amd_spi100};
+pub use amd_pci::{AMD_CHIPSETS, AMD_VID, AmdChipset, AmdChipsetEnable};
 pub use amd_spi100::Spi100Controller;
 pub use chipset::{BusType, ChipsetEnable, IchChipset, TestStatus};
 pub use error::{InternalError, PciAccessError};
 pub use ichspi::{IchSpiController, SpiMode};
-pub use intel_pci::{find_chipset, INTEL_CHIPSETS, INTEL_VID};
+pub use intel_pci::{INTEL_CHIPSETS, INTEL_VID, find_chipset};
 pub use pci::{
-    find_amd_chipset, find_intel_chipset, scan_for_amd_chipsets, scan_for_intel_chipsets,
-    scan_pci_bus, DetectedAmdChipset, PciDevice,
+    DetectedAmdChipset, PciDevice, find_amd_chipset, find_intel_chipset, scan_for_amd_chipsets,
+    scan_for_intel_chipsets, scan_pci_bus,
 };
 pub use physmap::PhysMap;
-pub use programmer::{programmer_info, InternalOptions, InternalProgrammer};
+pub use programmer::{InternalOptions, InternalProgrammer, programmer_info};
 
 // Re-export AnyDetectedChipset at crate root for convenience
 pub use AnyDetectedChipset as AnyChipset;

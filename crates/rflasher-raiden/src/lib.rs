@@ -65,7 +65,7 @@ mod error;
 mod protocol;
 
 #[cfg(any(feature = "std", feature = "wasm"))]
-pub use device::{parse_options, RaidenConfig, RaidenDebugSpi, RaidenDeviceInfo};
+pub use device::{RaidenConfig, RaidenDebugSpi, RaidenDeviceInfo, parse_options};
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{RaidenError, Result};
 #[cfg(any(feature = "std", feature = "wasm"))]

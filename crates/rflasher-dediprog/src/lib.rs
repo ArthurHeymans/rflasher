@@ -75,7 +75,7 @@ mod protocol;
 #[cfg(feature = "std")]
 pub use device::DediprogDeviceInfo;
 #[cfg(any(feature = "std", feature = "wasm"))]
-pub use device::{parse_options, Dediprog, DediprogConfig};
+pub use device::{Dediprog, DediprogConfig, parse_options};
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{DediprogError, Result};
 #[cfg(any(feature = "std", feature = "wasm"))]

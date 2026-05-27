@@ -48,8 +48,8 @@ pub use types::*;
 pub use flash::{read_fmap_from_flash, read_ifd_from_flash, read_layout_from_flash};
 #[cfg(feature = "std")]
 pub use fmap::{
-    fmap_offset, has_fmap, is_valid_fmap_header, parse_fmap, parse_fmap_at, search_fmap,
-    validate_fmap, FmapSearchable,
+    FmapSearchable, fmap_offset, has_fmap, is_valid_fmap_header, parse_fmap, parse_fmap_at,
+    search_fmap, validate_fmap,
 };
 #[cfg(feature = "std")]
 pub use ifd::{has_ifd, parse_ifd};

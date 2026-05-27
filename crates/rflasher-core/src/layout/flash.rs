@@ -10,7 +10,7 @@ use crate::flash::{self, FlashContext};
 use crate::programmer::SpiMaster;
 use maybe_async::maybe_async;
 
-use super::{fmap, has_fmap, has_ifd, ifd, is_valid_fmap_header, Layout, LayoutError};
+use super::{Layout, LayoutError, fmap, has_fmap, has_ifd, ifd, is_valid_fmap_header};
 
 /// Size of the IFD region (first 4KB of flash)
 const IFD_SIZE: usize = 0x1000;

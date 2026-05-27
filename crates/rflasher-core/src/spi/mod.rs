@@ -10,5 +10,5 @@ pub mod opcodes;
 
 pub use address::AddressWidth;
 pub use command::SpiCommand;
-pub use io_mode::{check_io_mode_supported, IoMode};
+pub use io_mode::{IoMode, check_io_mode_supported};
 pub use opcodes::*;

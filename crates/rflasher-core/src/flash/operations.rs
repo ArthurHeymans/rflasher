@@ -73,11 +73,7 @@ pub fn need_erase(have: &[u8], want: &[u8], granularity: WriteGranularity) -> bo
             // the source must be erased
             have.iter().zip(want.iter()).any(
                 |(h, w)| {
-                    if h == w {
-                        false
-                    } else {
-                        *h != ERASED_VALUE
-                    }
+                    if h == w { false } else { *h != ERASED_VALUE }
                 },
             )
         }

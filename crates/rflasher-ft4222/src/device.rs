@@ -11,9 +11,9 @@
 use std::time::Duration;
 
 use maybe_async::maybe_async;
-use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Out, Recipient};
 #[cfg(feature = "std")]
 use nusb::MaybeFuture;
+use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Out, Recipient};
 use nusb::{Endpoint, Interface};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};

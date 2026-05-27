@@ -18,15 +18,15 @@
 //! - **Software Sequencing**: We control the SPI protocol directly.
 //!   More flexible but may not be available on locked-down systems.
 
+use crate::DetectedChipset;
 use crate::chipset::IchChipset;
 use crate::controller::Controller;
 use crate::error::InternalError;
 use crate::ich_regs::*;
 use crate::pci::{
-    pci_read_config32, pci_read_config32_direct, pci_read_config8, pci_write_config8,
+    pci_read_config8, pci_read_config32, pci_read_config32_direct, pci_write_config8,
 };
 use crate::physmap::PhysMap;
-use crate::DetectedChipset;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::SpiFeatures;
 use rflasher_core::spi::SpiCommand;

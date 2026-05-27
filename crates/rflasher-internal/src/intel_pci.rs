@@ -2,7 +2,7 @@
 //!
 //! This table is ported from flashprog's chipset_enable.c
 
-use crate::chipset::{ChipsetEnable, IchChipset, TestStatus, B_FS, B_S};
+use crate::chipset::{B_FS, B_S, ChipsetEnable, IchChipset, TestStatus};
 
 /// Intel vendor ID
 pub const INTEL_VID: u16 = 0x8086;

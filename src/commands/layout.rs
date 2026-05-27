@@ -1,6 +1,6 @@
 //! Layout command implementations
 
-use rflasher_core::layout::{has_fmap, has_ifd, Layout, LayoutSource};
+use rflasher_core::layout::{Layout, LayoutSource, has_fmap, has_ifd};
 use std::fs;
 use std::path::Path;
 

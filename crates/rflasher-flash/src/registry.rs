@@ -8,7 +8,7 @@ use rflasher_core::chip::ChipDatabase;
 #[allow(unused_imports)] // Used in feature-gated code
 use rflasher_core::flash::FlashDevice;
 use rflasher_core::flash::{
-    probe_detailed, HybridFlashDevice, OpaqueFlashDevice, ProbeResult, SpiFlashDevice,
+    HybridFlashDevice, OpaqueFlashDevice, ProbeResult, SpiFlashDevice, probe_detailed,
 };
 use rflasher_core::layout::parse_ifd;
 use rflasher_core::programmer::OpaqueMaster;
@@ -524,7 +524,7 @@ fn open_ch347(
     params: &ProgrammerParams,
     db: &ChipDatabase,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    use rflasher_ch347::{parse_options, Ch347};
+    use rflasher_ch347::{Ch347, parse_options};
 
     log::info!("Opening CH347 programmer...");
 
@@ -547,7 +547,7 @@ fn open_dediprog(
     params: &ProgrammerParams,
     db: &ChipDatabase,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    use rflasher_dediprog::{parse_options, Dediprog};
+    use rflasher_dediprog::{Dediprog, parse_options};
 
     log::info!("Opening Dediprog programmer...");
 
@@ -672,7 +672,7 @@ fn open_ftdi(
     params: &ProgrammerParams,
     db: &ChipDatabase,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    use rflasher_ftdi::{parse_options, Ftdi};
+    use rflasher_ftdi::{Ftdi, parse_options};
 
     log::info!("Opening FTDI programmer...");
 
@@ -698,7 +698,7 @@ fn open_ft4222(
     params: &ProgrammerParams,
     db: &ChipDatabase,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    use rflasher_ft4222::{parse_options, Ft4222};
+    use rflasher_ft4222::{Ft4222, parse_options};
 
     log::info!("Opening FT4222H programmer...");
 
@@ -728,7 +728,7 @@ fn open_linux_spi(
     params: &ProgrammerParams,
     db: &ChipDatabase,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    use rflasher_linux_spi::{parse_options, LinuxSpi};
+    use rflasher_linux_spi::{LinuxSpi, parse_options};
 
     log::info!("Opening Linux SPI programmer...");
 
@@ -751,7 +751,7 @@ fn open_linux_spi(
 
 #[cfg(feature = "linux-mtd")]
 fn open_linux_mtd(params: &ProgrammerParams) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    use rflasher_linux_mtd::{parse_options, LinuxMtd};
+    use rflasher_linux_mtd::{LinuxMtd, parse_options};
 
     log::info!("Opening Linux MTD programmer...");
 
@@ -789,7 +789,7 @@ fn open_linux_gpio_spi(
     params: &ProgrammerParams,
     db: &ChipDatabase,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    use rflasher_linux_gpio::{parse_options, LinuxGpioSpi};
+    use rflasher_linux_gpio::{LinuxGpioSpi, parse_options};
 
     log::info!("Opening Linux GPIO SPI (bitbang) programmer...");
 
@@ -858,7 +858,7 @@ fn open_raiden(
     params: &ProgrammerParams,
     db: &ChipDatabase,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    use rflasher_raiden::{parse_options, RaidenDebugSpi};
+    use rflasher_raiden::{RaidenDebugSpi, parse_options};
 
     log::info!("Opening Raiden Debug SPI programmer...");
 

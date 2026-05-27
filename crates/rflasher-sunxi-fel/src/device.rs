@@ -22,17 +22,17 @@
 //! - read/write/erase → OpaqueMaster (firmware-accelerated)
 //! - WP/status regs   → SpiMaster (generic SPI commands)
 
-use nusb::transfer::{Bulk, In, Out};
 use nusb::MaybeFuture;
+use nusb::transfer::{Bulk, In, Out};
 use rflasher_core::chip::EraseBlock;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::flash::select_erase_block;
 use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
 use rflasher_core::spi::SpiCommand;
 
-use crate::chips::{self, spi_cmd, ChipFamily, SpiPayloadInfo};
+use crate::chips::{self, ChipFamily, SpiPayloadInfo, spi_cmd};
 use crate::error::{Error, Result};
-use crate::protocol::{FelTransport, FelVersion, FEL_PID, FEL_VID};
+use crate::protocol::{FEL_PID, FEL_VID, FelTransport, FelVersion};
 
 /// Allwinner FEL SPI programmer
 pub struct SunxiFel {

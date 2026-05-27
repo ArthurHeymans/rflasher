@@ -19,7 +19,7 @@ mod commands;
 use clap::Parser;
 use cli::{Cli, Commands, LayoutArgs, LayoutCommands, WpCommands};
 use rflasher_core::chip::ChipDatabase;
-use rflasher_flash::{open_flash, FlashHandle};
+use rflasher_flash::{FlashHandle, open_flash};
 
 use rflasher_core::layout::Layout;
 use std::path::{Path, PathBuf};
