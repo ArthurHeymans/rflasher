@@ -2199,29 +2199,28 @@ async fn load_file_dialog() -> Result<Vec<u8>, String> {
 
         Closure::once(Box::new(move || {
             let files = input.files();
-            if let Some(files) = files {
-                if files.length() > 0 {
-                    if let Some(file) = files.get(0) {
-                        let tx = tx.clone();
-                        let reader = web_sys::FileReader::new().unwrap();
-                        let reader_clone = reader.clone();
+            if let Some(files) = files
+                && files.length() > 0
+                && let Some(file) = files.get(0)
+            {
+                let tx = tx.clone();
+                let reader = web_sys::FileReader::new().unwrap();
+                let reader_clone = reader.clone();
 
-                        let onload = Closure::once(Box::new(move || {
-                            let result = reader_clone.result().unwrap();
-                            let array = js_sys::Uint8Array::new(&result);
-                            let data = array.to_vec();
-                            if let Some(tx) = tx.borrow_mut().take() {
-                                let _ = tx.send(Ok(data));
-                            }
-                        }) as Box<dyn FnOnce()>);
-
-                        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
-                        onload.forget();
-
-                        reader.read_as_array_buffer(&file).unwrap();
-                        return;
+                let onload = Closure::once(Box::new(move || {
+                    let result = reader_clone.result().unwrap();
+                    let array = js_sys::Uint8Array::new(&result);
+                    let data = array.to_vec();
+                    if let Some(tx) = tx.borrow_mut().take() {
+                        let _ = tx.send(Ok(data));
                     }
-                }
+                }) as Box<dyn FnOnce()>);
+
+                reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+                onload.forget();
+
+                reader.read_as_array_buffer(&file).unwrap();
+                return;
             }
             if let Some(tx) = tx.borrow_mut().take() {
                 let _ = tx.send(Err("No file selected".to_string()));

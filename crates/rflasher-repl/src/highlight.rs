@@ -274,10 +274,10 @@ impl Highlighter for ReplHelper {
             highlighted.replace_range(range, &replacement);
             let new_length = highlighted.len();
 
-            if let Some(paren_pos) = paren_to_highlight {
-                if start <= paren_pos {
-                    offset += new_length - old_length;
-                }
+            if let Some(paren_pos) = paren_to_highlight
+                && start <= paren_pos
+            {
+                offset += new_length - old_length;
             }
         }
 
@@ -348,18 +348,17 @@ fn check_bracket(line: &str, pos: usize) -> Option<(u8, usize)> {
         return Some((current, pos));
     }
 
-    if pos > 0 {
-        if let Some((current, open)) = on_bracket(pos - 1) {
-            if !open {
-                return Some((current, pos - 1));
-            }
-        }
+    if pos > 0
+        && let Some((current, open)) = on_bracket(pos - 1)
+        && !open
+    {
+        return Some((current, pos - 1));
     }
 
-    if let Some((current, open)) = on_bracket(pos + 1) {
-        if open {
-            return Some((current, pos + 1));
-        }
+    if let Some((current, open)) = on_bracket(pos + 1)
+        && open
+    {
+        return Some((current, pos + 1));
     }
 
     None

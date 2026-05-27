@@ -340,27 +340,27 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
             device.erase(op.start, op.size).await?;
 
             // Restore preserved data
-            if let Some(ref buf) = pre_data {
-                if let Err(e) = device.write(op.start, buf).await {
-                    log::error!(
-                        "Failed to restore {} bytes at 0x{:08X} after erase — data may be lost: {}",
-                        buf.len(),
-                        op.start,
-                        e
-                    );
-                    return Err(e);
-                }
+            if let Some(ref buf) = pre_data
+                && let Err(e) = device.write(op.start, buf).await
+            {
+                log::error!(
+                    "Failed to restore {} bytes at 0x{:08X} after erase — data may be lost: {}",
+                    buf.len(),
+                    op.start,
+                    e
+                );
+                return Err(e);
             }
-            if let Some(ref buf) = post_data {
-                if let Err(e) = device.write(region_end_addr, buf).await {
-                    log::error!(
-                        "Failed to restore {} bytes at 0x{:08X} after erase — data may be lost: {}",
-                        buf.len(),
-                        region_end_addr,
-                        e
-                    );
-                    return Err(e);
-                }
+            if let Some(ref buf) = post_data
+                && let Err(e) = device.write(region_end_addr, buf).await
+            {
+                log::error!(
+                    "Failed to restore {} bytes at 0x{:08X} after erase — data may be lost: {}",
+                    buf.len(),
+                    region_end_addr,
+                    e
+                );
+                return Err(e);
             }
 
             // Update our view of current contents

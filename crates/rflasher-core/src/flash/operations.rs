@@ -825,10 +825,8 @@ pub async fn read<M: SpiMaster + ?Sized>(
     };
 
     // Exit 4-byte mode if we entered it
-    if enter_exit_4byte {
-        if let Err(e) = protocol::exit_4byte_mode(master).await {
-            log::warn!("Failed to exit 4-byte address mode: {}", e);
-        }
+    if enter_exit_4byte && let Err(e) = protocol::exit_4byte_mode(master).await {
+        log::warn!("Failed to exit 4-byte address mode: {}", e);
     }
 
     result
@@ -887,10 +885,11 @@ pub async fn write<M: SpiMaster + ?Sized>(
 
         if result.is_err() {
             // Try to exit 4-byte mode before returning error
-            if use_4byte && !use_native {
-                if let Err(e) = protocol::exit_4byte_mode(master).await {
-                    log::warn!("Failed to exit 4-byte address mode: {}", e);
-                }
+            if use_4byte
+                && !use_native
+                && let Err(e) = protocol::exit_4byte_mode(master).await
+            {
+                log::warn!("Failed to exit 4-byte address mode: {}", e);
             }
             return result;
         }

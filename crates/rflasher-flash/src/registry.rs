@@ -275,11 +275,10 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
                         .map_err(|e| format!("Failed to open serial port {}: {}", device, e))?;
                     let mut serprog = rflasher_serprog::Serprog::new(transport)
                         .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
-                    if let Some(speed_khz) = spispeed {
-                        if let Err(e) = serprog.set_spi_speed(speed_khz * 1000) {
+                    if let Some(speed_khz) = spispeed
+                        && let Err(e) = serprog.set_spi_speed(speed_khz * 1000) {
                             log::warn!("Failed to set SPI speed: {}", e);
                         }
-                    }
                     if let Some(chip_select) = cs {
                         serprog.set_spi_cs(chip_select)
                             .map_err(|e| format!("Failed to set chip select: {}", e))?;
@@ -291,11 +290,10 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
                         .map_err(|e| format!("Failed to connect to {}:{}: {}", host, port, e))?;
                     let mut serprog = rflasher_serprog::Serprog::new(transport)
                         .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
-                    if let Some(speed_khz) = spispeed {
-                        if let Err(e) = serprog.set_spi_speed(speed_khz * 1000) {
+                    if let Some(speed_khz) = spispeed
+                        && let Err(e) = serprog.set_spi_speed(speed_khz * 1000) {
                             log::warn!("Failed to set SPI speed: {}", e);
                         }
-                    }
                     if let Some(chip_select) = cs {
                         serprog.set_spi_cs(chip_select)
                             .map_err(|e| format!("Failed to set chip select: {}", e))?;

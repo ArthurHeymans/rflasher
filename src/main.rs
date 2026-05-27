@@ -50,7 +50,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     log::info!("Loaded {} chip definitions", db.len());
 
-    let result = match cli.command {
+    match cli.command {
         Commands::Probe { programmer } => {
             // Probe doesn't use the device, just shows info
             let _handle = open_flash(&programmer, &db)?;
@@ -205,9 +205,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Repl { programmer, script } => {
             commands::repl::cmd_repl(&programmer, script.as_deref())
         }
-    };
-
-    result
+    }
 }
 
 /// Load the chip database from the specified path or default locations

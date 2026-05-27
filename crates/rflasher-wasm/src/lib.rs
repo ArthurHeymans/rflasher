@@ -49,10 +49,10 @@ pub fn main() {
         match result {
             Ok(()) => {
                 // Hide the loading screen now that the app is ready
-                if let Some(loading) = document.get_element_by_id("loading") {
-                    if let Some(style) = loading.dyn_ref::<web_sys::HtmlElement>() {
-                        let _ = style.style().set_property("display", "none");
-                    }
+                if let Some(loading) = document.get_element_by_id("loading")
+                    && let Some(style) = loading.dyn_ref::<web_sys::HtmlElement>()
+                {
+                    let _ = style.style().set_property("display", "none");
                 }
                 log::info!("rflasher-wasm started successfully");
             }
