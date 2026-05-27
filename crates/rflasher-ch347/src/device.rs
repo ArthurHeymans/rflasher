@@ -31,7 +31,7 @@ use crate::protocol::*;
 /// In sync mode: blocks with the given timeout.
 /// In async mode: awaits indefinitely.
 macro_rules! ep_wait {
-    ($ep:expr_2021, $timeout:expr_2021) => {{
+    ($ep:expr, $timeout:expr) => {{
         #[cfg(feature = "is_sync")]
         {
             $ep.wait_next_complete($timeout)
