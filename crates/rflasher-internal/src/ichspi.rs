@@ -294,9 +294,9 @@ impl IchSpiController {
 
     /// Get the SPI BAR physical address from PCI config space
     fn get_spibar_address(chipset: &DetectedChipset) -> Result<u64, InternalError> {
-        let gen = chipset.chipset_type();
+        let r#gen = chipset.chipset_type();
 
-        if gen.is_pch100_compatible() {
+        if r#gen.is_pch100_compatible() {
             // PCH100+ (Sunrise Point and later): SPI controller is a separate PCI device
             // at function 5 (00:1f.5), not part of the LPC bridge at function 0.
             // The chipset detection finds the LPC bridge, but we need to read BAR0
@@ -342,7 +342,7 @@ impl IchSpiController {
             );
 
             Ok(addr)
-        } else if gen.is_ich9_compatible() || gen == IchChipset::Ich7 {
+        } else if r#gen.is_ich9_compatible() || r#gen == IchChipset::Ich7 {
             // ICH7-ICH10, 5-9 Series: SPI is at an offset within RCBA
             Self::get_spibar_via_rcba(chipset)
         } else {

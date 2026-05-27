@@ -425,7 +425,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
             if let Some((idx, &found)) = chunk_buf
                 .iter()
                 .enumerate()
-                .find(|(_, &b)| b != ERASED_VALUE)
+                .find(|&(_, &b)| b != ERASED_VALUE)
             {
                 return Err(Error::EraseError(EraseFailure::VerifyFailed {
                     addr: addr + offset + idx as u32,

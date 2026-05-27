@@ -38,7 +38,7 @@ use crate::protocol::*;
 /// timeout wrapper if needed).
 /// Returns `Option<Completion>`.
 macro_rules! ep_wait {
-    ($ep:expr, $timeout:expr) => {{
+    ($ep:expr_2021, $timeout:expr_2021) => {{
         #[cfg(feature = "is_sync")]
         {
             $ep.wait_next_complete($timeout)
@@ -53,7 +53,7 @@ macro_rules! ep_wait {
 /// Try to get the next completion without blocking (non-blocking poll).
 /// Returns `Option<Completion>`.
 macro_rules! ep_try {
-    ($ep:expr) => {{
+    ($ep:expr_2021) => {{
         #[cfg(feature = "is_sync")]
         {
             $ep.wait_next_complete(Duration::ZERO)

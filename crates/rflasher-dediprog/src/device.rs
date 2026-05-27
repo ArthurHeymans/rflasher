@@ -34,7 +34,7 @@ use crate::protocol::*;
 /// API does not support timeouts natively).
 /// Returns `Option<Completion>`.
 macro_rules! ep_wait {
-    ($ep:expr, $timeout:expr) => {{
+    ($ep:expr_2021, $timeout:expr_2021) => {{
         #[cfg(feature = "is_sync")]
         {
             $ep.wait_next_complete($timeout)
@@ -50,7 +50,7 @@ macro_rules! ep_wait {
 /// In sync mode: calls `.wait()` (blocking).
 /// In async mode: `.await`s the future.
 macro_rules! nusb_await {
-    ($expr:expr) => {{
+    ($expr:expr_2021) => {{
         #[cfg(feature = "is_sync")]
         {
             $expr.wait()
@@ -66,7 +66,7 @@ macro_rules! nusb_await {
 /// In sync mode: std::thread::sleep.
 /// In async mode (WASM): setTimeout-based delay.
 macro_rules! platform_sleep {
-    ($dur:expr) => {{
+    ($dur:expr_2021) => {{
         #[cfg(feature = "is_sync")]
         {
             std::thread::sleep($dur);
