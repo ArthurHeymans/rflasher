@@ -4,6 +4,8 @@
 //! the low-level controllers (Intel ICH/PCH or AMD SPI100) and implements
 //! the appropriate trait (SpiMaster or OpaqueMaster).
 
+#![cfg_attr(not(all(feature = "std", target_os = "linux")), allow(unused_imports))]
+
 use crate::amd_enable::enable_amd_spi100;
 use crate::controller::Controller;
 use crate::error::InternalError;

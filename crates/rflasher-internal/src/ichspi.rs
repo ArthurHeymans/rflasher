@@ -18,10 +18,16 @@
 //! - **Software Sequencing**: We control the SPI protocol directly.
 //!   More flexible but may not be available on locked-down systems.
 
+#![cfg_attr(
+    not(all(feature = "std", target_os = "linux")),
+    allow(dead_code, unused_imports)
+)]
+
 use crate::DetectedChipset;
 use crate::chipset::IchChipset;
 use crate::controller::Controller;
 use crate::error::InternalError;
+use crate::host::{Bdf, PciConfigAccess};
 use crate::ich_regs::*;
 use crate::pci::{
     pci_read_config8, pci_read_config32, pci_read_config32_direct, pci_write_config8,
@@ -49,22 +55,82 @@ pub enum SpiMode {
 impl SpiMode {
     /// Parse from string (for CLI parameter)
     pub fn parse(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "auto" => Some(Self::Auto),
-            "hwseq" | "hardware" | "hw" => Some(Self::HardwareSequencing),
-            "swseq" | "software" | "sw" => Some(Self::SoftwareSequencing),
-            _ => None,
+        if s.eq_ignore_ascii_case("auto") {
+            Some(Self::Auto)
+        } else if s.eq_ignore_ascii_case("hwseq")
+            || s.eq_ignore_ascii_case("hardware")
+            || s.eq_ignore_ascii_case("hw")
+        {
+            Some(Self::HardwareSequencing)
+        } else if s.eq_ignore_ascii_case("swseq")
+            || s.eq_ignore_ascii_case("software")
+            || s.eq_ignore_ascii_case("sw")
+        {
+            Some(Self::SoftwareSequencing)
+        } else {
+            None
         }
     }
 }
 
-impl std::fmt::Display for SpiMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for SpiMode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Auto => write!(f, "auto"),
             Self::HardwareSequencing => write!(f, "hwseq"),
             Self::SoftwareSequencing => write!(f, "swseq"),
         }
+    }
+}
+
+/// Gets the SPI BAR physical address using host-provided PCI config access.
+///
+/// This helper is independent from Linux sysfs and can be exercised by
+/// embedded firmware or fake hosts. It covers both PCH100+ hidden SPI function
+/// BAR discovery and legacy RCBA-relative SPI BAR discovery.
+pub fn get_spibar_address_with_host<H: PciConfigAccess>(
+    host: &H,
+    chipset: &DetectedChipset,
+) -> Result<u64, InternalError> {
+    let generation = chipset.chipset_type();
+
+    if generation.is_pch100_compatible() {
+        const SPI_FUNCTION: u8 = 5;
+        let spi_bdf = Bdf::with_segment(chipset.domain, chipset.bus, chipset.device, SPI_FUNCTION);
+        let spibar_raw = host.read32(spi_bdf, PCI_REG_SPIBAR as u16)?;
+        let addr = (spibar_raw & 0xffff_f000) as u64;
+
+        if addr == 0 {
+            return Err(InternalError::ChipsetEnable(
+                "SPIBAR is 0 - SPI controller may be hidden or disabled by firmware",
+            ));
+        }
+
+        Ok(addr)
+    } else if generation.is_ich9_compatible() || generation == IchChipset::Ich7 {
+        let lpc_bdf = Bdf::with_segment(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        let rcba = host.read32(lpc_bdf, PCI_REG_RCBA as u16)?;
+        if rcba & 1 == 0 {
+            return Err(InternalError::ChipsetEnable("RCBA not enabled"));
+        }
+
+        let rcba_base = (rcba & !0x3fff) as u64;
+        let spi_offset = if generation == IchChipset::Ich7 {
+            RCBA_SPI_OFFSET_ICH7
+        } else {
+            RCBA_SPI_OFFSET_ICH9
+        };
+
+        Ok(rcba_base + spi_offset as u64)
+    } else {
+        Err(InternalError::NotSupported(
+            "Unsupported chipset generation",
+        ))
     }
 }
 
@@ -2636,5 +2702,88 @@ impl IchSpiController {
         Err(InternalError::NotSupported(
             "Intel internal programmer only supported on Linux",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::tests::FakeHost;
+    use crate::intel_pci::INTEL_CHIPSETS;
+
+    fn detected_with_generation(generation: IchChipset) -> DetectedChipset {
+        let enable = INTEL_CHIPSETS
+            .iter()
+            .find(|chipset| chipset.chipset == generation)
+            .expect("Intel chipset table entry for generation");
+
+        DetectedChipset {
+            enable,
+            domain: 0,
+            bus: 0,
+            device: 0x1f,
+            function: 0,
+            revision_id: 0,
+        }
+    }
+
+    #[test]
+    fn test_spimode_parse_is_no_alloc_case_insensitive() {
+        assert_eq!(SpiMode::parse("AUTO"), Some(SpiMode::Auto));
+        assert_eq!(SpiMode::parse("HwSeq"), Some(SpiMode::HardwareSequencing));
+        assert_eq!(
+            SpiMode::parse("software"),
+            Some(SpiMode::SoftwareSequencing)
+        );
+        assert_eq!(SpiMode::parse("invalid"), None);
+    }
+
+    #[test]
+    fn test_get_spibar_address_with_host_pch100_hidden_spi_function() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::Series100SunrisePoint);
+        let spi_bdf = Bdf::with_segment(chipset.domain, chipset.bus, chipset.device, 5);
+        host.set_config32(spi_bdf, PCI_REG_SPIBAR as u16, 0xfed1_c001);
+
+        let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
+
+        assert_eq!(spibar, 0xfed1_c000);
+    }
+
+    #[test]
+    fn test_get_spibar_address_with_host_legacy_rcba() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::Ich7);
+        let lpc_bdf = Bdf::with_segment(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        host.set_config32(lpc_bdf, PCI_REG_RCBA as u16, 0xfed1_8001);
+
+        let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
+
+        assert_eq!(spibar, 0xfed1_8000 + RCBA_SPI_OFFSET_ICH7 as u64);
+    }
+
+    #[test]
+    fn test_get_spibar_address_with_host_rejects_disabled_rcba() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::Ich7);
+        let lpc_bdf = Bdf::with_segment(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        host.set_config32(lpc_bdf, PCI_REG_RCBA as u16, 0xfed1_8000);
+
+        let err = get_spibar_address_with_host(&host, &chipset).unwrap_err();
+
+        assert!(matches!(
+            err,
+            InternalError::ChipsetEnable("RCBA not enabled")
+        ));
     }
 }

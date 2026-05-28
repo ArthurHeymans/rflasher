@@ -3,6 +3,11 @@
 //! This module provides PCI device scanning functionality using the Linux
 //! sysfs interface (/sys/bus/pci/devices).
 
+#![cfg_attr(
+    not(all(feature = "std", target_os = "linux")),
+    allow(dead_code, unused_imports)
+)]
+
 #[cfg(all(feature = "std", target_os = "linux"))]
 use std::fs;
 #[cfg(all(feature = "std", target_os = "linux"))]
@@ -47,6 +52,102 @@ impl PciDevice {
 }
 
 extern crate alloc;
+
+fn detected_intel_from_device(dev: &PciDevice) -> Option<DetectedChipset> {
+    if dev.vendor_id != INTEL_VID {
+        return None;
+    }
+
+    find_chipset(dev.vendor_id, dev.device_id, Some(dev.revision_id)).map(|enable| {
+        DetectedChipset {
+            enable,
+            domain: dev.domain,
+            bus: dev.bus,
+            device: dev.device,
+            function: dev.function,
+            revision_id: dev.revision_id,
+        }
+    })
+}
+
+fn detected_amd_from_device(dev: &PciDevice) -> Option<DetectedAmdChipset> {
+    if dev.vendor_id != AMD_VID && dev.vendor_id != 0x1002 {
+        return None;
+    }
+
+    find_amd_chipset_entry(dev.vendor_id, dev.device_id, dev.revision_id).map(|enable| {
+        DetectedAmdChipset {
+            enable,
+            domain: dev.domain,
+            bus: dev.bus,
+            device: dev.device,
+            function: dev.function,
+            revision_id: dev.revision_id,
+        }
+    })
+}
+
+/// Finds a single Intel chipset in a caller-provided PCI device list.
+///
+/// This is the embedded-friendly detection path: firmware can provide devices
+/// from its own PCI scanner and avoid Linux sysfs enumeration entirely.
+pub fn find_intel_chipset_in_devices(
+    devices: &[PciDevice],
+) -> Result<Option<DetectedChipset>, InternalError> {
+    find_intel_chipset_in_iter(devices.iter().cloned())
+}
+
+/// Finds a single Intel chipset in a caller-provided PCI device iterator.
+pub fn find_intel_chipset_in_iter<I>(devices: I) -> Result<Option<DetectedChipset>, InternalError>
+where
+    I: IntoIterator<Item = PciDevice>,
+{
+    let mut found = None;
+
+    for dev in devices {
+        let Some(chipset) = detected_intel_from_device(&dev) else {
+            continue;
+        };
+
+        if found.is_some() {
+            return Err(InternalError::MultipleChipsets);
+        }
+
+        found = Some(chipset);
+    }
+
+    if let Some(chipset) = &found
+        && chipset.enable.status.is_bad()
+    {
+        return Err(InternalError::UnsupportedChipset {
+            vendor_id: chipset.enable.vendor_id,
+            device_id: chipset.enable.device_id,
+            name: chipset.enable.device_name,
+        });
+    }
+
+    Ok(found)
+}
+
+/// Finds a single AMD chipset in a caller-provided PCI device list.
+pub fn find_amd_chipset_in_devices(
+    devices: &[PciDevice],
+) -> Result<Option<DetectedAmdChipset>, InternalError> {
+    find_amd_chipset_in_iter(devices.iter().cloned())
+}
+
+/// Finds a single AMD chipset in a caller-provided PCI device iterator.
+///
+/// This preserves the existing Linux behavior for multiple AMD matches by
+/// returning the first match instead of failing.
+pub fn find_amd_chipset_in_iter<I>(devices: I) -> Result<Option<DetectedAmdChipset>, InternalError>
+where
+    I: IntoIterator<Item = PciDevice>,
+{
+    Ok(devices
+        .into_iter()
+        .find_map(|dev| detected_amd_from_device(&dev)))
+}
 
 /// Scan the PCI bus for devices
 ///
@@ -182,6 +283,7 @@ pub fn scan_for_intel_chipsets() -> Result<alloc::vec::Vec<DetectedChipset>, Int
 
             found.push(DetectedChipset {
                 enable,
+                domain: dev.domain,
                 bus: dev.bus,
                 device: dev.device,
                 function: dev.function,
@@ -291,7 +393,7 @@ pub fn pci_read_config32_direct(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         }));
     }
 
@@ -357,7 +459,7 @@ pub fn pci_read_config8(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -368,7 +470,7 @@ pub fn pci_read_config8(
                 bus,
                 device,
                 function,
-                register: offset,
+                register: offset as u16,
             })
         })?;
 
@@ -378,7 +480,7 @@ pub fn pci_read_config8(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -405,7 +507,7 @@ pub fn pci_read_config16(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -416,7 +518,7 @@ pub fn pci_read_config16(
                 bus,
                 device,
                 function,
-                register: offset,
+                register: offset as u16,
             })
         })?;
 
@@ -426,7 +528,7 @@ pub fn pci_read_config16(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -453,7 +555,7 @@ pub fn pci_read_config32(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -464,7 +566,7 @@ pub fn pci_read_config32(
                 bus,
                 device,
                 function,
-                register: offset,
+                register: offset as u16,
             })
         })?;
 
@@ -474,7 +576,7 @@ pub fn pci_read_config32(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -503,7 +605,7 @@ pub fn pci_write_config8(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -514,7 +616,7 @@ pub fn pci_write_config8(
                 bus,
                 device,
                 function,
-                register: offset,
+                register: offset as u16,
             })
         })?;
 
@@ -523,7 +625,7 @@ pub fn pci_write_config8(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -552,7 +654,7 @@ pub fn pci_write_config16(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -563,7 +665,7 @@ pub fn pci_write_config16(
                 bus,
                 device,
                 function,
-                register: offset,
+                register: offset as u16,
             })
         })?;
 
@@ -572,7 +674,7 @@ pub fn pci_write_config16(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -601,7 +703,7 @@ pub fn pci_write_config32(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -612,7 +714,7 @@ pub fn pci_write_config32(
                 bus,
                 device,
                 function,
-                register: offset,
+                register: offset as u16,
             })
         })?;
 
@@ -621,7 +723,7 @@ pub fn pci_write_config32(
             bus,
             device,
             function,
-            register: offset,
+            register: offset as u16,
         })
     })?;
 
@@ -735,6 +837,8 @@ pub fn find_intel_chipset() -> Result<Option<DetectedChipset>, InternalError> {
 pub struct DetectedAmdChipset {
     /// The chipset enable entry from the database
     pub enable: &'static AmdChipsetEnable,
+    /// PCI segment/domain
+    pub domain: u16,
     /// PCI bus number
     pub bus: u8,
     /// PCI device number
@@ -844,6 +948,7 @@ pub fn scan_for_amd_chipsets() -> Result<alloc::vec::Vec<DetectedAmdChipset>, In
 
             found.push(DetectedAmdChipset {
                 enable,
+                domain: dev.domain,
                 bus: dev.bus,
                 device: dev.device,
                 function: dev.function,
@@ -901,4 +1006,57 @@ pub fn find_amd_chipset() -> Result<Option<DetectedAmdChipset>, InternalError> {
     Err(InternalError::NotSupported(
         "PCI scanning only supported on Linux",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pci_device(vendor_id: u16, device_id: u16, revision_id: u8) -> PciDevice {
+        PciDevice {
+            domain: 0,
+            bus: 0,
+            device: 0x1f,
+            function: 0,
+            vendor_id,
+            device_id,
+            revision_id,
+            class: 0,
+        }
+    }
+
+    #[test]
+    fn test_find_intel_chipset_in_devices_no_match() {
+        let devices = [pci_device(0x1234, 0x5678, 0)];
+        assert!(find_intel_chipset_in_devices(&devices).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_find_intel_chipset_in_devices_detects_match() {
+        let devices = [pci_device(INTEL_VID, 0x0f1c, 0)];
+        let chipset = find_intel_chipset_in_devices(&devices).unwrap().unwrap();
+        assert_eq!(chipset.enable.vendor_id, INTEL_VID);
+        assert_eq!(chipset.enable.device_id, 0x0f1c);
+        assert_eq!(chipset.bus, 0);
+        assert_eq!(chipset.device, 0x1f);
+    }
+
+    #[test]
+    fn test_find_intel_chipset_in_devices_rejects_multiple_matches() {
+        let devices = [
+            pci_device(INTEL_VID, 0x0f1c, 0),
+            pci_device(INTEL_VID, 0x1c44, 0),
+        ];
+        let err = find_intel_chipset_in_devices(&devices).unwrap_err();
+        assert!(matches!(err, InternalError::MultipleChipsets));
+    }
+
+    #[test]
+    fn test_find_amd_chipset_in_devices_detects_revision_match() {
+        let devices = [pci_device(AMD_VID, 0x790b, 0x51)];
+        let chipset = find_amd_chipset_in_devices(&devices).unwrap().unwrap();
+        assert_eq!(chipset.enable.vendor_id, AMD_VID);
+        assert_eq!(chipset.enable.device_id, 0x790b);
+        assert_eq!(chipset.revision_id, 0x51);
+    }
 }

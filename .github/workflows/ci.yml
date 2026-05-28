@@ -71,6 +71,24 @@ jobs:
       - name: Build
         run: cargo build --workspace --exclude rflasher-wasm --all-features --release
 
+  no-std:
+    name: no_std embedded checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-none
+      - uses: Swatinem/rust-cache@v2
+      - name: Check rflasher-core without std
+        run: cargo check -p rflasher-core --no-default-features --target x86_64-unknown-none
+      - name: Check rflasher-core sync without std
+        run: cargo check -p rflasher-core --no-default-features --features is_sync --target x86_64-unknown-none
+      - name: Check rflasher-internal embedded host without std
+        run: cargo check -p rflasher-internal --no-default-features --features embedded-host --target x86_64-unknown-none
+
   wasm:
     name: WASM Build
     runs-on: ubuntu-latest
