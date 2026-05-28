@@ -59,7 +59,7 @@ pub mod transport;
 
 // Re-exports
 pub use error::{Result, SerprogError};
-pub use protocol::{bus, CommandMap, ProgrammerInfo};
+pub use protocol::{CommandMap, ProgrammerInfo, bus};
 
 #[cfg(feature = "std")]
 pub use device::Serprog;

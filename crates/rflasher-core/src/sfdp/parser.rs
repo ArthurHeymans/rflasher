@@ -541,14 +541,14 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
             .filter(|(_, et)| et.is_valid())
             .collect();
         for (type_index, et) in valid_types {
-            if let Some(opcode_4ba) = four_byte_table.erase_opcodes.opcode_for_type(type_index) {
-                if opcode_4ba != et.opcode {
-                    erase_blocks.push(EraseBlock::with_count(
-                        opcode_4ba,
-                        et.size,
-                        total_size / et.size,
-                    ));
-                }
+            if let Some(opcode_4ba) = four_byte_table.erase_opcodes.opcode_for_type(type_index)
+                && opcode_4ba != et.opcode
+            {
+                erase_blocks.push(EraseBlock::with_count(
+                    opcode_4ba,
+                    et.size,
+                    total_size / et.size,
+                ));
             }
         }
     }
@@ -755,13 +755,13 @@ pub fn compare_with_chip(info: &SfdpInfo, chip: &FlashChip) -> Vec<SfdpMismatch>
         .iter()
         .filter(|eb| eb.is_uniform() && !eb.is_chip_erase())
     {
-        if let Some(size) = db_eb.uniform_size() {
-            if !sfdp_erase.iter().any(|e| e.size == size) {
-                mismatches.push(SfdpMismatch::ExtraEraseBlock {
-                    size,
-                    opcode: db_eb.opcode,
-                });
-            }
+        if let Some(size) = db_eb.uniform_size()
+            && !sfdp_erase.iter().any(|e| e.size == size)
+        {
+            mismatches.push(SfdpMismatch::ExtraEraseBlock {
+                size,
+                opcode: db_eb.opcode,
+            });
         }
     }
 

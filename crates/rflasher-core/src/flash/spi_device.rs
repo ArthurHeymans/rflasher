@@ -213,10 +213,8 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         };
 
         // Exit 4-byte mode if we entered it
-        if enter_exit_4byte {
-            if let Err(e) = protocol::exit_4byte_mode(self.master()).await {
-                log::warn!("Failed to exit 4-byte address mode: {}", e);
-            }
+        if enter_exit_4byte && let Err(e) = protocol::exit_4byte_mode(self.master()).await {
+            log::warn!("Failed to exit 4-byte address mode: {}", e);
         }
 
         result
@@ -282,10 +280,11 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             };
 
             if result.is_err() {
-                if use_4byte && !use_native {
-                    if let Err(e) = protocol::exit_4byte_mode(self.master()).await {
-                        log::warn!("Failed to exit 4-byte address mode: {}", e);
-                    }
+                if use_4byte
+                    && !use_native
+                    && let Err(e) = protocol::exit_4byte_mode(self.master()).await
+                {
+                    log::warn!("Failed to exit 4-byte address mode: {}", e);
                 }
                 return result;
             }
@@ -374,20 +373,22 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             .await;
 
             if result.is_err() {
-                if use_4byte && !use_native {
-                    if let Err(e) = protocol::exit_4byte_mode(self.master()).await {
-                        log::warn!("Failed to exit 4-byte address mode: {}", e);
-                    }
+                if use_4byte
+                    && !use_native
+                    && let Err(e) = protocol::exit_4byte_mode(self.master()).await
+                {
+                    log::warn!("Failed to exit 4-byte address mode: {}", e);
                 }
                 return result;
             }
 
             // Verify the block was erased
             if let Err(e) = self.check_erased_range(current_addr, block_size).await {
-                if use_4byte && !use_native {
-                    if let Err(exit_e) = protocol::exit_4byte_mode(self.master()).await {
-                        log::warn!("Failed to exit 4-byte address mode: {}", exit_e);
-                    }
+                if use_4byte
+                    && !use_native
+                    && let Err(exit_e) = protocol::exit_4byte_mode(self.master()).await
+                {
+                    log::warn!("Failed to exit 4-byte address mode: {}", exit_e);
                 }
                 return Err(e);
             }
@@ -425,7 +426,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
             if let Some((idx, &found)) = chunk_buf
                 .iter()
                 .enumerate()
-                .find(|(_, &b)| b != ERASED_VALUE)
+                .find(|&(_, &b)| b != ERASED_VALUE)
             {
                 return Err(Error::EraseError(EraseFailure::VerifyFailed {
                     addr: addr + offset + idx as u32,

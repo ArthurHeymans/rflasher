@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 
 use rflasher_core::error::{Error, Result};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::{opcodes, SpiCommand};
+use rflasher_core::spi::{SpiCommand, opcodes};
 
 /// Configuration for the dummy flash
 #[derive(Debug, Clone)]

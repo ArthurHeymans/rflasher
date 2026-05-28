@@ -96,10 +96,10 @@ fn parse_size(s: &str) -> Result<u32, String> {
     }
 
     // Try hex
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        if let Ok(n) = u32::from_str_radix(hex.trim(), 16) {
-            return Ok(n);
-        }
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
+        && let Ok(n) = u32::from_str_radix(hex.trim(), 16)
+    {
+        return Ok(n);
     }
 
     // Try with suffix

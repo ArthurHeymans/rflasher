@@ -209,13 +209,13 @@ impl Layout {
     /// Validate the layout against a chip size
     pub fn validate(&self, chip_size: u32) -> Result<(), LayoutError> {
         // Check chip size matches if specified
-        if let Some(expected) = self.chip_size {
-            if expected != chip_size {
-                return Err(LayoutError::ChipSizeMismatch {
-                    expected,
-                    actual: chip_size,
-                });
-            }
+        if let Some(expected) = self.chip_size
+            && expected != chip_size
+        {
+            return Err(LayoutError::ChipSizeMismatch {
+                expected,
+                actual: chip_size,
+            });
         }
 
         // Check all regions are within chip bounds

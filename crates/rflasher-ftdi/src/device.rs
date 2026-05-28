@@ -6,7 +6,7 @@
 use std::io::{Read, Write};
 use std::time::Duration;
 
-use ftdi::{find_by_vid_pid, BitMode, Device, Interface};
+use ftdi::{BitMode, Device, Interface, find_by_vid_pid};
 use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::default_execute_with_vec;

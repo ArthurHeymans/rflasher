@@ -8,10 +8,10 @@ use std::fs;
 #[cfg(all(feature = "std", target_os = "linux"))]
 use std::path::Path;
 
-use crate::amd_pci::{find_chipset as find_amd_chipset_entry, AmdChipsetEnable, AMD_VID};
-use crate::error::{InternalError, PciAccessError};
-use crate::intel_pci::{find_chipset, INTEL_VID};
 use crate::DetectedChipset;
+use crate::amd_pci::{AMD_VID, AmdChipsetEnable, find_chipset as find_amd_chipset_entry};
+use crate::error::{InternalError, PciAccessError};
+use crate::intel_pci::{INTEL_VID, find_chipset};
 
 /// PCI device information
 #[derive(Debug, Clone)]

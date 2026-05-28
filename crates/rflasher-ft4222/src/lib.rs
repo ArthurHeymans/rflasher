@@ -100,7 +100,7 @@ mod error;
 mod protocol;
 
 #[cfg(any(feature = "std", feature = "wasm"))]
-pub use device::{parse_options, Ft4222, Ft4222DeviceInfo};
+pub use device::{Ft4222, Ft4222DeviceInfo, parse_options};
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{Ft4222Error, Result};
 #[cfg(any(feature = "std", feature = "wasm"))]

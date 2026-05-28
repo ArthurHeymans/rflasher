@@ -88,7 +88,7 @@ pub mod device;
 pub mod error;
 
 // Re-exports
-pub use device::{parse_options, LinuxGpioSpi, LinuxGpioSpiConfig};
+pub use device::{LinuxGpioSpi, LinuxGpioSpiConfig, parse_options};
 pub use error::{LinuxGpioError, Result};
 
 /// Open a Linux GPIO SPI device and return a boxed SpiMaster

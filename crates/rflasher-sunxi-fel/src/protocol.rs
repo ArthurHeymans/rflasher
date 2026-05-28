@@ -9,8 +9,8 @@
 //! All multi-byte values are little-endian.
 
 use crate::error::{Error, Result};
-use nusb::transfer::{Buffer, Bulk, In, Out};
 use nusb::Endpoint;
+use nusb::transfer::{Buffer, Bulk, In, Out};
 use std::time::Duration;
 
 /// Allwinner FEL USB Vendor ID

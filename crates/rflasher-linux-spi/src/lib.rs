@@ -62,7 +62,7 @@ pub mod device;
 pub mod error;
 
 // Re-exports
-pub use device::{mode, parse_options, LinuxSpi, LinuxSpiConfig};
+pub use device::{LinuxSpi, LinuxSpiConfig, mode, parse_options};
 pub use error::{LinuxSpiError, Result};
 
 /// Open a Linux SPI device and return a boxed SpiMaster

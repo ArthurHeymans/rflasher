@@ -111,7 +111,7 @@ mod protocol;
 
 // Re-exports: same public API regardless of backend
 #[cfg(all(feature = "std", not(feature = "native"), not(feature = "wasm")))]
-pub use device::{parse_options, Ftdi, FtdiDeviceInfo};
+pub use device::{Ftdi, FtdiDeviceInfo, parse_options};
 #[cfg(all(feature = "std", not(feature = "native"), not(feature = "wasm")))]
 pub use error::{FtdiError, Result};
 
@@ -119,7 +119,7 @@ pub use error::{FtdiError, Result};
 #[cfg(any(feature = "native", feature = "wasm"))]
 pub use rsftdi_device::Ftdi;
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
-pub use rsftdi_device::{parse_options, FtdiDeviceInfo};
+pub use rsftdi_device::{FtdiDeviceInfo, parse_options};
 #[cfg(any(feature = "native", feature = "wasm"))]
 pub use rsftdi_error::{FtdiError, Result};
 

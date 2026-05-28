@@ -10,10 +10,10 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use super::Features;
 use super::types::{
     ChipTestStatus, EraseBlock, EraseRegion, FlashChip, TestStatus, WriteGranularity,
 };
-use super::Features;
 
 /// Error type for chip database operations
 #[derive(Debug, thiserror::Error)]
@@ -117,11 +117,7 @@ impl From<FeaturesDef> for Features {
         .fold(
             Features::empty(),
             |acc, (enabled, flag)| {
-                if enabled {
-                    acc | flag
-                } else {
-                    acc
-                }
+                if enabled { acc | flag } else { acc }
             },
         )
     }

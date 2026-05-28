@@ -394,11 +394,11 @@ impl SpiMaster for LinuxSpi {
 fn get_max_kernel_buf_size() -> usize {
     // Try to read from sysfs
     if let Ok(content) = std::fs::read_to_string(BUF_SIZE_SYSFS) {
-        if let Ok(size) = content.trim().parse::<usize>() {
-            if size > 0 {
-                log::debug!("linux_spi: Using buffer size {} from sysfs", size);
-                return size;
-            }
+        if let Ok(size) = content.trim().parse::<usize>()
+            && size > 0
+        {
+            log::debug!("linux_spi: Using buffer size {} from sysfs", size);
+            return size;
         }
         log::warn!("linux_spi: Invalid buffer size in {}", BUF_SIZE_SYSFS);
     } else {

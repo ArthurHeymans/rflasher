@@ -54,10 +54,10 @@ pub fn list_chips(db: &ChipDatabase, vendor_filter: Option<&str>) {
 
     for chip in db.iter() {
         // Apply vendor filter if specified
-        if let Some(vendor) = vendor_filter {
-            if !chip.vendor.to_lowercase().contains(&vendor.to_lowercase()) {
-                continue;
-            }
+        if let Some(vendor) = vendor_filter
+            && !chip.vendor.to_lowercase().contains(&vendor.to_lowercase())
+        {
+            continue;
         }
 
         let size_str = super::format_size(chip.total_size);

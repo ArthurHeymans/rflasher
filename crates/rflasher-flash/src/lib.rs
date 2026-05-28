@@ -55,8 +55,8 @@ mod registry;
 
 pub use handle::{ChipInfo, FlashHandle};
 pub use registry::{
-    available_programmers, open_flash, open_spi_programmer, parse_programmer_params,
-    programmer_names_short, BoxedSpiMaster, ProgrammerInfo, ProgrammerParams,
+    BoxedSpiMaster, ProgrammerInfo, ProgrammerParams, available_programmers, open_flash,
+    open_spi_programmer, parse_programmer_params, programmer_names_short,
 };
 
 // Re-export core types that CLI needs

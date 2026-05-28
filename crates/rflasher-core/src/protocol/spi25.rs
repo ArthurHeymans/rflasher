@@ -20,7 +20,7 @@
 
 use crate::error::{Error, Result};
 use crate::programmer::{SpiFeatures, SpiMaster};
-use crate::spi::{opcodes, AddressWidth, IoMode, SpiCommand};
+use crate::spi::{AddressWidth, IoMode, SpiCommand, opcodes};
 use maybe_async::maybe_async;
 
 // Timing constants for SPI flash operations

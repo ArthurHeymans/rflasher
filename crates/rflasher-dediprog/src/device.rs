@@ -11,13 +11,13 @@
 use std::time::Duration;
 
 use maybe_async::maybe_async;
-use nusb::transfer::{Buffer, Bulk, In, Out};
 use nusb::Endpoint;
 #[cfg(feature = "std")]
 use nusb::MaybeFuture;
+use nusb::transfer::{Buffer, Bulk, In, Out};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
-use rflasher_core::spi::{check_io_mode_supported, opcodes, SpiCommand};
+use rflasher_core::spi::{SpiCommand, check_io_mode_supported, opcodes};
 
 use crate::error::{DediprogError, Result};
 use crate::protocol::*;
