@@ -22,6 +22,11 @@
 //!
 //! - flashprog/amd_spi100.c - Original C implementation
 
+#![cfg_attr(
+    not(all(feature = "std", target_os = "linux")),
+    allow(dead_code, unused_imports)
+)]
+
 use crate::controller::Controller;
 use crate::error::InternalError;
 use crate::physmap::PhysMap;

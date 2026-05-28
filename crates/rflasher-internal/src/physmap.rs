@@ -9,6 +9,11 @@
 //! Accessing physical memory is inherently unsafe and requires root privileges.
 //! The mapping functions ensure proper alignment and size constraints.
 
+#![cfg_attr(
+    not(all(feature = "std", target_os = "linux")),
+    allow(unused_variables)
+)]
+
 use crate::error::InternalError;
 
 /// A mapped region of physical memory
@@ -232,6 +237,32 @@ impl PhysMap {
     }
     pub fn size(&self) -> usize {
         0
+    }
+}
+
+impl crate::host::MmioAccess for PhysMap {
+    fn read8(&self, offset: usize) -> u8 {
+        self.read8(offset)
+    }
+
+    fn read16(&self, offset: usize) -> u16 {
+        self.read16(offset)
+    }
+
+    fn read32(&self, offset: usize) -> u32 {
+        self.read32(offset)
+    }
+
+    fn write8(&self, offset: usize, value: u8) {
+        self.write8(offset, value);
+    }
+
+    fn write16(&self, offset: usize, value: u16) {
+        self.write16(offset, value);
+    }
+
+    fn write32(&self, offset: usize, value: u32) {
+        self.write32(offset, value);
     }
 }
 
