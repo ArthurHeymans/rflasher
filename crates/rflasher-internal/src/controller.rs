@@ -5,6 +5,7 @@
 //! awkward enum matching.
 
 use crate::error::InternalError;
+use crate::ichspi::SpiMode;
 use rflasher_core::error::Result as CoreResult;
 use rflasher_core::programmer::SpiFeatures;
 use rflasher_core::spi::SpiCommand;
@@ -40,6 +41,14 @@ pub trait Controller {
 
     /// Get a human-readable name for this controller type
     fn controller_name(&self) -> &'static str;
+
+    /// Get the controller sequencing mode reported through the high-level API.
+    ///
+    /// Controllers without Intel-style sequencing report software sequencing so
+    /// callers do not need concrete-type downcasts.
+    fn spi_mode(&self) -> SpiMode {
+        SpiMode::SoftwareSequencing
+    }
 
     // SpiMaster-like methods that we need for InternalProgrammer
 

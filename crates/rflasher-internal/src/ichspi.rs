@@ -18,16 +18,85 @@
 //! - **Software Sequencing**: We control the SPI protocol directly.
 //!   More flexible but may not be available on locked-down systems.
 
+#![cfg_attr(
+    all(feature = "std", not(target_os = "linux")),
+    allow(dead_code, unused_imports)
+)]
+
 use crate::DetectedChipset;
 use crate::chipset::IchChipset;
 use crate::controller::Controller;
 use crate::error::InternalError;
+#[cfg(all(feature = "std", target_os = "linux"))]
+use crate::host::LinuxHost;
+use crate::host::{Bdf, HostAccess, MmioAccess, PciConfigAccess};
 use crate::ich_regs::*;
-use crate::pci::{
-    pci_read_config8, pci_read_config32, pci_read_config32_direct, pci_write_config8,
-};
-use crate::physmap::PhysMap;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
+
+#[inline]
+fn spin_loop() {
+    core::hint::spin_loop();
+}
+
+#[cfg(all(feature = "std", target_os = "linux"))]
+struct Deadline {
+    end_sec: i64,
+    end_nsec: i64,
+}
+
+#[cfg(all(feature = "std", target_os = "linux"))]
+impl Deadline {
+    fn new(timeout_us: u32) -> Self {
+        let mut start = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: clock_gettime writes to a valid stack timespec.
+        unsafe {
+            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut start);
+        }
+
+        let timeout_ns = (timeout_us as i64) * 1000;
+        let end_nsec = start.tv_nsec + timeout_ns;
+        let end_sec = start.tv_sec + (end_nsec / 1_000_000_000);
+        let end_nsec = end_nsec % 1_000_000_000;
+
+        Self { end_sec, end_nsec }
+    }
+
+    fn expired(&mut self) -> bool {
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: clock_gettime writes to a valid stack timespec.
+        unsafe {
+            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
+        }
+
+        now.tv_sec > self.end_sec || (now.tv_sec == self.end_sec && now.tv_nsec >= self.end_nsec)
+    }
+}
+
+#[cfg(not(feature = "std"))]
+struct Deadline {
+    polls_left: u32,
+}
+
+#[cfg(not(feature = "std"))]
+impl Deadline {
+    fn new(timeout_us: u32) -> Self {
+        Self {
+            polls_left: timeout_us.saturating_mul(64).max(1),
+        }
+    }
+
+    fn expired(&mut self) -> bool {
+        let expired = self.polls_left == 0;
+        self.polls_left = self.polls_left.saturating_sub(1);
+        expired
+    }
+}
 use rflasher_core::programmer::SpiFeatures;
 use rflasher_core::spi::SpiCommand;
 
@@ -49,22 +118,82 @@ pub enum SpiMode {
 impl SpiMode {
     /// Parse from string (for CLI parameter)
     pub fn parse(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "auto" => Some(Self::Auto),
-            "hwseq" | "hardware" | "hw" => Some(Self::HardwareSequencing),
-            "swseq" | "software" | "sw" => Some(Self::SoftwareSequencing),
-            _ => None,
+        if s.eq_ignore_ascii_case("auto") {
+            Some(Self::Auto)
+        } else if s.eq_ignore_ascii_case("hwseq")
+            || s.eq_ignore_ascii_case("hardware")
+            || s.eq_ignore_ascii_case("hw")
+        {
+            Some(Self::HardwareSequencing)
+        } else if s.eq_ignore_ascii_case("swseq")
+            || s.eq_ignore_ascii_case("software")
+            || s.eq_ignore_ascii_case("sw")
+        {
+            Some(Self::SoftwareSequencing)
+        } else {
+            None
         }
     }
 }
 
-impl std::fmt::Display for SpiMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for SpiMode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Auto => write!(f, "auto"),
             Self::HardwareSequencing => write!(f, "hwseq"),
             Self::SoftwareSequencing => write!(f, "swseq"),
         }
+    }
+}
+
+/// Gets the SPI BAR physical address using host-provided PCI config access.
+///
+/// This helper is independent from Linux sysfs and can be exercised by
+/// embedded firmware or fake hosts. It covers both PCH100+ hidden SPI function
+/// BAR discovery and legacy RCBA-relative SPI BAR discovery.
+pub fn get_spibar_address_with_host<H: PciConfigAccess>(
+    host: &H,
+    chipset: &DetectedChipset,
+) -> Result<u64, InternalError> {
+    let generation = chipset.chipset_type();
+
+    if generation.is_pch100_compatible() {
+        const SPI_FUNCTION: u8 = 5;
+        let spi_bdf = Bdf::with_segment(chipset.domain, chipset.bus, chipset.device, SPI_FUNCTION);
+        let spibar_raw = host.read32(spi_bdf, PCI_REG_SPIBAR as u16)?;
+        let addr = spibar_raw & 0xffff_f000;
+
+        if addr == 0 || addr == 0xffff_f000 {
+            return Err(InternalError::ChipsetEnable(
+                "SPIBAR is invalid - SPI controller may be hidden or disabled by firmware",
+            ));
+        }
+
+        Ok(addr as u64)
+    } else if generation.is_ich9_compatible() || generation == IchChipset::Ich7 {
+        let lpc_bdf = Bdf::with_segment(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        let rcba = host.read32(lpc_bdf, PCI_REG_RCBA as u16)?;
+        if rcba & 1 == 0 {
+            return Err(InternalError::ChipsetEnable("RCBA not enabled"));
+        }
+
+        let rcba_base = (rcba & !0x3fff) as u64;
+        let spi_offset = if generation == IchChipset::Ich7 {
+            RCBA_SPI_OFFSET_ICH7
+        } else {
+            RCBA_SPI_OFFSET_ICH9
+        };
+
+        Ok(rcba_base + spi_offset as u64)
+    } else {
+        Err(InternalError::NotSupported(
+            "Unsupported chipset generation",
+        ))
     }
 }
 
@@ -177,13 +306,16 @@ impl Default for Opcodes {
 }
 
 /// Intel ICH/PCH SPI Controller
-#[cfg(all(feature = "std", target_os = "linux"))]
-pub struct IchSpiController {
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+pub struct IchSpiController<H: HostAccess> {
+    /// Platform access backend
+    host: H,
     /// Memory-mapped SPI registers
-    spibar: PhysMap,
+    spibar: H::MmioRegion,
     /// Chipset generation
     generation: IchChipset,
     /// PCI location of LPC/eSPI bridge
+    lpc_segment: u16,
     lpc_bus: u8,
     lpc_device: u8,
     lpc_function: u8,
@@ -210,17 +342,31 @@ pub struct IchSpiController {
 }
 
 #[cfg(all(feature = "std", target_os = "linux"))]
-impl IchSpiController {
-    /// Initialize a new SPI controller for the detected chipset
+impl IchSpiController<LinuxHost> {
+    /// Initialize a new SPI controller for the detected chipset using Linux host access.
     pub fn new(chipset: &DetectedChipset, mode: SpiMode) -> Result<Self, InternalError> {
+        Self::new_with_host(LinuxHost::new(), chipset, mode)
+    }
+}
+
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+impl<H: HostAccess> IchSpiController<H> {
+    /// Initialize a new SPI controller for the detected chipset.
+    pub fn new_with_host(
+        host: H,
+        chipset: &DetectedChipset,
+        mode: SpiMode,
+    ) -> Result<Self, InternalError> {
         let generation = chipset.chipset_type();
 
         // Get SPI BAR address
-        let spibar_addr = Self::get_spibar_address(chipset)?;
+        let spibar_addr = get_spibar_address_with_host(&host, chipset)?;
         log::debug!("SPI BAR at physical address: {:#x}", spibar_addr);
 
         // Map the SPI registers
-        let spibar = PhysMap::new(spibar_addr, 0x200)?;
+        // SAFETY: SPIBAR was discovered from chipset PCI configuration and is
+        // the controller register window for the selected chipset.
+        let spibar = unsafe { host.map_mmio(spibar_addr, 0x200)? };
 
         // Initialize register offsets based on generation
         let (swseq, hwseq) = if generation.is_pch100_compatible() {
@@ -269,8 +415,10 @@ impl IchSpiController {
         };
 
         let mut controller = Self {
+            host,
             spibar,
             generation,
+            lpc_segment: chipset.domain,
             lpc_bus: chipset.bus,
             lpc_device: chipset.device,
             lpc_function: chipset.function,
@@ -290,89 +438,6 @@ impl IchSpiController {
         controller.init()?;
 
         Ok(controller)
-    }
-
-    /// Get the SPI BAR physical address from PCI config space
-    fn get_spibar_address(chipset: &DetectedChipset) -> Result<u64, InternalError> {
-        let r#gen = chipset.chipset_type();
-
-        if r#gen.is_pch100_compatible() {
-            // PCH100+ (Sunrise Point and later): SPI controller is a separate PCI device
-            // at function 5 (00:1f.5), not part of the LPC bridge at function 0.
-            // The chipset detection finds the LPC bridge, but we need to read BAR0
-            // from the SPI controller device.
-            //
-            // IMPORTANT: The SPI device is often hidden by firmware (vendor/device IDs
-            // read as 0xFFFF), so it doesn't appear in sysfs. We must use direct I/O
-            // port access (PCI Configuration Mechanism 1) to read from it.
-            const SPI_FUNCTION: u8 = 5;
-
-            // Use direct I/O port access since the SPI device may be hidden
-            let spibar_raw = pci_read_config32_direct(
-                chipset.bus,
-                chipset.device,
-                SPI_FUNCTION,
-                PCI_REG_SPIBAR,
-            )?;
-
-            // SPIBAR is a 32-bit memory BAR. Mask off the lower 12 bits (BAR type indicators)
-            // to get the physical address (4KB aligned).
-            let addr = (spibar_raw & 0xFFFF_F000) as u64;
-
-            log::debug!(
-                "Raw SPIBAR register: {:#010x}, masked addr: {:#010x}",
-                spibar_raw,
-                addr
-            );
-
-            if addr == 0 {
-                // SPIBAR is 0 - the SPI device may be hidden or disabled
-                // Note: RCBA does NOT exist on PCH100+, so we cannot fall back to it
-                return Err(InternalError::ChipsetEnable(
-                    "SPIBAR is 0 - SPI controller may be hidden or disabled by firmware",
-                ));
-            }
-
-            log::debug!(
-                "Read SPIBAR {:#x} from PCI {:02x}:{:02x}.{} (via direct I/O)",
-                addr,
-                chipset.bus,
-                chipset.device,
-                SPI_FUNCTION
-            );
-
-            Ok(addr)
-        } else if r#gen.is_ich9_compatible() || r#gen == IchChipset::Ich7 {
-            // ICH7-ICH10, 5-9 Series: SPI is at an offset within RCBA
-            Self::get_spibar_via_rcba(chipset)
-        } else {
-            Err(InternalError::NotSupported(
-                "Unsupported chipset generation",
-            ))
-        }
-    }
-
-    /// Get SPI BAR via RCBA (Root Complex Base Address)
-    fn get_spibar_via_rcba(chipset: &DetectedChipset) -> Result<u64, InternalError> {
-        // Read RCBA from LPC bridge config space
-        let rcba = pci_read_config32(chipset.bus, chipset.device, chipset.function, PCI_REG_RCBA)?;
-
-        // Check if RCBA is enabled (bit 0)
-        if rcba & 1 == 0 {
-            return Err(InternalError::ChipsetEnable("RCBA not enabled"));
-        }
-
-        // RCBA is 32-bit aligned, mask off lower bits
-        let rcba_base = (rcba & !0x3FFF) as u64;
-
-        // SPI offset depends on chipset generation
-        let spi_offset = if chipset.chipset_type() == IchChipset::Ich7 {
-            RCBA_SPI_OFFSET_ICH7
-        } else {
-            RCBA_SPI_OFFSET_ICH9
-        };
-
-        Ok(rcba_base + spi_offset as u64)
     }
 
     /// Initialize the SPI controller
@@ -1103,12 +1168,13 @@ impl IchSpiController {
 
     /// Enable BIOS write access via BIOS_CNTL register
     pub fn enable_bios_write(&mut self) -> Result<(), InternalError> {
-        let bios_cntl = pci_read_config8(
+        let lpc_bdf = Bdf::with_segment(
+            self.lpc_segment,
             self.lpc_bus,
             self.lpc_device,
             self.lpc_function,
-            PCI_REG_BIOS_CNTL,
-        )?;
+        );
+        let bios_cntl = self.host.read8(lpc_bdf, PCI_REG_BIOS_CNTL as u16)?;
 
         log::debug!("BIOS_CNTL: {:#04x}", bios_cntl);
 
@@ -1126,21 +1192,11 @@ impl IchSpiController {
         // Enable BIOS Write Enable
         if bios_cntl & BIOS_CNTL_BWE == 0 {
             let new_val = bios_cntl | BIOS_CNTL_BWE;
-            pci_write_config8(
-                self.lpc_bus,
-                self.lpc_device,
-                self.lpc_function,
-                PCI_REG_BIOS_CNTL,
-                new_val,
-            )?;
+            self.host
+                .write8(lpc_bdf, PCI_REG_BIOS_CNTL as u16, new_val)?;
 
             // Verify
-            let verify = pci_read_config8(
-                self.lpc_bus,
-                self.lpc_device,
-                self.lpc_function,
-                PCI_REG_BIOS_CNTL,
-            )?;
+            let verify = self.host.read8(lpc_bdf, PCI_REG_BIOS_CNTL as u16)?;
 
             if verify & BIOS_CNTL_BWE == 0 {
                 log::error!("Failed to enable BIOS Write Enable");
@@ -1164,6 +1220,26 @@ impl IchSpiController {
     #[allow(dead_code)]
     fn is_locked(&self) -> bool {
         self.locked
+    }
+
+    /// Return the BIOS region from the Intel Flash Descriptor, if valid.
+    ///
+    /// The tuple is `(base, limit)` in flash offsets, inclusive. This is used
+    /// by firmware callers to translate top-of-4GiB memory-mapped BIOS
+    /// addresses back to SPI flash offsets.
+    pub fn get_bios_region(&self) -> Option<(u32, u32)> {
+        if !self.desc_valid || self.generation == IchChipset::Ich7 {
+            return None;
+        }
+
+        let freg1 = self.spibar.read32(ICH9_REG_FREG0 + 4);
+        let base = (freg1 & 0x7fff) << 12;
+        let limit = (((freg1 >> 16) & 0x7fff) << 12) | 0x0fff;
+        if base <= limit {
+            Some((base, limit))
+        } else {
+            None
+        }
     }
 
     /// Get the chipset generation
@@ -1192,19 +1268,7 @@ impl IchSpiController {
     fn hwseq_wait_for_cycle(&self, timeout_us: u32) -> Result<(), InternalError> {
         let done_or_err = HSFS_FDONE | HSFS_FCERR;
 
-        // Get start time
-        let mut start = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        unsafe {
-            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut start);
-        }
-
-        let timeout_ns = (timeout_us as i64) * 1000;
-        let end_nsec = start.tv_nsec as i64 + timeout_ns;
-        let end_sec = start.tv_sec as i64 + (end_nsec / 1_000_000_000);
-        let end_nsec = end_nsec % 1_000_000_000;
+        let mut deadline = Deadline::new(timeout_us);
 
         loop {
             let hsfs = self.spibar.read16(ICH9_REG_HSFS);
@@ -1220,23 +1284,12 @@ impl IchSpiController {
                 return Ok(());
             }
 
-            // Check timeout using clock_gettime (busy loop for precision)
-            let mut now = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            unsafe {
-                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
-            }
-
-            if now.tv_sec as i64 > end_sec
-                || (now.tv_sec as i64 == end_sec && now.tv_nsec as i64 >= end_nsec)
-            {
+            if deadline.expired() {
                 return Err(InternalError::Io("Hardware sequencing timeout"));
             }
 
             // Hint to CPU that we're spinning (reduces power, improves perf on hyperthreaded cores)
-            std::hint::spin_loop();
+            spin_loop();
         }
     }
 
@@ -1462,18 +1515,7 @@ impl IchSpiController {
     /// previous one has completed.
     #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
     fn swseq_wait_idle(&self, timeout_us: u32) -> Result<(), InternalError> {
-        let mut start = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        unsafe {
-            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut start);
-        }
-
-        let timeout_ns = (timeout_us as i64) * 1000;
-        let end_nsec = start.tv_nsec as i64 + timeout_ns;
-        let end_sec = start.tv_sec as i64 + (end_nsec / 1_000_000_000);
-        let end_nsec = end_nsec % 1_000_000_000;
+        let mut deadline = Deadline::new(timeout_us);
 
         loop {
             let ssfs = self.spibar.read8(self.swseq.ssfsc);
@@ -1482,21 +1524,11 @@ impl IchSpiController {
                 return Ok(());
             }
 
-            let mut now = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            unsafe {
-                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
-            }
-
-            if now.tv_sec as i64 > end_sec
-                || (now.tv_sec as i64 == end_sec && now.tv_nsec as i64 >= end_nsec)
-            {
+            if deadline.expired() {
                 return Err(InternalError::Io("SCIP never cleared (swseq busy timeout)"));
             }
 
-            std::hint::spin_loop();
+            spin_loop();
         }
     }
 
@@ -1505,18 +1537,7 @@ impl IchSpiController {
     fn swseq_wait_complete(&self, timeout_us: u32) -> Result<(), InternalError> {
         let done_or_err = SSFS_FDONE | SSFS_FCERR;
 
-        let mut start = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        unsafe {
-            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut start);
-        }
-
-        let timeout_ns = (timeout_us as i64) * 1000;
-        let end_nsec = start.tv_nsec as i64 + timeout_ns;
-        let end_sec = start.tv_sec as i64 + (end_nsec / 1_000_000_000);
-        let end_nsec = end_nsec % 1_000_000_000;
+        let mut deadline = Deadline::new(timeout_us);
 
         loop {
             let ssfsc = self.spibar.read32(self.swseq.ssfsc);
@@ -1535,21 +1556,11 @@ impl IchSpiController {
                 return Ok(());
             }
 
-            let mut now = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            unsafe {
-                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
-            }
-
-            if now.tv_sec as i64 > end_sec
-                || (now.tv_sec as i64 == end_sec && now.tv_nsec as i64 >= end_nsec)
-            {
+            if deadline.expired() {
                 return Err(InternalError::Io("Software sequencing timeout"));
             }
 
-            std::hint::spin_loop();
+            spin_loop();
         }
     }
 
@@ -1665,18 +1676,7 @@ impl IchSpiController {
     /// previous one has completed.
     #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
     fn ich7_swseq_wait_idle(&self, timeout_us: u32) -> Result<(), InternalError> {
-        let mut start = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        unsafe {
-            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut start);
-        }
-
-        let timeout_ns = (timeout_us as i64) * 1000;
-        let end_nsec = start.tv_nsec as i64 + timeout_ns;
-        let end_sec = start.tv_sec as i64 + (end_nsec / 1_000_000_000);
-        let end_nsec = end_nsec % 1_000_000_000;
+        let mut deadline = Deadline::new(timeout_us);
 
         loop {
             let spis = self.spibar.read16(self.ich7_swseq.spis);
@@ -1685,23 +1685,13 @@ impl IchSpiController {
                 return Ok(());
             }
 
-            let mut now = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            unsafe {
-                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
-            }
-
-            if now.tv_sec as i64 > end_sec
-                || (now.tv_sec as i64 == end_sec && now.tv_nsec as i64 >= end_nsec)
-            {
+            if deadline.expired() {
                 return Err(InternalError::Io(
                     "ICH7: SCIP never cleared (swseq busy timeout)",
                 ));
             }
 
-            std::hint::spin_loop();
+            spin_loop();
         }
     }
 
@@ -1710,18 +1700,7 @@ impl IchSpiController {
     fn ich7_swseq_wait_complete(&self, timeout_us: u32) -> Result<(), InternalError> {
         let done_or_err = SPIS_CDS | SPIS_FCERR;
 
-        let mut start = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        unsafe {
-            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut start);
-        }
-
-        let timeout_ns = (timeout_us as i64) * 1000;
-        let end_nsec = start.tv_nsec as i64 + timeout_ns;
-        let end_sec = start.tv_sec as i64 + (end_nsec / 1_000_000_000);
-        let end_nsec = end_nsec % 1_000_000_000;
+        let mut deadline = Deadline::new(timeout_us);
 
         loop {
             let spis = self.spibar.read16(self.ich7_swseq.spis);
@@ -1741,21 +1720,11 @@ impl IchSpiController {
                 return Ok(());
             }
 
-            let mut now = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            unsafe {
-                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
-            }
-
-            if now.tv_sec as i64 > end_sec
-                || (now.tv_sec as i64 == end_sec && now.tv_nsec as i64 >= end_nsec)
-            {
+            if deadline.expired() {
                 return Err(InternalError::Io("ICH7: Software sequencing timeout"));
             }
 
-            std::hint::spin_loop();
+            spin_loop();
         }
     }
 
@@ -2158,7 +2127,7 @@ impl IchSpiController {
         // Check we have RDSR opcode
         if self.find_opcode_index(JEDEC_RDSR).is_none() {
             // No RDSR available, just wait a fixed time
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            self.host.delay_us(100_000);
             return Ok(());
         }
 
@@ -2175,7 +2144,7 @@ impl IchSpiController {
             }
 
             // Small delay between polls
-            std::thread::sleep(std::time::Duration::from_micros(100));
+            self.host.delay_us(100);
         }
 
         Err(InternalError::Io("Timeout waiting for WIP to clear"))
@@ -2411,7 +2380,7 @@ impl IchSpiController {
         // Check we have RDSR opcode
         if self.find_opcode_index(JEDEC_RDSR).is_none() {
             // No RDSR available, just wait a fixed time
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            self.host.delay_us(100_000);
             return Ok(());
         }
 
@@ -2428,15 +2397,15 @@ impl IchSpiController {
             }
 
             // Small delay between polls
-            std::thread::sleep(std::time::Duration::from_micros(100));
+            self.host.delay_us(100);
         }
 
         Err(InternalError::Io("Timeout waiting for WIP to clear"))
     }
 }
 
-#[cfg(all(feature = "std", target_os = "linux"))]
-impl Controller for IchSpiController {
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+impl<H: HostAccess> Controller for IchSpiController<H> {
     fn is_locked(&self) -> bool {
         self.locked
     }
@@ -2487,6 +2456,10 @@ impl Controller for IchSpiController {
 
     fn controller_name(&self) -> &'static str {
         "Intel ICH/PCH"
+    }
+
+    fn spi_mode(&self) -> SpiMode {
+        self.mode
     }
 
     fn features(&self) -> SpiFeatures {
@@ -2602,8 +2575,8 @@ impl Controller for IchSpiController {
     }
 }
 
-#[cfg(all(feature = "std", target_os = "linux"))]
-impl IchSpiController {
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+impl<H: HostAccess> IchSpiController<H> {
     /// Map InternalError to CoreError
     fn map_internal_error(e: InternalError) -> CoreError {
         match e {
@@ -2624,17 +2597,112 @@ impl IchSpiController {
     }
 }
 
-// Non-Linux stub
-#[cfg(not(all(feature = "std", target_os = "linux")))]
+// Unsupported std non-Linux stub.
+#[cfg(all(feature = "std", not(target_os = "linux")))]
 pub struct IchSpiController {
     _private: (),
 }
 
-#[cfg(not(all(feature = "std", target_os = "linux")))]
+#[cfg(all(feature = "std", not(target_os = "linux")))]
 impl IchSpiController {
     pub fn new(_chipset: &DetectedChipset, _mode: SpiMode) -> Result<Self, InternalError> {
         Err(InternalError::NotSupported(
-            "Intel internal programmer only supported on Linux",
+            "Intel internal programmer not available on this target",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::tests::FakeHost;
+    use crate::intel_pci::INTEL_CHIPSETS;
+
+    fn detected_with_generation(generation: IchChipset) -> DetectedChipset {
+        let enable = INTEL_CHIPSETS
+            .iter()
+            .find(|chipset| chipset.chipset == generation)
+            .expect("Intel chipset table entry for generation");
+
+        DetectedChipset {
+            enable,
+            domain: 0,
+            bus: 0,
+            device: 0x1f,
+            function: 0,
+            revision_id: 0,
+        }
+    }
+
+    #[test]
+    fn test_spimode_parse_is_no_alloc_case_insensitive() {
+        assert_eq!(SpiMode::parse("AUTO"), Some(SpiMode::Auto));
+        assert_eq!(SpiMode::parse("HwSeq"), Some(SpiMode::HardwareSequencing));
+        assert_eq!(
+            SpiMode::parse("software"),
+            Some(SpiMode::SoftwareSequencing)
+        );
+        assert_eq!(SpiMode::parse("invalid"), None);
+    }
+
+    #[test]
+    fn test_get_spibar_address_with_host_pch100_hidden_spi_function() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::Series100SunrisePoint);
+        let spi_bdf = Bdf::with_segment(chipset.domain, chipset.bus, chipset.device, 5);
+        host.set_config32(spi_bdf, PCI_REG_SPIBAR as u16, 0xfed1_c001);
+
+        let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
+
+        assert_eq!(spibar, 0xfed1_c000);
+    }
+
+    #[test]
+    fn test_get_spibar_address_with_host_rejects_all_ones_spibar() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::Series100SunrisePoint);
+        let spi_bdf = Bdf::with_segment(chipset.domain, chipset.bus, chipset.device, 5);
+        host.set_config32(spi_bdf, PCI_REG_SPIBAR as u16, u32::MAX);
+
+        let err = get_spibar_address_with_host(&host, &chipset).unwrap_err();
+
+        assert!(matches!(err, InternalError::ChipsetEnable(_)));
+    }
+
+    #[test]
+    fn test_get_spibar_address_with_host_legacy_rcba() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::Ich7);
+        let lpc_bdf = Bdf::with_segment(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        host.set_config32(lpc_bdf, PCI_REG_RCBA as u16, 0xfed1_8001);
+
+        let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
+
+        assert_eq!(spibar, 0xfed1_8000 + RCBA_SPI_OFFSET_ICH7 as u64);
+    }
+
+    #[test]
+    fn test_get_spibar_address_with_host_rejects_disabled_rcba() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::Ich7);
+        let lpc_bdf = Bdf::with_segment(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        host.set_config32(lpc_bdf, PCI_REG_RCBA as u16, 0xfed1_8000);
+
+        let err = get_spibar_address_with_host(&host, &chipset).unwrap_err();
+
+        assert!(matches!(
+            err,
+            InternalError::ChipsetEnable("RCBA not enabled")
+        ));
     }
 }

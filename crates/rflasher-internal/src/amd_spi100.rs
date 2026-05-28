@@ -22,15 +22,25 @@
 //!
 //! - flashprog/amd_spi100.c - Original C implementation
 
+#![cfg_attr(
+    not(all(feature = "std", target_os = "linux")),
+    allow(dead_code, unused_imports)
+)]
+
 use crate::controller::Controller;
 use crate::error::InternalError;
-use crate::physmap::PhysMap;
+#[cfg(all(feature = "std", target_os = "linux"))]
+use crate::host::LinuxHost;
+use crate::host::{HostAccess, MmioAccess};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{AddressWidth, SpiCommand};
 
 /// SPI100 FIFO size (in bytes)
 const SPI100_FIFO_SIZE: usize = 71;
+const SPI_FLASH_PAGE_SIZE: usize = 256;
+const SPI_FLASH_4K_SECTOR: u32 = 4096;
+const SPI_READY_POLL_LIMIT: u32 = 600_000;
 
 /// Maximum data transfer for read operations
 /// Account for up to 4 address bytes
@@ -182,12 +192,14 @@ const SPI_SPEEDS: [SpiSpeed; 8] = [
 ];
 
 /// AMD SPI100 Controller
-#[cfg(all(feature = "std", target_os = "linux"))]
-pub struct Spi100Controller {
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+pub struct Spi100Controller<H: HostAccess> {
+    /// Platform access backend
+    host: H,
     /// Memory-mapped SPI registers
-    spibar: PhysMap,
+    spibar: H::MmioRegion,
     /// Memory-mapped flash region (optional)
-    memory: Option<PhysMap>,
+    memory: Option<H::MmioRegion>,
     /// Size of memory-mapped region
     mapped_len: usize,
     /// Whether 4-byte addressing memory map is disabled
@@ -197,7 +209,7 @@ pub struct Spi100Controller {
 }
 
 #[cfg(all(feature = "std", target_os = "linux"))]
-impl Spi100Controller {
+impl Spi100Controller<LinuxHost> {
     /// Create a new SPI100 controller instance
     ///
     /// # Arguments
@@ -210,21 +222,45 @@ impl Spi100Controller {
         memory_addr: Option<u64>,
         mapped_len: usize,
     ) -> Result<Self, InternalError> {
-        // Map the SPI registers (256 bytes)
-        let spibar = PhysMap::new(spibar_addr, 256)?;
+        Self::new_with_host(LinuxHost::new(), spibar_addr, memory_addr, mapped_len)
+    }
+}
 
-        // Map the memory region if provided
-        let memory = if let Some(addr) = memory_addr {
-            if mapped_len > 0 {
-                Some(PhysMap::new(addr, mapped_len)?)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+impl<H: HostAccess> Spi100Controller<H> {
+    /// Create a new SPI100 controller instance using caller-provided host access.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - PCI/MMIO/delay backend for this execution environment
+    /// * `spibar_addr` - Physical address of SPI BAR
+    /// * `memory_addr` - Optional physical address of memory-mapped flash
+    /// * `mapped_len` - Size of memory-mapped flash region (0 if none)
+    pub fn new_with_host(
+        host: H,
+        spibar_addr: u64,
+        memory_addr: Option<u64>,
+        mapped_len: usize,
+    ) -> Result<Self, InternalError> {
+        // Map the SPI registers (256 bytes)
+        // SAFETY: `spibar_addr` comes from chipset enable code or the caller's
+        // platform-specific discovery and must name the SPI100 register window.
+        let spibar = unsafe { host.map_mmio(spibar_addr, 256)? };
+
+        // Map the memory region if provided. A zero address is treated as no
+        // usable memory window so reads fall back to the SPI command engine.
+        let memory = memory_addr
+            .filter(|&addr| addr != 0 && mapped_len > 0)
+            .map(|addr| {
+                // SAFETY: the optional memory window is supplied by chipset
+                // ROM range registers or the caller's platform discovery.
+                unsafe { host.map_mmio(addr, mapped_len) }
+            })
+            .transpose()?;
+        let mapped_len = memory.as_ref().map_or(0, |_| mapped_len);
 
         let mut controller = Self {
+            host,
             spibar,
             memory,
             mapped_len,
@@ -289,26 +325,10 @@ impl Spi100Controller {
         }
     }
 
-    /// Read multiple bytes from SPI register (FIFO)
-    /// Uses aligned 32-bit reads for efficiency
+    /// Read multiple bytes from SPI register (FIFO).
     fn readn(&self, reg: usize, data: &mut [u8]) {
-        let len = data.len();
-        let mut offset = 0;
-
-        // Read full 32-bit words
-        while offset + 4 <= len {
-            let val = self.read32(reg + offset);
-            data[offset] = val as u8;
-            data[offset + 1] = (val >> 8) as u8;
-            data[offset + 2] = (val >> 16) as u8;
-            data[offset + 3] = (val >> 24) as u8;
-            offset += 4;
-        }
-
-        // Read remaining bytes
-        while offset < len {
-            data[offset] = self.read8(reg + offset);
-            offset += 1;
+        for (offset, byte) in data.iter_mut().enumerate() {
+            *byte = self.read8(reg + offset);
         }
     }
 
@@ -381,7 +401,7 @@ impl Spi100Controller {
             }
 
             // Delay 1 microsecond
-            std::thread::sleep(std::time::Duration::from_micros(1));
+            self.host.delay_us(1);
             elapsed_us += 1;
         }
 
@@ -402,31 +422,8 @@ impl Spi100Controller {
             .as_ref()
             .ok_or(InternalError::Io("No memory mapping available"))?;
 
-        // Use aligned 64-bit reads for efficiency
-        let len = dst.len();
-        let mut offset = 0;
-
-        while offset + 8 <= len {
-            let addr = start + offset;
-            // Read as two 32-bit values (PhysMap doesn't have read64)
-            let lo = memory.read32(addr);
-            let hi = memory.read32(addr + 4);
-
-            dst[offset] = lo as u8;
-            dst[offset + 1] = (lo >> 8) as u8;
-            dst[offset + 2] = (lo >> 16) as u8;
-            dst[offset + 3] = (lo >> 24) as u8;
-            dst[offset + 4] = hi as u8;
-            dst[offset + 5] = (hi >> 8) as u8;
-            dst[offset + 6] = (hi >> 16) as u8;
-            dst[offset + 7] = (hi >> 24) as u8;
-            offset += 8;
-        }
-
-        // Read remaining bytes
-        while offset < len {
-            dst[offset] = memory.read8(start + offset);
-            offset += 1;
+        for (offset, byte) in dst.iter_mut().enumerate() {
+            *byte = memory.read8(start + offset);
         }
 
         Ok(())
@@ -609,6 +606,97 @@ impl Spi100Controller {
         self.write16(regs::SPEED_CFG, new_speed_cfg);
     }
 
+    fn write_enable(&self) -> Result<(), InternalError> {
+        self.send_command(&[rflasher_core::spi::opcodes::WREN], &mut [])
+    }
+
+    fn read_status(&self) -> Result<u8, InternalError> {
+        let mut status = [0u8; 1];
+        self.send_command(&[rflasher_core::spi::opcodes::RDSR], &mut status)?;
+        Ok(status[0])
+    }
+
+    fn wait_ready(&self) -> Result<(), InternalError> {
+        for _ in 0..SPI_READY_POLL_LIMIT {
+            if self.read_status()? & 0x01 == 0 {
+                return Ok(());
+            }
+            self.host.delay_us(100);
+        }
+
+        Err(InternalError::Io("SPI flash busy timeout"))
+    }
+
+    /// Write data using 3-byte Page Program commands.
+    pub fn write(&self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let end = addr as u64 + data.len() as u64;
+        if end > 16 * 1024 * 1024 {
+            return Err(InternalError::NotSupported(
+                "AMD SPI100 write currently supports 3-byte addresses only",
+            ));
+        }
+
+        let mut offset = 0usize;
+        while offset < data.len() {
+            let current_addr = addr + offset as u32;
+            let page_remaining =
+                SPI_FLASH_PAGE_SIZE - (current_addr as usize % SPI_FLASH_PAGE_SIZE);
+            let chunk_len = (data.len() - offset)
+                .min(SPI100_MAX_DATA_WRITE - 3)
+                .min(page_remaining);
+
+            self.write_enable()?;
+
+            let chunk = &data[offset..offset + chunk_len];
+            let mut writearr = [0u8; SPI100_FIFO_SIZE + 1];
+            writearr[0] = rflasher_core::spi::opcodes::PP;
+            writearr[1] = (current_addr >> 16) as u8;
+            writearr[2] = (current_addr >> 8) as u8;
+            writearr[3] = current_addr as u8;
+            writearr[4..4 + chunk_len].copy_from_slice(chunk);
+
+            self.send_command(&writearr[..4 + chunk_len], &mut [])?;
+            self.wait_ready()?;
+            offset += chunk_len;
+        }
+
+        Ok(())
+    }
+
+    /// Erase a 4 KiB-sector-aligned region using 3-byte Sector Erase commands.
+    pub fn erase(&self, addr: u32, len: u32) -> Result<(), InternalError> {
+        if addr & (SPI_FLASH_4K_SECTOR - 1) != 0 || len & (SPI_FLASH_4K_SECTOR - 1) != 0 {
+            return Err(InternalError::Io("Erase address/length not 4 KiB aligned"));
+        }
+
+        let end = addr as u64 + len as u64;
+        if end > 16 * 1024 * 1024 {
+            return Err(InternalError::NotSupported(
+                "AMD SPI100 erase currently supports 3-byte addresses only",
+            ));
+        }
+
+        let mut current = addr;
+        while current < addr + len {
+            self.write_enable()?;
+            let cmd = [
+                rflasher_core::spi::opcodes::SE_20,
+                (current >> 16) as u8,
+                (current >> 8) as u8,
+                current as u8,
+            ];
+            self.send_command(&cmd, &mut [])?;
+            self.wait_ready()?;
+            current += SPI_FLASH_4K_SECTOR;
+        }
+
+        Ok(())
+    }
+
     /// Get maximum data read size
     pub fn max_data_read(&self) -> usize {
         SPI100_MAX_DATA_READ
@@ -618,18 +706,67 @@ impl Spi100Controller {
     pub fn max_data_write(&self) -> usize {
         SPI100_MAX_DATA_WRITE
     }
+
+    fn execute_spi_command(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        // Build the write array: opcode + address + write data
+        let mut writearr = [0u8; SPI100_FIFO_SIZE + 1];
+        let mut write_len = 1;
+
+        // Opcode
+        writearr[0] = cmd.opcode;
+
+        // Add address if present
+        match cmd.address_width {
+            AddressWidth::None => {}
+            AddressWidth::ThreeByte => {
+                let addr = cmd.address.unwrap_or(0);
+                writearr[1] = (addr >> 16) as u8;
+                writearr[2] = (addr >> 8) as u8;
+                writearr[3] = addr as u8;
+                write_len += 3;
+            }
+            AddressWidth::FourByte => {
+                let addr = cmd.address.unwrap_or(0);
+                writearr[1] = (addr >> 24) as u8;
+                writearr[2] = (addr >> 16) as u8;
+                writearr[3] = (addr >> 8) as u8;
+                writearr[4] = addr as u8;
+                write_len += 4;
+            }
+        }
+
+        // Add write data if present
+        let write_data = cmd.write_data;
+        if !write_data.is_empty() {
+            let data_len = write_data.len().min(SPI100_FIFO_SIZE - write_len + 1);
+            writearr[write_len..write_len + data_len].copy_from_slice(&write_data[..data_len]);
+            write_len += data_len;
+        }
+
+        // Dummy cycles are not directly supported by SPI100 FIFO interface.
+        // The controller handles this internally for known commands.
+        if cmd.dummy_cycles > 0 {
+            log::debug!(
+                "Dummy cycles ({}) will be handled by controller",
+                cmd.dummy_cycles
+            );
+        }
+
+        self.send_command(&writearr[..write_len], cmd.read_buf)
+            .map_err(map_amd_error)
+    }
 }
 
-#[cfg(all(feature = "std", target_os = "linux"))]
-impl Drop for Spi100Controller {
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+impl<H: HostAccess> Drop for Spi100Controller<H> {
     fn drop(&mut self) {
         // Restore original alternate speed
         self.restore_altspeed();
     }
 }
 
-#[cfg(all(feature = "std", target_os = "linux"))]
-impl Controller for Spi100Controller {
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+impl<H: HostAccess> Controller for Spi100Controller<H> {
     fn is_locked(&self) -> bool {
         // AMD SPI100 doesn't have a lock bit like Intel
         false
@@ -669,18 +806,24 @@ impl Controller for Spi100Controller {
         })
     }
 
-    fn controller_write(&mut self, _addr: u32, _data: &[u8]) -> CoreResult<()> {
-        // AMD SPI100 uses SpiMaster for write operations, not OpaqueMaster
-        // Caller should use SpiMaster::execute() with appropriate SPI commands
-        log::warn!("OpaqueMaster::write() not supported for AMD SPI100 - use SpiMaster instead");
-        Err(CoreError::OpcodeNotSupported)
+    fn controller_write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
+        self.write(addr, data).map_err(|e| match e {
+            InternalError::AccessDenied { .. } => CoreError::RegionProtected,
+            InternalError::Io(_) => CoreError::WriteError { addr },
+            InternalError::NotSupported(_) => CoreError::AddressOutOfBounds,
+            _ => CoreError::ProgrammerError,
+        })
     }
 
-    fn controller_erase(&mut self, _addr: u32, _len: u32) -> CoreResult<()> {
-        // AMD SPI100 uses SpiMaster for erase operations, not OpaqueMaster
-        // Caller should use SpiMaster::execute() with appropriate SPI commands
-        log::warn!("OpaqueMaster::erase() not supported for AMD SPI100 - use SpiMaster instead");
-        Err(CoreError::OpcodeNotSupported)
+    fn controller_erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
+        self.erase(addr, len).map_err(|e| match e {
+            InternalError::AccessDenied { .. } => CoreError::RegionProtected,
+            InternalError::Io(_) => {
+                CoreError::EraseError(rflasher_core::error::EraseFailure::CommandFailed { addr })
+            }
+            InternalError::NotSupported(_) => CoreError::AddressOutOfBounds,
+            _ => CoreError::ProgrammerError,
+        })
     }
 
     fn controller_name(&self) -> &'static str {
@@ -688,33 +831,33 @@ impl Controller for Spi100Controller {
     }
 
     fn features(&self) -> SpiFeatures {
-        <Self as SpiMaster>::features(self)
+        SpiFeatures::empty()
     }
 
     fn max_read_len(&self) -> usize {
-        <Self as SpiMaster>::max_read_len(self)
+        SPI100_MAX_DATA_READ
     }
 
     fn max_write_len(&self) -> usize {
-        <Self as SpiMaster>::max_write_len(self)
+        SPI100_MAX_DATA_WRITE
     }
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        <Self as SpiMaster>::execute(self, cmd)
+        self.execute_spi_command(cmd)
     }
 
-    fn probe_opcode(&self, opcode: u8) -> bool {
-        <Self as SpiMaster>::probe_opcode(self, opcode)
+    fn probe_opcode(&self, _opcode: u8) -> bool {
+        true
     }
 }
 
-// Non-Linux stub
-#[cfg(not(all(feature = "std", target_os = "linux")))]
+// Unsupported std non-Linux stub.
+#[cfg(all(feature = "std", not(target_os = "linux")))]
 pub struct Spi100Controller {
     _private: (),
 }
 
-#[cfg(not(all(feature = "std", target_os = "linux")))]
+#[cfg(all(feature = "std", not(target_os = "linux")))]
 impl Spi100Controller {
     pub fn new(
         _spibar_addr: u64,
@@ -722,19 +865,19 @@ impl Spi100Controller {
         _mapped_len: usize,
     ) -> Result<Self, InternalError> {
         Err(InternalError::NotSupported(
-            "AMD SPI100 controller only supported on Linux",
+            "AMD SPI100 controller not available on this target",
         ))
     }
 
     pub fn send_command(&self, _writearr: &[u8], _readarr: &mut [u8]) -> Result<(), InternalError> {
         Err(InternalError::NotSupported(
-            "AMD SPI100 controller only supported on Linux",
+            "AMD SPI100 controller not available on this target",
         ))
     }
 
     pub fn read(&self, _chip_size: u64, _start: u32, _buf: &mut [u8]) -> Result<(), InternalError> {
         Err(InternalError::NotSupported(
-            "AMD SPI100 controller only supported on Linux",
+            "AMD SPI100 controller not available on this target",
         ))
     }
 
@@ -751,8 +894,11 @@ impl Spi100Controller {
 // SpiMaster trait implementation for AMD SPI100
 // =============================================================================
 
-#[cfg(all(feature = "std", target_os = "linux"))]
-impl SpiMaster for Spi100Controller {
+#[cfg(all(
+    feature = "is_sync",
+    any(all(feature = "std", target_os = "linux"), not(feature = "std"))
+))]
+impl<H: HostAccess> SpiMaster for Spi100Controller<H> {
     fn features(&self) -> SpiFeatures {
         // AMD SPI100 supports standard SPI only (no dual/quad modes exposed to software)
         SpiFeatures::empty()
@@ -767,55 +913,7 @@ impl SpiMaster for Spi100Controller {
     }
 
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        // Build the write array: opcode + address + write data
-        let mut writearr = [0u8; SPI100_FIFO_SIZE + 1];
-        let mut write_len = 1;
-
-        // Opcode
-        writearr[0] = cmd.opcode;
-
-        // Add address if present
-        match cmd.address_width {
-            AddressWidth::None => {}
-            AddressWidth::ThreeByte => {
-                let addr = cmd.address.unwrap_or(0);
-                writearr[1] = (addr >> 16) as u8;
-                writearr[2] = (addr >> 8) as u8;
-                writearr[3] = addr as u8;
-                write_len += 3;
-            }
-            AddressWidth::FourByte => {
-                let addr = cmd.address.unwrap_or(0);
-                writearr[1] = (addr >> 24) as u8;
-                writearr[2] = (addr >> 16) as u8;
-                writearr[3] = (addr >> 8) as u8;
-                writearr[4] = addr as u8;
-                write_len += 4;
-            }
-        }
-
-        // Add write data if present
-        let write_data = cmd.write_data;
-        if !write_data.is_empty() {
-            let data_len = write_data.len().min(SPI100_FIFO_SIZE - write_len + 1);
-            writearr[write_len..write_len + data_len].copy_from_slice(&write_data[..data_len]);
-            write_len += data_len;
-        }
-
-        // Dummy cycles are not directly supported by SPI100 FIFO interface
-        // The controller handles this internally for known commands
-        if cmd.dummy_cycles > 0 {
-            log::debug!(
-                "Dummy cycles ({}) will be handled by controller",
-                cmd.dummy_cycles
-            );
-        }
-
-        // Execute the command
-        self.send_command(&writearr[..write_len], cmd.read_buf)
-            .map_err(map_amd_error)?;
-
-        Ok(())
+        self.execute_spi_command(cmd)
     }
 
     fn probe_opcode(&self, _opcode: u8) -> bool {
@@ -824,7 +922,7 @@ impl SpiMaster for Spi100Controller {
     }
 
     fn delay_us(&mut self, us: u32) {
-        std::thread::sleep(std::time::Duration::from_micros(us as u64));
+        self.host.delay_us(us);
     }
 }
 
