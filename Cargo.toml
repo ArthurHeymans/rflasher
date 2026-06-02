@@ -51,15 +51,15 @@ default-members = [
 version = "0.1.0"
 edition = "2024"
 license = "GPL-2.0-or-later"
-repository = "https://github.com/user/rflasher"
+repository = "https://github.com/ArthurHeymans/rflasher"
 
 [workspace.dependencies]
 # Internal crates - NOTE: is_sync is NOT included here to allow async builds (WASM)
 # Crates that need sync mode should add `features = ["is_sync"]` explicitly
-rflasher-chip-types = { path = "crates/rflasher-chip-types", default-features = false }
-rflasher-core = { path = "crates/rflasher-core", default-features = false }
-rflasher-chips = { path = "crates/rflasher-chips" }
-rflasher-pci = { path = "crates/rflasher-pci", default-features = false }
+rflasher-chip-types = { version = "0.1.0", path = "crates/rflasher-chip-types", default-features = false }
+rflasher-core = { version = "0.1.0", path = "crates/rflasher-core", default-features = false }
+rflasher-chips = { version = "0.1.0", path = "crates/rflasher-chips" }
+rflasher-pci = { version = "0.1.0", path = "crates/rflasher-pci", default-features = false }
 
 # Core
 bitflags = "2"
@@ -94,6 +94,18 @@ name = "rflasher"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Command-line flash chip programming tool"
+readme = "README.md"
+exclude = [
+    "/.github",
+    "/.pi-lens",
+    "/docs",
+    "/firmware",
+    "/flake.*",
+    "/rflasher.png",
+    "/web",
+]
 
 [features]
 default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden", "sunxi-fel"]
@@ -130,8 +142,8 @@ portable-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi
 [dependencies]
 rflasher-core = { workspace = true, features = ["std", "is_sync"] }
 rflasher-chips.workspace = true
-rflasher-flash = { path = "crates/rflasher-flash", features = ["std", "is_sync"] }
-rflasher-repl = { path = "crates/rflasher-repl", optional = true }
+rflasher-flash = { version = "0.1.0", path = "crates/rflasher-flash", features = ["std", "is_sync"] }
+rflasher-repl = { version = "0.1.0", path = "crates/rflasher-repl", optional = true }
 clap.workspace = true
 clap_mangen = "0.2"
 env_logger.workspace = true

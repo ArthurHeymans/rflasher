@@ -3,6 +3,7 @@ name = "rflasher-internal"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Intel chipset internal flash programmer support for rflasher"
 
 [features]

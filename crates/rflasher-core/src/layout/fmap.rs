@@ -4,7 +4,7 @@
 //! flash regions. The FMAP structure can be embedded anywhere in the
 //! flash image.
 //!
-//! Reference: flashprog/fmap.c and https://chromium.googlesource.com/chromiumos/platform/flashmap
+//! Reference: flashprog/fmap.c and <https://chromium.googlesource.com/chromiumos/platform/flashmap>
 
 use std::format;
 use std::string::{String, ToString};

@@ -3,11 +3,13 @@ name = "rflasher-linux-gpio"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Linux GPIO bitbang SPI support for rflasher"
 
 [features]
 default = ["std"]
-std = ["rflasher-core/std"]
+std = ["rflasher-core/std", "is_sync"]
+is_sync = ["rflasher-core/is_sync"]
 
 [dependencies]
 rflasher-core.workspace = true

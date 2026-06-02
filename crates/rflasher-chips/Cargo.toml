@@ -3,6 +3,7 @@ name = "rflasher-chips"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Runtime and compiled flash chip database providers"
 
 [features]
@@ -19,4 +20,4 @@ ron.workspace = true
 once_cell = { workspace = true, features = ["std"] }
 
 [build-dependencies]
-rflasher-chips-codegen = { path = "../rflasher-chips-codegen", optional = true }
+rflasher-chips-codegen = { version = "0.1.0", path = "../rflasher-chips-codegen", optional = true }

@@ -64,7 +64,7 @@ impl FastReadParams {
 
     /// Parse from DWORD half (instruction in high byte, mode/dummy in lower bits)
     ///
-    /// Layout: [31:24] instruction, [23:21] mode clocks, [20:16] dummy clocks
+    /// Layout: bits `31:24` instruction, `23:21` mode clocks, `20:16` dummy clocks
     pub fn from_high_half(dword: u32) -> Self {
         let opcode = ((dword >> 24) & 0xFF) as u8;
         let mode_clocks = ((dword >> 21) & 0x07) as u8;
@@ -79,7 +79,7 @@ impl FastReadParams {
 
     /// Parse from DWORD low half
     ///
-    /// Layout: [15:8] instruction, [7:5] mode clocks, [4:0] dummy clocks
+    /// Layout: bits `15:8` instruction, `7:5` mode clocks, `4:0` dummy clocks
     pub fn from_low_half(dword: u32) -> Self {
         let opcode = ((dword >> 8) & 0xFF) as u8;
         let mode_clocks = ((dword >> 5) & 0x07) as u8;
@@ -247,7 +247,7 @@ pub enum AddressMode {
 }
 
 impl AddressMode {
-    /// Parse from BFPT DWORD 1 bits [18:17]
+    /// Parse from BFPT DWORD 1 bits `18:17`
     pub fn from_bfpt(value: u8) -> Self {
         match value & 0x03 {
             0b00 => Self::ThreeByteOnly,
@@ -340,7 +340,7 @@ pub enum QuadEnableRequirement {
 }
 
 impl QuadEnableRequirement {
-    /// Parse from BFPT DWORD 15 bits [22:20]
+    /// Parse from BFPT DWORD 15 bits `22:20`
     pub fn from_bfpt(value: u8) -> Self {
         match value & 0x07 {
             0b000 => Self::None,
@@ -382,7 +382,7 @@ impl FourByteEntryMethods {
     /// Always operates in 4-byte mode
     pub const ALWAYS_4BYTE: u8 = 0x10;
 
-    /// Parse from BFPT DWORD 16 bits [31:24]
+    /// Parse from BFPT DWORD 16 bits `31:24`
     pub fn from_bfpt(value: u8) -> Self {
         Self { methods: value }
     }
@@ -417,7 +417,7 @@ impl SoftResetSupport {
     /// Exit 0-4-4 mode required before reset
     pub const EXIT_044_REQUIRED: u8 = 0x01;
 
-    /// Parse from BFPT DWORD 16 bits [13:8]
+    /// Parse from BFPT DWORD 16 bits `13:8`
     pub fn from_bfpt(value: u8) -> Self {
         Self {
             methods: value & 0x3F,

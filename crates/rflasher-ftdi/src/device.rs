@@ -359,7 +359,7 @@ impl std::fmt::Display for FtdiDeviceInfo {
 
 /// Parse programmer options from a string
 ///
-/// Format: "type=<type>,port=<A|B|C|D>,divisor=<N>,serial=<serial>,gpiol0=<H|L|C>"
+/// Format: `type=<type>,port=<A|B|C|D>,divisor=<N>,serial=<serial>,gpiol0=<H|L|C>`
 pub fn parse_options(options: &[(&str, &str)]) -> Result<FtdiConfig> {
     let mut config = FtdiConfig::default();
 

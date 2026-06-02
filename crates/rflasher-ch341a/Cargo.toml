@@ -3,6 +3,7 @@ name = "rflasher-ch341a"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "CH341A USB programmer support for rflasher"
 
 [features]
