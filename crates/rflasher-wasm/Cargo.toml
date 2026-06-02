@@ -3,7 +3,9 @@ name = "rflasher-wasm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Web interface for rflasher using egui and WebSerial/WebUSB"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -14,14 +16,14 @@ default = []
 [dependencies]
 # Internal crates (async mode - explicitly NO is_sync feature)
 # We override the workspace dependency to ensure async mode for WASM
-rflasher-core = { path = "../rflasher-core", default-features = false, features = ["std", "alloc", "static-chips"] }
-rflasher-serprog = { path = "../rflasher-serprog", default-features = false, features = ["std", "wasm"] }
-rflasher-ch341a = { path = "../rflasher-ch341a", default-features = false, features = ["wasm"] }
-rflasher-ch347 = { path = "../rflasher-ch347", default-features = false, features = ["wasm"] }
-rflasher-ftdi = { path = "../rflasher-ftdi", default-features = false, features = ["wasm"] }
-rflasher-ft4222 = { path = "../rflasher-ft4222", default-features = false, features = ["wasm"] }
-rflasher-dediprog = { path = "../rflasher-dediprog", default-features = false, features = ["wasm"] }
-rflasher-raiden = { path = "../rflasher-raiden", default-features = false, features = ["wasm"] }
+rflasher-core = { version = "0.1.0", path = "../rflasher-core", default-features = false, features = ["std", "alloc", "static-chips"] }
+rflasher-serprog = { version = "0.1.0", path = "../rflasher-serprog", default-features = false, features = ["std", "wasm"] }
+rflasher-ch341a = { version = "0.1.0", path = "../rflasher-ch341a", default-features = false, features = ["wasm"] }
+rflasher-ch347 = { version = "0.1.0", path = "../rflasher-ch347", default-features = false, features = ["wasm"] }
+rflasher-ftdi = { version = "0.1.0", path = "../rflasher-ftdi", default-features = false, features = ["wasm"] }
+rflasher-ft4222 = { version = "0.1.0", path = "../rflasher-ft4222", default-features = false, features = ["wasm"] }
+rflasher-dediprog = { version = "0.1.0", path = "../rflasher-dediprog", default-features = false, features = ["wasm"] }
+rflasher-raiden = { version = "0.1.0", path = "../rflasher-raiden", default-features = false, features = ["wasm"] }
 
 # GUI
 eframe = { version = "0.33", default-features = false, features = [

@@ -3,11 +3,13 @@ name = "rflasher-internal"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Intel chipset internal flash programmer support for rflasher"
 
 [features]
 default = ["std"]
-std = ["rflasher-core/std", "dep:thiserror"]
+std = ["rflasher-core/std", "dep:thiserror", "is_sync"]
+is_sync = ["rflasher-core/is_sync"]
 
 [dependencies]
 rflasher-core.workspace = true
