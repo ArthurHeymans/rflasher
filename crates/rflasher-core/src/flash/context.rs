@@ -23,8 +23,6 @@ pub struct FlashContext {
     pub chip: FlashChip,
     /// Current address mode
     pub address_mode: AddressMode,
-    /// Whether to use native 4-byte commands or mode switching
-    pub use_native_4byte: bool,
 }
 
 /// Runtime context for flash operations (no_std version with static reference)
@@ -35,8 +33,6 @@ pub struct FlashContext {
     pub chip: &'static FlashChip,
     /// Current address mode
     pub address_mode: AddressMode,
-    /// Whether to use native 4-byte commands or mode switching
-    pub use_native_4byte: bool,
 }
 
 /// Shared methods for FlashContext that are identical across alloc/no_std.
@@ -78,15 +74,7 @@ impl FlashContext {
             AddressMode::ThreeByte
         };
 
-        let use_native_4byte = chip
-            .features
-            .contains(crate::chip::Features::FOUR_BYTE_NATIVE);
-
-        Self {
-            chip,
-            address_mode,
-            use_native_4byte,
-        }
+        Self { chip, address_mode }
     }
 
     impl_flash_context_common!();
@@ -102,15 +90,7 @@ impl FlashContext {
             AddressMode::ThreeByte
         };
 
-        let use_native_4byte = chip
-            .features
-            .contains(crate::chip::Features::FOUR_BYTE_NATIVE);
-
-        Self {
-            chip,
-            address_mode,
-            use_native_4byte,
-        }
+        Self { chip, address_mode }
     }
 
     impl_flash_context_common!();

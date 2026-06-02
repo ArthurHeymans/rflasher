@@ -113,6 +113,18 @@ bitflags! {
 }
 
 impl Features {
+    /// Whether any 4-byte mode enter/exit mechanism is supported.
+    pub fn supports_4ba_mode_switch(self) -> bool {
+        self.intersects(
+            Self::FOUR_BYTE_ENTER | Self::FOUR_BYTE_ENTER_WREN | Self::FOUR_BYTE_ENTER_EAR7,
+        )
+    }
+
+    /// Whether an extended address register can select the high address byte.
+    pub fn supports_extended_address_register(self) -> bool {
+        self.intersects(Self::EXT_ADDR_REG | Self::EXT_ADDR_REG_C5C8 | Self::EXT_ADDR_REG_1716)
+    }
+
     /// Whether the native 4BA 0x13 read opcode is supported.
     pub fn supports_4ba_read(self) -> bool {
         self.contains(Self::FOUR_BYTE_READ)

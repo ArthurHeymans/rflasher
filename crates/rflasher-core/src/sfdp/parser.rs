@@ -516,6 +516,13 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     {
         features |= Features::EXT_ADDR_REG | Features::EXT_ADDR_REG_C5C8;
     }
+    if params
+        .four_byte_entry
+        .supports(FourByteEntryMethods::BANK_REG)
+    {
+        features |=
+            Features::EXT_ADDR_REG | Features::EXT_ADDR_REG_1716 | Features::FOUR_BYTE_ENTER_EAR7;
+    }
     if let Some(ref four_byte_table) = info.four_byte_addr_table {
         let instr = four_byte_table.instructions;
         if instr.supports(FourByteAddrInstructions::READ_1S_1S_1S) {
