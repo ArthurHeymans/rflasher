@@ -41,6 +41,37 @@ pub const BLOCK_ERASE_POLL_US: u32 = 10_000;
 /// Timeout for block erase completion (microseconds)
 pub const BLOCK_ERASE_TIMEOUT_US: u32 = 10_000_000;
 
+/// Addressing behavior for an addressed SPI command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandAddressing {
+    /// Send a 24-bit address directly in the command.
+    ThreeByte,
+    /// Send a 32-bit address directly in the command.
+    FourByte,
+    /// Select the high address byte through the chip's extended address
+    /// register, then send the low 24 bits in the command.
+    ExtendedAddressRegister(crate::chip::Features),
+}
+
+impl CommandAddressing {
+    fn address_width(self) -> AddressWidth {
+        match self {
+            Self::ThreeByte | Self::ExtendedAddressRegister(_) => AddressWidth::ThreeByte,
+            Self::FourByte => AddressWidth::FourByte,
+        }
+    }
+
+    fn max_chunk_len(self, addr: u32, requested: usize) -> usize {
+        match self {
+            Self::ExtendedAddressRegister(_) => {
+                let bytes_to_bank_end = 0x01_00_00_00usize - (addr as usize & 0x00FF_FFFF);
+                core::cmp::min(requested, bytes_to_bank_end)
+            }
+            Self::ThreeByte | Self::FourByte => requested,
+        }
+    }
+}
+
 /// Read the JEDEC ID from a flash chip
 ///
 /// Returns (manufacturer_id, device_id) on success.
@@ -196,6 +227,32 @@ pub async fn write_status12_ewsr<M: SpiMaster + ?Sized>(
     wait_ready(master, WRSR_POLL_US, WRSR_TIMEOUT_US).await
 }
 
+/// Read data from flash with an explicitly selected opcode, I/O mode, and addressing mode.
+#[maybe_async]
+pub async fn read_io_with_addressing<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    opcode: u8,
+    addr: u32,
+    buf: &mut [u8],
+    addressing: CommandAddressing,
+    io_mode: IoMode,
+    dummy_cycles: u8,
+) -> Result<()> {
+    read_multi_io(master, opcode, addr, buf, addressing, io_mode, dummy_cycles).await
+}
+
+/// Read data from flash with an explicitly selected opcode and addressing mode.
+#[maybe_async]
+pub async fn read_with_addressing<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    opcode: u8,
+    addr: u32,
+    buf: &mut [u8],
+    addressing: CommandAddressing,
+) -> Result<()> {
+    read_io_with_addressing(master, opcode, addr, buf, addressing, IoMode::Single, 0).await
+}
+
 /// Read data from flash using 3-byte addressing
 #[maybe_async]
 pub async fn read_3b<M: SpiMaster + ?Sized>(
@@ -203,75 +260,98 @@ pub async fn read_3b<M: SpiMaster + ?Sized>(
     addr: u32,
     buf: &mut [u8],
 ) -> Result<()> {
-    let max_len = master.max_read_len();
-    let mut offset = 0;
-
-    while offset < buf.len() {
-        let chunk_len = core::cmp::min(max_len, buf.len() - offset);
-        let chunk = &mut buf[offset..offset + chunk_len];
-        let mut cmd = SpiCommand::read_3b(opcodes::READ, addr + offset as u32, chunk);
-        master.execute(&mut cmd).await?;
-        offset += chunk_len;
-    }
-
-    Ok(())
+    read_with_addressing(
+        master,
+        opcodes::READ,
+        addr,
+        buf,
+        CommandAddressing::ThreeByte,
+    )
+    .await
 }
 
-/// Read data from flash using 4-byte addressing
+/// Read data from flash using native 4-byte addressing opcode
 #[maybe_async]
 pub async fn read_4b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
     buf: &mut [u8],
 ) -> Result<()> {
-    let max_len = master.max_read_len();
-    let mut offset = 0;
-
-    while offset < buf.len() {
-        let chunk_len = core::cmp::min(max_len, buf.len() - offset);
-        let chunk = &mut buf[offset..offset + chunk_len];
-        let mut cmd = SpiCommand::read_4b(opcodes::READ_4B, addr + offset as u32, chunk);
-        master.execute(&mut cmd).await?;
-        offset += chunk_len;
-    }
-
-    Ok(())
+    read_with_addressing(
+        master,
+        opcodes::READ_4B,
+        addr,
+        buf,
+        CommandAddressing::FourByte,
+    )
+    .await
 }
 
-/// Program a single page (up to page_size bytes)
+/// Program a single page with an explicitly selected opcode and addressing mode.
 ///
 /// The data must not cross a page boundary.
 /// Page program typically takes 0.7-5ms, we poll every 10us with 10ms timeout.
+#[maybe_async]
+pub async fn program_page_with_addressing<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    opcode: u8,
+    addr: u32,
+    data: &[u8],
+    addressing: CommandAddressing,
+) -> Result<()> {
+    if let CommandAddressing::ExtendedAddressRegister(features) = addressing {
+        set_extended_address(master, features, (addr >> 24) as u8).await?;
+    }
+
+    write_enable(master).await?;
+
+    let mut cmd = SpiCommand {
+        opcode,
+        address: Some(addr),
+        address_width: addressing.address_width(),
+        io_mode: IoMode::Single,
+        dummy_cycles: 0,
+        write_data: data,
+        read_buf: &mut [],
+    };
+    master.execute(&mut cmd).await?;
+
+    // Page program: poll every 10us, timeout after 10ms (typical is 0.7-5ms)
+    wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await
+}
+
+/// Program a single page (up to page_size bytes) using 3-byte addressing
 #[maybe_async]
 pub async fn program_page_3b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
     data: &[u8],
 ) -> Result<()> {
-    write_enable(master).await?;
-
-    let mut cmd = SpiCommand::write_3b(opcodes::PP, addr, data);
-    master.execute(&mut cmd).await?;
-
-    // Page program: poll every 10us, timeout after 10ms (typical is 0.7-5ms)
-    wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await
+    program_page_with_addressing(
+        master,
+        opcodes::PP,
+        addr,
+        data,
+        CommandAddressing::ThreeByte,
+    )
+    .await
 }
 
-/// Program a single page using 4-byte addressing
-/// Page program typically takes 0.7-5ms, we poll every 10us with 10ms timeout.
+/// Program a single page using native 4-byte addressing opcode
 #[maybe_async]
 pub async fn program_page_4b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
     data: &[u8],
 ) -> Result<()> {
-    write_enable(master).await?;
-
-    let mut cmd = SpiCommand::write_4b(opcodes::PP_4B, addr, data);
-    master.execute(&mut cmd).await?;
-
-    // Page program: poll every 10us, timeout after 10ms (typical is 0.7-5ms)
-    wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await
+    program_page_with_addressing(
+        master,
+        opcodes::PP_4B,
+        addr,
+        data,
+        CommandAddressing::FourByte,
+    )
+    .await
 }
 
 // ============================================================================
@@ -386,16 +466,24 @@ pub async fn erase_block<M: SpiMaster + ?Sized>(
     master: &mut M,
     opcode: u8,
     addr: u32,
-    use_4byte: bool,
+    addressing: CommandAddressing,
     poll_delay_us: u32,
     timeout_us: u32,
 ) -> Result<()> {
+    if let CommandAddressing::ExtendedAddressRegister(features) = addressing {
+        set_extended_address(master, features, (addr >> 24) as u8).await?;
+    }
+
     write_enable(master).await?;
 
-    let mut cmd = if use_4byte {
-        SpiCommand::erase_4b(opcode, addr)
-    } else {
-        SpiCommand::erase_3b(opcode, addr)
+    let mut cmd = SpiCommand {
+        opcode,
+        address: Some(addr),
+        address_width: addressing.address_width(),
+        io_mode: IoMode::Single,
+        dummy_cycles: 0,
+        write_data: &[],
+        read_buf: &mut [],
     };
     master.execute(&mut cmd).await?;
 
@@ -417,18 +505,84 @@ pub async fn chip_erase<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     wait_ready(master, CHIP_ERASE_POLL_US, CHIP_ERASE_TIMEOUT_US).await
 }
 
-/// Enter 4-byte address mode
+/// Enter 4-byte address mode with the plain B7h instruction.
 #[maybe_async]
 pub async fn enter_4byte_mode<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     let mut cmd = SpiCommand::simple(opcodes::EN4B);
     master.execute(&mut cmd).await
 }
 
-/// Exit 4-byte address mode
+/// Exit 4-byte address mode with the plain E9h instruction.
 #[maybe_async]
 pub async fn exit_4byte_mode<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     let mut cmd = SpiCommand::simple(opcodes::EX4B);
     master.execute(&mut cmd).await
+}
+
+fn extended_address_write_opcode(features: crate::chip::Features) -> Result<u8> {
+    use crate::chip::Features;
+
+    if features.contains(Features::EXT_ADDR_REG_C5C8) || features.contains(Features::EXT_ADDR_REG) {
+        Ok(opcodes::WREAR)
+    } else if features.contains(Features::EXT_ADDR_REG_1716) {
+        Ok(opcodes::WREAR_ALT)
+    } else {
+        Err(Error::ChipNotSupported)
+    }
+}
+
+/// Write the high address byte to the chip's extended address register.
+#[maybe_async]
+pub async fn set_extended_address<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    features: crate::chip::Features,
+    addr_high: u8,
+) -> Result<()> {
+    let opcode = extended_address_write_opcode(features)?;
+    write_enable(master).await?;
+    let data = [addr_high];
+    let mut cmd = SpiCommand::write_reg(opcode, &data);
+    master.execute(&mut cmd).await
+}
+
+/// Enter 4-byte address mode using the method described by the chip features.
+#[maybe_async]
+pub async fn enter_4byte_mode_with_features<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    features: crate::chip::Features,
+) -> Result<()> {
+    use crate::chip::Features;
+
+    if features.contains(Features::FOUR_BYTE_ENTER) {
+        enter_4byte_mode(master).await
+    } else if features.contains(Features::FOUR_BYTE_ENTER_WREN) {
+        write_enable(master).await?;
+        enter_4byte_mode(master).await
+    } else if features.contains(Features::FOUR_BYTE_ENTER_EAR7) {
+        set_extended_address(master, features, 0x80).await
+    } else {
+        Err(Error::ChipNotSupported)
+    }
+}
+
+/// Exit 4-byte address mode using the method described by the chip features.
+#[maybe_async]
+pub async fn exit_4byte_mode_with_features<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    features: crate::chip::Features,
+) -> Result<()> {
+    use crate::chip::Features;
+
+    if features.contains(Features::FOUR_BYTE_ENTER) {
+        exit_4byte_mode(master).await
+    } else if features.contains(Features::FOUR_BYTE_ENTER_WREN) {
+        write_enable(master).await?;
+        exit_4byte_mode(master).await
+    } else if features.contains(Features::FOUR_BYTE_ENTER_EAR7) {
+        set_extended_address(master, features, 0x00).await
+    } else {
+        Err(Error::ChipNotSupported)
+    }
 }
 
 /// Send software reset sequence
@@ -497,7 +651,7 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
     opcode: u8,
     addr: u32,
     buf: &mut [u8],
-    address_width: AddressWidth,
+    addressing: CommandAddressing,
     io_mode: IoMode,
     dummy_cycles: u8,
 ) -> Result<()> {
@@ -505,12 +659,19 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
     let mut offset = 0;
 
     while offset < buf.len() {
-        let chunk_len = core::cmp::min(max_len, buf.len() - offset);
+        let current_addr = addr + offset as u32;
+        let chunk_len =
+            addressing.max_chunk_len(current_addr, core::cmp::min(max_len, buf.len() - offset));
         let chunk = &mut buf[offset..offset + chunk_len];
+
+        if let CommandAddressing::ExtendedAddressRegister(features) = addressing {
+            set_extended_address(master, features, (current_addr >> 24) as u8).await?;
+        }
+
         let mut cmd = SpiCommand {
             opcode,
-            address: Some(addr + offset as u32),
-            address_width,
+            address: Some(current_addr),
+            address_width: addressing.address_width(),
             io_mode,
             dummy_cycles,
             write_data: &[],
@@ -537,7 +698,7 @@ pub async fn read_dual_out_3b<M: SpiMaster + ?Sized>(
         opcodes::DOR,
         addr,
         buf,
-        AddressWidth::ThreeByte,
+        CommandAddressing::ThreeByte,
         IoMode::DualOut,
         8,
     )
@@ -558,7 +719,7 @@ pub async fn read_dual_io_3b<M: SpiMaster + ?Sized>(
         opcodes::DIOR,
         addr,
         buf,
-        AddressWidth::ThreeByte,
+        CommandAddressing::ThreeByte,
         IoMode::DualIo,
         4,
     )
@@ -580,7 +741,7 @@ pub async fn read_quad_out_3b<M: SpiMaster + ?Sized>(
         opcodes::QOR,
         addr,
         buf,
-        AddressWidth::ThreeByte,
+        CommandAddressing::ThreeByte,
         IoMode::QuadOut,
         8,
     )
@@ -602,7 +763,7 @@ pub async fn read_quad_io_3b<M: SpiMaster + ?Sized>(
         opcodes::QIOR,
         addr,
         buf,
-        AddressWidth::ThreeByte,
+        CommandAddressing::ThreeByte,
         IoMode::QuadIo,
         6,
     )
@@ -621,7 +782,7 @@ pub async fn read_dual_out_4b<M: SpiMaster + ?Sized>(
         opcodes::DOR_4B,
         addr,
         buf,
-        AddressWidth::FourByte,
+        CommandAddressing::FourByte,
         IoMode::DualOut,
         8,
     )
@@ -640,7 +801,7 @@ pub async fn read_dual_io_4b<M: SpiMaster + ?Sized>(
         opcodes::DIOR_4B,
         addr,
         buf,
-        AddressWidth::FourByte,
+        CommandAddressing::FourByte,
         IoMode::DualIo,
         4,
     )
@@ -659,7 +820,7 @@ pub async fn read_quad_out_4b<M: SpiMaster + ?Sized>(
         opcodes::QOR_4B,
         addr,
         buf,
-        AddressWidth::FourByte,
+        CommandAddressing::FourByte,
         IoMode::QuadOut,
         8,
     )
@@ -678,7 +839,7 @@ pub async fn read_quad_io_4b<M: SpiMaster + ?Sized>(
         opcodes::QIOR_4B,
         addr,
         buf,
-        AddressWidth::FourByte,
+        CommandAddressing::FourByte,
         IoMode::QuadIo,
         6,
     )
@@ -860,60 +1021,93 @@ pub async fn exit_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) ->
 // Read Mode Selection Helper
 // ============================================================================
 
-/// Select the best available read mode based on programmer and chip capabilities
+/// Select the best available read mode based on programmer and chip capabilities.
 ///
-/// Returns the IO mode and corresponding opcode.
-/// Prefers higher bandwidth modes: Quad I/O > Quad Out > Dual I/O > Dual Out > Single.
+/// Returns the I/O mode, opcode, and whether the selected opcode is a native
+/// 4-byte-address opcode. Prefers higher bandwidth modes:
+/// Quad I/O > Quad Out > Dual I/O > Dual Out > Single.
 pub fn select_read_mode(
     master_features: SpiFeatures,
-    chip_has_dual: bool,
-    chip_has_quad: bool,
-    use_4byte: bool,
-) -> (IoMode, u8) {
-    // Candidates in priority order: (chip_capable, master_feature, mode, opcode_3b, opcode_4b)
-    let candidates: [(bool, SpiFeatures, IoMode, u8, u8); 4] = [
+    chip_features: crate::chip::Features,
+    try_native_4byte: bool,
+    mut opcode_supported: impl FnMut(u8) -> bool,
+) -> (IoMode, u8, bool) {
+    let chip_has_dual = chip_features.contains(crate::chip::Features::DUAL_IO);
+    let chip_has_quad = chip_features.contains(crate::chip::Features::QUAD_IO);
+
+    if try_native_4byte && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR) {
+        let native_candidates: [(bool, SpiFeatures, IoMode, u8); 4] = [
+            (
+                chip_features.supports_4ba_quad_io_read(),
+                SpiFeatures::QUAD_IO,
+                IoMode::QuadIo,
+                opcodes::QIOR_4B,
+            ),
+            (
+                chip_features.supports_4ba_quad_out_read(),
+                SpiFeatures::QUAD_IN,
+                IoMode::QuadOut,
+                opcodes::QOR_4B,
+            ),
+            (
+                chip_features.supports_4ba_dual_io_read(),
+                SpiFeatures::DUAL_IO,
+                IoMode::DualIo,
+                opcodes::DIOR_4B,
+            ),
+            (
+                chip_features.supports_4ba_dual_out_read(),
+                SpiFeatures::DUAL_IN,
+                IoMode::DualOut,
+                opcodes::DOR_4B,
+            ),
+        ];
+
+        for (chip_capable, feature, mode, opcode) in native_candidates {
+            if chip_capable && master_features.contains(feature) && opcode_supported(opcode) {
+                return (mode, opcode, true);
+            }
+        }
+
+        if chip_features.supports_4ba_read() && opcode_supported(opcodes::READ_4B) {
+            return (IoMode::Single, opcodes::READ_4B, true);
+        }
+    }
+
+    // Compatibility-mode candidates. These opcodes may still be sent with a
+    // 32-bit address when the chip has been switched into 4BA mode.
+    let candidates: [(bool, SpiFeatures, IoMode, u8); 4] = [
         (
             chip_has_quad,
             SpiFeatures::QUAD_IO,
             IoMode::QuadIo,
             opcodes::QIOR,
-            opcodes::QIOR_4B,
         ),
         (
             chip_has_quad,
             SpiFeatures::QUAD_IN,
             IoMode::QuadOut,
             opcodes::QOR,
-            opcodes::QOR_4B,
         ),
         (
             chip_has_dual,
             SpiFeatures::DUAL_IO,
             IoMode::DualIo,
             opcodes::DIOR,
-            opcodes::DIOR_4B,
         ),
         (
             chip_has_dual,
             SpiFeatures::DUAL_IN,
             IoMode::DualOut,
             opcodes::DOR,
-            opcodes::DOR_4B,
         ),
     ];
 
-    for (chip_capable, feature, mode, opcode_3b, opcode_4b) in candidates {
-        if chip_capable && master_features.contains(feature) {
-            let opcode = if use_4byte { opcode_4b } else { opcode_3b };
-            return (mode, opcode);
+    for (chip_capable, feature, mode, opcode) in candidates {
+        if chip_capable && master_features.contains(feature) && opcode_supported(opcode) {
+            return (mode, opcode, false);
         }
     }
 
-    // Fall back to single I/O
-    let opcode = if use_4byte {
-        opcodes::READ_4B
-    } else {
-        opcodes::READ
-    };
-    (IoMode::Single, opcode)
+    (IoMode::Single, opcodes::READ, false)
 }

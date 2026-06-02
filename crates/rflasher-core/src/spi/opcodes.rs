@@ -155,6 +155,10 @@ pub const EX4B: u8 = 0xE9;
 pub const RDEAR: u8 = 0xC8;
 /// Write Extended Address Register
 pub const WREAR: u8 = 0xC5;
+/// Alternate Read Extended/Bank Address Register
+pub const RDEAR_ALT: u8 = 0x16;
+/// Alternate Write Extended/Bank Address Register
+pub const WREAR_ALT: u8 = 0x17;
 
 // ============================================================================
 // Power management

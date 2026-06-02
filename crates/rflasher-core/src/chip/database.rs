@@ -69,6 +69,17 @@ struct FeaturesDef {
     four_byte_enter: bool,
     four_byte_native: bool,
     ext_addr_reg: bool,
+    four_byte_enter_wren: bool,
+    four_byte_enter_ear7: bool,
+    ext_addr_reg_c5c8: bool,
+    ext_addr_reg_1716: bool,
+    four_byte_read: bool,
+    four_byte_fast_read: bool,
+    four_byte_program: bool,
+    four_byte_dual_out_read: bool,
+    four_byte_dual_io_read: bool,
+    four_byte_quad_out_read: bool,
+    four_byte_quad_io_read: bool,
     otp: bool,
     qpi: bool,
     security_reg: bool,
@@ -97,7 +108,27 @@ impl From<FeaturesDef> for Features {
             (def.four_byte_addr, Features::FOUR_BYTE_ADDR),
             (def.four_byte_enter, Features::FOUR_BYTE_ENTER),
             (def.four_byte_native, Features::FOUR_BYTE_NATIVE),
-            (def.ext_addr_reg, Features::EXT_ADDR_REG),
+            (
+                def.ext_addr_reg || def.ext_addr_reg_c5c8 || def.ext_addr_reg_1716,
+                Features::EXT_ADDR_REG,
+            ),
+            (def.four_byte_enter_wren, Features::FOUR_BYTE_ENTER_WREN),
+            (def.four_byte_enter_ear7, Features::FOUR_BYTE_ENTER_EAR7),
+            (def.ext_addr_reg_c5c8, Features::EXT_ADDR_REG_C5C8),
+            (def.ext_addr_reg_1716, Features::EXT_ADDR_REG_1716),
+            (def.four_byte_read, Features::FOUR_BYTE_READ),
+            (def.four_byte_fast_read, Features::FOUR_BYTE_FAST_READ),
+            (def.four_byte_program, Features::FOUR_BYTE_PROGRAM),
+            (
+                def.four_byte_dual_out_read,
+                Features::FOUR_BYTE_DUAL_OUT_READ,
+            ),
+            (def.four_byte_dual_io_read, Features::FOUR_BYTE_DUAL_IO_READ),
+            (
+                def.four_byte_quad_out_read,
+                Features::FOUR_BYTE_QUAD_OUT_READ,
+            ),
+            (def.four_byte_quad_io_read, Features::FOUR_BYTE_QUAD_IO_READ),
             (def.otp, Features::OTP),
             (def.qpi, Features::QPI),
             (def.security_reg, Features::SECURITY_REG),
@@ -134,6 +165,7 @@ struct RegionDef {
 #[derive(Debug, Clone, serde::Deserialize)]
 struct EraseBlockDef {
     opcode: u8,
+    opcode_4b: Option<u8>,
     regions: Vec<RegionDef>,
 }
 
@@ -319,7 +351,7 @@ impl ChipDatabase {
                             .iter()
                             .map(|r| EraseRegion::new(r.size.to_bytes(), r.count))
                             .collect();
-                        EraseBlock::with_regions(eb.opcode, &regions)
+                        EraseBlock::with_regions_and_4b(eb.opcode, eb.opcode_4b, &regions)
                     })
                     .collect(),
                 tested: chip_def.tested.into(),

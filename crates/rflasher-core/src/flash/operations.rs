@@ -9,15 +9,62 @@ use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
 use crate::chip::ChipDatabase;
-use crate::chip::EraseBlock;
 #[cfg(feature = "alloc")]
 use crate::chip::WriteGranularity;
+use crate::chip::{EraseBlock, Features};
 use crate::error::{Error, Result};
-use crate::programmer::SpiMaster;
-use crate::protocol;
+use crate::programmer::{SpiFeatures, SpiMaster};
+use crate::protocol::{self, CommandAddressing};
 use maybe_async::maybe_async;
 
 use super::context::{AddressMode, FlashContext};
+
+pub(crate) fn compatible_4byte_addressing(
+    chip_features: Features,
+    master_features: SpiFeatures,
+) -> Result<(CommandAddressing, bool)> {
+    if master_features.contains(SpiFeatures::NO_4BA_MODES) {
+        return Err(Error::ChipNotSupported);
+    }
+
+    if master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
+        && chip_features.supports_4ba_mode_switch()
+    {
+        return Ok((CommandAddressing::FourByte, true));
+    }
+
+    if chip_features.supports_extended_address_register() {
+        return Ok((
+            CommandAddressing::ExtendedAddressRegister(chip_features),
+            false,
+        ));
+    }
+
+    Err(Error::ChipNotSupported)
+}
+
+pub(crate) fn addressing_for_4byte_operation(
+    native_4byte: bool,
+    chip_features: Features,
+    master_features: SpiFeatures,
+) -> Result<(CommandAddressing, bool)> {
+    if native_4byte {
+        Ok((CommandAddressing::FourByte, false))
+    } else {
+        compatible_4byte_addressing(chip_features, master_features)
+    }
+}
+
+pub(crate) fn read_dummy_cycles(io_mode: crate::spi::IoMode) -> u8 {
+    match io_mode {
+        crate::spi::IoMode::Single => 0,
+        crate::spi::IoMode::DualOut => 8,
+        crate::spi::IoMode::DualIo => 4,
+        crate::spi::IoMode::QuadOut => 8,
+        crate::spi::IoMode::QuadIo => 6,
+        crate::spi::IoMode::Qpi => 0,
+    }
+}
 
 // =============================================================================
 // Smart erase/write support
@@ -754,78 +801,44 @@ pub async fn read<M: SpiMaster + ?Sized>(
     addr: u32,
     buf: &mut [u8],
 ) -> Result<()> {
-    use crate::chip::Features;
-    use crate::spi::IoMode;
-
     if !ctx.is_valid_range(addr, buf.len()) {
         return Err(Error::AddressOutOfBounds);
     }
 
-    let chip_has_dual = ctx.chip.features.contains(Features::DUAL_IO);
-    let chip_has_quad = ctx.chip.features.contains(Features::QUAD_IO);
-    let use_4byte = ctx.address_mode == AddressMode::FourByte && ctx.use_native_4byte;
+    let features = ctx.chip.features;
     let master_features = master.features();
+    let try_native_4byte =
+        ctx.address_mode == AddressMode::FourByte && features.supports_4ba_read();
 
-    // Select the best read mode based on chip and programmer capabilities
-    let (io_mode, _opcode) =
-        protocol::select_read_mode(master_features, chip_has_dual, chip_has_quad, use_4byte);
+    let (io_mode, opcode, native_4byte) =
+        protocol::select_read_mode(master_features, features, try_native_4byte, |opcode| {
+            master.probe_opcode(opcode)
+        });
 
-    // Enter 4-byte mode if needed and not using native commands
-    let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !ctx.use_native_4byte;
-    if enter_exit_4byte {
-        protocol::enter_4byte_mode(master).await?;
-    }
-
-    let result = match io_mode {
-        IoMode::Single => {
-            if use_4byte {
-                protocol::read_4b(master, addr, buf).await
-            } else {
-                protocol::read_3b(master, addr, buf).await
-            }
-        }
-        IoMode::DualOut => {
-            if use_4byte {
-                protocol::read_dual_out_4b(master, addr, buf).await
-            } else {
-                protocol::read_dual_out_3b(master, addr, buf).await
-            }
-        }
-        IoMode::DualIo => {
-            if use_4byte {
-                protocol::read_dual_io_4b(master, addr, buf).await
-            } else {
-                protocol::read_dual_io_3b(master, addr, buf).await
-            }
-        }
-        IoMode::QuadOut => {
-            if use_4byte {
-                protocol::read_quad_out_4b(master, addr, buf).await
-            } else {
-                protocol::read_quad_out_3b(master, addr, buf).await
-            }
-        }
-        IoMode::QuadIo => {
-            if use_4byte {
-                protocol::read_quad_io_4b(master, addr, buf).await
-            } else {
-                protocol::read_quad_io_3b(master, addr, buf).await
-            }
-        }
-        IoMode::Qpi => {
-            // QPI mode requires special handling - fall back to single for now
-            // TODO: Implement QPI read when needed
-            log::warn!("QPI read mode not yet implemented, falling back to single I/O");
-            if use_4byte {
-                protocol::read_4b(master, addr, buf).await
-            } else {
-                protocol::read_3b(master, addr, buf).await
-            }
-        }
+    let (addressing, enter_exit_4byte) = if ctx.address_mode == AddressMode::FourByte {
+        addressing_for_4byte_operation(native_4byte, features, master_features)?
+    } else {
+        (CommandAddressing::ThreeByte, false)
     };
 
-    // Exit 4-byte mode if we entered it
-    if enter_exit_4byte && let Err(e) = protocol::exit_4byte_mode(master).await {
+    if enter_exit_4byte {
+        protocol::enter_4byte_mode_with_features(master, features).await?;
+    }
+
+    let result = protocol::read_io_with_addressing(
+        master,
+        opcode,
+        addr,
+        buf,
+        addressing,
+        io_mode,
+        read_dummy_cycles(io_mode),
+    )
+    .await;
+
+    if enter_exit_4byte
+        && let Err(e) = protocol::exit_4byte_mode_with_features(master, features).await
+    {
         log::warn!("Failed to exit 4-byte address mode: {}", e);
     }
 
@@ -851,17 +864,31 @@ pub async fn write<M: SpiMaster + ?Sized>(
         return Err(Error::AddressOutOfBounds);
     }
 
+    let features = ctx.chip.features;
     let page_size = ctx.page_size();
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
-    let use_native = ctx.use_native_4byte;
+    let master_features = master.features();
+    let use_native = use_4byte
+        && features.supports_4ba_program()
+        && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
+        && master.probe_opcode(crate::spi::opcodes::PP_4B);
+    let (addressing, enter_exit_4byte) = if use_4byte {
+        addressing_for_4byte_operation(use_native, features, master_features)?
+    } else {
+        (CommandAddressing::ThreeByte, false)
+    };
+    let opcode = if use_native {
+        crate::spi::opcodes::PP_4B
+    } else {
+        crate::spi::opcodes::PP
+    };
 
     // Get the master's maximum write length - some controllers have limits
     // smaller than a full page (e.g., Intel swseq is limited to 64 bytes)
     let max_write = master.max_write_len();
 
-    // Enter 4-byte mode if needed and not using native commands
-    if use_4byte && !use_native {
-        protocol::enter_4byte_mode(master).await?;
+    if enter_exit_4byte {
+        protocol::enter_4byte_mode_with_features(master, features).await?;
     }
 
     let mut offset = 0usize;
@@ -877,17 +904,13 @@ pub async fn write<M: SpiMaster + ?Sized>(
 
         let chunk = &data[offset..offset + chunk_size];
 
-        let result = if use_4byte && use_native {
-            protocol::program_page_4b(master, current_addr, chunk).await
-        } else {
-            protocol::program_page_3b(master, current_addr, chunk).await
-        };
+        let result =
+            protocol::program_page_with_addressing(master, opcode, current_addr, chunk, addressing)
+                .await;
 
         if result.is_err() {
-            // Try to exit 4-byte mode before returning error
-            if use_4byte
-                && !use_native
-                && let Err(e) = protocol::exit_4byte_mode(master).await
+            if enter_exit_4byte
+                && let Err(e) = protocol::exit_4byte_mode_with_features(master, features).await
             {
                 log::warn!("Failed to exit 4-byte address mode: {}", e);
             }
@@ -898,9 +921,8 @@ pub async fn write<M: SpiMaster + ?Sized>(
         current_addr += chunk_size as u32;
     }
 
-    // Exit 4-byte mode if we entered it
-    if use_4byte && !use_native {
-        protocol::exit_4byte_mode(master).await?;
+    if enter_exit_4byte {
+        protocol::exit_4byte_mode_with_features(master, features).await?;
     }
 
     Ok(())
@@ -933,23 +955,6 @@ pub fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> O
         })
         .max_by_key(|eb| eb.max_block_size())
         .cloned()
-}
-
-/// Map a 3-byte erase opcode to its 4-byte equivalent
-///
-/// Converts standard 3-byte address erase opcodes to their 4-byte variants:
-/// - SE (0x20) -> SE_4B (0x21)
-/// - BE_32K (0x52) -> BE_32K_4B (0x5C)  
-/// - BE_64K (0xD8) -> BE_64K_4B (0xDC)
-/// - Other opcodes (like chip erase) are returned unchanged
-pub fn map_to_4byte_erase_opcode(opcode: u8) -> u8 {
-    use crate::spi::opcodes;
-    match opcode {
-        opcodes::SE_20 => opcodes::SE_21,
-        opcodes::BE_52 => opcodes::BE_5C,
-        opcodes::BE_D8 => opcodes::BE_DC,
-        _ => opcode, // Chip erase doesn't need address
-    }
 }
 
 // =============================================================================

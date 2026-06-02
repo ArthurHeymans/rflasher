@@ -7,9 +7,11 @@ use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{EraseFailure, Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
-use crate::flash::operations::{map_to_4byte_erase_opcode, select_erase_block};
-use crate::programmer::SpiMaster;
-use crate::protocol;
+use crate::flash::operations::{
+    addressing_for_4byte_operation, read_dummy_cycles, select_erase_block,
+};
+use crate::programmer::{SpiFeatures, SpiMaster};
+use crate::protocol::{self, CommandAddressing};
 use crate::wp::{
     self, RangeDecoder, WpBits, WpConfig, WpMode, WpRange, WpRegBitMap, WpResult, WriteOptions,
 };
@@ -136,84 +138,49 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
-        use crate::chip::Features;
-        use crate::spi::IoMode;
-
         let ctx = self.context();
         if !ctx.is_valid_range(addr, buf.len()) {
             return Err(Error::AddressOutOfBounds);
         }
 
-        let chip_has_dual = ctx.chip.features.contains(Features::DUAL_IO);
-        let chip_has_quad = ctx.chip.features.contains(Features::QUAD_IO);
-        let use_native_4byte = ctx.use_native_4byte;
-        let use_4byte_native = ctx.address_mode == AddressMode::FourByte && use_native_4byte;
-        let enter_exit_4byte = ctx.address_mode == AddressMode::FourByte && !use_native_4byte;
+        let chip_features = ctx.chip.features;
+        let address_mode = ctx.address_mode;
+        let try_native_4byte =
+            address_mode == AddressMode::FourByte && chip_features.supports_4ba_read();
+        let master_features = self.master.features();
 
-        let master_features = self.master().features();
-
-        // Select the best read mode based on chip and programmer capabilities
-        let (io_mode, ..) = protocol::select_read_mode(
+        let (io_mode, opcode, native_4byte) = protocol::select_read_mode(
             master_features,
-            chip_has_dual,
-            chip_has_quad,
-            use_4byte_native,
+            chip_features,
+            try_native_4byte,
+            |opcode| self.master.probe_opcode(opcode),
         );
 
-        // Enter 4-byte mode if needed and not using native commands
-        if enter_exit_4byte {
-            protocol::enter_4byte_mode(self.master()).await?;
-        }
-
-        let result = match io_mode {
-            IoMode::Single => {
-                if use_4byte_native {
-                    protocol::read_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_3b(self.master(), addr, buf).await
-                }
-            }
-            IoMode::DualOut => {
-                if use_4byte_native {
-                    protocol::read_dual_out_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_dual_out_3b(self.master(), addr, buf).await
-                }
-            }
-            IoMode::DualIo => {
-                if use_4byte_native {
-                    protocol::read_dual_io_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_dual_io_3b(self.master(), addr, buf).await
-                }
-            }
-            IoMode::QuadOut => {
-                if use_4byte_native {
-                    protocol::read_quad_out_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_quad_out_3b(self.master(), addr, buf).await
-                }
-            }
-            IoMode::QuadIo => {
-                if use_4byte_native {
-                    protocol::read_quad_io_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_quad_io_3b(self.master(), addr, buf).await
-                }
-            }
-            IoMode::Qpi => {
-                // QPI mode requires special handling - fall back to single for now
-                log::warn!("QPI read mode not yet implemented, falling back to single I/O");
-                if use_4byte_native {
-                    protocol::read_4b(self.master(), addr, buf).await
-                } else {
-                    protocol::read_3b(self.master(), addr, buf).await
-                }
-            }
+        let (addressing, enter_exit_4byte) = if address_mode == AddressMode::FourByte {
+            addressing_for_4byte_operation(native_4byte, chip_features, master_features)?
+        } else {
+            (CommandAddressing::ThreeByte, false)
         };
 
-        // Exit 4-byte mode if we entered it
-        if enter_exit_4byte && let Err(e) = protocol::exit_4byte_mode(self.master()).await {
+        if enter_exit_4byte {
+            protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
+        }
+
+        let result = protocol::read_io_with_addressing(
+            self.master(),
+            opcode,
+            addr,
+            buf,
+            addressing,
+            io_mode,
+            read_dummy_cycles(io_mode),
+        )
+        .await;
+
+        if enter_exit_4byte
+            && let Err(e) =
+                protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
+        {
             log::warn!("Failed to exit 4-byte address mode: {}", e);
         }
 
@@ -232,7 +199,21 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         let write_granularity = ctx.chip.write_granularity;
         let page_size = ctx.page_size();
         let use_4byte = ctx.address_mode == AddressMode::FourByte;
-        let use_native = ctx.use_native_4byte;
+        let master_features = self.master.features();
+        let use_native = use_4byte
+            && features.supports_4ba_program()
+            && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
+            && self.master.probe_opcode(crate::spi::opcodes::PP_4B);
+        let (addressing, enter_exit_4byte) = if use_4byte {
+            addressing_for_4byte_operation(use_native, features, master_features)?
+        } else {
+            (CommandAddressing::ThreeByte, false)
+        };
+        let opcode = if use_native {
+            crate::spi::opcodes::PP_4B
+        } else {
+            crate::spi::opcodes::PP
+        };
 
         // SST25 AAI word program: chip database sets AAI_WORD for SST25VFxxxB/SST25WFxxx.
         // These chips require a streaming protocol (0xAD) rather than page program (0x02).
@@ -247,9 +228,8 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         // smaller than a full page (e.g., Intel swseq is limited to 64 bytes)
         let max_write = self.master().max_write_len();
 
-        // Enter 4-byte mode if needed and not using native commands
-        if use_4byte && !use_native {
-            protocol::enter_4byte_mode(self.master()).await?;
+        if enter_exit_4byte {
+            protocol::enter_4byte_mode_with_features(self.master(), features).await?;
         }
 
         let mut offset = 0usize;
@@ -273,16 +253,19 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
             let chunk = &data[offset..offset + chunk_size];
 
-            let result = if use_4byte && use_native {
-                protocol::program_page_4b(self.master(), current_addr, chunk).await
-            } else {
-                protocol::program_page_3b(self.master(), current_addr, chunk).await
-            };
+            let result = protocol::program_page_with_addressing(
+                self.master(),
+                opcode,
+                current_addr,
+                chunk,
+                addressing,
+            )
+            .await;
 
             if result.is_err() {
-                if use_4byte
-                    && !use_native
-                    && let Err(e) = protocol::exit_4byte_mode(self.master()).await
+                if enter_exit_4byte
+                    && let Err(e) =
+                        protocol::exit_4byte_mode_with_features(self.master(), features).await
                 {
                     log::warn!("Failed to exit 4-byte address mode: {}", e);
                 }
@@ -293,9 +276,8 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             current_addr += chunk_size as u32;
         }
 
-        // Exit 4-byte mode if we entered it
-        if use_4byte && !use_native {
-            protocol::exit_4byte_mode(self.master()).await?;
+        if enter_exit_4byte {
+            protocol::exit_4byte_mode_with_features(self.master(), features).await?;
         }
 
         Ok(())
@@ -326,19 +308,23 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         let erase_block = select_erase_block(ctx.chip.erase_blocks(), addr, len)
             .ok_or(Error::InvalidAlignment)?;
 
+        let chip_features = ctx.chip.features;
         let use_4byte = ctx.address_mode == AddressMode::FourByte;
-        let use_native = ctx.use_native_4byte;
-
-        // Map 3-byte opcode to 4-byte opcode if needed
-        let opcode = if use_4byte && use_native {
-            map_to_4byte_erase_opcode(erase_block.opcode)
+        let master_features = self.master.features();
+        let use_native = use_4byte
+            && erase_block.opcode_4b.is_some_and(|opcode| {
+                master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
+                    && self.master.probe_opcode(opcode)
+            });
+        let opcode = erase_block.opcode_for_address_width(use_native);
+        let (addressing, enter_exit_4byte) = if use_4byte {
+            addressing_for_4byte_operation(use_native, chip_features, master_features)?
         } else {
-            erase_block.opcode
+            (CommandAddressing::ThreeByte, false)
         };
 
-        // Enter 4-byte mode if needed
-        if use_4byte && !use_native {
-            protocol::enter_4byte_mode(self.master()).await?;
+        if enter_exit_4byte {
+            protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
         }
 
         let mut current_addr = addr;
@@ -366,16 +352,16 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
                 self.master(),
                 opcode,
                 current_addr,
-                use_4byte && use_native,
+                addressing,
                 poll_delay_us,
                 timeout_us,
             )
             .await;
 
             if result.is_err() {
-                if use_4byte
-                    && !use_native
-                    && let Err(e) = protocol::exit_4byte_mode(self.master()).await
+                if enter_exit_4byte
+                    && let Err(e) =
+                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
                 {
                     log::warn!("Failed to exit 4-byte address mode: {}", e);
                 }
@@ -384,9 +370,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
             // Verify the block was erased
             if let Err(e) = self.check_erased_range(current_addr, block_size).await {
-                if use_4byte
-                    && !use_native
-                    && let Err(exit_e) = protocol::exit_4byte_mode(self.master()).await
+                if enter_exit_4byte
+                    && let Err(exit_e) =
+                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
                 {
                     log::warn!("Failed to exit 4-byte address mode: {}", exit_e);
                 }
@@ -396,9 +382,8 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
             current_addr += block_size;
         }
 
-        // Exit 4-byte mode
-        if use_4byte && !use_native {
-            protocol::exit_4byte_mode(self.master()).await?;
+        if enter_exit_4byte {
+            protocol::exit_4byte_mode_with_features(self.master(), chip_features).await?;
         }
 
         Ok(())

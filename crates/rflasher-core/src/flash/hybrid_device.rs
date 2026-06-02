@@ -23,9 +23,9 @@ use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
-use crate::flash::operations::{map_to_4byte_erase_opcode, select_erase_block};
-use crate::programmer::{OpaqueMaster, SpiMaster};
-use crate::protocol;
+use crate::flash::operations::{addressing_for_4byte_operation, select_erase_block};
+use crate::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
+use crate::protocol::{self, CommandAddressing};
 #[cfg(feature = "alloc")]
 use crate::wp::{
     self, RangeDecoder, WpBits, WpConfig, WpMode, WpRange, WpRegBitMap, WpResult, WriteOptions,
@@ -205,17 +205,23 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         let erase_block = select_erase_block(ctx.chip.erase_blocks(), addr, len)
             .ok_or(Error::InvalidAlignment)?;
 
+        let chip_features = ctx.chip.features;
         let use_4byte = ctx.address_mode == AddressMode::FourByte;
-        let use_native = ctx.use_native_4byte;
-
-        let opcode = if use_4byte && use_native {
-            map_to_4byte_erase_opcode(erase_block.opcode)
+        let master_features = self.master.features();
+        let use_native = use_4byte
+            && erase_block.opcode_4b.is_some_and(|opcode| {
+                master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
+                    && self.master.probe_opcode(opcode)
+            });
+        let opcode = erase_block.opcode_for_address_width(use_native);
+        let (addressing, enter_exit_4byte) = if use_4byte {
+            addressing_for_4byte_operation(use_native, chip_features, master_features)?
         } else {
-            erase_block.opcode
+            (CommandAddressing::ThreeByte, false)
         };
 
-        if use_4byte && !use_native {
-            protocol::enter_4byte_mode(self.master()).await?;
+        if enter_exit_4byte {
+            protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
         }
 
         let mut current_addr = addr;
@@ -239,15 +245,16 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
                 self.master(),
                 opcode,
                 current_addr,
-                use_4byte && use_native,
+                addressing,
                 poll_delay_us,
                 timeout_us,
             )
             .await;
 
             if result.is_err() {
-                if use_4byte && !use_native {
-                    let _ = protocol::exit_4byte_mode(self.master()).await;
+                if enter_exit_4byte {
+                    let _ =
+                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await;
                 }
                 return result;
             }
@@ -255,8 +262,8 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
             current_addr += block_size;
         }
 
-        if use_4byte && !use_native {
-            protocol::exit_4byte_mode(self.master()).await?;
+        if enter_exit_4byte {
+            protocol::exit_4byte_mode_with_features(self.master(), chip_features).await?;
         }
 
         Ok(())
