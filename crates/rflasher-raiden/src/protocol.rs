@@ -4,7 +4,7 @@
 //! ChromiumOS EC USB SPI bridges (Raiden Debug SPI).
 //!
 //! The protocol is defined in the ChromiumOS EC repository:
-//! https://chromium.googlesource.com/chromiumos/platform/ec
+//! <https://chromium.googlesource.com/chromiumos/platform/ec>
 //! Files: chip/stm32/usb_spi.h and chip/stm32/usb_spi.c
 
 #![allow(dead_code)]

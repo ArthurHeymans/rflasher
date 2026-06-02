@@ -3,6 +3,7 @@ name = "rflasher-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Core library for flash chip programming (no_std compatible)"
 
 [features]

@@ -3,10 +3,11 @@ name = "rflasher-repl"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Steel Scheme REPL for scripting raw SPI commands"
 
 [dependencies]
-rflasher-core = { workspace = true, features = ["std"] }
+rflasher-core = { workspace = true, features = ["std", "is_sync"] }
 steel-core = "0.7"
 steel-parser = "0.7"
 rustyline = { version = "14.0", features = ["derive"] }
