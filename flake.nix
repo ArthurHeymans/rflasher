@@ -76,13 +76,23 @@
               pciutils
             ];
 
-        # Base rust toolchain with WASM target for web builds
+        # Base rust toolchain with WASM target for web builds and CI checks.
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
             "rust-src"
             "rust-analyzer"
+            "rustfmt"
+            "clippy"
           ];
           targets = [ "wasm32-unknown-unknown" ];
+        };
+
+        cargoLock = {
+          lockFile = ./Cargo.lock;
+          outputHashes = {
+            "ftdi-0.1.0" = "sha256-dRQqF6TOXLGL6+XW+Y+dSeYbbwpvXTocbq7+FVDv3Og=";
+            "nusb-0.2.1" = "sha256-5GrOwak/hiRDNg/CZWcYPYCwxGMZTKEPdIMBJ7D2naI=";
+          };
         };
 
         # Rust toolchain with cross targets
@@ -157,7 +167,7 @@
               version = "0.1.0";
               src = ./.;
 
-              cargoLock.lockFile = ./Cargo.lock;
+              cargoLock = cargoLock;
 
               buildInputs = mkBuildInputs crossPkgs;
               nativeBuildInputs = [
@@ -202,6 +212,40 @@
           name: target: lib.nameValuePair "cross-${name}" (mkCrossPackage name target)
         ) crossTargets;
 
+        mkCargoCheck =
+          name: command:
+          pkgs.stdenv.mkDerivation {
+            pname = "rflasher-${name}";
+            version = "0.1.0";
+            src = ./.;
+
+            cargoDeps = pkgs.rustPlatform.importCargoLock cargoLock;
+
+            buildInputs = mkBuildInputs pkgs;
+            nativeBuildInputs = [
+              pkgs.rustPlatform.cargoSetupHook
+              pkgs.pkg-config
+              rustToolchain
+            ];
+
+            PKG_CONFIG_PATH = lib.makeSearchPath "lib/pkgconfig" (mkBuildInputs pkgs);
+            LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+            CARGO_INCREMENTAL = "0";
+
+            buildPhase = ''
+              runHook preBuild
+              ${command}
+              runHook postBuild
+            '';
+
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out
+              touch $out/${name}
+              runHook postInstall
+            '';
+          };
+
       in
       {
         devShells = {
@@ -241,13 +285,37 @@
         }
         // crossDevShells;
 
+        checks = {
+          fmt = mkCargoCheck "fmt" ''
+            cargo fmt --all -- --check
+          '';
+
+          clippy = mkCargoCheck "clippy" ''
+            cargo clippy --workspace --exclude rflasher-wasm --all-targets --all-features -- -D warnings
+          '';
+
+          test = mkCargoCheck "test" ''
+            cargo test --workspace --exclude rflasher-wasm --all-features
+          '';
+
+          build = mkCargoCheck "build" ''
+            cargo build --workspace --exclude rflasher-wasm --all-features --release
+          '';
+
+          wasm = mkCargoCheck "wasm" ''
+            export RUSTFLAGS="--cfg=web_sys_unstable_apis"
+            cargo clippy --package rflasher-wasm --target wasm32-unknown-unknown -- -D warnings
+            cargo build --package rflasher-wasm --target wasm32-unknown-unknown --release
+          '';
+        };
+
         packages = {
           default = pkgs.rustPlatform.buildRustPackage {
             pname = "rflasher";
             version = "0.1.0";
             src = ./.;
 
-            cargoLock.lockFile = ./Cargo.lock;
+            cargoLock = cargoLock;
 
             buildInputs = mkBuildInputs pkgs;
             nativeBuildInputs = [
