@@ -1,56 +1,56 @@
 [workspace]
 members = [
-    "crates/rflasher-core",
-    "crates/rflasher-flash",
-    "crates/rflasher-chips-codegen",
-    "crates/rflasher-ch341a",
-    "crates/rflasher-ch347",
-    "crates/rflasher-dediprog",
-    "crates/rflasher-serprog",
-    "crates/rflasher-ftdi",
-    "crates/rflasher-ft4222",
-    "crates/rflasher-internal",
-    "crates/rflasher-linux-spi",
-    "crates/rflasher-linux-mtd",
-    "crates/rflasher-linux-gpio",
-    "crates/rflasher-dummy",
-    "crates/rflasher-raiden",
-    "crates/rflasher-sunxi-fel",
-    "crates/rflasher-repl",
-    "crates/rflasher-wasm",
+  "crates/rflasher-core",
+  "crates/rflasher-flash",
+  "crates/rflasher-chips-codegen",
+  "crates/rflasher-ch341a",
+  "crates/rflasher-ch347",
+  "crates/rflasher-dediprog",
+  "crates/rflasher-serprog",
+  "crates/rflasher-ftdi",
+  "crates/rflasher-ft4222",
+  "crates/rflasher-internal",
+  "crates/rflasher-linux-spi",
+  "crates/rflasher-linux-mtd",
+  "crates/rflasher-linux-gpio",
+  "crates/rflasher-dummy",
+  "crates/rflasher-raiden",
+  "crates/rflasher-sunxi-fel",
+  "crates/rflasher-repl",
+  "crates/rflasher-wasm",
 ]
 # Exclude WASM crate from default build (requires wasm32 target)
 default-members = [
-    ".",
-    "crates/rflasher-core",
-    "crates/rflasher-flash",
-    "crates/rflasher-chips-codegen",
-    "crates/rflasher-ch341a",
-    "crates/rflasher-ch347",
-    "crates/rflasher-dediprog",
-    "crates/rflasher-serprog",
-    "crates/rflasher-ftdi",
-    "crates/rflasher-ft4222",
-    "crates/rflasher-internal",
-    "crates/rflasher-linux-spi",
-    "crates/rflasher-linux-mtd",
-    "crates/rflasher-linux-gpio",
-    "crates/rflasher-dummy",
-    "crates/rflasher-raiden",
-    "crates/rflasher-sunxi-fel",
-    "crates/rflasher-repl",
+  ".",
+  "crates/rflasher-core",
+  "crates/rflasher-flash",
+  "crates/rflasher-chips-codegen",
+  "crates/rflasher-ch341a",
+  "crates/rflasher-ch347",
+  "crates/rflasher-dediprog",
+  "crates/rflasher-serprog",
+  "crates/rflasher-ftdi",
+  "crates/rflasher-ft4222",
+  "crates/rflasher-internal",
+  "crates/rflasher-linux-spi",
+  "crates/rflasher-linux-mtd",
+  "crates/rflasher-linux-gpio",
+  "crates/rflasher-dummy",
+  "crates/rflasher-raiden",
+  "crates/rflasher-sunxi-fel",
+  "crates/rflasher-repl",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "GPL-2.0-or-later"
-repository = "https://github.com/user/rflasher"
+repository = "https://github.com/ArthurHeymans/rflasher"
 
 [workspace.dependencies]
 # Internal crates - NOTE: is_sync is NOT included here to allow async builds (WASM)
 # Crates that need sync mode should add `features = ["is_sync"]` explicitly
-rflasher-core = { path = "crates/rflasher-core", default-features = false }
+rflasher-core = { version = "0.1.0", path = "crates/rflasher-core", default-features = false }
 
 # Core
 bitflags = "2"
@@ -62,7 +62,7 @@ log = "0.4"
 thiserror = "2"
 env_logger = "0.11"
 tokio = { version = "1", features = ["full"] }
-nusb = { git = "https://github.com/ArthuRheymans/nusb.git", branch = "task/webusb-rebased" }
+nusb = "0.2"
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.17"
 
@@ -79,14 +79,50 @@ heapless = { version = "0.8", features = ["serde"] }
 once_cell = { version = "1.21", default-features = false }
 maybe-async = "0.2"
 
+# Local WebUSB support until the nusb WebUSB backend is released on crates.io.
+# Published crates still depend on crates.io `nusb = "0.2"`; this patch is a
+# workspace-only development override used by the unpublished WASM frontend.
+#
+# ftdi-nusb is also patched locally because crates.io ftdi-nusb 0.1.0 does not
+# yet expose its `wasm` feature. Once that feature is published, remove this
+# ftdi-nusb patch and keep only the nusb override for local WASM builds.
+[patch.crates-io]
+nusb = { git = "https://github.com/ArthuRheymans/nusb.git", branch = "task/webusb-rebased" }
+ftdi-nusb = { git = "https://github.com/ArthurHeymans/ftdi-nusb.git", branch = "feat/wasm-webusb" }
+
 [package]
 name = "rflasher"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Command-line flash chip programming tool"
+readme = "README.md"
+exclude = [
+  "/.github",
+  "/.pi-lens",
+  "/docs",
+  "/firmware",
+  "/flake.*",
+  "/rflasher.png",
+  "/web",
+]
 
 [features]
-default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden", "sunxi-fel"]
+default = [
+  "dummy",
+  "ch341a",
+  "ch347",
+  "dediprog",
+  "serprog",
+  "ft4222",
+  "ftdi",
+  "linux-spi",
+  "linux-mtd",
+  "internal",
+  "raiden",
+  "sunxi-fel",
+]
 
 # Programmer features (passed through to rflasher-flash)
 dummy = ["rflasher-flash/dummy"]
@@ -109,14 +145,45 @@ sunxi-fel = ["rflasher-flash/sunxi-fel"]
 repl = ["dep:rflasher-repl"]
 
 # Enable all programmers
-all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "sunxi-fel"]
+all-programmers = [
+  "dummy",
+  "ch341a",
+  "ch347",
+  "dediprog",
+  "serprog",
+  "ftdi",
+  "ft4222",
+  "linux-spi",
+  "linux-mtd",
+  "linux-gpio",
+  "internal",
+  "raiden",
+  "sunxi-fel",
+]
 # Enable all programmers with pure-Rust FTDI backend
-all-programmers-native = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi-native", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "sunxi-fel"]
+all-programmers-native = [
+  "dummy",
+  "ch341a",
+  "ch347",
+  "dediprog",
+  "serprog",
+  "ftdi-native",
+  "ft4222",
+  "linux-spi",
+  "linux-mtd",
+  "linux-gpio",
+  "internal",
+  "raiden",
+  "sunxi-fel",
+]
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std", "is_sync"] }
-rflasher-flash = { path = "crates/rflasher-flash", features = ["std", "is_sync"] }
-rflasher-repl = { path = "crates/rflasher-repl", optional = true }
+rflasher-flash = { version = "0.1.0", path = "crates/rflasher-flash", features = [
+  "std",
+  "is_sync",
+] }
+rflasher-repl = { version = "0.1.0", path = "crates/rflasher-repl", optional = true }
 clap.workspace = true
 clap_mangen = "0.2"
 env_logger.workspace = true

@@ -3,6 +3,7 @@ name = "rflasher-raiden"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Raiden Debug SPI (Chrome OS EC USB) programmer support for rflasher"
 
 [features]

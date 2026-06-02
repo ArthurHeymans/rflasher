@@ -3,12 +3,14 @@ name = "rflasher-dummy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Dummy/emulator flash programmer for testing"
 
 [features]
 default = ["std"]
-std = ["rflasher-core/std", "alloc"]
+std = ["rflasher-core/std", "alloc", "is_sync"]
 alloc = ["rflasher-core/alloc"]
+is_sync = ["rflasher-core/is_sync"]
 
 [dependencies]
 rflasher-core.workspace = true

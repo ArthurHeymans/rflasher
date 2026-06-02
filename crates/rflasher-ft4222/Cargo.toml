@@ -3,6 +3,7 @@ name = "rflasher-ft4222"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "FT4222H USB SPI programmer support for rflasher"
 
 [features]
