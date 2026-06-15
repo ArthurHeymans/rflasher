@@ -7,7 +7,8 @@
 //! # Supported Chipsets
 //!
 //! - ICH7: Original SPI controller (swseq only)
-//! - ICH8-ICH10: Hardware sequencing introduced
+//! - ICH8: ICH9-like software sequencing; hardware sequencing is unsupported
+//! - ICH9-ICH10: Hardware sequencing introduced
 //! - 5-9 Series (Ibex Peak through Wildcat Point)
 //! - 100+ Series (Sunrise Point and later): New register layout
 //!
@@ -943,11 +944,11 @@ impl<H: HostAccess> IchSpiController<H> {
             // Check if hwseq is supported
             if !self.generation.supports_hwseq() {
                 log::error!(
-                    "Hardware sequencing requested but not supported on {} (ICH7 only supports swseq)",
+                    "Hardware sequencing requested but not supported on {} (ICH7/ICH8 only support swseq)",
                     self.generation
                 );
                 return Err(InternalError::NotSupported(
-                    "Hardware sequencing not available on ICH7",
+                    "Hardware sequencing not available on ICH7/ICH8",
                 ));
             }
             if !self.desc_valid {
@@ -973,8 +974,8 @@ impl<H: HostAccess> IchSpiController<H> {
         } else {
             // Auto mode selection logic
             if !self.generation.supports_hwseq() {
-                // ICH7: swseq only
-                log::debug!("Using swseq (ICH7 has no hwseq support)");
+                // ICH7/ICH8: swseq only
+                log::debug!("Using swseq ({} has no hwseq support)", self.generation);
                 SpiMode::SoftwareSequencing
             } else if self.swseq_locked {
                 // swseq locked, must use hwseq
