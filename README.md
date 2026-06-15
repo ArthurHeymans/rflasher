@@ -15,7 +15,7 @@ A modern Rust implementation for reading, writing, and erasing SPI flash chips. 
 - **Modern Rust Architecture**: Clean separation of concerns with workspace organization
 - **Dual-Mode Support**: Synchronous CLI and asynchronous WASM/browser support from a single codebase
 - **Web Interface**: Browser-based UI using egui and WebSerial API for programming flash chips directly in Chrome/Edge
-- **`no_std` Compatible Core**: Designed for potential embedded and async use cases. WIP
+- **`no_std` Compatible Core**: Core flash and selected internal-controller logic can be reused in firmware/embedded environments.
 - **RON-based Chip Database**: Human-readable chip definitions with build-time code generation
 - **Trait-based Programmer Abstraction**: Extensible design for adding new programmers
 - **Layout Support**: Intel Flash Descriptor (IFD) and FMAP parsing for region-based operations
@@ -223,7 +223,7 @@ rflasher probe -p dediprog:spispeed=12M
 # Raiden Debug SPI (Chrome OS debug hardware)
 rflasher probe -p raiden
 
-# Internal chipset programmer (Intel/AMD)
+# Internal chipset programmer (Intel/AMD; Linux userspace only)
 rflasher probe -p internal
 
 # FTDI with specific device type
@@ -250,6 +250,25 @@ rflasher probe -p linux_mtd:dev=0
 # Linux MTD - read from device 0
 rflasher read -p linux_mtd:dev=0 -o flash_backup.bin
 ```
+
+### Internal Programmer and Embedded Reuse
+
+The `internal` programmer uses chipset-integrated SPI controllers. The CLI path is available on Linux userspace and uses Linux PCI sysfs plus `/dev/mem`, so it usually requires root or equivalent hardware access permissions.
+
+The low-level Intel ICH/PCH and AMD SPI100 controller code is also structured for firmware reuse without duplicating controller logic. Embedded callers provide the platform-specific access layer by implementing `rflasher_internal::HostAccess`:
+
+- `PciConfigAccess` methods for PCI configuration reads/writes.
+- `map_mmio` for controller register and optional flash memory windows.
+- `delay_us` for short controller polling delays.
+
+For a synchronous `no_std` firmware integration, depend on the crates without default features:
+
+```toml
+rflasher-core = { version = "0.1", default-features = false, features = ["is_sync"] }
+rflasher-internal = { version = "0.1", default-features = false, features = ["is_sync"] }
+```
+
+Firmware code can pass its own PCI scan results to `find_intel_chipset_in_devices` / `find_amd_chipset_in_devices`, then construct controllers with `IchSpiController::new_with_host(...)` or `AmdSpi100Info::create_controller_with_host(...)`.
 
 ### Layout Operations
 

@@ -45,14 +45,14 @@ pub enum PciAccessError {
         bus: u8,
         device: u8,
         function: u8,
-        register: u8,
+        register: u16,
     },
     /// Failed to write PCI config space
     ConfigWrite {
         bus: u8,
         device: u8,
         function: u8,
-        register: u8,
+        register: u16,
     },
     /// BAR not available or invalid
     InvalidBar(u8),

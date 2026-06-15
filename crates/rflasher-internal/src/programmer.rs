@@ -4,9 +4,12 @@
 //! the low-level controllers (Intel ICH/PCH or AMD SPI100) and implements
 //! the appropriate trait (SpiMaster or OpaqueMaster).
 
-use crate::amd_enable::enable_amd_spi100;
+#![cfg_attr(not(all(feature = "std", target_os = "linux")), allow(unused_imports))]
+
+use crate::amd_enable::enable_amd_spi100_with_host;
 use crate::controller::Controller;
 use crate::error::InternalError;
+use crate::host::{Bdf, DefaultPciAccess};
 use crate::ichspi::{IchSpiController, SpiMode};
 use crate::{AnyDetectedChipset, DetectedAmdChipset, DetectedChipset};
 
@@ -118,11 +121,16 @@ impl InternalProgrammer {
         chipset: &DetectedAmdChipset,
         _options: InternalOptions,
     ) -> Result<Self, InternalError> {
-        // Enable the AMD SPI100 controller
-        let info = enable_amd_spi100(
+        // Enable the AMD SPI100 controller using the detected PCI segment.
+        let info = enable_amd_spi100_with_host(
+            &DefaultPciAccess,
             chipset.enable,
-            chipset.bus,
-            chipset.device,
+            Bdf::with_segment(
+                chipset.domain,
+                chipset.bus,
+                chipset.device,
+                chipset.function,
+            ),
             chipset.revision_id,
         )?;
 
@@ -159,34 +167,12 @@ impl InternalProgrammer {
     ///
     /// Returns SoftwareSequencing for AMD controllers
     pub fn mode(&self) -> SpiMode {
-        self.intel_controller()
-            .map(|c| c.mode())
-            .unwrap_or(SpiMode::SoftwareSequencing)
+        self.controller.spi_mode()
     }
 
     /// Check if writes are enabled (internal helper)
     fn writes_enabled(&self) -> bool {
         self.controller.writes_enabled()
-    }
-
-    /// Check if this is an Intel controller (internal helper)
-    fn is_intel(&self) -> bool {
-        self.controller.controller_name() == "Intel ICH/PCH"
-    }
-
-    /// Get a reference to the underlying Intel controller (internal helper)
-    ///
-    /// Returns None for AMD controllers.
-    fn intel_controller(&self) -> Option<&IchSpiController> {
-        // SAFETY: We use controller_name to determine the type
-        if self.is_intel() {
-            // Downcast the trait object to the concrete type
-            let controller_ptr = &*self.controller as *const dyn Controller;
-            let intel_ptr = controller_ptr as *const IchSpiController;
-            unsafe { Some(&*intel_ptr) }
-        } else {
-            None
-        }
     }
 }
 
@@ -287,7 +273,7 @@ impl InternalProgrammer {
     }
 }
 
-#[cfg(not(all(feature = "std", target_os = "linux")))]
+#[cfg(all(feature = "is_sync", not(all(feature = "std", target_os = "linux"))))]
 impl OpaqueMaster for InternalProgrammer {
     fn size(&self) -> usize {
         0
@@ -306,7 +292,7 @@ impl OpaqueMaster for InternalProgrammer {
     }
 }
 
-#[cfg(not(all(feature = "std", target_os = "linux")))]
+#[cfg(all(feature = "is_sync", not(all(feature = "std", target_os = "linux"))))]
 impl SpiMaster for InternalProgrammer {
     fn features(&self) -> SpiFeatures {
         SpiFeatures::empty()

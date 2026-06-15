@@ -48,6 +48,7 @@ pub mod amd_spi100;
 pub mod chipset;
 pub mod controller;
 pub mod error;
+pub mod host;
 pub mod ich_regs;
 pub mod ichspi;
 pub mod intel_pci;
@@ -55,16 +56,20 @@ pub mod pci;
 pub mod physmap;
 pub mod programmer;
 
-pub use amd_enable::{AmdSpi100Info, enable_amd_spi100};
+pub use amd_enable::{AmdSpi100Info, enable_amd_spi100, enable_amd_spi100_with_host};
 pub use amd_pci::{AMD_CHIPSETS, AMD_VID, AmdChipset, AmdChipsetEnable};
 pub use amd_spi100::Spi100Controller;
 pub use chipset::{BusType, ChipsetEnable, IchChipset, TestStatus};
 pub use error::{InternalError, PciAccessError};
+#[cfg(all(feature = "std", target_os = "linux"))]
+pub use host::LinuxHost;
+pub use host::{Bdf, DefaultPciAccess, HostAccess, MmioAccess, PciConfigAccess};
 pub use ichspi::{IchSpiController, SpiMode};
 pub use intel_pci::{INTEL_CHIPSETS, INTEL_VID, find_chipset};
 pub use pci::{
-    DetectedAmdChipset, PciDevice, find_amd_chipset, find_intel_chipset, scan_for_amd_chipsets,
-    scan_for_intel_chipsets, scan_pci_bus,
+    DetectedAmdChipset, PciDevice, find_amd_chipset, find_amd_chipset_in_devices,
+    find_amd_chipset_in_iter, find_intel_chipset, find_intel_chipset_in_devices,
+    find_intel_chipset_in_iter, scan_for_amd_chipsets, scan_for_intel_chipsets, scan_pci_bus,
 };
 pub use physmap::PhysMap;
 pub use programmer::{InternalOptions, InternalProgrammer, programmer_info};
@@ -80,6 +85,8 @@ pub type Result<T> = core::result::Result<T, InternalError>;
 pub struct DetectedChipset {
     /// The chipset enable entry from the database
     pub enable: &'static ChipsetEnable,
+    /// PCI segment/domain
+    pub domain: u16,
     /// PCI bus number
     pub bus: u8,
     /// PCI device number  
