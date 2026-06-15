@@ -1,5 +1,9 @@
 # rflasher
 
+<p align="center">
+  <img src="docs/images/rflasher.png" alt="rflasher logo" width="160">
+</p>
+
 A modern Rust implementation for reading, writing, and erasing SPI flash chips. This is a loose port of [flashprog](https://github.com/SourceArcade/flashprog).
 
 > **⚠️ ALPHA SOFTWARE WARNING**
