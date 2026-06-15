@@ -7,7 +7,8 @@
 //! # Supported Chipsets
 //!
 //! - ICH7: Original SPI controller (swseq only)
-//! - ICH8-ICH10: Hardware sequencing introduced
+//! - ICH8: ICH9-like software sequencing; hardware sequencing is unsupported
+//! - ICH9-ICH10: Hardware sequencing introduced
 //! - 5-9 Series (Ibex Peak through Wildcat Point)
 //! - 100+ Series (Sunrise Point and later): New register layout
 //!
@@ -183,10 +184,11 @@ pub fn get_spibar_address_with_host<H: PciConfigAccess>(
         }
 
         let rcba_base = (rcba & !0x3fff) as u64;
-        let spi_offset = if generation == IchChipset::Ich7 {
-            RCBA_SPI_OFFSET_ICH7
-        } else {
-            RCBA_SPI_OFFSET_ICH9
+        let spi_offset = match generation {
+            // flashprog: SPIBAR is at RCRB+0x3020 for ICH7 and ICH8,
+            // and at RCRB+0x3800 for ICH9 and newer legacy-RCBA chipsets.
+            IchChipset::Ich7 | IchChipset::Ich8 => RCBA_SPI_OFFSET_ICH7,
+            _ => RCBA_SPI_OFFSET_ICH9,
         };
 
         Ok(rcba_base + spi_offset as u64)
@@ -942,11 +944,11 @@ impl<H: HostAccess> IchSpiController<H> {
             // Check if hwseq is supported
             if !self.generation.supports_hwseq() {
                 log::error!(
-                    "Hardware sequencing requested but not supported on {} (ICH7 only supports swseq)",
+                    "Hardware sequencing requested but not supported on {} (ICH7/ICH8 only support swseq)",
                     self.generation
                 );
                 return Err(InternalError::NotSupported(
-                    "Hardware sequencing not available on ICH7",
+                    "Hardware sequencing not available on ICH7/ICH8",
                 ));
             }
             if !self.desc_valid {
@@ -972,8 +974,8 @@ impl<H: HostAccess> IchSpiController<H> {
         } else {
             // Auto mode selection logic
             if !self.generation.supports_hwseq() {
-                // ICH7: swseq only
-                log::debug!("Using swseq (ICH7 has no hwseq support)");
+                // ICH7/ICH8: swseq only
+                log::debug!("Using swseq ({} has no hwseq support)", self.generation);
                 SpiMode::SoftwareSequencing
             } else if self.swseq_locked {
                 // swseq locked, must use hwseq
@@ -2670,7 +2672,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_spibar_address_with_host_legacy_rcba() {
+    fn test_get_spibar_address_with_host_ich7_legacy_rcba() {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Ich7);
         let lpc_bdf = Bdf::with_segment(
@@ -2684,6 +2686,40 @@ mod tests {
         let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
 
         assert_eq!(spibar, 0xfed1_8000 + RCBA_SPI_OFFSET_ICH7 as u64);
+    }
+
+    #[test]
+    fn test_get_spibar_address_with_host_ich8_uses_ich7_rcba_offset() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::Ich8);
+        let lpc_bdf = Bdf::with_segment(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        host.set_config32(lpc_bdf, PCI_REG_RCBA as u16, 0xfed1_c001);
+
+        let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
+
+        assert_eq!(spibar, 0xfed1_c000 + RCBA_SPI_OFFSET_ICH7 as u64);
+    }
+
+    #[test]
+    fn test_get_spibar_address_with_host_ich9_uses_ich9_rcba_offset() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::Ich9);
+        let lpc_bdf = Bdf::with_segment(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        host.set_config32(lpc_bdf, PCI_REG_RCBA as u16, 0xfed1_c001);
+
+        let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
+
+        assert_eq!(spibar, 0xfed1_c000 + RCBA_SPI_OFFSET_ICH9 as u64);
     }
 
     #[test]

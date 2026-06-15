@@ -221,10 +221,11 @@ impl IchChipset {
 
     /// Returns true if this chipset supports hardware sequencing (hwseq)
     ///
-    /// Hardware sequencing was introduced with ICH8. ICH7 only supports
-    /// software sequencing.
+    /// ICH8 has an ICH9-like descriptor/SPI engine, but flashprog treats
+    /// hardware sequencing as unsupported because the flash partition boundary
+    /// register is undocumented. ICH7 and ICH8 must use software sequencing.
     pub fn supports_hwseq(self) -> bool {
-        self >= Self::SPI_ENGINE_ICH9
+        self > Self::Ich8
     }
 
     /// Returns true if this chipset supports software sequencing (swseq)
@@ -388,3 +389,15 @@ pub const B_L: BusType = BusType::LPC;
 pub const B_LS: BusType = BusType(BusType::LPC.0 | BusType::SPI.0);
 /// SPI only
 pub const B_S: BusType = BusType::SPI;
+
+#[cfg(test)]
+mod tests {
+    use super::IchChipset;
+
+    #[test]
+    fn ich8_does_not_support_hwseq() {
+        assert!(!IchChipset::Ich7.supports_hwseq());
+        assert!(!IchChipset::Ich8.supports_hwseq());
+        assert!(IchChipset::Ich9.supports_hwseq());
+    }
+}

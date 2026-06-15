@@ -6,7 +6,8 @@
 //! # Register Layout by Generation
 //!
 //! - ICH7: Original SPI controller, software sequencing only
-//! - ICH8/ICH9: Hardware sequencing introduced, dual flash support
+//! - ICH8: ICH9-like software sequencing; hardware sequencing is unsupported
+//! - ICH9: Hardware sequencing introduced, dual flash support
 //! - PCH100+: New register layout at different offsets
 
 // ============================================================================
