@@ -183,10 +183,11 @@ pub fn get_spibar_address_with_host<H: PciConfigAccess>(
         }
 
         let rcba_base = (rcba & !0x3fff) as u64;
-        let spi_offset = if generation == IchChipset::Ich7 {
-            RCBA_SPI_OFFSET_ICH7
-        } else {
-            RCBA_SPI_OFFSET_ICH9
+        let spi_offset = match generation {
+            // flashprog: SPIBAR is at RCRB+0x3020 for ICH7 and ICH8,
+            // and at RCRB+0x3800 for ICH9 and newer legacy-RCBA chipsets.
+            IchChipset::Ich7 | IchChipset::Ich8 => RCBA_SPI_OFFSET_ICH7,
+            _ => RCBA_SPI_OFFSET_ICH9,
         };
 
         Ok(rcba_base + spi_offset as u64)
@@ -2670,7 +2671,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_spibar_address_with_host_legacy_rcba() {
+    fn test_get_spibar_address_with_host_ich7_legacy_rcba() {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Ich7);
         let lpc_bdf = Bdf::with_segment(
@@ -2684,6 +2685,40 @@ mod tests {
         let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
 
         assert_eq!(spibar, 0xfed1_8000 + RCBA_SPI_OFFSET_ICH7 as u64);
+    }
+
+    #[test]
+    fn test_get_spibar_address_with_host_ich8_uses_ich7_rcba_offset() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::Ich8);
+        let lpc_bdf = Bdf::with_segment(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        host.set_config32(lpc_bdf, PCI_REG_RCBA as u16, 0xfed1_c001);
+
+        let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
+
+        assert_eq!(spibar, 0xfed1_c000 + RCBA_SPI_OFFSET_ICH7 as u64);
+    }
+
+    #[test]
+    fn test_get_spibar_address_with_host_ich9_uses_ich9_rcba_offset() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::Ich9);
+        let lpc_bdf = Bdf::with_segment(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        host.set_config32(lpc_bdf, PCI_REG_RCBA as u16, 0xfed1_c001);
+
+        let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
+
+        assert_eq!(spibar, 0xfed1_c000 + RCBA_SPI_OFFSET_ICH9 as u64);
     }
 
     #[test]
