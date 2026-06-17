@@ -268,7 +268,7 @@ impl Dediprog {
     fn try_open_device(device_info: &nusb::DeviceInfo, config: &DediprogConfig) -> Result<Self> {
         log::info!(
             "Opening Dediprog at bus {} address {}",
-            device_info.busnum(),
+            device_info.bus_id(),
             device_info.device_address()
         );
 
@@ -309,7 +309,7 @@ impl Dediprog {
                 d.vendor_id() == DEDIPROG_USB_VENDOR && d.product_id() == DEDIPROG_USB_PRODUCT
             })
             .map(|d| DediprogDeviceInfo {
-                bus: d.busnum(),
+                bus_id: d.bus_id().to_string(),
                 address: d.device_address(),
             })
             .collect();
@@ -322,8 +322,8 @@ impl Dediprog {
 #[cfg(feature = "std")]
 #[derive(Debug, Clone)]
 pub struct DediprogDeviceInfo {
-    /// USB bus number
-    pub bus: u8,
+    /// USB bus identifier (platform-defined; integer string on Linux)
+    pub bus_id: String,
     /// USB device address
     pub address: u8,
 }
@@ -331,7 +331,11 @@ pub struct DediprogDeviceInfo {
 #[cfg(feature = "std")]
 impl std::fmt::Display for DediprogDeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Dediprog at bus {} address {}", self.bus, self.address)
+        write!(
+            f,
+            "Dediprog at bus {} address {}",
+            self.bus_id, self.address
+        )
     }
 }
 
