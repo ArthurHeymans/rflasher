@@ -138,7 +138,7 @@ impl Ft4222 {
             .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?
             .filter(|d| d.vendor_id() == FTDI_VID && d.product_id() == FT4222H_PID)
             .map(|d| Ft4222DeviceInfo {
-                bus: d.busnum(),
+                bus_id: d.bus_id().to_string(),
                 address: d.device_address(),
             })
             .collect();
@@ -238,7 +238,7 @@ impl Ft4222 {
         #[cfg(feature = "is_sync")]
         log::info!(
             "Opening FT4222H device at bus {} address {}",
-            device_info.busnum(),
+            device_info.bus_id(),
             device_info.device_address()
         );
         #[cfg(not(feature = "is_sync"))]
@@ -904,15 +904,15 @@ impl SpiMaster for Ft4222 {
 /// Information about a connected FT4222H device.
 #[derive(Debug, Clone)]
 pub struct Ft4222DeviceInfo {
-    /// USB bus number.
-    pub bus: u8,
+    /// USB bus identifier (platform-defined; integer string on Linux)
+    pub bus_id: String,
     /// USB device address.
     pub address: u8,
 }
 
 impl std::fmt::Display for Ft4222DeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FT4222H at bus {} address {}", self.bus, self.address)
+        write!(f, "FT4222H at bus {} address {}", self.bus_id, self.address)
     }
 }
 
