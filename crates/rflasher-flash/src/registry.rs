@@ -7,10 +7,12 @@ use crate::handle::{ChipInfo, FlashHandle};
 use rflasher_core::chip::ChipDatabase;
 #[allow(unused_imports)] // Used in feature-gated code
 use rflasher_core::flash::FlashDevice;
-use rflasher_core::flash::{
-    HybridFlashDevice, OpaqueFlashDevice, ProbeResult, SpiFlashDevice, probe_detailed,
-};
+#[cfg(any(feature = "linux-mtd", feature = "internal"))]
+use rflasher_core::flash::OpaqueFlashDevice;
+use rflasher_core::flash::{HybridFlashDevice, ProbeResult, SpiFlashDevice, probe_detailed};
+#[cfg(feature = "internal")]
 use rflasher_core::layout::parse_ifd;
+#[cfg(feature = "internal")]
 use rflasher_core::programmer::OpaqueMaster;
 use rflasher_core::sfdp::SfdpMismatch;
 use std::collections::HashMap;
@@ -303,7 +305,7 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
             }
         }
 
-        #[cfg(feature = "ftdi")]
+        #[cfg(any(feature = "ftdi", feature = "ftdi-native"))]
         "ftdi" | "ft2232_spi" | "ft4232_spi" => {
             use rflasher_ftdi::{parse_options, Ftdi};
             log::info!("Opening FTDI programmer for REPL...");
@@ -439,7 +441,7 @@ pub fn open_flash(
         #[cfg(feature = "serprog")]
         "serprog" => open_serprog(&params, db),
 
-        #[cfg(feature = "ftdi")]
+        #[cfg(any(feature = "ftdi", feature = "ftdi-native"))]
         "ftdi" | "ft2232_spi" | "ft4232_spi" => open_ftdi(&params, db),
 
         #[cfg(feature = "ft4222")]
@@ -470,6 +472,7 @@ pub fn open_flash(
 }
 
 // Helper to get flash size from IFD for opaque programmers
+#[cfg(feature = "internal")]
 fn get_flash_size_from_ifd(
     master: &mut dyn OpaqueMaster,
 ) -> Result<u32, Box<dyn std::error::Error>> {
@@ -665,7 +668,7 @@ fn open_serprog(
     }
 }
 
-#[cfg(feature = "ftdi")]
+#[cfg(any(feature = "ftdi", feature = "ftdi-native"))]
 fn open_ftdi(
     params: &ProgrammerParams,
     db: &ChipDatabase,
@@ -965,7 +968,7 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
             "Serial Flasher Protocol over serial/network (dev=<port>,ip=<host:port>,spispeed=<khz>)",
     });
 
-    #[cfg(feature = "ftdi")]
+    #[cfg(any(feature = "ftdi", feature = "ftdi-native"))]
     programmers.push(ProgrammerInfo {
         name: "ftdi",
         aliases: &["ft2232_spi", "ft4232_spi"],
