@@ -117,7 +117,7 @@ impl Ch347 {
             } else {
                 "F"
             },
-            device_info.busnum(),
+            device_info.bus_id(),
             device_info.device_address()
         );
 
@@ -187,7 +187,7 @@ impl Ch347 {
                 let variant =
                     Ch347Variant::from_product_id(d.product_id()).unwrap_or(Ch347Variant::Ch347T);
                 Ch347DeviceInfo {
-                    bus: d.busnum(),
+                    bus_id: d.bus_id().to_string(),
                     address: d.device_address(),
                     variant,
                 }
@@ -228,8 +228,8 @@ impl Ch347 {
 #[cfg(feature = "std")]
 #[derive(Debug, Clone)]
 pub struct Ch347DeviceInfo {
-    /// USB bus number
-    pub bus: u8,
+    /// USB bus identifier (platform-defined; integer string on Linux)
+    pub bus_id: String,
     /// USB device address
     pub address: u8,
     /// Device variant
@@ -247,7 +247,7 @@ impl std::fmt::Display for Ch347DeviceInfo {
             } else {
                 "F"
             },
-            self.bus,
+            self.bus_id,
             self.address
         )
     }

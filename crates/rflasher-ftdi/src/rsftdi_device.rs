@@ -128,7 +128,7 @@ impl Ftdi {
                 let pid = dev.product_id();
 
                 get_device_info(vid, pid).map(|info| FtdiDeviceInfo {
-                    bus: dev.busnum(),
+                    bus_id: dev.bus_id().to_string(),
                     address: dev.device_address(),
                     vendor_id: vid,
                     product_id: pid,
@@ -488,8 +488,8 @@ impl SpiMaster for Ftdi {
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 #[derive(Debug, Clone)]
 pub struct FtdiDeviceInfo {
-    /// USB bus number
-    pub bus: u8,
+    /// USB bus identifier (platform-defined; integer string on Linux)
+    pub bus_id: String,
     /// USB device address
     pub address: u8,
     /// Vendor ID
@@ -512,7 +512,7 @@ impl std::fmt::Display for FtdiDeviceInfo {
             "{} {} at bus {} address {} ({:04X}:{:04X})",
             self.vendor_name,
             self.device_name,
-            self.bus,
+            self.bus_id,
             self.address,
             self.vendor_id,
             self.product_id

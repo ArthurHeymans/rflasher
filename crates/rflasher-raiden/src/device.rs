@@ -126,7 +126,7 @@ impl RaidenDebugSpi {
 
         log::info!(
             "Opening Raiden Debug SPI device at bus {} address {} (protocol v{})",
-            device_info.bus,
+            device_info.bus_id,
             device_info.address,
             device_info.protocol_version,
         );
@@ -224,7 +224,7 @@ impl RaidenDebugSpi {
                 if let (Some(in_ep), Some(out_ep)) = (in_ep, out_ep) {
                     devices.push(RaidenDeviceInfo {
                         info: dev_info.clone(),
-                        bus: dev_info.busnum(),
+                        bus_id: dev_info.bus_id().to_string(),
                         address: dev_info.device_address(),
                         serial: dev_info.serial_number().map(|s| s.to_string()),
                         interface_num: iface_info.interface_number(),
@@ -709,8 +709,8 @@ impl SpiMaster for RaidenDebugSpi {
 pub struct RaidenDeviceInfo {
     /// nusb device info
     pub(crate) info: nusb::DeviceInfo,
-    /// USB bus number
-    pub bus: u8,
+    /// USB bus identifier (platform-defined; integer string on Linux)
+    pub bus_id: String,
     /// USB device address
     pub address: u8,
     /// Device serial number (if available)
@@ -730,7 +730,7 @@ impl std::fmt::Display for RaidenDeviceInfo {
         write!(
             f,
             "Raiden Debug SPI at bus {} address {} (v{})",
-            self.bus, self.address, self.protocol_version
+            self.bus_id, self.address, self.protocol_version
         )?;
         if let Some(ref serial) = self.serial {
             write!(f, " serial={}", serial)?;

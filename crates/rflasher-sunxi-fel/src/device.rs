@@ -63,7 +63,7 @@ impl SunxiFel {
 
         log::info!(
             "Found FEL device: bus={} addr={}",
-            device_info.busnum(),
+            device_info.bus_id(),
             device_info.device_address()
         );
 

@@ -121,7 +121,7 @@ impl Ch341a {
 
         log::info!(
             "Opening CH341A device at bus {} address {}",
-            device_info.busnum(),
+            device_info.bus_id(),
             device_info.device_address()
         );
 
@@ -173,7 +173,7 @@ impl Ch341a {
             .map_err(|e| Ch341aError::OpenFailed(e.to_string()))?
             .filter(|d| d.vendor_id() == CH341A_USB_VENDOR && d.product_id() == CH341A_USB_PRODUCT)
             .map(|d| Ch341aDeviceInfo {
-                bus: d.busnum(),
+                bus_id: d.bus_id().to_string(),
                 address: d.device_address(),
             })
             .collect();
@@ -186,8 +186,8 @@ impl Ch341a {
 #[cfg(feature = "std")]
 #[derive(Debug, Clone)]
 pub struct Ch341aDeviceInfo {
-    /// USB bus number
-    pub bus: u8,
+    /// USB bus identifier (platform-defined; integer string on Linux)
+    pub bus_id: String,
     /// USB device address
     pub address: u8,
 }
@@ -195,7 +195,7 @@ pub struct Ch341aDeviceInfo {
 #[cfg(feature = "std")]
 impl std::fmt::Display for Ch341aDeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CH341A at bus {} address {}", self.bus, self.address)
+        write!(f, "CH341A at bus {} address {}", self.bus_id, self.address)
     }
 }
 
