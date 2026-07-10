@@ -93,6 +93,7 @@ impl FlashHandle {
     }
 
     /// Create a new handle without chip information (opaque programmers)
+    #[cfg(any(feature = "linux-mtd", feature = "internal"))]
     pub(crate) fn without_chip_info(device: Box<dyn FlashDevice>) -> Self {
         Self {
             device,

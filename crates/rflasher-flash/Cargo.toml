@@ -13,7 +13,7 @@ rflasher-ch341a = { path = "../rflasher-ch341a", optional = true }
 rflasher-ch347 = { path = "../rflasher-ch347", optional = true }
 rflasher-dediprog = { path = "../rflasher-dediprog", optional = true }
 rflasher-serprog = { path = "../rflasher-serprog", optional = true }
-rflasher-ftdi = { path = "../rflasher-ftdi", optional = true }
+rflasher-ftdi = { path = "../rflasher-ftdi", optional = true, default-features = false }
 rflasher-ft4222 = { path = "../rflasher-ft4222", optional = true }
 rflasher-linux-spi = { path = "../rflasher-linux-spi", optional = true }
 rflasher-linux-mtd = { path = "../rflasher-linux-mtd", optional = true }
@@ -35,7 +35,7 @@ ch341a = ["dep:rflasher-ch341a"]
 ch347 = ["dep:rflasher-ch347"]
 dediprog = ["dep:rflasher-dediprog"]
 serprog = ["dep:rflasher-serprog"]
-ftdi = ["dep:rflasher-ftdi"]
+ftdi = ["dep:rflasher-ftdi", "rflasher-ftdi/std"]
 # Use pure-Rust rs-ftdi backend for FTDI MPSSE (instead of C libftdi1)
 ftdi-native = ["dep:rflasher-ftdi", "rflasher-ftdi/native"]
 ft4222 = ["dep:rflasher-ft4222"]
@@ -45,3 +45,7 @@ linux-gpio = ["dep:rflasher-linux-gpio"]
 internal = ["dep:rflasher-internal"]
 raiden = ["dep:rflasher-raiden"]
 sunxi-fel = ["dep:rflasher-sunxi-fel"]
+
+# Cross-platform desktop programmers: nusb-backed USB programmers plus serprog and dummy.
+# Excludes Linux-only devices and the Linux userspace internal chipset backend.
+portable-programmers = ["std", "is_sync", "dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi-native", "ft4222", "raiden", "sunxi-fel"]

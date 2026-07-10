@@ -31,7 +31,7 @@ pub fn list_programmers() {
         feature = "dummy",
         feature = "ch341a",
         feature = "serprog",
-        feature = "ftdi",
+        any(feature = "ftdi", feature = "ftdi-native"),
         feature = "linux-spi",
         feature = "internal"
     )))]
