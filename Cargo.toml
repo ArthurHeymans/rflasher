@@ -115,6 +115,9 @@ all-programmers-native = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft
 # Cross-platform desktop programmers: nusb-backed USB programmers plus serprog and dummy.
 # Excludes Linux-only devices and the Linux userspace internal chipset backend.
 portable-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi-native", "ft4222", "raiden", "sunxi-fel"]
+# Static Linux (musl) builds: portable programmers plus Linux-only backends that
+# are pure libc syscalls and need no C libraries (internal chipset, spidev, mtd).
+static-linux-programmers = ["portable-programmers", "linux-spi", "linux-mtd", "internal"]
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std", "is_sync"] }
