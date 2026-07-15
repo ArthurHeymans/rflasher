@@ -90,8 +90,22 @@
           nativePackage = pkgs.rustPlatform.buildRustPackage (
             packageAttrs
             // {
+              cargoBuildFlags = packageAttrs.cargoBuildFlags ++ [ "--bin=gen-completions" ];
               buildInputs = runtimeBuildInputs pkgs;
-              nativeBuildInputs = [ pkgs.pkg-config ];
+              nativeBuildInputs = [
+                pkgs.installShellFiles
+                pkgs.pkg-config
+              ];
+
+              postInstall = packageAttrs.postInstall + ''
+                completion_dir=$(mktemp -d)
+                "$out/bin/gen-completions" "$completion_dir"
+                installShellCompletion --cmd rflasher \
+                  --bash "$completion_dir/rflasher.bash" \
+                  --zsh "$completion_dir/_rflasher" \
+                  --fish "$completion_dir/rflasher.fish"
+                rm "$out/bin/gen-completions"
+              '';
             }
           );
 
