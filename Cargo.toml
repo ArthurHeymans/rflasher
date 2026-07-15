@@ -50,6 +50,7 @@ env_logger = "0.11"
 tokio = { version = "1", features = ["full"] }
 nusb = "0.2.6"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 indicatif = "0.17"
 
 # Build/codegen
@@ -130,6 +131,7 @@ env_logger.workspace = true
 log.workspace = true
 indicatif.workspace = true
 thiserror.workspace = true
+clap_complete.workspace = true
 
 [dev-dependencies]
 nusb = { workspace = true }
