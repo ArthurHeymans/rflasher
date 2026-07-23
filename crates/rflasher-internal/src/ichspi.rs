@@ -30,7 +30,7 @@ use crate::controller::Controller;
 use crate::error::InternalError;
 #[cfg(all(feature = "std", target_os = "linux"))]
 use crate::host::LinuxHost;
-use crate::host::{Bdf, HostAccess, MmioAccess, PciConfigAccess};
+use crate::host::{HostAccess, MmioAccess, PciAddress, PciConfigAccess};
 use crate::ich_regs::*;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 
@@ -152,7 +152,7 @@ impl core::fmt::Display for SpiMode {
 /// This helper is independent from Linux sysfs and can be exercised by
 /// embedded firmware or fake hosts. It covers both PCH100+ hidden SPI function
 /// BAR discovery and legacy RCBA-relative SPI BAR discovery.
-pub fn get_spibar_address_with_host<H: PciConfigAccess>(
+pub fn get_spibar_address_with_host<H: PciConfigAccess<Error = InternalError>>(
     host: &H,
     chipset: &DetectedChipset,
 ) -> Result<u64, InternalError> {
@@ -160,7 +160,7 @@ pub fn get_spibar_address_with_host<H: PciConfigAccess>(
 
     if generation.is_pch100_compatible() {
         const SPI_FUNCTION: u8 = 5;
-        let spi_bdf = Bdf::with_segment(chipset.domain, chipset.bus, chipset.device, SPI_FUNCTION);
+        let spi_bdf = PciAddress::new(chipset.domain, chipset.bus, chipset.device, SPI_FUNCTION);
         let spibar_raw = host.read32(spi_bdf, PCI_REG_SPIBAR as u16)?;
         let addr = spibar_raw & 0xffff_f000;
 
@@ -172,7 +172,7 @@ pub fn get_spibar_address_with_host<H: PciConfigAccess>(
 
         Ok(addr as u64)
     } else if generation.is_ich9_compatible() || generation == IchChipset::Ich7 {
-        let lpc_bdf = Bdf::with_segment(
+        let lpc_bdf = PciAddress::new(
             chipset.domain,
             chipset.bus,
             chipset.device,
@@ -1170,7 +1170,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
     /// Enable BIOS write access via BIOS_CNTL register
     pub fn enable_bios_write(&mut self) -> Result<(), InternalError> {
-        let lpc_bdf = Bdf::with_segment(
+        let lpc_bdf = PciAddress::new(
             self.lpc_segment,
             self.lpc_bus,
             self.lpc_device,
@@ -2651,7 +2651,7 @@ mod tests {
     fn test_get_spibar_address_with_host_pch100_hidden_spi_function() {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Series100SunrisePoint);
-        let spi_bdf = Bdf::with_segment(chipset.domain, chipset.bus, chipset.device, 5);
+        let spi_bdf = PciAddress::new(chipset.domain, chipset.bus, chipset.device, 5);
         host.set_config32(spi_bdf, PCI_REG_SPIBAR as u16, 0xfed1_c001);
 
         let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
@@ -2663,7 +2663,7 @@ mod tests {
     fn test_get_spibar_address_with_host_rejects_all_ones_spibar() {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Series100SunrisePoint);
-        let spi_bdf = Bdf::with_segment(chipset.domain, chipset.bus, chipset.device, 5);
+        let spi_bdf = PciAddress::new(chipset.domain, chipset.bus, chipset.device, 5);
         host.set_config32(spi_bdf, PCI_REG_SPIBAR as u16, u32::MAX);
 
         let err = get_spibar_address_with_host(&host, &chipset).unwrap_err();
@@ -2675,7 +2675,7 @@ mod tests {
     fn test_get_spibar_address_with_host_ich7_legacy_rcba() {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Ich7);
-        let lpc_bdf = Bdf::with_segment(
+        let lpc_bdf = PciAddress::new(
             chipset.domain,
             chipset.bus,
             chipset.device,
@@ -2692,7 +2692,7 @@ mod tests {
     fn test_get_spibar_address_with_host_ich8_uses_ich7_rcba_offset() {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Ich8);
-        let lpc_bdf = Bdf::with_segment(
+        let lpc_bdf = PciAddress::new(
             chipset.domain,
             chipset.bus,
             chipset.device,
@@ -2709,7 +2709,7 @@ mod tests {
     fn test_get_spibar_address_with_host_ich9_uses_ich9_rcba_offset() {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Ich9);
-        let lpc_bdf = Bdf::with_segment(
+        let lpc_bdf = PciAddress::new(
             chipset.domain,
             chipset.bus,
             chipset.device,
@@ -2726,7 +2726,7 @@ mod tests {
     fn test_get_spibar_address_with_host_rejects_disabled_rcba() {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Ich7);
-        let lpc_bdf = Bdf::with_segment(
+        let lpc_bdf = PciAddress::new(
             chipset.domain,
             chipset.bus,
             chipset.device,

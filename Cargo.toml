@@ -12,6 +12,7 @@ members = [
     "crates/rflasher-ftdi",
     "crates/rflasher-ft4222",
     "crates/rflasher-internal",
+    "crates/rflasher-pci",
     "crates/rflasher-linux-spi",
     "crates/rflasher-linux-mtd",
     "crates/rflasher-linux-gpio",
@@ -36,6 +37,7 @@ default-members = [
     "crates/rflasher-ftdi",
     "crates/rflasher-ft4222",
     "crates/rflasher-internal",
+    "crates/rflasher-pci",
     "crates/rflasher-linux-spi",
     "crates/rflasher-linux-mtd",
     "crates/rflasher-linux-gpio",
@@ -57,6 +59,7 @@ repository = "https://github.com/user/rflasher"
 rflasher-chip-types = { path = "crates/rflasher-chip-types", default-features = false }
 rflasher-core = { path = "crates/rflasher-core", default-features = false }
 rflasher-chips = { path = "crates/rflasher-chips" }
+rflasher-pci = { path = "crates/rflasher-pci", default-features = false }
 
 # Core
 bitflags = "2"

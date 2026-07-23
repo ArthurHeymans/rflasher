@@ -10,7 +10,7 @@ use crate::error::InternalError;
 use crate::host::DefaultPciAccess;
 #[cfg(all(feature = "std", target_os = "linux"))]
 use crate::host::LinuxHost;
-use crate::host::{Bdf, HostAccess, PciConfigAccess};
+use crate::host::{HostAccess, PciAddress, PciConfigAccess};
 
 /// PCI register offset for SPI BAR in AMD FCH LPC device
 const AMD_SPI_BAR_OFFSET: u8 = 0xa0;
@@ -68,23 +68,23 @@ impl AmdSpi100Info {
 /// This helper contains the platform-independent BAR and ROM range discovery
 /// logic. Linux userspace and embedded firmware can use the same code with
 /// different [`PciConfigAccess`] implementations.
-pub fn enable_amd_spi100_with_host<H: PciConfigAccess>(
+pub fn enable_amd_spi100_with_host<H: PciConfigAccess<Error = InternalError>>(
     host: &H,
     enable: &'static AmdChipsetEnable,
-    smbus_bdf: Bdf,
+    smbus_bdf: PciAddress,
     revision_id: u8,
 ) -> Result<AmdSpi100Info, InternalError> {
     log::info!(
         "Enabling AMD {} SPI100 controller at {:02x}:{:02x}.0",
         enable.device_name,
-        smbus_bdf.bus,
-        smbus_bdf.device
+        smbus_bdf.bus(),
+        smbus_bdf.device()
     );
 
-    let lpc_bdf = Bdf::with_segment(
-        smbus_bdf.segment,
-        smbus_bdf.bus,
-        smbus_bdf.device,
+    let lpc_bdf = PciAddress::new(
+        smbus_bdf.segment(),
+        smbus_bdf.bus(),
+        smbus_bdf.device(),
         AMD_LPC_FUNCTION,
     );
     let spibar = host.read32(lpc_bdf, AMD_SPI_BAR_OFFSET as u16)?;
@@ -153,9 +153,9 @@ pub fn enable_amd_spi100_with_host<H: PciConfigAccess>(
 
     Ok(AmdSpi100Info {
         enable,
-        domain: smbus_bdf.segment,
-        bus: smbus_bdf.bus,
-        device: smbus_bdf.device,
+        domain: smbus_bdf.segment(),
+        bus: smbus_bdf.bus(),
+        device: smbus_bdf.device(),
         function: 0,
         revision_id,
         spibar_addr: phys_spibar,
@@ -193,7 +193,7 @@ pub fn enable_amd_spi100(
     enable_amd_spi100_with_host(
         &DefaultPciAccess,
         enable,
-        Bdf::new(bus, device, 0),
+        PciAddress::new(0, bus, device, 0),
         revision_id,
     )
 }
@@ -245,12 +245,17 @@ mod tests {
     #[test]
     fn test_enable_amd_spi100_with_host_extracts_bars() {
         let host = FakeHost::default();
-        let lpc_bdf = Bdf::new(0, 0x14, AMD_LPC_FUNCTION);
+        let lpc_bdf = PciAddress::new(0, 0, 0x14, AMD_LPC_FUNCTION);
         host.set_config32(lpc_bdf, AMD_SPI_BAR_OFFSET as u16, 0xfed8_0203);
         host.set_config32(lpc_bdf, AMD_ROM_RANGE2_OFFSET as u16, 0xff00_0000);
 
-        let info = enable_amd_spi100_with_host(&host, spi100_enable(), Bdf::new(0, 0x14, 0), 0x51)
-            .unwrap();
+        let info = enable_amd_spi100_with_host(
+            &host,
+            spi100_enable(),
+            PciAddress::new(0, 0, 0x14, 0),
+            0x51,
+        )
+        .unwrap();
 
         assert_eq!(info.domain, 0);
         assert_eq!(info.spibar_addr, 0xfed8_0200);
@@ -262,11 +267,16 @@ mod tests {
     #[test]
     fn test_enable_amd_spi100_with_host_rejects_unconfigured_bar() {
         let host = FakeHost::default();
-        let lpc_bdf = Bdf::new(0, 0x14, AMD_LPC_FUNCTION);
+        let lpc_bdf = PciAddress::new(0, 0, 0x14, AMD_LPC_FUNCTION);
         host.set_config32(lpc_bdf, AMD_SPI_BAR_OFFSET as u16, 0xffff_ffff);
 
-        let err = enable_amd_spi100_with_host(&host, spi100_enable(), Bdf::new(0, 0x14, 0), 0x51)
-            .unwrap_err();
+        let err = enable_amd_spi100_with_host(
+            &host,
+            spi100_enable(),
+            PciAddress::new(0, 0, 0x14, 0),
+            0x51,
+        )
+        .unwrap_err();
         assert!(matches!(err, InternalError::ChipsetEnable(_)));
     }
 }

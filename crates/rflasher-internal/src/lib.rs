@@ -63,7 +63,7 @@ pub use chipset::{BusType, ChipsetEnable, IchChipset, TestStatus};
 pub use error::{InternalError, PciAccessError};
 #[cfg(all(feature = "std", target_os = "linux"))]
 pub use host::LinuxHost;
-pub use host::{Bdf, DefaultPciAccess, HostAccess, MmioAccess, PciConfigAccess};
+pub use host::{DefaultPciAccess, HostAccess, MmioAccess, PciAddress, PciConfigAccess};
 pub use ichspi::{IchSpiController, SpiMode};
 pub use intel_pci::{INTEL_CHIPSETS, INTEL_VID, find_chipset};
 pub use pci::{

@@ -9,7 +9,7 @@
 use crate::amd_enable::enable_amd_spi100_with_host;
 use crate::controller::Controller;
 use crate::error::InternalError;
-use crate::host::{Bdf, DefaultPciAccess};
+use crate::host::{DefaultPciAccess, PciAddress};
 use crate::ichspi::{IchSpiController, SpiMode};
 use crate::{AnyDetectedChipset, DetectedAmdChipset, DetectedChipset};
 
@@ -125,7 +125,7 @@ impl InternalProgrammer {
         let info = enable_amd_spi100_with_host(
             &DefaultPciAccess,
             chipset.enable,
-            Bdf::with_segment(
+            PciAddress::new(
                 chipset.domain,
                 chipset.bus,
                 chipset.device,
