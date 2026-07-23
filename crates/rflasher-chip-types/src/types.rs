@@ -455,6 +455,34 @@ mod tests {
         assert!(!boot_sector.is_chip_erase());
         assert!(!boot_sector.is_uniform());
     }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_flash_chip_serde_round_trip() {
+        let chip = FlashChip {
+            vendor: alloc::string::String::from("Winbond"),
+            name: alloc::string::String::from("W25Q128FV"),
+            jedec_manufacturer: 0xEF,
+            jedec_device: 0x4018,
+            total_size: 16 * 1024 * 1024,
+            page_size: 256,
+            features: Features::WRSR_WREN | Features::FAST_READ,
+            voltage_min_mv: 2700,
+            voltage_max_mv: 3600,
+            write_granularity: WriteGranularity::Page,
+            erase_blocks: alloc::vec![EraseBlock::with_count(0x20, 4096, 4096)],
+            tested: ChipTestStatus::default(),
+        };
+
+        let encoded = ron::to_string(&chip).unwrap();
+        let decoded: FlashChip = ron::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded.vendor, chip.vendor);
+        assert_eq!(decoded.name, chip.name);
+        assert_eq!(decoded.jedec_id(), chip.jedec_id());
+        assert_eq!(decoded.features, chip.features);
+        assert_eq!(decoded.erase_blocks, chip.erase_blocks);
+    }
 }
 
 /// JEDEC manufacturer IDs

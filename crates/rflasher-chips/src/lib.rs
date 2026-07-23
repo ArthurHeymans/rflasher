@@ -1,7 +1,23 @@
 //! Runtime and compiled flash chip database providers.
 //!
 //! This crate loads chip definitions from RON files and can optionally include
-//! the workspace chip database at build time.
+//! the workspace chip database at build time. It also re-exports the shared
+//! chip model, allowing catalog-only consumers to use a single dependency.
+//!
+//! Use [`ChipDatabase::new`] for the compiled database and
+//! [`ChipDatabase::from_dir`] when an explicit directory should replace it:
+//!
+//! ```no_run
+//! use rflasher_chips::ChipDatabase;
+//! use std::path::Path;
+//!
+//! fn load_database(override_dir: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::error::Error>> {
+//!     match override_dir {
+//!         Some(directory) => Ok(ChipDatabase::from_dir(directory)?),
+//!         None => Ok(ChipDatabase::new()),
+//!     }
+//! }
+//! ```
 
 use std::fs;
 use std::io;
