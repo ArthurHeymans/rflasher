@@ -12,7 +12,7 @@ std = []
 static-chips = ["dep:rflasher-chips-codegen"]
 
 [dependencies]
-rflasher-core = { workspace = true, features = ["std"] }
+rflasher-chip-types = { workspace = true, features = ["alloc"] }
 thiserror.workspace = true
 serde.workspace = true
 ron.workspace = true

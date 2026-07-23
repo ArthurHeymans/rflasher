@@ -10,10 +10,7 @@ use std::{string::String, vec::Vec};
 #[cfg(feature = "static-chips")]
 use std::{string::ToString, vec};
 
-use rflasher_core::chip::{
-    ChipProvider, ChipTestStatus, EraseBlock, EraseRegion, Features, FlashChip, TestStatus,
-    WriteGranularity,
-};
+pub use rflasher_chip_types::*;
 
 /// Error type for chip database operations
 #[derive(Debug, thiserror::Error)]
@@ -297,9 +294,7 @@ pub struct ChipDatabase {
 
 impl ChipProvider for ChipDatabase {
     fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
-        self.chips
-            .iter()
-            .find(|chip| chip.matches_jedec_id(manufacturer, device))
+        ChipDatabase::find_by_jedec_id(self, manufacturer, device)
     }
 }
 
@@ -325,6 +320,17 @@ impl ChipDatabase {
     /// Create an empty chip database (ignores static chips even if compiled in)
     pub fn empty() -> Self {
         Self { chips: Vec::new() }
+    }
+
+    /// Create a database containing only definitions loaded from a directory.
+    ///
+    /// Unlike [`Self::new`], this ignores the compiled-in database when the
+    /// `static-chips` feature is enabled, making it suitable for an explicit
+    /// runtime database override.
+    pub fn from_dir(dir: &Path) -> Result<Self, ChipDbError> {
+        let mut database = Self::empty();
+        database.load_dir(dir)?;
+        Ok(database)
     }
 
     /// Load chip definitions from a single RON file
@@ -436,6 +442,15 @@ impl ChipDatabase {
 mod tests {
     use super::*;
 
+    fn vendors_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("chips crate should be inside the workspace crates directory")
+            .parent()
+            .expect("workspace should contain the crates directory")
+            .join("chips/vendors")
+    }
+
     #[test]
     fn test_load_ron() {
         let ron = r#"
@@ -481,13 +496,23 @@ mod tests {
         assert!(chip.features.contains(Features::FAST_READ));
     }
 
+    #[test]
+    fn test_load_vendor_directory() {
+        let db = ChipDatabase::from_dir(&vendors_dir()).unwrap();
+
+        assert!(!db.is_empty());
+        assert!(db.find_by_jedec_id(0xEF, 0x4018).is_some());
+    }
+
     #[cfg(feature = "static-chips")]
     #[test]
     fn test_static_database() {
         let db = ChipDatabase::new();
+        let runtime_db = ChipDatabase::from_dir(&vendors_dir()).unwrap();
+        let provider: &dyn ChipProvider = &db;
 
-        assert!(!db.is_empty());
-        assert!(db.find_by_jedec_id(0xEF, 0x4018).is_some());
+        assert_eq!(db.len(), runtime_db.len());
+        assert!(provider.find_by_jedec_id(0xEF, 0x4018).is_some());
     }
 
     #[test]

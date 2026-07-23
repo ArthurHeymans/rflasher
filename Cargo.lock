@@ -2952,8 +2952,8 @@ name = "rflasher-chips"
 version = "0.1.0"
 dependencies = [
  "once_cell",
+ "rflasher-chip-types",
  "rflasher-chips-codegen",
- "rflasher-core",
  "ron",
  "serde",
  "thiserror 2.0.17",
