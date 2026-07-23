@@ -28,7 +28,7 @@ pub type RegionVec = Vec<EraseRegion>;
 /// For non-uniform flash chips (like boot sector chips), multiple
 /// regions can be combined to describe the full layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EraseRegion {
     /// Size of each block in this region, in bytes
     pub size: u32,
@@ -62,7 +62,7 @@ impl EraseRegion {
 /// For non-uniform chips (like PT/PU boot sector variants),
 /// there may be multiple regions with different block sizes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EraseBlock {
     /// Regular SPI opcode for this erase operation
     pub opcode: u8,
@@ -202,7 +202,7 @@ impl EraseBlock {
 
 /// Write granularity
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WriteGranularity {
     /// Can write individual bits (1->0 only)
     Bit,
@@ -215,7 +215,7 @@ pub enum WriteGranularity {
 
 /// Test status for a chip operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TestStatus {
     /// Not tested
     #[default]
@@ -230,7 +230,7 @@ pub enum TestStatus {
 
 /// Test results for various chip operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChipTestStatus {
     /// Probe/identification
     pub probe: TestStatus,
@@ -251,7 +251,7 @@ pub struct ChipTestStatus {
 /// for runtime flexibility.
 #[derive(Debug, Clone)]
 #[cfg(feature = "alloc")]
-#[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FlashChip {
     /// Vendor name (e.g., "Winbond")
     pub vendor: String,
@@ -266,30 +266,30 @@ pub struct FlashChip {
     /// Page size in bytes (for programming)
     pub page_size: u16,
     /// Feature flags
-    #[cfg_attr(feature = "std", serde(default))]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub features: Features,
     /// Minimum operating voltage in millivolts
-    #[cfg_attr(feature = "std", serde(default = "default_voltage_min"))]
+    #[cfg_attr(feature = "serde", serde(default = "default_voltage_min"))]
     pub voltage_min_mv: u16,
     /// Maximum operating voltage in millivolts
-    #[cfg_attr(feature = "std", serde(default = "default_voltage_max"))]
+    #[cfg_attr(feature = "serde", serde(default = "default_voltage_max"))]
     pub voltage_max_mv: u16,
     /// Write granularity
-    #[cfg_attr(feature = "std", serde(default))]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub write_granularity: WriteGranularity,
     /// Available erase block sizes (smallest to largest)
     pub erase_blocks: Vec<EraseBlock>,
     /// Test status
-    #[cfg_attr(feature = "std", serde(default))]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub tested: ChipTestStatus,
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "serde")]
 fn default_voltage_min() -> u16 {
     2700
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "serde")]
 fn default_voltage_max() -> u16 {
     3600
 }

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/rflasher-chip-types",
     "crates/rflasher-core",
     "crates/rflasher-flash",
     "crates/rflasher-chips",
@@ -23,6 +24,7 @@ members = [
 # Exclude WASM crate from default build (requires wasm32 target)
 default-members = [
     ".",
+    "crates/rflasher-chip-types",
     "crates/rflasher-core",
     "crates/rflasher-flash",
     "crates/rflasher-chips",
@@ -52,6 +54,7 @@ repository = "https://github.com/user/rflasher"
 [workspace.dependencies]
 # Internal crates - NOTE: is_sync is NOT included here to allow async builds (WASM)
 # Crates that need sync mode should add `features = ["is_sync"]` explicitly
+rflasher-chip-types = { path = "crates/rflasher-chip-types", default-features = false }
 rflasher-core = { path = "crates/rflasher-core", default-features = false }
 rflasher-chips = { path = "crates/rflasher-chips" }
 
@@ -78,7 +81,7 @@ syn = "2"
 prettyplease = "0.2"
 
 # no_std compatible
-heapless = { version = "0.8", features = ["serde"] }
+heapless = "0.8"
 once_cell = { version = "1.21", default-features = false }
 maybe-async = "0.2"
 

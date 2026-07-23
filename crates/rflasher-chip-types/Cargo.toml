@@ -1,0 +1,17 @@
+[package]
+name = "rflasher-chip-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared no_std SPI NOR flash chip data model"
+
+[features]
+default = []
+alloc = []
+serde = ["alloc", "dep:serde", "bitflags/serde"]
+std = ["serde", "serde/std"]
+
+[dependencies]
+bitflags.workspace = true
+heapless.workspace = true
+serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }

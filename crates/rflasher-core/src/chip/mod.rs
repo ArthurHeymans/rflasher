@@ -1,12 +1,6 @@
-//! Flash chip types and database
+//! Flash chip data model compatibility exports.
 //!
-//! This module provides types for describing flash chips and their
-//! capabilities, as well as a database of known chips.
+//! The canonical chip types live in `rflasher-chip-types`. They remain
+//! available through this module for compatibility with existing core users.
 
-mod features;
-mod provider;
-mod types;
-
-pub use features::Features;
-pub use provider::ChipProvider;
-pub use types::*;
+pub use rflasher_chip_types::*;
