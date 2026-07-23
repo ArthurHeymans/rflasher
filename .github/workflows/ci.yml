@@ -98,6 +98,10 @@ jobs:
         with:
           targets: x86_64-unknown-none
       - uses: Swatinem/rust-cache@v2.9.1
+      - name: Check chip model without std
+        run: cargo check -p rflasher-chip-types --no-default-features --target x86_64-unknown-none
+      - name: Check chip model with alloc
+        run: cargo check -p rflasher-chip-types --no-default-features --features alloc --target x86_64-unknown-none
       - name: Check rflasher-core without std
         run: cargo check -p rflasher-core --no-default-features --target x86_64-unknown-none
       - name: Check rflasher-core sync without std

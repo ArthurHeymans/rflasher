@@ -1,7 +1,9 @@
 [workspace]
 members = [
+    "crates/rflasher-chip-types",
     "crates/rflasher-core",
     "crates/rflasher-flash",
+    "crates/rflasher-chips",
     "crates/rflasher-chips-codegen",
     "crates/rflasher-ch341a",
     "crates/rflasher-ch347",
@@ -22,8 +24,10 @@ members = [
 # Exclude WASM crate from default build (requires wasm32 target)
 default-members = [
     ".",
+    "crates/rflasher-chip-types",
     "crates/rflasher-core",
     "crates/rflasher-flash",
+    "crates/rflasher-chips",
     "crates/rflasher-chips-codegen",
     "crates/rflasher-ch341a",
     "crates/rflasher-ch347",
@@ -50,7 +54,9 @@ repository = "https://github.com/user/rflasher"
 [workspace.dependencies]
 # Internal crates - NOTE: is_sync is NOT included here to allow async builds (WASM)
 # Crates that need sync mode should add `features = ["is_sync"]` explicitly
+rflasher-chip-types = { path = "crates/rflasher-chip-types", default-features = false }
 rflasher-core = { path = "crates/rflasher-core", default-features = false }
+rflasher-chips = { path = "crates/rflasher-chips" }
 
 # Core
 bitflags = "2"
@@ -75,7 +81,7 @@ syn = "2"
 prettyplease = "0.2"
 
 # no_std compatible
-heapless = { version = "0.8", features = ["serde"] }
+heapless = "0.8"
 once_cell = { version = "1.21", default-features = false }
 maybe-async = "0.2"
 
@@ -119,6 +125,7 @@ portable-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std", "is_sync"] }
+rflasher-chips.workspace = true
 rflasher-flash = { path = "crates/rflasher-flash", features = ["std", "is_sync"] }
 rflasher-repl = { path = "crates/rflasher-repl", optional = true }
 clap.workspace = true

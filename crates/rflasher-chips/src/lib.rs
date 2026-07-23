@@ -1,19 +1,32 @@
-//! Chip database for runtime loading and lookup
+//! Runtime and compiled flash chip database providers.
 //!
-//! This module provides the `ChipDatabase` type for loading chip definitions
-//! from RON files at runtime.
+//! This crate loads chip definitions from RON files and can optionally include
+//! the workspace chip database at build time. It also re-exports the shared
+//! chip model, allowing catalog-only consumers to use a single dependency.
+//!
+//! Use [`ChipDatabase::new`] for the compiled database and
+//! [`ChipDatabase::from_dir`] when an explicit directory should replace it:
+//!
+//! ```no_run
+//! use rflasher_chips::ChipDatabase;
+//! use std::path::Path;
+//!
+//! fn load_database(override_dir: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::error::Error>> {
+//!     match override_dir {
+//!         Some(directory) => Ok(ChipDatabase::from_dir(directory)?),
+//!         None => Ok(ChipDatabase::new()),
+//!     }
+//! }
+//! ```
 
-use alloc::{string::String, vec::Vec};
-#[cfg(feature = "static-chips")]
-use alloc::{string::ToString, vec};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::{string::String, vec::Vec};
+#[cfg(feature = "static-chips")]
+use std::{string::ToString, vec};
 
-use super::Features;
-use super::types::{
-    ChipTestStatus, EraseBlock, EraseRegion, FlashChip, TestStatus, WriteGranularity,
-};
+pub use rflasher_chip_types::*;
 
 /// Error type for chip database operations
 #[derive(Debug, thiserror::Error)]
@@ -295,6 +308,12 @@ pub struct ChipDatabase {
     chips: Vec<FlashChip>,
 }
 
+impl ChipProvider for ChipDatabase {
+    fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
+        ChipDatabase::find_by_jedec_id(self, manufacturer, device)
+    }
+}
+
 impl ChipDatabase {
     /// Create a chip database with the static chip definitions (if compiled in)
     ///
@@ -317,6 +336,17 @@ impl ChipDatabase {
     /// Create an empty chip database (ignores static chips even if compiled in)
     pub fn empty() -> Self {
         Self { chips: Vec::new() }
+    }
+
+    /// Create a database containing only definitions loaded from a directory.
+    ///
+    /// Unlike [`Self::new`], this ignores the compiled-in database when the
+    /// `static-chips` feature is enabled, making it suitable for an explicit
+    /// runtime database override.
+    pub fn from_dir(dir: &Path) -> Result<Self, ChipDbError> {
+        let mut database = Self::empty();
+        database.load_dir(dir)?;
+        Ok(database)
     }
 
     /// Load chip definitions from a single RON file
@@ -428,6 +458,15 @@ impl ChipDatabase {
 mod tests {
     use super::*;
 
+    fn vendors_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("chips crate should be inside the workspace crates directory")
+            .parent()
+            .expect("workspace should contain the crates directory")
+            .join("chips/vendors")
+    }
+
     #[test]
     fn test_load_ron() {
         let ron = r#"
@@ -471,6 +510,25 @@ mod tests {
         assert_eq!(chip.total_size, 16 * 1024 * 1024);
         assert!(chip.features.contains(Features::WRSR_WREN));
         assert!(chip.features.contains(Features::FAST_READ));
+    }
+
+    #[test]
+    fn test_load_vendor_directory() {
+        let db = ChipDatabase::from_dir(&vendors_dir()).unwrap();
+
+        assert!(!db.is_empty());
+        assert!(db.find_by_jedec_id(0xEF, 0x4018).is_some());
+    }
+
+    #[cfg(feature = "static-chips")]
+    #[test]
+    fn test_static_database() {
+        let db = ChipDatabase::new();
+        let runtime_db = ChipDatabase::from_dir(&vendors_dir()).unwrap();
+        let provider: &dyn ChipProvider = &db;
+
+        assert_eq!(db.len(), runtime_db.len());
+        assert!(provider.find_by_jedec_id(0xEF, 0x4018).is_some());
     }
 
     #[test]

@@ -4,6 +4,8 @@
 //!
 //! Uses `maybe_async` to support both sync and async modes.
 
+#[cfg(feature = "std")]
+use crate::chip::ChipProvider;
 use crate::error::{Error, Result};
 use crate::programmer::SpiMaster;
 use crate::protocol;
@@ -880,10 +882,11 @@ impl SfdpProbeResult {
 /// Returns a result containing all discovered information.
 #[cfg(feature = "std")]
 #[maybe_async]
-pub async fn probe_with_database<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    db: &crate::chip::ChipDatabase,
-) -> Result<SfdpProbeResult> {
+pub async fn probe_with_database<M, P>(master: &mut M, provider: &P) -> Result<SfdpProbeResult>
+where
+    M: SpiMaster + ?Sized,
+    P: ChipProvider + ?Sized,
+{
     // Read JEDEC ID first
     let (jedec_manufacturer, jedec_device) = protocol::read_jedec_id(master).await?;
 
@@ -891,7 +894,7 @@ pub async fn probe_with_database<M: SpiMaster + ?Sized>(
     let sfdp = probe(master).await?;
 
     // Look up in database
-    let database_chip = db
+    let database_chip = provider
         .find_by_jedec_id(jedec_manufacturer, jedec_device)
         .cloned();
 

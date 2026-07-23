@@ -7,7 +7,8 @@ use std::rc::Rc;
 
 use rflasher_ch341a::Ch341a;
 use rflasher_ch347::{Ch347, SpiSpeed};
-use rflasher_core::chip::{ChipDatabase, FlashChip};
+use rflasher_chips::ChipDatabase;
+use rflasher_core::chip::FlashChip;
 use rflasher_core::flash::unified::{WriteProgress, WriteStats, smart_write};
 use rflasher_core::flash::{
     FlashContext, FlashDevice, HybridFlashDevice, ProbeResult, SpiFlashDevice,

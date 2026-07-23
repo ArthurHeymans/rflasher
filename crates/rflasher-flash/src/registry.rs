@@ -4,12 +4,14 @@
 //! It completely hides SpiMaster and OpaqueMaster from the public API.
 
 use crate::handle::{ChipInfo, FlashHandle};
-use rflasher_core::chip::ChipDatabase;
+use rflasher_core::chip::ChipProvider;
 #[allow(unused_imports)] // Used in feature-gated code
 use rflasher_core::flash::FlashDevice;
+#[cfg(any(feature = "dediprog", feature = "sunxi-fel"))]
+use rflasher_core::flash::HybridFlashDevice;
 #[cfg(any(feature = "linux-mtd", feature = "internal"))]
 use rflasher_core::flash::OpaqueFlashDevice;
-use rflasher_core::flash::{HybridFlashDevice, ProbeResult, SpiFlashDevice, probe_detailed};
+use rflasher_core::flash::{ProbeResult, SpiFlashDevice, probe_detailed};
 #[cfg(feature = "internal")]
 use rflasher_core::layout::parse_ifd;
 #[cfg(feature = "internal")]
@@ -112,7 +114,7 @@ fn parse_speed_khz(s: &str) -> Option<u32> {
 /// Common probe and create handle logic for SPI programmers
 fn probe_and_create_handle<M>(
     master: M,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>>
 where
     M: rflasher_core::programmer::SpiMaster + 'static,
@@ -421,8 +423,9 @@ pub fn open_spi_programmer(programmer: &str) -> Result<BoxedSpiMaster, Box<dyn s
 /// ```
 pub fn open_flash(
     programmer: &str,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    let _ = db;
     let params = parse_programmer_params(programmer)?;
 
     match params.name.as_str() {
@@ -498,7 +501,7 @@ fn get_flash_size_from_ifd(
 // These handle the details of each programmer type and return a FlashHandle
 
 #[cfg(feature = "dummy")]
-fn open_dummy(db: &ChipDatabase) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+fn open_dummy(db: &dyn ChipProvider) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     let master = rflasher_dummy::DummyFlash::new_default();
     probe_and_create_handle(master, db)
 }
@@ -506,7 +509,7 @@ fn open_dummy(db: &ChipDatabase) -> Result<FlashHandle, Box<dyn std::error::Erro
 #[cfg(feature = "ch341a")]
 fn open_ch341a(
     _params: &ProgrammerParams,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     log::info!("Opening CH341A programmer...");
 
@@ -523,7 +526,7 @@ fn open_ch341a(
 #[cfg(feature = "ch347")]
 fn open_ch347(
     params: &ProgrammerParams,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use rflasher_ch347::{Ch347, parse_options};
 
@@ -546,7 +549,7 @@ fn open_ch347(
 #[cfg(feature = "dediprog")]
 fn open_dediprog(
     params: &ProgrammerParams,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use rflasher_dediprog::{Dediprog, parse_options};
 
@@ -589,7 +592,7 @@ fn open_dediprog(
 #[cfg(feature = "serprog")]
 fn open_serprog(
     params: &ProgrammerParams,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use rflasher_serprog::SerprogConnection;
 
@@ -671,7 +674,7 @@ fn open_serprog(
 #[cfg(any(feature = "ftdi", feature = "ftdi-native"))]
 fn open_ftdi(
     params: &ProgrammerParams,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use rflasher_ftdi::{Ftdi, parse_options};
 
@@ -697,7 +700,7 @@ fn open_ftdi(
 #[cfg(feature = "ft4222")]
 fn open_ft4222(
     params: &ProgrammerParams,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use rflasher_ft4222::{Ft4222, parse_options};
 
@@ -727,7 +730,7 @@ fn open_ft4222(
 #[cfg(feature = "linux-spi")]
 fn open_linux_spi(
     params: &ProgrammerParams,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use rflasher_linux_spi::{LinuxSpi, parse_options};
 
@@ -788,7 +791,7 @@ fn open_linux_mtd(params: &ProgrammerParams) -> Result<FlashHandle, Box<dyn std:
 #[cfg(feature = "linux-gpio")]
 fn open_linux_gpio_spi(
     params: &ProgrammerParams,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use rflasher_linux_gpio::{LinuxGpioSpi, parse_options};
 
@@ -814,7 +817,7 @@ fn open_linux_gpio_spi(
 #[cfg(feature = "internal")]
 fn open_internal(
     params: &ProgrammerParams,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use rflasher_internal::{InternalOptions, InternalProgrammer, SpiMode};
 
@@ -857,7 +860,7 @@ fn open_internal(
 #[cfg(feature = "raiden")]
 fn open_raiden(
     params: &ProgrammerParams,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use rflasher_raiden::{RaidenDebugSpi, parse_options};
 
@@ -883,7 +886,7 @@ fn open_raiden(
 #[cfg(feature = "sunxi-fel")]
 fn open_sunxi_fel(
     _params: &ProgrammerParams,
-    db: &ChipDatabase,
+    db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     log::info!("Opening sunxi FEL programmer...");
 

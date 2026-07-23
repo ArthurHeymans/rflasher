@@ -1,6 +1,6 @@
 //! List commands implementation
 
-use rflasher_core::chip::ChipDatabase;
+use rflasher_chips::ChipDatabase;
 use rflasher_flash::available_programmers;
 
 /// List all supported programmers

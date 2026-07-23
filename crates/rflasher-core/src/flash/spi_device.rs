@@ -27,10 +27,10 @@ use maybe_async::maybe_async;
 ///
 /// ```ignore
 /// use rflasher_core::flash::{SpiFlashDevice, probe};
-/// use rflasher_core::chip::ChipDatabase;
+/// use rflasher_core::chip::ChipProvider;
 /// use rflasher_ch341a::Ch341a;
 ///
-/// fn create_flash_handle(db: &ChipDatabase) -> SpiFlashDevice<Ch341a> {
+/// fn create_flash_handle(db: &dyn ChipProvider) -> SpiFlashDevice<Ch341a> {
 ///     let mut master = Ch341a::open().unwrap();
 ///     let ctx = probe(&mut master, db).unwrap();
 ///     SpiFlashDevice::new(master, ctx)

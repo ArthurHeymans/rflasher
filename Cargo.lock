@@ -1464,7 +1464,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
 dependencies = [
  "hash32",
- "serde",
  "stable_deref_trait",
 ]
 
@@ -2902,6 +2901,7 @@ dependencies = [
  "indicatif",
  "log",
  "nusb",
+ "rflasher-chips",
  "rflasher-core",
  "rflasher-flash",
  "rflasher-repl",
@@ -2939,6 +2939,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "rflasher-chip-types"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.10.0",
+ "heapless",
+ "ron",
+ "serde",
+]
+
+[[package]]
+name = "rflasher-chips"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "rflasher-chip-types",
+ "rflasher-chips-codegen",
+ "ron",
+ "serde",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "rflasher-chips-codegen"
 version = "0.1.0"
 dependencies = [
@@ -2957,12 +2979,9 @@ dependencies = [
  "bitflags 2.10.0",
  "embedded-io",
  "embedded-io-async",
- "heapless",
  "log",
  "maybe-async",
- "once_cell",
- "rflasher-chips-codegen",
- "ron",
+ "rflasher-chip-types",
  "serde",
  "thiserror 2.0.17",
  "toml",
@@ -3159,6 +3178,7 @@ dependencies = [
  "maybe-async",
  "rflasher-ch341a",
  "rflasher-ch347",
+ "rflasher-chips",
  "rflasher-core",
  "rflasher-dediprog",
  "rflasher-ft4222",

@@ -7,26 +7,19 @@ description = "Core library for flash chip programming (no_std compatible)"
 
 [features]
 default = []
-std = ["alloc", "thiserror", "serde", "ron", "toml", "once_cell/std"]
-alloc = []
-# Static chip database compiled at build time (optional, for no_std or embedded)
-static-chips = ["dep:rflasher-chips-codegen"]
+std = ["alloc", "thiserror", "serde", "toml", "rflasher-chip-types/std"]
+alloc = ["rflasher-chip-types/alloc"]
 # Sync mode - when enabled, async code is compiled as sync
 is_sync = ["maybe-async/is_sync"]
 
 [dependencies]
+rflasher-chip-types.workspace = true
 bitflags.workspace = true
 embedded-io.workspace = true
 embedded-io-async.workspace = true
 thiserror = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
-ron = { workspace = true, optional = true }
 toml = { version = "0.8", optional = true }
 zerocopy = { version = "0.8", features = ["derive"] }
 log.workspace = true
-heapless.workspace = true
-once_cell.workspace = true
 maybe-async.workspace = true
-
-[build-dependencies]
-rflasher-chips-codegen = { path = "../rflasher-chips-codegen", optional = true }
