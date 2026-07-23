@@ -8,7 +8,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
-use crate::chip::ChipDatabase;
+use crate::chip::ChipProvider;
 #[cfg(feature = "alloc")]
 use crate::chip::WriteGranularity;
 use crate::chip::{EraseBlock, Features};
@@ -724,10 +724,11 @@ impl ProbeResult {
 /// to decide how to handle mismatches or unknown chips.
 #[cfg(feature = "std")]
 #[maybe_async]
-pub async fn probe_detailed<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    db: &ChipDatabase,
-) -> Result<ProbeResult> {
+pub async fn probe_detailed<M, P>(master: &mut M, provider: &P) -> Result<ProbeResult>
+where
+    M: SpiMaster + ?Sized,
+    P: ChipProvider + ?Sized,
+{
     let (jedec_manufacturer, jedec_device) = protocol::read_jedec_id(master).await?;
 
     log::info!(
@@ -755,7 +756,7 @@ pub async fn probe_detailed<M: SpiMaster + ?Sized>(
     };
 
     // Look up in database
-    let db_chip = db.find_by_jedec_id(jedec_manufacturer, jedec_device);
+    let db_chip = provider.find_by_jedec_id(jedec_manufacturer, jedec_device);
     if db_chip.is_some() {
         log::debug!("Chip found in database");
     } else {

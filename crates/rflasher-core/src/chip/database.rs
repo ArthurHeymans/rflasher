@@ -295,6 +295,14 @@ pub struct ChipDatabase {
     chips: Vec<FlashChip>,
 }
 
+impl super::ChipProvider for ChipDatabase {
+    fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
+        self.chips
+            .iter()
+            .find(|chip| chip.matches_jedec_id(manufacturer, device))
+    }
+}
+
 impl ChipDatabase {
     /// Create a chip database with the static chip definitions (if compiled in)
     ///
