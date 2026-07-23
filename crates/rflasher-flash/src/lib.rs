@@ -37,7 +37,7 @@
 //!
 //! ```ignore
 //! use rflasher_flash::{FlashHandle, open_flash};
-//! use rflasher_core::chip::ChipDatabase;
+//! use rflasher_chips::ChipDatabase;
 //!
 //! let db = ChipDatabase::new();
 //! // ... load chip database

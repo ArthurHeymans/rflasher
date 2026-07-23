@@ -18,7 +18,7 @@ mod commands;
 
 use clap::Parser;
 use cli::{Cli, Commands, LayoutArgs, LayoutCommands, WpCommands};
-use rflasher_core::chip::ChipDatabase;
+use rflasher_chips::ChipDatabase;
 use rflasher_flash::{FlashHandle, open_flash};
 
 use rflasher_core::layout::Layout;

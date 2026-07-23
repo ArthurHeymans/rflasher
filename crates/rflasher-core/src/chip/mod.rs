@@ -7,12 +7,6 @@ mod features;
 mod provider;
 mod types;
 
-#[cfg(feature = "std")]
-mod database;
-
 pub use features::Features;
 pub use provider::ChipProvider;
 pub use types::*;
-
-#[cfg(feature = "std")]
-pub use database::*;

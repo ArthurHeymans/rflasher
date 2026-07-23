@@ -2902,6 +2902,7 @@ dependencies = [
  "indicatif",
  "log",
  "nusb",
+ "rflasher-chips",
  "rflasher-core",
  "rflasher-flash",
  "rflasher-repl",
@@ -2939,6 +2940,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rflasher-chips"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "rflasher-chips-codegen",
+ "rflasher-core",
+ "ron",
+ "serde",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "rflasher-chips-codegen"
 version = "0.1.0"
 dependencies = [
@@ -2960,9 +2973,6 @@ dependencies = [
  "heapless",
  "log",
  "maybe-async",
- "once_cell",
- "rflasher-chips-codegen",
- "ron",
  "serde",
  "thiserror 2.0.17",
  "toml",
@@ -3159,6 +3169,7 @@ dependencies = [
  "maybe-async",
  "rflasher-ch341a",
  "rflasher-ch347",
+ "rflasher-chips",
  "rflasher-core",
  "rflasher-dediprog",
  "rflasher-ft4222",

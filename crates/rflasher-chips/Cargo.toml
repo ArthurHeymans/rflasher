@@ -1,0 +1,22 @@
+[package]
+name = "rflasher-chips"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Runtime and compiled flash chip database providers"
+
+[features]
+default = ["std"]
+std = []
+# Static chip database compiled at build time.
+static-chips = ["dep:rflasher-chips-codegen"]
+
+[dependencies]
+rflasher-core = { workspace = true, features = ["std"] }
+thiserror.workspace = true
+serde.workspace = true
+ron.workspace = true
+once_cell = { workspace = true, features = ["std"] }
+
+[build-dependencies]
+rflasher-chips-codegen = { path = "../rflasher-chips-codegen", optional = true }

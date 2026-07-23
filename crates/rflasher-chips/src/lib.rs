@@ -1,18 +1,18 @@
-//! Chip database for runtime loading and lookup
+//! Runtime and compiled flash chip database providers.
 //!
-//! This module provides the `ChipDatabase` type for loading chip definitions
-//! from RON files at runtime.
+//! This crate loads chip definitions from RON files and can optionally include
+//! the workspace chip database at build time.
 
-use alloc::{string::String, vec::Vec};
-#[cfg(feature = "static-chips")]
-use alloc::{string::ToString, vec};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::{string::String, vec::Vec};
+#[cfg(feature = "static-chips")]
+use std::{string::ToString, vec};
 
-use super::Features;
-use super::types::{
-    ChipTestStatus, EraseBlock, EraseRegion, FlashChip, TestStatus, WriteGranularity,
+use rflasher_core::chip::{
+    ChipProvider, ChipTestStatus, EraseBlock, EraseRegion, Features, FlashChip, TestStatus,
+    WriteGranularity,
 };
 
 /// Error type for chip database operations
@@ -295,7 +295,7 @@ pub struct ChipDatabase {
     chips: Vec<FlashChip>,
 }
 
-impl super::ChipProvider for ChipDatabase {
+impl ChipProvider for ChipDatabase {
     fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
         self.chips
             .iter()
@@ -479,6 +479,15 @@ mod tests {
         assert_eq!(chip.total_size, 16 * 1024 * 1024);
         assert!(chip.features.contains(Features::WRSR_WREN));
         assert!(chip.features.contains(Features::FAST_READ));
+    }
+
+    #[cfg(feature = "static-chips")]
+    #[test]
+    fn test_static_database() {
+        let db = ChipDatabase::new();
+
+        assert!(!db.is_empty());
+        assert!(db.find_by_jedec_id(0xEF, 0x4018).is_some());
     }
 
     #[test]

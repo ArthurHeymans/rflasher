@@ -529,9 +529,10 @@ trunk serve
 
 rflasher uses a workspace structure with clear separation of concerns:
 
-- **`rflasher-core`** - `no_std` core library with chip database, SPI protocol, and flash operations (supports both sync and async via `maybe-async`)
+- **`rflasher-core`** - `no_std` core library with chip types, SPI protocol, and flash operations (supports both sync and async via `maybe-async`)
+- **`rflasher-chips`** - Runtime RON loading and optional compiled chip database provider
 - **`rflasher-flash`** - Unified flash device abstraction (works with both SPI and opaque programmers)
-- **`rflasher-chips-codegen`** - Build-time code generator for chip database
+- **`rflasher-chips-codegen`** - Build-time code generator for the compiled chip database
 - **`rflasher-wasm`** - Browser-based web interface using egui and WebSerial API (async mode)
 - **`rflasher-ch341a`** - CH341A USB programmer support
 - **`rflasher-ch347`** - CH347 USB programmer support

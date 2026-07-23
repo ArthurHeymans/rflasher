@@ -1,4 +1,4 @@
-//! Build script for rflasher-core
+//! Build script for rflasher-chips
 //!
 //! This script generates the chip database from RON files at build time.
 
