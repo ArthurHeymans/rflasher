@@ -1,0 +1,15 @@
+[package]
+name = "rflasher-pci"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure-Rust PCI configuration-space access for rflasher"
+
+[features]
+default = []
+alloc = []
+std = ["alloc", "dep:libc"]
+
+[dependencies]
+pci_types = "0.10.1"
+libc = { version = "0.2", optional = true }

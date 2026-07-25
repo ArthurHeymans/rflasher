@@ -54,8 +54,48 @@ pub enum PciAccessError {
         function: u8,
         register: u16,
     },
+    /// Invalid PCI configuration-space address, offset, or width.
+    InvalidAccess {
+        bus: u8,
+        device: u8,
+        function: u8,
+        register: u16,
+    },
     /// BAR not available or invalid
     InvalidBar(u8),
+}
+
+impl From<rflasher_pci::PciError> for InternalError {
+    fn from(error: rflasher_pci::PciError) -> Self {
+        match error {
+            rflasher_pci::PciError::NotSupported(message) => Self::NotSupported(message),
+            rflasher_pci::PciError::Scan => Self::PciAccess(PciAccessError::Scan),
+            rflasher_pci::PciError::ConfigRead { address, offset } => {
+                Self::PciAccess(PciAccessError::ConfigRead {
+                    bus: address.bus(),
+                    device: address.device(),
+                    function: address.function(),
+                    register: offset,
+                })
+            }
+            rflasher_pci::PciError::ConfigWrite { address, offset } => {
+                Self::PciAccess(PciAccessError::ConfigWrite {
+                    bus: address.bus(),
+                    device: address.device(),
+                    function: address.function(),
+                    register: offset,
+                })
+            }
+            rflasher_pci::PciError::InvalidAccess { address, offset } => {
+                Self::PciAccess(PciAccessError::InvalidAccess {
+                    bus: address.bus(),
+                    device: address.device(),
+                    function: address.function(),
+                    register: offset,
+                })
+            }
+        }
+    }
 }
 
 impl fmt::Display for InternalError {
@@ -113,6 +153,16 @@ impl fmt::Display for PciAccessError {
             } => write!(
                 f,
                 "failed to write PCI config at {:02x}:{:02x}.{:x} reg {:#x}",
+                bus, device, function, register
+            ),
+            Self::InvalidAccess {
+                bus,
+                device,
+                function,
+                register,
+            } => write!(
+                f,
+                "invalid PCI config access at {:02x}:{:02x}.{:x} reg {:#x}",
                 bus, device, function, register
             ),
             Self::InvalidBar(bar) => write!(f, "BAR{} not available or invalid", bar),
