@@ -3144,6 +3144,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "zerocopy",
 ]
 
 [[package]]

@@ -87,6 +87,7 @@ prettyplease = "0.2"
 heapless = "0.8"
 once_cell = { version = "1.21", default-features = false }
 maybe-async = "0.2"
+zerocopy = { version = "0.8", features = ["derive"] }
 
 [package]
 name = "rflasher"
