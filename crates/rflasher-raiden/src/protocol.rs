@@ -365,6 +365,8 @@ pub struct CommandV2Start {
     pub write_count: u16,
     /// Total number of bytes to read (0xFFFF = full duplex)
     pub read_count: u16,
+    /// Number of valid bytes in `data`
+    pub data_len: usize,
     /// First chunk of write data (up to 58 bytes)
     pub data: [u8; V2_START_PAYLOAD],
 }
@@ -375,6 +377,7 @@ impl Default for CommandV2Start {
             packet_id: PacketId::CmdTransferStart as u16,
             write_count: 0,
             read_count: 0,
+            data_len: 0,
             data: [0; V2_START_PAYLOAD],
         }
     }
@@ -389,17 +392,21 @@ impl CommandV2Start {
             ..Default::default()
         };
         let len = std::cmp::min(first_data.len(), V2_START_PAYLOAD);
+        cmd.data_len = len;
         cmd.data[..len].copy_from_slice(&first_data[..len]);
         cmd
     }
 
-    /// Serialize to a 64-byte packet
-    pub fn to_bytes(&self) -> [u8; USB_PACKET_SIZE] {
-        let mut buf = [0u8; USB_PACKET_SIZE];
+    /// Serialize to a variable-length packet.
+    ///
+    /// The device uses the USB transfer length to determine how much write
+    /// payload is present, so the final packet must not be padded to 64 bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = vec![0u8; 6 + self.data_len];
         buf[0..2].copy_from_slice(&self.packet_id.to_le_bytes());
         buf[2..4].copy_from_slice(&self.write_count.to_le_bytes());
         buf[4..6].copy_from_slice(&self.read_count.to_le_bytes());
-        buf[6..64].copy_from_slice(&self.data);
+        buf[6..].copy_from_slice(&self.data[..self.data_len]);
         buf
     }
 }
@@ -411,6 +418,8 @@ pub struct CommandV2Continue {
     pub packet_id: u16,
     /// Byte offset for validation
     pub data_index: u16,
+    /// Number of valid bytes in `data`
+    pub data_len: usize,
     /// Additional write data (up to 60 bytes)
     pub data: [u8; V2_CONTINUE_PAYLOAD],
 }
@@ -420,6 +429,7 @@ impl Default for CommandV2Continue {
         Self {
             packet_id: PacketId::CmdTransferContinue as u16,
             data_index: 0,
+            data_len: 0,
             data: [0; V2_CONTINUE_PAYLOAD],
         }
     }
@@ -433,16 +443,17 @@ impl CommandV2Continue {
             ..Default::default()
         };
         let len = std::cmp::min(data.len(), V2_CONTINUE_PAYLOAD);
+        cmd.data_len = len;
         cmd.data[..len].copy_from_slice(&data[..len]);
         cmd
     }
 
-    /// Serialize to a 64-byte packet
-    pub fn to_bytes(&self) -> [u8; USB_PACKET_SIZE] {
-        let mut buf = [0u8; USB_PACKET_SIZE];
+    /// Serialize to a variable-length packet.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = vec![0u8; 4 + self.data_len];
         buf[0..2].copy_from_slice(&self.packet_id.to_le_bytes());
         buf[2..4].copy_from_slice(&self.data_index.to_le_bytes());
-        buf[4..64].copy_from_slice(&self.data);
+        buf[4..].copy_from_slice(&self.data[..self.data_len]);
         buf
     }
 }
@@ -463,11 +474,9 @@ impl Default for CommandV2Restart {
 }
 
 impl CommandV2Restart {
-    /// Serialize to a 64-byte packet
-    pub fn to_bytes(&self) -> [u8; USB_PACKET_SIZE] {
-        let mut buf = [0u8; USB_PACKET_SIZE];
-        buf[0..2].copy_from_slice(&self.packet_id.to_le_bytes());
-        buf
+    /// Serialize the two-byte command header.
+    pub fn to_bytes(&self) -> [u8; 2] {
+        self.packet_id.to_le_bytes()
     }
 }
 
@@ -487,11 +496,9 @@ impl Default for CommandV2GetConfig {
 }
 
 impl CommandV2GetConfig {
-    /// Serialize to a 64-byte packet
-    pub fn to_bytes(&self) -> [u8; USB_PACKET_SIZE] {
-        let mut buf = [0u8; USB_PACKET_SIZE];
-        buf[0..2].copy_from_slice(&self.packet_id.to_le_bytes());
-        buf
+    /// Serialize the two-byte command header.
+    pub fn to_bytes(&self) -> [u8; 2] {
+        self.packet_id.to_le_bytes()
     }
 }
 
@@ -605,5 +612,28 @@ impl ResponseV2Config {
     /// Check if full duplex is supported
     pub fn supports_full_duplex(&self) -> bool {
         self.feature_bitmap & features::FULL_DUPLEX != 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v2_header_only_commands_are_two_bytes() {
+        assert_eq!(CommandV2GetConfig::default().to_bytes(), [0, 0]);
+        assert_eq!(CommandV2Restart::default().to_bytes(), [4, 0]);
+    }
+
+    #[test]
+    fn v2_start_packet_contains_only_valid_payload() {
+        let cmd = CommandV2Start::new(3, 2, &[0x9f, 0xaa, 0x55]);
+        assert_eq!(cmd.to_bytes(), vec![2, 0, 3, 0, 2, 0, 0x9f, 0xaa, 0x55]);
+    }
+
+    #[test]
+    fn v2_continue_packet_contains_only_valid_payload() {
+        let cmd = CommandV2Continue::new(58, &[0xde, 0xad]);
+        assert_eq!(cmd.to_bytes(), vec![3, 0, 58, 0, 0xde, 0xad]);
     }
 }
