@@ -1,0 +1,18 @@
+[package]
+name = "rflasher-ati-spi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ATI/AMD Radeon GPU SPI flash programmer support for rflasher"
+
+[features]
+default = ["std"]
+std = ["rflasher-core/std", "rflasher-pci/std"]
+is_sync = ["rflasher-core/is_sync"]
+
+[dependencies]
+rflasher-core.workspace = true
+rflasher-pci.workspace = true
+log.workspace = true
+maybe-async.workspace = true
+tock-registers.workspace = true

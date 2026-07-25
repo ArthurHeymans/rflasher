@@ -94,6 +94,10 @@ impl From<rflasher_pci::PciError> for InternalError {
                     register: offset,
                 })
             }
+            rflasher_pci::PciError::InvalidBar { bar, .. }
+            | rflasher_pci::PciError::MapBar { bar, .. } => {
+                Self::PciAccess(PciAccessError::InvalidBar(bar))
+            }
         }
     }
 }

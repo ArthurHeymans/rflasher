@@ -64,6 +64,10 @@ pub enum PciError {
     ConfigWrite { address: PciAddress, offset: u16 },
     /// The address, register offset, or access width is invalid for the backend.
     InvalidAccess { address: PciAddress, offset: u16 },
+    /// The requested BAR index is invalid.
+    InvalidBar { address: PciAddress, bar: u8 },
+    /// A PCI BAR resource could not be mapped.
+    MapBar { address: PciAddress, bar: u8 },
 }
 
 impl core::fmt::Display for PciError {
@@ -79,6 +83,12 @@ impl core::fmt::Display for PciError {
             }
             Self::InvalidAccess { address, offset } => {
                 write!(f, "invalid PCI config access at {address} reg {offset:#x}")
+            }
+            Self::InvalidBar { address, bar } => {
+                write!(f, "invalid BAR{bar} for PCI device {address}")
+            }
+            Self::MapBar { address, bar } => {
+                write!(f, "failed to map BAR{bar} for PCI device {address}")
             }
         }
     }
@@ -219,7 +229,48 @@ mod linux {
     use super::{PciAddress, PciConfigAccess, PciDevice, PciError};
     use std::fs::{self, OpenOptions};
     use std::io::{Read, Seek, Write};
+    use std::os::fd::AsRawFd;
     use std::path::{Path, PathBuf};
+
+    /// Memory mapping of one PCI BAR resource.
+    pub struct MappedBar {
+        ptr: *mut u8,
+        size: usize,
+    }
+
+    impl MappedBar {
+        /// Views this BAR as a caller-defined register block.
+        ///
+        /// # Safety
+        ///
+        /// `T` must exactly describe the registers at the start of this BAR.
+        pub unsafe fn registers<T>(&self) -> &T {
+            assert!(
+                core::mem::size_of::<T>() <= self.size,
+                "register block exceeds BAR mapping"
+            );
+            assert!(
+                (self.ptr as usize).is_multiple_of(core::mem::align_of::<T>()),
+                "unaligned register block"
+            );
+            // SAFETY: guaranteed by the caller and checked for size/alignment above.
+            unsafe { &*self.ptr.cast::<T>() }
+        }
+
+        pub fn size(&self) -> usize {
+            self.size
+        }
+    }
+
+    impl Drop for MappedBar {
+        fn drop(&mut self) {
+            // SAFETY: this is the mapping created by `SysfsPci::map_bar`.
+            unsafe { libc::munmap(self.ptr.cast(), self.size) };
+        }
+    }
+
+    unsafe impl Send for MappedBar {}
+    unsafe impl Sync for MappedBar {}
 
     /// Linux sysfs PCI backend.
     #[derive(Clone, Debug)]
@@ -252,6 +303,41 @@ mod linux {
 
         fn config_path(&self, address: PciAddress) -> PathBuf {
             self.device_path(address).join("config")
+        }
+
+        /// Maps a PCI BAR through its Linux sysfs `resourceN` file.
+        pub fn map_bar(
+            &self,
+            address: PciAddress,
+            bar: u8,
+            size: usize,
+        ) -> Result<MappedBar, PciError> {
+            if bar > 5 || size == 0 {
+                return Err(PciError::InvalidBar { address, bar });
+            }
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(self.device_path(address).join(format!("resource{bar}")))
+                .map_err(|_| PciError::MapBar { address, bar })?;
+            // SAFETY: Linux PCI sysfs resource files are mmap-able BAR windows.
+            let ptr = unsafe {
+                libc::mmap(
+                    core::ptr::null_mut(),
+                    size,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    file.as_raw_fd(),
+                    0,
+                )
+            };
+            if ptr == libc::MAP_FAILED {
+                return Err(PciError::MapBar { address, bar });
+            }
+            Ok(MappedBar {
+                ptr: ptr.cast(),
+                size,
+            })
         }
 
         /// Enumerates PCI functions exposed by Linux sysfs.
@@ -405,7 +491,7 @@ mod linux {
 }
 
 #[cfg(all(feature = "std", target_os = "linux"))]
-pub use linux::{SysfsPci, read32_direct};
+pub use linux::{MappedBar, SysfsPci, read32_direct};
 
 #[cfg(test)]
 mod tests {

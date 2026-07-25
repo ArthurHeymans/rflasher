@@ -13,6 +13,7 @@ members = [
     "crates/rflasher-ft4222",
     "crates/rflasher-internal",
     "crates/rflasher-pci",
+    "crates/rflasher-ati-spi",
     "crates/rflasher-linux-spi",
     "crates/rflasher-linux-mtd",
     "crates/rflasher-linux-gpio",
@@ -38,6 +39,7 @@ default-members = [
     "crates/rflasher-ft4222",
     "crates/rflasher-internal",
     "crates/rflasher-pci",
+    "crates/rflasher-ati-spi",
     "crates/rflasher-linux-spi",
     "crates/rflasher-linux-mtd",
     "crates/rflasher-linux-gpio",
@@ -60,6 +62,7 @@ rflasher-chip-types = { path = "crates/rflasher-chip-types", default-features = 
 rflasher-core = { path = "crates/rflasher-core", default-features = false }
 rflasher-chips = { path = "crates/rflasher-chips" }
 rflasher-pci = { path = "crates/rflasher-pci", default-features = false }
+rflasher-ati-spi = { path = "crates/rflasher-ati-spi", default-features = false }
 
 # Core
 bitflags = "2"
@@ -87,6 +90,7 @@ prettyplease = "0.2"
 heapless = "0.8"
 once_cell = { version = "1.21", default-features = false }
 maybe-async = "0.2"
+tock-registers = { version = "0.10.1", default-features = false, features = ["register_types"] }
 
 [package]
 name = "rflasher"

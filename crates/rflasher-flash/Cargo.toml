@@ -19,15 +19,24 @@ rflasher-linux-spi = { path = "../rflasher-linux-spi", optional = true }
 rflasher-linux-mtd = { path = "../rflasher-linux-mtd", optional = true }
 rflasher-linux-gpio = { path = "../rflasher-linux-gpio", optional = true }
 rflasher-internal = { path = "../rflasher-internal", optional = true }
+rflasher-ati-spi = { path = "../rflasher-ati-spi", optional = true }
 rflasher-raiden = { path = "../rflasher-raiden", optional = true }
 rflasher-sunxi-fel = { path = "../rflasher-sunxi-fel", optional = true }
+
 
 [features]
 default = ["std", "is_sync"]
 std = ["rflasher-core/std"]
 alloc = ["rflasher-core/alloc"]
 # Sync mode - when enabled, all programmer code is synchronous
-is_sync = ["rflasher-core/is_sync", "rflasher-serprog?/is_sync", "rflasher-ch341a?/is_sync", "rflasher-ch347?/is_sync", "rflasher-ftdi?/is_sync"]
+is_sync = [
+  "rflasher-core/is_sync",
+  "rflasher-serprog?/is_sync",
+  "rflasher-ch341a?/is_sync",
+  "rflasher-ch347?/is_sync",
+  "rflasher-ftdi?/is_sync",
+  "rflasher-ati-spi?/is_sync",
+]
 
 # Programmer features
 dummy = ["dep:rflasher-dummy"]
@@ -43,6 +52,7 @@ linux-spi = ["dep:rflasher-linux-spi"]
 linux-mtd = ["dep:rflasher-linux-mtd"]
 linux-gpio = ["dep:rflasher-linux-gpio"]
 internal = ["dep:rflasher-internal"]
+ati-spi = ["dep:rflasher-ati-spi"]
 raiden = ["dep:rflasher-raiden"]
 sunxi-fel = ["dep:rflasher-sunxi-fel"]
 
