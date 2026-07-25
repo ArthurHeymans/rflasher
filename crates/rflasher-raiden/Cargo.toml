@@ -17,6 +17,7 @@ nusb = { workspace = true, optional = true }
 futures-lite = { version = "2", optional = true }
 maybe-async.workspace = true
 log.workspace = true
+zerocopy.workspace = true
 
 web-sys = { version = "0.3", optional = true, features = [
     "Navigator",

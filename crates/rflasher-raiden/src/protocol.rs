@@ -9,6 +9,9 @@
 
 #![allow(dead_code)]
 
+use zerocopy::byteorder::little_endian::U16 as U16Le;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
+
 // ===========================================================================
 // USB Device Identifiers
 // ===========================================================================
@@ -109,6 +112,43 @@ impl PacketId {
             _ => None,
         }
     }
+}
+
+#[repr(C)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+struct PacketV2Header {
+    packet_id: U16Le,
+}
+
+#[repr(C)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+struct CommandV2StartHeader {
+    packet_id: U16Le,
+    write_count: U16Le,
+    read_count: U16Le,
+}
+
+#[repr(C)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+struct PacketV2ContinueHeader {
+    packet_id: U16Le,
+    data_index: U16Le,
+}
+
+#[repr(C)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+struct ResponseV2StartHeader {
+    packet_id: U16Le,
+    status_code: U16Le,
+}
+
+#[repr(C)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+struct ResponseV2ConfigWire {
+    packet_id: U16Le,
+    max_write_count: U16Le,
+    max_read_count: U16Le,
+    feature_bitmap: U16Le,
 }
 
 // ===========================================================================
@@ -402,12 +442,15 @@ impl CommandV2Start {
     /// The device uses the USB transfer length to determine how much write
     /// payload is present, so the final packet must not be padded to 64 bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = vec![0u8; 6 + self.data_len];
-        buf[0..2].copy_from_slice(&self.packet_id.to_le_bytes());
-        buf[2..4].copy_from_slice(&self.write_count.to_le_bytes());
-        buf[4..6].copy_from_slice(&self.read_count.to_le_bytes());
-        buf[6..].copy_from_slice(&self.data[..self.data_len]);
-        buf
+        let header = CommandV2StartHeader {
+            packet_id: U16Le::new(self.packet_id),
+            write_count: U16Le::new(self.write_count),
+            read_count: U16Le::new(self.read_count),
+        };
+        let mut packet = Vec::with_capacity(size_of::<CommandV2StartHeader>() + self.data_len);
+        packet.extend_from_slice(header.as_bytes());
+        packet.extend_from_slice(&self.data[..self.data_len]);
+        packet
     }
 }
 
@@ -450,11 +493,14 @@ impl CommandV2Continue {
 
     /// Serialize to a variable-length packet.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = vec![0u8; 4 + self.data_len];
-        buf[0..2].copy_from_slice(&self.packet_id.to_le_bytes());
-        buf[2..4].copy_from_slice(&self.data_index.to_le_bytes());
-        buf[4..].copy_from_slice(&self.data[..self.data_len]);
-        buf
+        let header = PacketV2ContinueHeader {
+            packet_id: U16Le::new(self.packet_id),
+            data_index: U16Le::new(self.data_index),
+        };
+        let mut packet = Vec::with_capacity(size_of::<PacketV2ContinueHeader>() + self.data_len);
+        packet.extend_from_slice(header.as_bytes());
+        packet.extend_from_slice(&self.data[..self.data_len]);
+        packet
     }
 }
 
@@ -475,8 +521,12 @@ impl Default for CommandV2Restart {
 
 impl CommandV2Restart {
     /// Serialize the two-byte command header.
-    pub fn to_bytes(&self) -> [u8; 2] {
-        self.packet_id.to_le_bytes()
+    pub fn to_bytes(&self) -> Vec<u8> {
+        PacketV2Header {
+            packet_id: U16Le::new(self.packet_id),
+        }
+        .as_bytes()
+        .to_vec()
     }
 }
 
@@ -497,8 +547,12 @@ impl Default for CommandV2GetConfig {
 
 impl CommandV2GetConfig {
     /// Serialize the two-byte command header.
-    pub fn to_bytes(&self) -> [u8; 2] {
-        self.packet_id.to_le_bytes()
+    pub fn to_bytes(&self) -> Vec<u8> {
+        PacketV2Header {
+            packet_id: U16Le::new(self.packet_id),
+        }
+        .as_bytes()
+        .to_vec()
     }
 }
 
@@ -526,16 +580,16 @@ impl Default for ResponseV2Start {
 impl ResponseV2Start {
     /// Parse from a 64-byte packet
     pub fn from_bytes(buf: &[u8]) -> Self {
-        let mut rsp = Self::default();
-        if buf.len() >= 4 {
-            rsp.packet_id = u16::from_le_bytes([buf[0], buf[1]]);
-            rsp.status_code = u16::from_le_bytes([buf[2], buf[3]]);
-        }
-        if buf.len() >= 64 {
-            rsp.data.copy_from_slice(&buf[4..64]);
-        } else if buf.len() > 4 {
-            rsp.data[..buf.len() - 4].copy_from_slice(&buf[4..]);
-        }
+        let Ok((header, payload)) = ResponseV2StartHeader::ref_from_prefix(buf) else {
+            return Self::default();
+        };
+        let mut rsp = Self {
+            packet_id: header.packet_id.get(),
+            status_code: header.status_code.get(),
+            ..Default::default()
+        };
+        let data_len = payload.len().min(V2_CONTINUE_PAYLOAD);
+        rsp.data[..data_len].copy_from_slice(&payload[..data_len]);
         rsp
     }
 
@@ -569,16 +623,16 @@ impl Default for ResponseV2Continue {
 impl ResponseV2Continue {
     /// Parse from a 64-byte packet
     pub fn from_bytes(buf: &[u8]) -> Self {
-        let mut rsp = Self::default();
-        if buf.len() >= 4 {
-            rsp.packet_id = u16::from_le_bytes([buf[0], buf[1]]);
-            rsp.data_index = u16::from_le_bytes([buf[2], buf[3]]);
-        }
-        if buf.len() >= 64 {
-            rsp.data.copy_from_slice(&buf[4..64]);
-        } else if buf.len() > 4 {
-            rsp.data[..buf.len() - 4].copy_from_slice(&buf[4..]);
-        }
+        let Ok((header, payload)) = PacketV2ContinueHeader::ref_from_prefix(buf) else {
+            return Self::default();
+        };
+        let mut rsp = Self {
+            packet_id: header.packet_id.get(),
+            data_index: header.data_index.get(),
+            ..Default::default()
+        };
+        let data_len = payload.len().min(V2_CONTINUE_PAYLOAD);
+        rsp.data[..data_len].copy_from_slice(&payload[..data_len]);
         rsp
     }
 }
@@ -599,14 +653,15 @@ pub struct ResponseV2Config {
 impl ResponseV2Config {
     /// Parse from a 64-byte packet
     pub fn from_bytes(buf: &[u8]) -> Self {
-        let mut rsp = Self::default();
-        if buf.len() >= 8 {
-            rsp.packet_id = u16::from_le_bytes([buf[0], buf[1]]);
-            rsp.max_write_count = u16::from_le_bytes([buf[2], buf[3]]);
-            rsp.max_read_count = u16::from_le_bytes([buf[4], buf[5]]);
-            rsp.feature_bitmap = u16::from_le_bytes([buf[6], buf[7]]);
+        let Ok((wire, _)) = ResponseV2ConfigWire::ref_from_prefix(buf) else {
+            return Self::default();
+        };
+        Self {
+            packet_id: wire.packet_id.get(),
+            max_write_count: wire.max_write_count.get(),
+            max_read_count: wire.max_read_count.get(),
+            feature_bitmap: wire.feature_bitmap.get(),
         }
-        rsp
     }
 
     /// Check if full duplex is supported
