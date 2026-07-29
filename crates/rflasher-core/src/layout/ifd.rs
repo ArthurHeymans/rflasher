@@ -9,7 +9,11 @@ use std::string::ToString;
 
 use super::{Layout, LayoutError, LayoutSource, Region};
 
-/// IFD signature at offset 0x10
+/// Intel Flash Descriptor signature.
+///
+/// Normal descriptors store this at offset 0x00. Some PCH generations have
+/// the descriptor shifted by one DWORD, in which case it is at offset 0x10;
+/// flashprog accepts both forms.
 const IFD_SIGNATURE: u32 = 0x0FF0_A55A;
 
 /// Maximum number of IFD regions
@@ -68,24 +72,34 @@ pub fn parse_ifd(data: &[u8]) -> Result<Layout, LayoutError> {
         return Err(LayoutError::InvalidIfdSignature);
     }
 
-    // Check signature at offset 0x10
-    let sig = u32::from_le_bytes([data[0x10], data[0x11], data[0x12], data[0x13]]);
-    if sig != IFD_SIGNATURE {
+    // flashprog accepts the normal descriptor location (offset 0) and the
+    // PCH-bug variant where the descriptor is shifted by one DWORD (offset
+    // 0x10). FLMAP0 is immediately after the signature in either form.
+    let descriptor_offset = if data[0..4] == IFD_SIGNATURE.to_le_bytes() {
+        0
+    } else if data[0x10..0x14] == IFD_SIGNATURE.to_le_bytes() {
+        0x10
+    } else {
         return Err(LayoutError::InvalidIfdSignature);
-    }
+    };
 
-    // Read FLMAP0 at offset 0x14
-    let flmap0 = u32::from_le_bytes([data[0x14], data[0x15], data[0x16], data[0x17]]);
+    let flmap0_offset = descriptor_offset + 4;
+    let flmap0 = u32::from_le_bytes([
+        data[flmap0_offset],
+        data[flmap0_offset + 1],
+        data[flmap0_offset + 2],
+        data[flmap0_offset + 3],
+    ]);
 
-    // Calculate Flash Region Base Address (FRBA)
-    // FRBA is at bits 23:16 of FLMAP0, shifted left by 4
+    // Calculate Flash Region Base Address (FRBA), matching flashprog's
+    // getFRBA() macro. FRBA is an absolute descriptor offset, even for the
+    // PCH-bug variant.
     let frba = ((flmap0 >> 12) & 0xFF0) as usize;
 
-    // Always scan all possible regions (up to 16).
-    // The NR field in FLMAP0 is not reliable for newer chipsets (Skylake+),
-    // where the number of regions is fixed per chipset generation.
-    // Unused regions have limit < base, which we detect below.
-    let num_regions = MAX_IFD_REGIONS;
+    // ICH9 uses NR + 1 region entries. This is flashprog's fallback rule for
+    // pre-PCH100 chipsets.
+    let nr = ((flmap0 >> 24) & 0x7) as usize;
+    let num_regions = nr + 1;
 
     if frba + num_regions * 4 > data.len() {
         return Err(LayoutError::InvalidIfdSignature);
@@ -114,8 +128,8 @@ pub fn parse_ifd(data: &[u8]) -> Result<Layout, LayoutError> {
         let base = freg_base(freg);
         let limit = freg_limit(freg);
 
-        // Region is unused if limit < base
-        if limit < base {
+        // Region is unused if limit <= base
+        if limit <= base {
             continue;
         }
 
@@ -135,8 +149,8 @@ pub fn has_ifd(data: &[u8]) -> bool {
     if data.len() < 0x14 {
         return false;
     }
-    let sig = u32::from_le_bytes([data[0x10], data[0x11], data[0x12], data[0x13]]);
-    sig == IFD_SIGNATURE
+    data[0..4] == IFD_SIGNATURE.to_le_bytes()
+        || data[0x10..0x14] == IFD_SIGNATURE.to_le_bytes()
 }
 
 impl Layout {
@@ -162,21 +176,22 @@ mod tests {
     /// This sets base=0x7FFF (max), limit=0 which makes limit < base.
     const FLREG_UNUSED: u32 = 0x00007FFF;
 
-    fn make_test_ifd() -> Vec<u8> {
+    fn make_test_ifd_at(offset: usize) -> Vec<u8> {
         let mut data = vec![0x00; 0x1000];
 
-        // Signature at 0x10
-        data[0x10..0x14].copy_from_slice(&IFD_SIGNATURE.to_le_bytes());
+        // Signature at the requested descriptor offset
+        data[offset..offset + 4].copy_from_slice(&IFD_SIGNATURE.to_le_bytes());
 
         // FLMAP0: NR=2 (3 regions), FRBA=0x40 (0x40 >> 4 = 0x04 in field)
         // bits 26:24 = NR, bits 23:16 = FRBA >> 4
         let flmap0: u32 = (2 << 24) | (0x04 << 16);
-        data[0x14..0x18].copy_from_slice(&flmap0.to_le_bytes());
+        data[offset + 4..offset + 8].copy_from_slice(&flmap0.to_le_bytes());
 
-        // FRBA at 0x40 - initialize all 16 regions as unused first
-        for i in 0..MAX_IFD_REGIONS {
-            let offset = 0x40 + i * 4;
-            data[offset..offset + 4].copy_from_slice(&FLREG_UNUSED.to_le_bytes());
+        // FRBA at absolute offset 0x40 - initialize all reported regions as unused first
+        for i in 0..3 {
+            let region_offset = 0x40 + i * 4;
+            data[region_offset..region_offset + 4]
+                .copy_from_slice(&FLREG_UNUSED.to_le_bytes());
         }
 
         // Region 0 (descriptor): 0x000000 - 0x000FFF
@@ -192,6 +207,10 @@ mod tests {
         data[0x48..0x4C].copy_from_slice(&freg2.to_le_bytes());
 
         data
+    }
+
+    fn make_test_ifd() -> Vec<u8> {
+        make_test_ifd_at(0x10)
     }
 
     #[test]
@@ -221,5 +240,12 @@ mod tests {
         assert_eq!(layout.regions[2].start, 0x800000);
         assert_eq!(layout.regions[2].end, 0xFFFFFF);
         assert!(layout.regions[2].dangerous);
+    }
+
+    #[test]
+    fn test_parse_standard_ifd_location() {
+        let data = make_test_ifd_at(0);
+        assert!(has_ifd(&data));
+        assert_eq!(parse_ifd(&data).unwrap().regions.len(), 3);
     }
 }
