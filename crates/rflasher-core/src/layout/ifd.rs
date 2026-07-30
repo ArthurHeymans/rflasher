@@ -7,6 +7,9 @@
 
 use std::string::ToString;
 
+use zerocopy::byteorder::little_endian::U32 as U32LE;
+use zerocopy::{FromBytes, Immutable, KnownLayout, Unaligned};
+
 use super::{Layout, LayoutError, LayoutSource, Region};
 
 /// Intel Flash Descriptor signature.
@@ -18,6 +21,19 @@ const IFD_SIGNATURE: u32 = 0x0FF0_A55A;
 
 /// Maximum number of IFD regions
 const MAX_IFD_REGIONS: usize = 16;
+
+/// Fixed portion of an Intel Flash Descriptor.
+#[repr(C)]
+#[derive(FromBytes, KnownLayout, Immutable, Unaligned)]
+struct IfdHeader {
+    signature: U32LE,
+    flmap0: U32LE,
+}
+
+fn ifd_header_at(data: &[u8], offset: usize) -> Option<&IfdHeader> {
+    let (header, _) = IfdHeader::ref_from_prefix(data.get(offset..)?).ok()?;
+    (header.signature.get() == IFD_SIGNATURE).then_some(header)
+}
 
 /// IFD region names (based on Intel documentation)
 const IFD_REGION_NAMES: [&str; MAX_IFD_REGIONS] = [
@@ -75,21 +91,10 @@ pub fn parse_ifd(data: &[u8]) -> Result<Layout, LayoutError> {
     // flashprog accepts the normal descriptor location (offset 0) and the
     // PCH-bug variant where the descriptor is shifted by one DWORD (offset
     // 0x10). FLMAP0 is immediately after the signature in either form.
-    let descriptor_offset = if data[0..4] == IFD_SIGNATURE.to_le_bytes() {
-        0
-    } else if data[0x10..0x14] == IFD_SIGNATURE.to_le_bytes() {
-        0x10
-    } else {
-        return Err(LayoutError::InvalidIfdSignature);
-    };
-
-    let flmap0_offset = descriptor_offset + 4;
-    let flmap0 = u32::from_le_bytes([
-        data[flmap0_offset],
-        data[flmap0_offset + 1],
-        data[flmap0_offset + 2],
-        data[flmap0_offset + 3],
-    ]);
+    let header = ifd_header_at(data, 0)
+        .or_else(|| ifd_header_at(data, 0x10))
+        .ok_or(LayoutError::InvalidIfdSignature)?;
+    let flmap0 = header.flmap0.get();
 
     // Calculate Flash Region Base Address (FRBA), matching flashprog's
     // getFRBA() macro. FRBA is an absolute descriptor offset, even for the
@@ -101,22 +106,19 @@ pub fn parse_ifd(data: &[u8]) -> Result<Layout, LayoutError> {
     let nr = ((flmap0 >> 24) & 0x7) as usize;
     let num_regions = nr + 1;
 
-    if frba + num_regions * 4 > data.len() {
-        return Err(LayoutError::InvalidIfdSignature);
-    }
+    let (region_registers, _) = <[U32LE]>::ref_from_prefix_with_elems(
+        data.get(frba..)
+            .ok_or(LayoutError::InvalidIfdSignature)?,
+        num_regions,
+    )
+    .map_err(|_| LayoutError::InvalidIfdSignature)?;
 
     let mut layout = Layout::with_source(LayoutSource::Ifd);
     layout.name = Some("Intel Flash Descriptor".to_string());
 
     // Parse each region
-    for (i, &name) in IFD_REGION_NAMES.iter().enumerate().take(num_regions) {
-        let offset = frba + i * 4;
-        let freg = u32::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]);
+    for (&name, freg) in IFD_REGION_NAMES.iter().zip(region_registers) {
+        let freg = freg.get();
 
         // 0xFFFFFFFF indicates we've hit uninitialized flash memory beyond the
         // actual region table. Stop scanning here.
@@ -146,11 +148,7 @@ pub fn parse_ifd(data: &[u8]) -> Result<Layout, LayoutError> {
 
 /// Check if data appears to contain an Intel Flash Descriptor
 pub fn has_ifd(data: &[u8]) -> bool {
-    if data.len() < 0x14 {
-        return false;
-    }
-    data[0..4] == IFD_SIGNATURE.to_le_bytes()
-        || data[0x10..0x14] == IFD_SIGNATURE.to_le_bytes()
+    ifd_header_at(data, 0).is_some() || ifd_header_at(data, 0x10).is_some()
 }
 
 impl Layout {
