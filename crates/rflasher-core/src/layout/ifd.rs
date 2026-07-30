@@ -107,8 +107,7 @@ pub fn parse_ifd(data: &[u8]) -> Result<Layout, LayoutError> {
     let num_regions = nr + 1;
 
     let (region_registers, _) = <[U32LE]>::ref_from_prefix_with_elems(
-        data.get(frba..)
-            .ok_or(LayoutError::InvalidIfdSignature)?,
+        data.get(frba..).ok_or(LayoutError::InvalidIfdSignature)?,
         num_regions,
     )
     .map_err(|_| LayoutError::InvalidIfdSignature)?;
@@ -188,8 +187,7 @@ mod tests {
         // FRBA at absolute offset 0x40 - initialize all reported regions as unused first
         for i in 0..3 {
             let region_offset = 0x40 + i * 4;
-            data[region_offset..region_offset + 4]
-                .copy_from_slice(&FLREG_UNUSED.to_le_bytes());
+            data[region_offset..region_offset + 4].copy_from_slice(&FLREG_UNUSED.to_le_bytes());
         }
 
         // Region 0 (descriptor): 0x000000 - 0x000FFF
