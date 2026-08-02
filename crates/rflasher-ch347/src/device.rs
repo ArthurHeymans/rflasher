@@ -265,50 +265,22 @@ impl Ch347 {
     /// It shows the browser's device picker filtered to CH347 devices (both T and F variants).
     #[cfg(target_arch = "wasm32")]
     pub async fn request_device() -> Result<nusb::DeviceInfo> {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen_futures::JsFuture;
-        use web_sys::{UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
-
-        let usb = web_sys::window()
-            .ok_or(Ch347Error::DeviceNotFound)?
-            .navigator()
-            .usb();
-
-        // Create filters for both CH347T and CH347F devices
-        let filter_t = UsbDeviceFilter::new();
-        filter_t.set_vendor_id(CH347_USB_VENDOR);
-        filter_t.set_product_id(CH347T_USB_PRODUCT);
-
-        let filter_f = UsbDeviceFilter::new();
-        filter_f.set_vendor_id(CH347_USB_VENDOR);
-        filter_f.set_product_id(CH347F_USB_PRODUCT);
-
-        let filters = js_sys::Array::new();
-        filters.push(&filter_t);
-        filters.push(&filter_f);
-
-        let options = UsbDeviceRequestOptions::new(&filters);
-
         log::info!("Requesting CH347 device via WebUSB picker...");
 
-        let device_promise = usb.request_device(&options);
-        let device_js = JsFuture::from(device_promise)
+        let selectors = [
+            nusb::DeviceSelector::all().with_vid_pid(CH347_USB_VENDOR, CH347T_USB_PRODUCT),
+            nusb::DeviceSelector::all().with_vid_pid(CH347_USB_VENDOR, CH347F_USB_PRODUCT),
+        ];
+        let device_info = nusb::request_device(&selectors)
             .await
-            .map_err(|e| Ch347Error::OpenFailed(format!("WebUSB request failed: {:?}", e)))?;
-
-        let device: UsbDevice = device_js
-            .dyn_into()
-            .map_err(|_| Ch347Error::OpenFailed("Failed to get USB device".to_string()))?;
+            .map_err(|e| Ch347Error::OpenFailed(format!("WebUSB request failed: {e}")))?
+            .ok_or(Ch347Error::DeviceNotFound)?;
 
         log::info!(
             "CH347 device selected: VID={:04X} PID={:04X}",
-            device.vendor_id(),
-            device.product_id()
+            device_info.vendor_id(),
+            device_info.product_id()
         );
-
-        let device_info = nusb::device_info_from_webusb(device)
-            .await
-            .map_err(|e| Ch347Error::OpenFailed(format!("Failed to get device info: {}", e)))?;
 
         Ok(device_info)
     }
@@ -378,10 +350,12 @@ impl Ch347 {
     /// Shutdown: clean up (WASM equivalent of Drop)
     pub async fn shutdown(&mut self) {
         // Drain any pending transfers
+        #[cfg(not(target_arch = "wasm32"))]
         self.out_ep.cancel_all();
         while self.out_ep.pending() > 0 {
             let _ = ep_wait!(self.out_ep, Duration::from_secs(1));
         }
+        #[cfg(not(target_arch = "wasm32"))]
         self.in_ep.cancel_all();
         while self.in_ep.pending() > 0 {
             let _ = ep_wait!(self.in_ep, Duration::from_secs(1));

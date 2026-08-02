@@ -58,8 +58,8 @@ impl fmt::Display for FtdiError {
 
 impl std::error::Error for FtdiError {}
 
-impl From<rs_ftdi::Error> for FtdiError {
-    fn from(e: rs_ftdi::Error) -> Self {
+impl From<ftdi_nusb::Error> for FtdiError {
+    fn from(e: ftdi_nusb::Error) -> Self {
         FtdiError::RsFtdi(e.to_string())
     }
 }

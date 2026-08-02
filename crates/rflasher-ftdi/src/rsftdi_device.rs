@@ -1,33 +1,33 @@
-//! FTDI MPSSE device implementation using rs-ftdi (shared by native and wasm)
+//! FTDI MPSSE device implementation using ftdi-nusb (shared by native and wasm)
 //!
-//! This module provides the `Ftdi` struct using the pure-Rust `rs-ftdi` crate
+//! This module provides the `Ftdi` struct using the pure-Rust `ftdi-nusb` crate
 //! (backed by `nusb`). It uses `maybe_async` to support both native sync and
 //! WASM async modes from a single codebase.
 //!
-//! rs-ftdi handles USB communication, modem status byte stripping, and endpoint
+//! ftdi-nusb handles USB communication, modem status byte stripping, and endpoint
 //! management. This module layers MPSSE SPI protocol on top.
 
 #[cfg(feature = "is_sync")]
 use std::time::Duration;
 
+use ftdi_nusb::FtdiDevice;
 use maybe_async::maybe_async;
 #[cfg(feature = "is_sync")]
 use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
-use rs_ftdi::FtdiDevice;
 
 use crate::protocol::*;
 use crate::rsftdi_error::{FtdiError, Result};
 
-/// FTDI MPSSE programmer (rs-ftdi backend, shared by native and wasm)
+/// FTDI MPSSE programmer (ftdi-nusb backend, shared by native and wasm)
 ///
 /// This struct represents a connection to an FTDI device using the MPSSE
-/// engine for SPI communication. It uses the pure-Rust `rs-ftdi` crate
+/// engine for SPI communication. It uses the pure-Rust `ftdi-nusb` crate
 /// and supports both native sync and WASM async modes via `maybe_async`.
 pub struct Ftdi {
-    /// rs-ftdi device context
+    /// ftdi-nusb device context
     device: FtdiDevice,
     /// Current CS bits state
     cs_bits: u8,
@@ -38,15 +38,15 @@ pub struct Ftdi {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: convert our FtdiInterface to rs-ftdi's Interface
+// Helper: convert our FtdiInterface to ftdi-nusb's Interface
 // ---------------------------------------------------------------------------
 
-fn map_interface(iface: FtdiInterface) -> rs_ftdi::Interface {
+fn map_interface(iface: FtdiInterface) -> ftdi_nusb::Interface {
     match iface {
-        FtdiInterface::A => rs_ftdi::Interface::A,
-        FtdiInterface::B => rs_ftdi::Interface::B,
-        FtdiInterface::C => rs_ftdi::Interface::C,
-        FtdiInterface::D => rs_ftdi::Interface::D,
+        FtdiInterface::A => ftdi_nusb::Interface::A,
+        FtdiInterface::B => ftdi_nusb::Interface::B,
+        FtdiInterface::C => ftdi_nusb::Interface::C,
+        FtdiInterface::D => ftdi_nusb::Interface::D,
     }
 }
 
@@ -59,7 +59,7 @@ impl Ftdi {
     /// Open an FTDI device with the given configuration
     pub fn open(config: &FtdiConfig) -> Result<Self> {
         log::info!(
-            "Opening FTDI {} channel {} (rs-ftdi backend)",
+            "Opening FTDI {} channel {} (ftdi-nusb backend)",
             config.device_type.name(),
             config.interface.letter()
         );
@@ -87,7 +87,7 @@ impl Ftdi {
 
         // Set MPSSE bitbang mode
         device
-            .set_bitmode(0x00, rs_ftdi::BitMode::Mpsse)
+            .set_bitmode(0x00, ftdi_nusb::BitMode::Mpsse)
             .map_err(|e| FtdiError::ConfigFailed(format!("Set MPSSE mode failed: {}", e)))?;
 
         let mut ftdi = Ftdi {
@@ -101,7 +101,7 @@ impl Ftdi {
         ftdi.init_mpsse(config)?;
 
         log::info!(
-            "FTDI configured for SPI at {:.2} MHz (rs-ftdi backend)",
+            "FTDI configured for SPI at {:.2} MHz (ftdi-nusb backend)",
             config.spi_clock_mhz()
         );
 
@@ -165,26 +165,24 @@ impl Ftdi {
     /// This must be called from a user gesture (e.g., button click) in the browser.
     /// It shows the browser's device picker filtered to all supported FTDI devices.
     #[cfg(target_arch = "wasm32")]
-    pub async fn request_device() -> Result<nusb::DeviceInfo> {
-        // Delegate to rs-ftdi's WebUSB device picker
-        rs_ftdi::FtdiDevice::request_device()
+    pub async fn request_device() -> Result<nusb::Device> {
+        // Delegate to ftdi-nusb's WebUSB device picker
+        ftdi_nusb::FtdiDevice::request_device()
             .await
             .map_err(|e| FtdiError::OpenFailed(format!("WebUSB request failed: {}", e)))
     }
 
-    /// Open an FTDI device from a DeviceInfo with the given configuration
-    pub async fn open(device_info: nusb::DeviceInfo, config: &FtdiConfig) -> Result<Self> {
+    /// Open an FTDI device from a WebUSB-selected `nusb::Device` with the given configuration
+    pub async fn open(device: nusb::Device, config: &FtdiConfig) -> Result<Self> {
         log::info!(
-            "Opening FTDI {} channel {} VID={:04X} PID={:04X} (rs-ftdi WebUSB)",
+            "Opening FTDI {} channel {} (ftdi-nusb WebUSB)",
             config.device_type.name(),
-            config.interface.letter(),
-            device_info.vendor_id(),
-            device_info.product_id()
+            config.interface.letter()
         );
 
         let interface = map_interface(config.interface);
 
-        let mut device = FtdiDevice::open_wasm(device_info, interface)
+        let mut device = FtdiDevice::open_wasm(device, interface)
             .await
             .map_err(|e| FtdiError::OpenFailed(format!("{}", e)))?;
 
@@ -202,7 +200,7 @@ impl Ftdi {
 
         // Set MPSSE bitbang mode
         device
-            .set_bitmode(0x00, rs_ftdi::BitMode::Mpsse)
+            .set_bitmode(0x00, ftdi_nusb::BitMode::Mpsse)
             .await
             .map_err(|e| FtdiError::ConfigFailed(format!("Set MPSSE mode failed: {}", e)))?;
 
@@ -217,7 +215,7 @@ impl Ftdi {
         ftdi.init_mpsse(config).await?;
 
         log::info!(
-            "FTDI configured for SPI at {:.2} MHz (rs-ftdi WebUSB)",
+            "FTDI configured for SPI at {:.2} MHz (ftdi-nusb WebUSB)",
             config.spi_clock_mhz()
         );
 
