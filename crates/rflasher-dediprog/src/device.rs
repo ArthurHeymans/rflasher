@@ -362,45 +362,20 @@ impl Dediprog {
     /// It shows the browser's device picker filtered to Dediprog devices.
     #[cfg(target_arch = "wasm32")]
     pub async fn request_device() -> Result<nusb::DeviceInfo> {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen_futures::JsFuture;
-        use web_sys::{UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
-
-        let usb = web_sys::window()
-            .ok_or(DediprogError::DeviceNotFound)?
-            .navigator()
-            .usb();
-
-        // Create filter for Dediprog devices (VID:0483 PID:DADA)
-        let filter = UsbDeviceFilter::new();
-        filter.set_vendor_id(DEDIPROG_USB_VENDOR);
-        filter.set_product_id(DEDIPROG_USB_PRODUCT);
-
-        let filters = js_sys::Array::new();
-        filters.push(&filter);
-
-        let options = UsbDeviceRequestOptions::new(&filters);
-
         log::info!("Requesting Dediprog device via WebUSB picker...");
 
-        let device_promise = usb.request_device(&options);
-        let device_js = JsFuture::from(device_promise)
+        let selector =
+            nusb::DeviceSelector::all().with_vid_pid(DEDIPROG_USB_VENDOR, DEDIPROG_USB_PRODUCT);
+        let device_info = nusb::request_device(&[selector])
             .await
-            .map_err(|e| DediprogError::OpenFailed(format!("WebUSB request failed: {:?}", e)))?;
-
-        let device: UsbDevice = device_js
-            .dyn_into()
-            .map_err(|_| DediprogError::OpenFailed("Failed to get USB device".to_string()))?;
+            .map_err(|e| DediprogError::OpenFailed(format!("WebUSB request failed: {e}")))?
+            .ok_or(DediprogError::DeviceNotFound)?;
 
         log::info!(
             "Dediprog device selected: VID={:04X} PID={:04X}",
-            device.vendor_id(),
-            device.product_id()
+            device_info.vendor_id(),
+            device_info.product_id()
         );
-
-        let device_info = nusb::device_info_from_webusb(device)
-            .await
-            .map_err(|e| DediprogError::OpenFailed(format!("Failed to get device info: {}", e)))?;
 
         Ok(device_info)
     }

@@ -158,44 +158,21 @@ impl Ft4222 {
     /// This must be called from a user gesture (e.g., button click) in the browser.
     #[cfg(target_arch = "wasm32")]
     pub async fn request_device() -> Result<nusb::DeviceInfo> {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen_futures::JsFuture;
-        use web_sys::{UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
-
-        let usb = web_sys::window()
-            .ok_or(Ft4222Error::DeviceNotFound)?
-            .navigator()
-            .usb();
-
-        let filter = UsbDeviceFilter::new();
-        filter.set_vendor_id(FTDI_VID);
-        filter.set_product_id(FT4222H_PID);
-
-        let filters = js_sys::Array::new();
-        filters.push(&filter);
-
-        let options = UsbDeviceRequestOptions::new(&filters);
-
         log::info!("Requesting FT4222H device via WebUSB picker...");
 
-        let device_promise = usb.request_device(&options);
-        let device_js = JsFuture::from(device_promise)
+        let selector = nusb::DeviceSelector::all().with_vid_pid(FTDI_VID, FT4222H_PID);
+        let device_info = nusb::request_device(&[selector])
             .await
-            .map_err(|e| Ft4222Error::OpenFailed(format!("WebUSB request failed: {:?}", e)))?;
-
-        let device: UsbDevice = device_js
-            .dyn_into()
-            .map_err(|_| Ft4222Error::OpenFailed("Failed to get USB device".to_string()))?;
+            .map_err(|e| Ft4222Error::OpenFailed(format!("WebUSB request failed: {e}")))?
+            .ok_or(Ft4222Error::DeviceNotFound)?;
 
         log::info!(
             "FT4222H device selected: VID={:04X} PID={:04X}",
-            device.vendor_id(),
-            device.product_id()
+            device_info.vendor_id(),
+            device_info.product_id()
         );
 
-        nusb::device_info_from_webusb(device)
-            .await
-            .map_err(|e| Ft4222Error::OpenFailed(format!("Failed to get device info: {}", e)))
+        Ok(device_info)
     }
 
     /// Open an FT4222H device from a WebUSB-selected `DeviceInfo`.
@@ -209,6 +186,7 @@ impl Ft4222 {
         let _ = self.flush().await;
 
         if let Some(out_ep) = self.out_endpoint.as_mut() {
+            #[cfg(not(target_arch = "wasm32"))]
             out_ep.cancel_all();
             while out_ep.pending() > 0 {
                 let _ = ep_wait!(out_ep, Duration::from_secs(1));
@@ -216,6 +194,7 @@ impl Ft4222 {
         }
 
         if let Some(in_ep) = self.in_endpoint.as_mut() {
+            #[cfg(not(target_arch = "wasm32"))]
             in_ep.cancel_all();
             while in_ep.pending() > 0 {
                 let _ = ep_wait!(in_ep, Duration::from_secs(1));

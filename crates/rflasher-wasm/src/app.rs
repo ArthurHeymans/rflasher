@@ -935,7 +935,7 @@ impl RflasherApp {
             shared.borrow_mut().busy = true;
 
             match Ftdi::request_device().await {
-                Ok(device_info) => match Ftdi::open(device_info, &config).await {
+                Ok(device) => match Ftdi::open(device, &config).await {
                     Ok(ftdi) => {
                         let name = format!(
                             "{} ch {}",

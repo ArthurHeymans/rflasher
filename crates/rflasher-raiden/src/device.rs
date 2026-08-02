@@ -251,36 +251,13 @@ impl RaidenDebugSpi {
 impl RaidenDebugSpi {
     /// Request a Raiden device via the WebUSB permission prompt.
     pub async fn request_device() -> Result<nusb::DeviceInfo> {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen_futures::JsFuture;
-        use web_sys::{UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
-
-        let usb = web_sys::window()
-            .ok_or(RaidenError::DeviceNotFound)?
-            .navigator()
-            .usb();
-
-        let filter = UsbDeviceFilter::new();
-        filter.set_vendor_id(GOOGLE_VID);
-
-        let filters = js_sys::Array::new();
-        filters.push(&filter);
-
-        let options = UsbDeviceRequestOptions::new(&filters);
-
         log::info!("Requesting Raiden Debug SPI device via WebUSB picker...");
 
-        let device_js = JsFuture::from(usb.request_device(&options))
+        let selector = nusb::DeviceSelector::all().with_vid(GOOGLE_VID);
+        nusb::request_device(&[selector])
             .await
-            .map_err(|e| RaidenError::OpenFailed(format!("WebUSB request failed: {:?}", e)))?;
-
-        let device: UsbDevice = device_js
-            .dyn_into()
-            .map_err(|_| RaidenError::OpenFailed("Failed to get USB device".to_string()))?;
-
-        nusb::device_info_from_webusb(device)
-            .await
-            .map_err(|e| RaidenError::OpenFailed(format!("Failed to get device info: {}", e)))
+            .map_err(|e| RaidenError::OpenFailed(format!("WebUSB request failed: {e}")))?
+            .ok_or(RaidenError::DeviceNotFound)
     }
 
     /// Open a previously granted Raiden WebUSB device.

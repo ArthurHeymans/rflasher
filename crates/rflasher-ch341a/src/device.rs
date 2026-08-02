@@ -225,45 +225,20 @@ impl Ch341a {
     /// It shows the browser's device picker filtered to CH341A devices.
     #[cfg(target_arch = "wasm32")]
     pub async fn request_device() -> Result<nusb::DeviceInfo> {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen_futures::JsFuture;
-        use web_sys::{UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
-
-        let usb = web_sys::window()
-            .ok_or(Ch341aError::DeviceNotFound)?
-            .navigator()
-            .usb();
-
-        // Create filter for CH341A devices
-        let filter = UsbDeviceFilter::new();
-        filter.set_vendor_id(CH341A_USB_VENDOR);
-        filter.set_product_id(CH341A_USB_PRODUCT);
-
-        let filters = js_sys::Array::new();
-        filters.push(&filter);
-
-        let options = UsbDeviceRequestOptions::new(&filters);
-
         log::info!("Requesting CH341A device via WebUSB picker...");
 
-        let device_promise = usb.request_device(&options);
-        let device_js = JsFuture::from(device_promise)
+        let selector =
+            nusb::DeviceSelector::all().with_vid_pid(CH341A_USB_VENDOR, CH341A_USB_PRODUCT);
+        let device_info = nusb::request_device(&[selector])
             .await
-            .map_err(|e| Ch341aError::OpenFailed(format!("WebUSB request failed: {:?}", e)))?;
-
-        let device: UsbDevice = device_js
-            .dyn_into()
-            .map_err(|_| Ch341aError::OpenFailed("Failed to get USB device".to_string()))?;
+            .map_err(|e| Ch341aError::OpenFailed(format!("WebUSB request failed: {e}")))?
+            .ok_or(Ch341aError::DeviceNotFound)?;
 
         log::info!(
             "CH341A device selected: VID={:04X} PID={:04X}",
-            device.vendor_id(),
-            device.product_id()
+            device_info.vendor_id(),
+            device_info.product_id()
         );
-
-        let device_info = nusb::device_info_from_webusb(device)
-            .await
-            .map_err(|e| Ch341aError::OpenFailed(format!("Failed to get device info: {}", e)))?;
 
         Ok(device_info)
     }
@@ -545,10 +520,12 @@ impl Ch341a {
     /// Cancel and drain all pending transfers on both endpoints.
     #[maybe_async]
     async fn drain_all_pending(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         self.out_ep.cancel_all();
         while self.out_ep.pending() > 0 {
             let _ = ep_wait!(self.out_ep, Duration::from_secs(1));
         }
+        #[cfg(not(target_arch = "wasm32"))]
         self.in_ep.cancel_all();
         while self.in_ep.pending() > 0 {
             let _ = ep_wait!(self.in_ep, Duration::from_secs(1));
