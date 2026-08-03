@@ -815,6 +815,56 @@ fn open_linux_gpio_spi(
 }
 
 #[cfg(feature = "internal")]
+fn format_internal_init_error(error: &rflasher_internal::InternalError) -> String {
+    use rflasher_internal::InternalError;
+
+    let hint = match error {
+        InternalError::NoChipset | InternalError::UnsupportedChipset { .. } => {
+            "This system does not have a supported Intel or AMD chipset."
+        }
+        InternalError::MultipleChipsets => {
+            "Multiple supported chipsets were found; internal programmer selection is ambiguous."
+        }
+        InternalError::NotSupported("SPI100 not in use") => {
+            "The AMD SPI100 controller is not configured or in use."
+        }
+        _ => return format!("Failed to initialize internal programmer: {error}"),
+    };
+
+    format!("Failed to initialize internal programmer: {error}\n{hint}")
+}
+
+#[cfg(all(test, feature = "internal"))]
+mod internal_error_tests {
+    use super::format_internal_init_error;
+    use rflasher_internal::{InternalError, PciAccessError};
+
+    #[test]
+    fn permission_hint_is_not_used_without_a_permission_specific_cause() {
+        let pci_error = InternalError::PciAccess(PciAccessError::InvalidAccess {
+            bus: 0,
+            device: 0,
+            function: 0,
+            register: 0x1000,
+        });
+        let memory_map_error = InternalError::MemoryMap {
+            address: 0,
+            size: 4096,
+        };
+
+        assert!(!format_internal_init_error(&pci_error).contains("sudo"));
+        assert!(!format_internal_init_error(&memory_map_error).contains("sudo"));
+    }
+
+    #[test]
+    fn amd_spi100_not_in_use_has_specific_guidance() {
+        let error = InternalError::NotSupported("SPI100 not in use");
+
+        assert!(format_internal_init_error(&error).contains("AMD SPI100 controller"));
+    }
+}
+
+#[cfg(feature = "internal")]
 fn open_internal(
     params: &ProgrammerParams,
     db: &dyn ChipProvider,
@@ -832,15 +882,8 @@ fn open_internal(
         log::info!("Using ich_spi_mode={}", internal_opts.mode);
     }
 
-    let mut programmer = InternalProgrammer::with_options(internal_opts).map_err(|e| {
-        format!(
-            "Failed to initialize internal programmer: {}\n\
-             Make sure you have root privileges and a supported Intel or AMD chipset.\n\
-             For Intel ICH7, only swseq is supported.\n\
-             For Intel PCH100+, swseq may be locked (use ich_spi_mode=hwseq).",
-            e
-        )
-    })?;
+    let mut programmer = InternalProgrammer::with_options(internal_opts)
+        .map_err(|error| format_internal_init_error(&error))?;
 
     // Software sequencing: can probe chip via SPI
     // Hardware sequencing: opaque operations only
@@ -1010,7 +1053,7 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
     programmers.push(ProgrammerInfo {
         name: "internal",
         aliases: &[],
-        description: "Intel PCH internal SPI/FWH controller (ich_spi_mode=<auto|swseq|hwseq>)",
+        description: "Intel/AMD internal SPI controller (ich_spi_mode=<auto|swseq|hwseq>)",
     });
 
     #[cfg(feature = "raiden")]
