@@ -1,7 +1,7 @@
 //! WebSerial transport implementation for browser-based serprog communication
 //!
 //! This module provides a WebSerial-based transport that implements the
-//! `Transport` trait from rflasher-serprog for async mode.
+//! `Transport` trait from `rflasher-programmers` for async mode.
 //!
 //! Uses web-sys bindings for the WebSerial API types.
 
@@ -9,8 +9,8 @@
 #![allow(deprecated)]
 
 use maybe_async::maybe_async;
-use rflasher_serprog::Transport;
-use rflasher_serprog::error::{Result, SerprogError};
+use rflasher_programmers::serprog::Transport;
+use rflasher_programmers::serprog::error::{Result, SerprogError};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{

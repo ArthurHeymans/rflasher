@@ -1,0 +1,115 @@
+[package]
+name = "rflasher-programmers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Programmer backends and high-level programmer registry for rflasher"
+
+[features]
+default = ["std", "is_sync"]
+alloc = ["rflasher-core/alloc"]
+std = ["alloc", "rflasher-core/std"]
+is_sync = ["rflasher-core/is_sync", "maybe-async/is_sync"]
+wasm = [
+    "std",
+    "dep:web-sys",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:js-sys",
+    "dep:gloo-timers",
+]
+
+# Programmer backends
+dummy = ["alloc", "is_sync"]
+ch341a = ["std", "dep:nusb", "dep:futures-lite"]
+ch347 = ["std", "dep:nusb", "dep:futures-lite"]
+dediprog = ["std", "dep:nusb", "dep:futures-lite"]
+ft4222 = ["std", "dep:nusb", "dep:futures-lite"]
+raiden = ["std", "dep:nusb", "dep:futures-lite", "dep:zerocopy"]
+sunxi-fel = ["std", "is_sync", "dep:nusb"]
+serprog = ["std", "dep:embedded-io", "dep:embedded-io-async", "dep:thiserror"]
+serprog-native = ["serprog", "is_sync", "dep:serialport"]
+
+# FTDI backends
+ftdi = ["std", "is_sync", "dep:ftdi", "dep:nusb", "dep:futures-lite"]
+ftdi-native = [
+    "std",
+    "is_sync",
+    "dep:ftdi-nusb",
+    "ftdi-nusb/std",
+    "dep:nusb",
+    "dep:futures-lite",
+]
+ftdi-wasm = [
+    "wasm",
+    "dep:ftdi-nusb",
+    "ftdi-nusb/wasm",
+    "dep:nusb",
+]
+# Linux-only programmer backends
+linux-spi = ["std", "is_sync", "dep:libc", "dep:nix", "dep:thiserror"]
+linux-mtd = ["std", "is_sync", "dep:libc", "dep:nix", "dep:thiserror"]
+linux-gpio = ["std", "is_sync", "dep:gpiocdev", "dep:thiserror"]
+internal = ["std", "is_sync", "dep:rflasher-internal"]
+
+portable-programmers = [
+    "std",
+    "is_sync",
+    "dummy",
+    "ch341a",
+    "ch347",
+    "dediprog",
+    "serprog-native",
+    "ftdi-native",
+    "ft4222",
+    "raiden",
+    "sunxi-fel",
+]
+
+[dependencies]
+rflasher-core.workspace = true
+rflasher-internal = { version = "0.1.0", path = "../rflasher-internal", optional = true }
+log.workspace = true
+maybe-async.workspace = true
+thiserror = { workspace = true, optional = true }
+zerocopy = { workspace = true, optional = true }
+embedded-io = { workspace = true, optional = true }
+embedded-io-async = { workspace = true, optional = true }
+
+nusb = { workspace = true, optional = true }
+futures-lite = { version = "2", optional = true }
+ftdi = { version = "0.1", optional = true }
+ftdi-nusb = { version = "0.2", default-features = false, optional = true }
+serialport = { version = "4.5", optional = true }
+gpiocdev = { version = "0.8", features = ["uapi_v1", "uapi_v2"], optional = true }
+libc = { version = "0.2", optional = true }
+nix = { version = "0.29", features = ["ioctl", "fs"], optional = true }
+
+web-sys = { version = "0.3", optional = true, features = [
+    "Navigator",
+    "Window",
+    "WorkerNavigator",
+    "console",
+    "Usb",
+    "UsbConnectionEvent",
+    "UsbControlTransferParameters",
+    "UsbDevice",
+    "UsbDeviceFilter",
+    "UsbDeviceRequestOptions",
+    "UsbDirection",
+    "UsbInTransferResult",
+    "UsbOutTransferResult",
+    "UsbRecipient",
+    "UsbRequestType",
+    "UsbTransferStatus",
+] }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+gloo-timers = { version = "0.3", features = ["futures"], optional = true }
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["portable-programmers"]
+rustdoc-args = ["--cfg", "docsrs"]

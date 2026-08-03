@@ -2,23 +2,11 @@
 members = [
     "crates/rflasher-chip-types",
     "crates/rflasher-core",
-    "crates/rflasher-flash",
     "crates/rflasher-chips",
     "crates/rflasher-chips-codegen",
-    "crates/rflasher-ch341a",
-    "crates/rflasher-ch347",
-    "crates/rflasher-dediprog",
-    "crates/rflasher-serprog",
-    "crates/rflasher-ftdi",
-    "crates/rflasher-ft4222",
+    "crates/rflasher-programmers",
     "crates/rflasher-internal",
     "crates/rflasher-pci",
-    "crates/rflasher-linux-spi",
-    "crates/rflasher-linux-mtd",
-    "crates/rflasher-linux-gpio",
-    "crates/rflasher-dummy",
-    "crates/rflasher-raiden",
-    "crates/rflasher-sunxi-fel",
     "crates/rflasher-repl",
     "crates/rflasher-wasm",
 ]
@@ -27,23 +15,11 @@ default-members = [
     ".",
     "crates/rflasher-chip-types",
     "crates/rflasher-core",
-    "crates/rflasher-flash",
     "crates/rflasher-chips",
     "crates/rflasher-chips-codegen",
-    "crates/rflasher-ch341a",
-    "crates/rflasher-ch347",
-    "crates/rflasher-dediprog",
-    "crates/rflasher-serprog",
-    "crates/rflasher-ftdi",
-    "crates/rflasher-ft4222",
+    "crates/rflasher-programmers",
     "crates/rflasher-internal",
     "crates/rflasher-pci",
-    "crates/rflasher-linux-spi",
-    "crates/rflasher-linux-mtd",
-    "crates/rflasher-linux-gpio",
-    "crates/rflasher-dummy",
-    "crates/rflasher-raiden",
-    "crates/rflasher-sunxi-fel",
     "crates/rflasher-repl",
 ]
 
@@ -59,6 +35,7 @@ repository = "https://github.com/ArthurHeymans/rflasher"
 rflasher-chip-types = { version = "0.1.0", path = "crates/rflasher-chip-types", default-features = false }
 rflasher-core = { version = "0.1.0", path = "crates/rflasher-core", default-features = false }
 rflasher-chips = { version = "0.1.0", path = "crates/rflasher-chips" }
+rflasher-programmers = { version = "0.1.0", path = "crates/rflasher-programmers", default-features = false }
 rflasher-pci = { version = "0.1.0", path = "crates/rflasher-pci", default-features = false }
 
 # Core
@@ -110,22 +87,22 @@ exclude = [
 [features]
 default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden", "sunxi-fel"]
 
-# Programmer features (passed through to rflasher-flash)
-dummy = ["rflasher-flash/dummy"]
-ch341a = ["rflasher-flash/ch341a"]
-ch347 = ["rflasher-flash/ch347"]
-dediprog = ["rflasher-flash/dediprog"]
-serprog = ["rflasher-flash/serprog"]
-ftdi = ["rflasher-flash/ftdi"]
-# Use pure-Rust rs-ftdi backend for FTDI MPSSE (instead of C libftdi1)
-ftdi-native = ["rflasher-flash/ftdi-native"]
-ft4222 = ["rflasher-flash/ft4222"]
-linux-spi = ["rflasher-flash/linux-spi"]
-linux-mtd = ["rflasher-flash/linux-mtd"]
-linux-gpio = ["rflasher-flash/linux-gpio"]
-internal = ["rflasher-flash/internal"]
-raiden = ["rflasher-flash/raiden"]
-sunxi-fel = ["rflasher-flash/sunxi-fel"]
+# Programmer features (passed through to rflasher-programmers)
+dummy = ["rflasher-programmers/dummy"]
+ch341a = ["rflasher-programmers/ch341a"]
+ch347 = ["rflasher-programmers/ch347"]
+dediprog = ["rflasher-programmers/dediprog"]
+serprog = ["rflasher-programmers/serprog-native"]
+ftdi = ["rflasher-programmers/ftdi"]
+# Use pure-Rust ftdi-nusb backend for FTDI MPSSE (instead of C libftdi1)
+ftdi-native = ["rflasher-programmers/ftdi-native"]
+ft4222 = ["rflasher-programmers/ft4222"]
+linux-spi = ["rflasher-programmers/linux-spi"]
+linux-mtd = ["rflasher-programmers/linux-mtd"]
+linux-gpio = ["rflasher-programmers/linux-gpio"]
+internal = ["rflasher-programmers/internal"]
+raiden = ["rflasher-programmers/raiden"]
+sunxi-fel = ["rflasher-programmers/sunxi-fel"]
 
 # REPL feature for scripting with Steel Scheme
 repl = ["dep:rflasher-repl"]
@@ -142,7 +119,7 @@ portable-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi
 [dependencies]
 rflasher-core = { workspace = true, features = ["std", "is_sync"] }
 rflasher-chips.workspace = true
-rflasher-flash = { version = "0.1.0", path = "crates/rflasher-flash", features = ["std", "is_sync"] }
+rflasher-programmers = { workspace = true, features = ["std", "is_sync"] }
 rflasher-repl = { version = "0.1.0", path = "crates/rflasher-repl", optional = true }
 clap.workspace = true
 clap_mangen = "0.2"

@@ -1,6 +1,6 @@
 //! REPL command implementation
 
-use rflasher_flash::open_spi_programmer;
+use rflasher_programmers::open_spi_programmer;
 use std::path::Path;
 
 /// Run the Scheme REPL or execute a script

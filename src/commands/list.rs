@@ -1,7 +1,7 @@
 //! List commands implementation
 
 use rflasher_chips::ChipDatabase;
-use rflasher_flash::available_programmers;
+use rflasher_programmers::available_programmers;
 
 /// List all supported programmers
 pub fn list_programmers() {
