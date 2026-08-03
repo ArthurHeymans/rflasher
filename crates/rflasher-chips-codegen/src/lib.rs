@@ -598,7 +598,7 @@ impl ChipDatabase {
 
             /// Static chip database
             ///
-            /// Generated from RON files in chips/vendors/
+            /// Generated from the bundled `rflasher-chips/data/vendors` RON files.
             /// Lazily initialized on first access.
             pub static CHIPS: once_cell::sync::Lazy<Vec<FlashChip>> = once_cell::sync::Lazy::new(|| {
                 vec![

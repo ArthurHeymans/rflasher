@@ -224,6 +224,7 @@ fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::
     } else {
         // Try default locations
         let default_paths = [
+            PathBuf::from("crates/rflasher-chips/data/vendors"),
             PathBuf::from("chips/vendors"),
             PathBuf::from("/usr/share/rflasher/chips"),
             PathBuf::from("/usr/local/share/rflasher/chips"),

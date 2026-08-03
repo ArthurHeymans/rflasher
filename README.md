@@ -72,7 +72,7 @@ Currently includes **482 flash chips** from:
 - **XTX** - XT25F series (11 chips)
 - **Zetta** - ZD25D and ZD25LQ series (4 chips)
 
-Chip definitions are stored as RON files in `chips/vendors/` and can be easily extended. See the [chip database structure](chips/vendors/) for examples.
+Chip definitions are stored as RON files in `crates/rflasher-chips/data/vendors/` and can be easily extended. See the [chip database structure](crates/rflasher-chips/data/vendors/) for examples.
 
 ## Installation
 
@@ -106,11 +106,12 @@ cargo install --path .
 
 ### Chip Database
 
-The flash chip database is loaded from RON files at runtime. Default search paths:
+The flash chip database is bundled into builds that enable `static-chips`. The CLI can also load RON files at runtime from these default search paths:
 
-1. `./chips/vendors/` (local development)
-2. `/usr/share/rflasher/chips/` (system-wide installation)
-3. `/usr/local/share/rflasher/chips/` (local installation)
+1. `./crates/rflasher-chips/data/vendors/` (repository development)
+2. `./chips/vendors/` (compatible local override)
+3. `/usr/share/rflasher/chips/` (system-wide installation)
+4. `/usr/local/share/rflasher/chips/` (local installation)
 
 You can also specify a custom path with `--chip-db <path>`.
 
@@ -577,10 +578,10 @@ Contributions are welcome! Here are some ways you can help:
 
 ### Adding New Flash Chips
 
-Flash chips are defined in RON files under `chips/vendors/`. To add a new chip:
+Flash chips are defined in RON files under `crates/rflasher-chips/data/vendors/`. To add a new chip:
 
 1. Find the datasheet for your chip
-2. Create or update the vendor file (e.g., `chips/vendors/winbond.ron`)
+2. Create or update the vendor file (for example, `crates/rflasher-chips/data/vendors/winbond.ron`)
 3. Add chip definition with JEDEC ID, size, erase blocks, and features
 4. Submit a pull request
 

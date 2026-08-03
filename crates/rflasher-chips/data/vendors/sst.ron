@@ -17,7 +17,7 @@
 //   - Non-uniform 0xD8 erase: 4×8K boot sectors at each end, 64K blocks in middle.
 //
 // SST25WF020A / SST25WF040B / SST25WF080B use SANYO_ID (0x62), not SST_ID (0xBF).
-// Those chips are in chips/vendors/sanyo.ron instead.
+// Those chips are in sanyo.ron instead.
 
 (
     vendor: "SST",
@@ -299,7 +299,7 @@
         // ====================================================================
         // SST25WF series — 1.8V, AAI word program (0xAD)
         // Note: SST25WF020A, SST25WF040B, SST25WF080B use SANYO_ID (0x62) —
-        // those are in chips/vendors/sanyo.ron.
+        // those are in sanyo.ron.
         // ====================================================================
 
         (
