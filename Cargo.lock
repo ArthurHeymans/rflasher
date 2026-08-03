@@ -3005,39 +3005,9 @@ dependencies = [
  "nusb",
  "rflasher-chips",
  "rflasher-core",
- "rflasher-flash",
+ "rflasher-programmers",
  "rflasher-repl",
  "thiserror 2.0.19",
-]
-
-[[package]]
-name = "rflasher-ch341a"
-version = "0.1.0"
-dependencies = [
- "futures-lite",
- "js-sys",
- "log",
- "maybe-async",
- "nusb",
- "rflasher-core",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "rflasher-ch347"
-version = "0.1.0"
-dependencies = [
- "futures-lite",
- "js-sys",
- "log",
- "maybe-async",
- "nusb",
- "rflasher-core",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -3091,82 +3061,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rflasher-dediprog"
-version = "0.1.0"
-dependencies = [
- "futures-lite",
- "js-sys",
- "log",
- "maybe-async",
- "nusb",
- "rflasher-core",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "rflasher-dummy"
-version = "0.1.0"
-dependencies = [
- "log",
- "rflasher-core",
-]
-
-[[package]]
-name = "rflasher-flash"
-version = "0.1.0"
-dependencies = [
- "log",
- "rflasher-ch341a",
- "rflasher-ch347",
- "rflasher-core",
- "rflasher-dediprog",
- "rflasher-dummy",
- "rflasher-ft4222",
- "rflasher-ftdi",
- "rflasher-internal",
- "rflasher-linux-gpio",
- "rflasher-linux-mtd",
- "rflasher-linux-spi",
- "rflasher-raiden",
- "rflasher-serprog",
- "rflasher-sunxi-fel",
-]
-
-[[package]]
-name = "rflasher-ft4222"
-version = "0.1.0"
-dependencies = [
- "futures-lite",
- "js-sys",
- "log",
- "maybe-async",
- "nusb",
- "rflasher-core",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "rflasher-ftdi"
-version = "0.1.0"
-dependencies = [
- "ftdi",
- "ftdi-nusb",
- "futures-lite",
- "js-sys",
- "log",
- "maybe-async",
- "nusb",
- "rflasher-core",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "rflasher-internal"
 version = "0.1.0"
 dependencies = [
@@ -3174,38 +3068,6 @@ dependencies = [
  "log",
  "rflasher-core",
  "rflasher-pci",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "rflasher-linux-gpio"
-version = "0.1.0"
-dependencies = [
- "gpiocdev",
- "log",
- "rflasher-core",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "rflasher-linux-mtd"
-version = "0.1.0"
-dependencies = [
- "libc",
- "log",
- "nix 0.29.0",
- "rflasher-core",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "rflasher-linux-spi"
-version = "0.1.0"
-dependencies = [
- "libc",
- "log",
- "nix 0.29.0",
- "rflasher-core",
  "thiserror 2.0.19",
 ]
 
@@ -3218,15 +3080,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "rflasher-raiden"
+name = "rflasher-programmers"
 version = "0.1.0"
 dependencies = [
+ "embedded-io",
+ "embedded-io-async",
+ "ftdi",
+ "ftdi-nusb",
  "futures-lite",
+ "gloo-timers",
+ "gpiocdev",
  "js-sys",
+ "libc",
  "log",
  "maybe-async",
+ "nix 0.29.0",
  "nusb",
  "rflasher-core",
+ "rflasher-internal",
+ "serialport",
+ "thiserror 2.0.19",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -3249,33 +3122,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rflasher-serprog"
-version = "0.1.0"
-dependencies = [
- "embedded-io",
- "embedded-io-async",
- "gloo-timers",
- "js-sys",
- "log",
- "maybe-async",
- "rflasher-core",
- "serialport",
- "thiserror 2.0.19",
- "wasm-bindgen",
- "wasm-bindgen-futures",
-]
-
-[[package]]
-name = "rflasher-sunxi-fel"
-version = "0.1.0"
-dependencies = [
- "log",
- "maybe-async",
- "nusb",
- "rflasher-core",
-]
-
-[[package]]
 name = "rflasher-wasm"
 version = "0.1.0"
 dependencies = [
@@ -3288,15 +3134,9 @@ dependencies = [
  "js-sys",
  "log",
  "maybe-async",
- "rflasher-ch341a",
- "rflasher-ch347",
  "rflasher-chips",
  "rflasher-core",
- "rflasher-dediprog",
- "rflasher-ft4222",
- "rflasher-ftdi",
- "rflasher-raiden",
- "rflasher-serprog",
+ "rflasher-programmers",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

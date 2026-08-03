@@ -1,7 +1,7 @@
 //! CLI argument parsing
 
 use clap::{Parser, Subcommand};
-use rflasher_flash::programmer_names_short;
+use rflasher_programmers::programmer_names_short;
 use std::path::PathBuf;
 
 /// Generate dynamic help text for the programmer argument

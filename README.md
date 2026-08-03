@@ -127,6 +127,7 @@ sudo udevadm trigger
 ```
 
 Example udev rules:
+
 ```
 # CH341A USB programmer
 SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5512", MODE="0666"
@@ -386,6 +387,7 @@ Goodbye!
 ```
 
 Available functions include:
+
 - **SPI operations**: `spi-transfer`, `spi-read`, `spi-write`, `read-jedec-id`, `read-status1/2/3`, `write-enable`, `write-disable`, `is-busy?`, `wait-ready`
 - **Erase operations**: `chip-erase`, `sector-erase`, `block-erase-32k`, `block-erase-64k`
 - **Byte utilities**: `make-bytes`, `bytes-length`, `bytes-ref`, `bytes-set!`, `bytes->list`, `list->bytes`, `bytes->hex`, `hex->bytes`, `bytes-slice`
@@ -466,12 +468,14 @@ Then open `http://localhost:8080` in a compatible browser.
 To deploy the web interface to a web server:
 
 1. Build the release version:
+
    ```bash
    cd crates/rflasher-wasm
    trunk build --release
    ```
 
 2. Copy the contents of `crates/rflasher-wasm/dist/` to your web server:
+
    ```bash
    rsync -av dist/ user@yourserver:/var/www/html/rflasher/
    ```
@@ -511,16 +515,19 @@ trunk serve
 ### Troubleshooting
 
 **"Serial port not found" or "WebSerial not supported"**
+
 - Ensure you're using a compatible browser (Chrome/Edge 89+)
 - Check that WebSerial is enabled in your browser settings
 - Try accessing via `chrome://flags` and enable "Experimental Web Platform features"
 
 **"Failed to open port"**
+
 - Ensure no other application is using the serial port
 - Check USB cable and connections
 - Verify the serprog device is properly configured
 
 **Reads hang or timeout**
+
 - This is a known issue being investigated (see transport.rs TODO)
 - Try using a different USB cable or port
 - Reduce the amount of data being read at once
@@ -532,21 +539,14 @@ rflasher uses a workspace structure with clear separation of concerns:
 - **`rflasher-chip-types`** - Shared `no_std` SPI NOR chip data model and provider trait
 - **`rflasher-core`** - `no_std` SPI protocol, probing, and flash operations (supports both sync and async via `maybe-async`)
 - **`rflasher-chips`** - Runtime RON loading and optional compiled chip database provider, with chip type re-exports
-- **`rflasher-flash`** - Unified flash device abstraction (works with both SPI and opaque programmers)
 - **`rflasher-chips-codegen`** - Build-time code generator for the compiled chip database
-- **`rflasher-wasm`** - Browser-based web interface using egui and WebSerial API (async mode)
-- **`rflasher-ch341a`** - CH341A USB programmer support
-- **`rflasher-ch347`** - CH347 USB programmer support
-- **`rflasher-dediprog`** - Dediprog SF-series USB programmer support
-- **`rflasher-serprog`** - Serial Flasher Protocol implementation (supports both sync and async)
-- **`rflasher-ftdi`** - FTDI MPSSE programmer support
-- **`rflasher-ft4222`** - FTDI FT4222H USB to SPI bridge support
-- **`rflasher-raiden`** - Raiden Debug SPI (Chrome OS debug hardware) support
-- **`rflasher-internal`** - Internal chipset SPI controller support (Intel ICH/PCH, AMD FCH)
-- **`rflasher-linux-spi`** - Linux spidev interface
-- **`rflasher-linux-gpio`** - Linux GPIO bitbang SPI via character device
-- **`rflasher-linux-mtd`** - Linux MTD (Memory Technology Device) interface
-- **`rflasher-dummy`** - In-memory flash emulator for testing
+- **`rflasher-programmers`** - Feature-gated external programmer backends plus the native high-level registry and `FlashHandle`
+- **`rflasher-internal`** - Internal chipset SPI controller support. It remains separate so firmware such as CrabEFI can use it with `default-features = false` and `is_sync`, without `std`
+- **`rflasher-pci`** - Small `no_std` PCI configuration-space abstraction used by the internal programmer
+- **`rflasher-repl`** - Steel Scheme scripting support for native applications
+- **`rflasher-wasm`** - Browser-based web interface using egui, WebSerial, and WebUSB in async mode
+
+The `rflasher-programmers` crate contains modules for CH341A, CH347, Dediprog, serprog, FTDI, FT4222H, Raiden, sunxi FEL, Linux SPI/GPIO/MTD, and the dummy backend. Cargo features select which modules and optional dependencies are compiled.
 
 ### Async/Sync Architecture
 
@@ -610,12 +610,13 @@ Example chip definition:
 
 To add a new SPI programmer:
 
-1. Create a new crate in `crates/rflasher-yourprogrammer/`
-2. Implement the `SpiMaster` trait from `rflasher-core`
-3. Add programmer registration in `rflasher-flash`
-4. Update documentation and feature flags
+1. Add a module under `crates/rflasher-programmers/src/backends/`
+2. Implement the `SpiMaster` or `OpaqueMaster` trait from `rflasher-core`
+3. Add a feature and optional dependencies in `crates/rflasher-programmers/Cargo.toml`
+4. Register native synchronous programmers in `rflasher-programmers/src/registry.rs`
+5. Update the CLI/WASM feature forwarding and documentation as appropriate
 
-See existing programmer crates for examples.
+Keep firmware-oriented `no_std` chipset controller code in `rflasher-internal` rather than adding host or browser dependencies there.
 
 ## TODO
 
@@ -638,8 +639,8 @@ This project is a loose port of [flashprog](https://github.com/SourceArcade/flas
 
 ## Related Projects
 
-- **flashprog** - https://github.com/SourceArcade/flashprog - The upstream C implementation
-- **flashrom** - https://www.flashrom.org/ - The original flash chip programmer
+- **flashprog** - <https://github.com/SourceArcade/flashprog> - The upstream C implementation
+- **flashrom** - <https://www.flashrom.org/> - The original flash chip programmer
 
 ---
 

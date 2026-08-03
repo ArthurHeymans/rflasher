@@ -5,19 +5,19 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use rflasher_ch341a::Ch341a;
-use rflasher_ch347::{Ch347, SpiSpeed};
 use rflasher_chips::ChipDatabase;
 use rflasher_core::chip::FlashChip;
 use rflasher_core::flash::unified::{WriteProgress, WriteStats, smart_write};
 use rflasher_core::flash::{
     FlashContext, FlashDevice, HybridFlashDevice, ProbeResult, SpiFlashDevice,
 };
-use rflasher_dediprog::{Dediprog, DediprogConfig};
-use rflasher_ft4222::{Ft4222, SpiConfig as Ft4222SpiConfig};
-use rflasher_ftdi::{Ftdi, FtdiConfig, FtdiDeviceType, FtdiInterface};
-use rflasher_raiden::{RaidenConfig, RaidenDebugSpi, Target as RaidenTarget};
-use rflasher_serprog::Serprog;
+use rflasher_programmers::ch341a::Ch341a;
+use rflasher_programmers::ch347::{Ch347, SpiSpeed};
+use rflasher_programmers::dediprog::{Dediprog, DediprogConfig};
+use rflasher_programmers::ft4222::{Ft4222, SpiConfig as Ft4222SpiConfig};
+use rflasher_programmers::ftdi::{Ftdi, FtdiConfig, FtdiDeviceType, FtdiInterface};
+use rflasher_programmers::raiden::{RaidenConfig, RaidenDebugSpi, Target as RaidenTarget};
+use rflasher_programmers::serprog::Serprog;
 
 use crate::transport::WebSerialTransport;
 
@@ -871,14 +871,14 @@ impl RflasherApp {
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            let config = rflasher_ch347::SpiConfig::default().with_speed(spi_speed);
+            let config = rflasher_programmers::ch347::SpiConfig::default().with_speed(spi_speed);
 
             match Ch347::request_device().await {
                 Ok(device_info) => match Ch347::open_with_config(device_info, config).await {
                     Ok(ch347) => {
                         let variant_name = match ch347.variant() {
-                            rflasher_ch347::Ch347Variant::Ch347T => "CH347T",
-                            rflasher_ch347::Ch347Variant::Ch347F => "CH347F",
+                            rflasher_programmers::ch347::Ch347Variant::Ch347T => "CH347T",
+                            rflasher_programmers::ch347::Ch347Variant::Ch347F => "CH347F",
                         };
                         let mut state = shared.borrow_mut();
                         state.programmer = Some(Programmer::Ch347(ch347));

@@ -42,7 +42,7 @@ use maybe_async::maybe_async;
 /// ```ignore
 /// use rflasher_core::flash::{HybridFlashDevice, probe};
 /// use rflasher_core::chip::ChipProvider;
-/// use rflasher_dediprog::Dediprog;
+/// use rflasher_programmers::dediprog::Dediprog;
 ///
 /// let mut master = Dediprog::open().unwrap();
 /// let ctx = probe(&mut master, &db).unwrap();

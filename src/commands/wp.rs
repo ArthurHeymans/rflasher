@@ -1,7 +1,7 @@
 //! Write protection command implementations
 
 use rflasher_core::wp::{WpMode, WpRange, WriteOptions};
-use rflasher_flash::FlashHandle;
+use rflasher_programmers::FlashHandle;
 use std::error::Error;
 
 /// Format a range as a human-readable string with fraction of chip
