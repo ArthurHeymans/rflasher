@@ -37,7 +37,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libudev-dev libftdi1-dev
       - name: Run Clippy
-        run: cargo clippy --workspace --exclude rflasher-wasm --all-targets --all-features -- -D warnings
+        run: |
+          cargo clippy --workspace --exclude rflasher-wasm --all-targets --features rflasher/linux-gpio -- -D warnings
+          cargo clippy -p rflasher --no-default-features --features portable-programmers --all-targets -- -D warnings
 
   test:
     name: Tests
@@ -53,7 +55,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libudev-dev libftdi1-dev
       - name: Run tests
-        run: cargo test --workspace --exclude rflasher-wasm --all-features
+        run: cargo test --workspace --exclude rflasher-wasm --features rflasher/linux-gpio
 
   build:
     name: Build
@@ -70,6 +72,8 @@ jobs:
           sudo apt-get install -y libudev-dev libftdi1-dev
       - name: Build all native programmers
         run: cargo build -p rflasher --no-default-features --features all-programmers --release
+      - name: Validate packaged static chip database
+        run: ./scripts/check-packaged-chips.sh
 
   build-portable:
     name: Build portable (${{ matrix.os }})
