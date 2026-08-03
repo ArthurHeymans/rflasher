@@ -1,7 +1,7 @@
 //! Runtime and compiled flash chip database providers.
 //!
 //! This crate loads chip definitions from RON files and can optionally include
-//! the workspace chip database at build time. It also re-exports the shared
+//! the bundled chip database at build time. It also re-exports the shared
 //! chip model, allowing catalog-only consumers to use a single dependency.
 //!
 //! Use [`ChipDatabase::new`] for the compiled database and
@@ -318,7 +318,7 @@ impl ChipDatabase {
     /// Create a chip database with the static chip definitions (if compiled in)
     ///
     /// When the `static-chips` feature is enabled, this returns a database
-    /// pre-populated with all chips from the chips/vendors/ directory.
+    /// pre-populated with all chips from the bundled `data/vendors` directory.
     /// Otherwise, returns an empty database.
     #[cfg(feature = "static-chips")]
     pub fn new() -> Self {
@@ -459,12 +459,7 @@ mod tests {
     use super::*;
 
     fn vendors_dir() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("chips crate should be inside the workspace crates directory")
-            .parent()
-            .expect("workspace should contain the crates directory")
-            .join("chips/vendors")
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/vendors")
     }
 
     #[test]

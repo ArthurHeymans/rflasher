@@ -12,14 +12,9 @@ fn main() {
         let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
         let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
-        // Chips directory is at the workspace root
-        let chips_dir = manifest_dir
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("chips")
-            .join("vendors");
+        // Keep build inputs inside the crate so published packages and docs.rs
+        // builds contain everything required by the static database feature.
+        let chips_dir = manifest_dir.join("data").join("vendors");
         let output_file = out_dir.join("chips_generated.rs");
 
         // Re-run if any RON file changes

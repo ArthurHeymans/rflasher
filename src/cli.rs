@@ -21,7 +21,7 @@ pub struct Cli {
     pub verbose: u8,
 
     /// Path to chip database directory (contains .ron files)
-    /// Defaults to looking in ./chips/vendors/ and /usr/share/rflasher/chips/
+    /// Defaults to the bundled development database and system data directories.
     #[arg(long, global = true)]
     pub chip_db: Option<PathBuf>,
 

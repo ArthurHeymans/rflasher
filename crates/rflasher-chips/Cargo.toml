@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Runtime and compiled flash chip database providers"
+include = ["/src/**", "/build.rs", "/data/vendors/*.ron", "/Cargo.toml"]
 
 [features]
 default = ["std"]
