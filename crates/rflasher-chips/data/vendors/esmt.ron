@@ -89,6 +89,8 @@
         ),
         (
             name: "F25L32PA",
+            // F25L032A uses the same RDID. Keep both names because their
+            // status-register/OTP capabilities differ and probing is ambiguous.
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true),
