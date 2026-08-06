@@ -2025,9 +2025,13 @@ impl<H: HostAccess> IchSpiController<H> {
         let mut current_addr = addr;
 
         while offset < len {
-            // Max 64 bytes per transfer
+            // Avoid transfers that cross 4 KiB boundaries. The ICH SPI
+            // controller is known to fail on some platforms when a single
+            // transaction spans such a boundary; coreboot applies the same
+            // restriction in its Intel common SPI driver.
             let remaining = len - offset;
-            let block_len = remaining.min(Self::SWSEQ_MAX_DATA);
+            let boundary_remaining = 0x1000 - (current_addr as usize & 0xfff);
+            let block_len = remaining.min(Self::SWSEQ_MAX_DATA).min(boundary_remaining);
 
             // Build write array: opcode + 3-byte address
             let writearr = [
@@ -2277,9 +2281,13 @@ impl<H: HostAccess> IchSpiController<H> {
         let mut current_addr = addr;
 
         while offset < len {
-            // Max 64 bytes per transfer
+            // Avoid transfers that cross 4 KiB boundaries. The ICH SPI
+            // controller is known to fail on some platforms when a single
+            // transaction spans such a boundary; coreboot applies the same
+            // restriction in its Intel common SPI driver.
             let remaining = len - offset;
-            let block_len = remaining.min(Self::SWSEQ_MAX_DATA);
+            let boundary_remaining = 0x1000 - (current_addr as usize & 0xfff);
+            let block_len = remaining.min(Self::SWSEQ_MAX_DATA).min(boundary_remaining);
 
             // Build write array: opcode + 3-byte address
             let writearr = [
