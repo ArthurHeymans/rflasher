@@ -1,5 +1,9 @@
 // Macronix SPI Flash Chips
 // Ported from flashprog/flashchips.c
+//
+// MX23L1654/3254/6454/12854 are mask ROMs and are intentionally excluded.
+// The current chip model requires writable erase geometry and cannot represent
+// read-only SPI devices safely.
 
 (
     vendor: "Macronix",

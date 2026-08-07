@@ -513,6 +513,19 @@ mod tests {
 
         assert!(!db.is_empty());
         assert!(db.find_by_jedec_id(0xEF, 0x4018).is_some());
+
+        // N25Q00A and MT25Q01G share JEDEC IDs but have different erase
+        // profiles. Keep the tested MT25 definitions as the active matches.
+        assert_eq!(
+            db.find_by_jedec_id(0x20, 0xBA21)
+                .map(|chip| chip.name.as_str()),
+            Some("MT25QL01G")
+        );
+        assert_eq!(
+            db.find_by_jedec_id(0x20, 0xBB21)
+                .map(|chip| chip.name.as_str()),
+            Some("MT25QU01G")
+        );
     }
 
     #[cfg(feature = "static-chips")]

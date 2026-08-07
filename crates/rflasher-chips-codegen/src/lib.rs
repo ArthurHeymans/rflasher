@@ -7,6 +7,7 @@ use proc_macro2::{Literal, TokenStream};
 use quote::quote;
 use serde::Deserialize;
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -483,7 +484,16 @@ impl ChipDatabase {
     /// Validate the chip database
     pub fn validate(&self) -> Result<(), Error> {
         for vendor in &self.vendors {
+            let mut chip_names = HashSet::new();
+
             for chip in &vendor.chips {
+                if !chip_names.insert(chip.name.as_str()) {
+                    return Err(Error::Validation(format!(
+                        "Vendor {} defines chip name {} more than once",
+                        vendor.vendor, chip.name
+                    )));
+                }
+
                 // Validate erase blocks
                 if chip.erase_blocks.is_empty() {
                     return Err(Error::Validation(format!(

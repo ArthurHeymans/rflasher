@@ -1,5 +1,9 @@
 // Atmel/Adesto SPI Flash Chips
 // Ported from flashprog/flashchips.c
+//
+// AT45 DataFlash parts are intentionally excluded: although transported over
+// SPI, they require the DataFlash page-buffer protocol, which rflasher's
+// ordinary SPI-NOR chip model does not represent.
 
 (
     vendor: "Atmel",
