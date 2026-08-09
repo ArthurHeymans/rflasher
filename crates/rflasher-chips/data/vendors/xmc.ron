@@ -93,7 +93,7 @@
             ],
         ),
 
-        // XM25QH512C - 3.3V 64Mbit with QPI support
+        // XM25QH512C - 3.3V 512Mbit (64MiB) with QPI support
         (
             name: "XM25QH512C",
             device_id: 0x4020,
@@ -109,7 +109,7 @@
             ],
         ),
 
-        // XM25RH256C - 3.3V 32Mbit
+        // XM25RH256C - 3.3V 256Mbit (32MiB)
         (
             name: "XM25RH256C",
             device_id: 0x4319,
@@ -125,7 +125,7 @@
             ],
         ),
 
-        // XM25RH512C - 3.3V 64Mbit
+        // XM25RH512C - 3.3V 512Mbit (64MiB)
         (
             name: "XM25RH512C",
             device_id: 0x4320,
@@ -141,7 +141,7 @@
             ],
         ),
 
-        // XM25QU512C - 1.8V 64Mbit
+        // XM25QU512C - 1.8V 512Mbit (64MiB)
         (
             name: "XM25QU512C",
             device_id: 0x4120,
