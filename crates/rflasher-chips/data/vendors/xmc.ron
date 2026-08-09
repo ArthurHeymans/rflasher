@@ -156,5 +156,24 @@
                 (opcode: 0xC7, regions: [(size: MiB(64), count: 1)]),
             ],
         ),
+
+        // XM25QU64A - 1.8V 64Mbit (8MiB). Some vendors/boards report the
+        // XMC manufacturer ID (0x20:0x3817) for this part; flashprog lists
+        // it under SST_ID (0xBF) instead. Keep both JEDEC variants so a
+        // device reporting either ID is matched.
+        (
+            name: "XM25QU64A",
+            device_id: 0x3817,
+            total_size: MiB(8),
+            features: (wrsr_wren: true),
+            voltage: (min: 1650, max: 1950),
+            erase_blocks: [
+                (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
+                (opcode: 0x52, regions: [(size: KiB(32), count: 256)]),
+                (opcode: 0xD8, regions: [(size: KiB(64), count: 128)]),
+                (opcode: 0x60, regions: [(size: MiB(8), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(8), count: 1)]),
+            ],
+        ),
     ],
 )
