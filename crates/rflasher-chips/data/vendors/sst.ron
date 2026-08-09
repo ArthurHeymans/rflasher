@@ -533,7 +533,7 @@
                 (opcode: 0xC7, regions: [(size: MiB(1), count: 1)]),
             ],
         ),
-        // XM25QU64A - 1.8V 8Mbit. Despite being an XMC part it reports
+        // XM25QU64A - 1.8V 64Mbit (8MiB). Despite being an XMC part it reports
         // SST_ID (0xBF), so it lives in this vendor file (mirrors the
         // SST25WF SANYO_ID precedent above).
         (
