@@ -684,7 +684,7 @@
             tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
         ),
         (
-            name: "GD25Q256D/GD25B256D",
+            name: "GD25Q256D/GD25B256D/GD25R256D",
             device_id: 0x4019,
             total_size: MiB(32),
             features: (otp: true, four_byte_addr: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, status_reg_3: true, dual_io: true, quad_io: true, wrsr_ext: true),
