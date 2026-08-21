@@ -77,8 +77,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Write {
             programmer,
             input,
-            verify,
-            no_erase: _,
+            no_verify,
             layout,
         } => {
             let mut handle = open_flash(&programmer, &db)?;
@@ -89,10 +88,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     handle.as_device_mut(),
                     &input,
                     &mut layout_obj,
-                    verify,
+                    !no_verify,
                 )
             } else {
-                commands::unified::run_write(handle.as_device_mut(), &input, verify)
+                commands::unified::run_write(handle.as_device_mut(), &input, !no_verify)
             }
         }
         Commands::Erase {

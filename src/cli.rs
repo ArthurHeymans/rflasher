@@ -119,9 +119,9 @@ pub enum Commands {
         #[arg(short, long)]
         input: PathBuf,
 
-        /// Verify after writing
-        #[arg(long, default_value = "true")]
-        verify: bool,
+        /// Skip verification after writing
+        #[arg(long)]
+        no_verify: bool,
 
         /// Don't erase before writing
         #[arg(long)]
