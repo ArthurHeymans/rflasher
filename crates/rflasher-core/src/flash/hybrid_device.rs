@@ -23,7 +23,7 @@ use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
-use crate::flash::operations::{addressing_for_4byte_operation, select_erase_block};
+use crate::flash::operations::{addressing_for_4byte_operation, check_erased_range, select_erase_block};
 use crate::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
 use crate::protocol::{self, CommandAddressing};
 #[cfg(feature = "alloc")]
@@ -200,7 +200,23 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
             return Ok(());
         }
 
-        // Opaque erase not supported — fall back to SPI-based erase
+        // Opaque erase not supported — fall back to SPI-based erase.
+        // NOTE: OpaqueMaster::erase cannot distinguish "unsupported" from a
+        // genuine mid-erase failure; the SPI fallback retries the whole range
+        // either way, which is safe for flash (erase is idempotent) but means
+        // opaque hardware errors are not surfaced here.
+        // SST26 chips use a per-block protection register (not SR BP bits).
+        // A global unlock (WREN + ULBPR 0x98) is required before any erase
+        // succeeds — same as SpiFlashDevice::erase.
+        let needs_sst26_unprotect = self
+            .context()
+            .chip
+            .features
+            .contains(crate::chip::Features::SST26_BPR);
+        if needs_sst26_unprotect {
+            protocol::sst26_global_unprotect(&mut self.master).await?;
+        }
+
         let ctx = self.context();
         let erase_block = select_erase_block(ctx.chip.erase_blocks(), addr, len)
             .ok_or(Error::InvalidAlignment)?;
@@ -252,12 +268,17 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
             .await;
 
             if result.is_err() {
-                if enter_exit_4byte {
-                    let _ =
-                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await;
+                if enter_exit_4byte
+                    && let Err(e) =
+                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
+                {
+                    log::warn!("Failed to exit 4-byte address mode: {}", e);
                 }
                 return result;
             }
+
+            // Verify the block was erased, same as SpiFlashDevice::erase
+            check_erased_range(&mut self.master, &self.ctx, current_addr, block_size).await?;
 
             current_addr += block_size;
         }

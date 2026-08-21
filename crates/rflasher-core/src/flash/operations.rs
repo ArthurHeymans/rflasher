@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 #[cfg(feature = "std")]
 use crate::chip::ChipProvider;
 use crate::chip::{EraseBlock, Features, WriteGranularity};
-use crate::error::{Error, Result};
+use crate::error::{EraseFailure, Error, Result};
 use crate::programmer::{SpiFeatures, SpiMaster};
 use crate::protocol::{self, CommandAddressing};
 use maybe_async::maybe_async;
@@ -940,6 +940,41 @@ pub async fn write<M: SpiMaster + ?Sized>(
 
     if enter_exit_4byte {
         protocol::exit_4byte_mode_with_features(master, features).await?;
+    }
+
+    Ok(())
+}
+
+/// Check that a range of flash has been erased (all bytes are 0xFF)
+///
+/// Reads through the full read path (I/O mode selection, 4-byte addressing)
+/// and returns [`Error::EraseError`] with the exact address of the first
+/// non-erased byte on failure.
+#[maybe_async]
+pub async fn check_erased_range<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    len: u32,
+) -> Result<()> {
+    const CHUNK_SIZE: usize = 4096;
+    let mut buf = [0u8; CHUNK_SIZE];
+
+    let mut offset = 0u32;
+    while offset < len {
+        let chunk_len = core::cmp::min(CHUNK_SIZE as u32, len - offset) as usize;
+        let chunk_buf = &mut buf[..chunk_len];
+
+        read(master, ctx, addr + offset, chunk_buf).await?;
+
+        if let Some((idx, &found)) = chunk_buf.iter().enumerate().find(|&(_, &b)| b != 0xFF) {
+            return Err(Error::EraseError(EraseFailure::VerifyFailed {
+                addr: addr + offset + idx as u32,
+                found,
+            }));
+        }
+
+        offset += chunk_len as u32;
     }
 
     Ok(())
