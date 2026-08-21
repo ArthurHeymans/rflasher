@@ -123,10 +123,6 @@ pub enum Commands {
         #[arg(long)]
         no_verify: bool,
 
-        /// Don't erase before writing
-        #[arg(long)]
-        no_erase: bool,
-
         #[command(flatten)]
         layout: LayoutArgs,
     },
