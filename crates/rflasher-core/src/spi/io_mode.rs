@@ -1,5 +1,8 @@
 //! SPI I/O modes
 
+use crate::error::{Error, Result};
+use crate::programmer::SpiFeatures;
+
 /// I/O mode for SPI transactions
 ///
 /// Represents how data is transferred on the SPI bus, from single-wire
@@ -63,9 +66,6 @@ impl IoMode {
         matches!(self, Self::QuadOut | Self::QuadIo | Self::Qpi)
     }
 }
-
-use crate::error::{Error, Result};
-use crate::programmer::SpiFeatures;
 
 /// Check if a programmer supports the requested I/O mode
 ///
