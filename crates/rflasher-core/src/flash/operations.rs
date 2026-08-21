@@ -9,9 +9,7 @@ use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
 use crate::chip::ChipProvider;
-#[cfg(feature = "alloc")]
-use crate::chip::WriteGranularity;
-use crate::chip::{EraseBlock, Features};
+use crate::chip::{EraseBlock, Features, WriteGranularity};
 use crate::error::{Error, Result};
 use crate::programmer::{SpiFeatures, SpiMaster};
 use crate::protocol::{self, CommandAddressing};
@@ -805,7 +803,6 @@ pub async fn read<M: SpiMaster + ?Sized>(
     if !ctx.is_valid_range(addr, buf.len()) {
         return Err(Error::AddressOutOfBounds);
     }
-
     let features = ctx.chip.features;
     let master_features = master.features();
     let try_native_4byte =
@@ -866,7 +863,18 @@ pub async fn write<M: SpiMaster + ?Sized>(
     }
 
     let features = ctx.chip.features;
+    let write_granularity = ctx.chip.write_granularity;
     let page_size = ctx.page_size();
+
+    // SST25 AAI word program: chip database sets AAI_WORD for SST25VFxxxB/SST25WFxxx.
+    // These chips require a streaming protocol (0xAD) rather than page program (0x02).
+    // AAI uses 3-byte addressing only — 4-byte mode is irrelevant for SST25 chips.
+    // Note: SFDP-probed chips may report WriteGranularity::Byte (BFPT DWORD1 bit[2]=0)
+    // without AAI_WORD being set; those fall through to single-byte page program below.
+    if features.contains(crate::chip::Features::AAI_WORD) {
+        return protocol::aai_word_program(master, addr, data).await;
+    }
+
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
     let master_features = master.features();
     let use_native = use_4byte
@@ -896,12 +904,20 @@ pub async fn write<M: SpiMaster + ?Sized>(
     let mut current_addr = addr;
 
     while offset < data.len() {
-        // Calculate how many bytes until the next page boundary
-        let page_offset = (current_addr as usize) % page_size;
-        let bytes_to_page_end = page_size - page_offset;
         let remaining = data.len() - offset;
-        // Respect both page boundaries and the master's maximum write length
-        let chunk_size = core::cmp::min(core::cmp::min(bytes_to_page_end, remaining), max_write);
+
+        let chunk_size = if write_granularity == WriteGranularity::Byte {
+            // Single-byte page program: one byte per WREN+PP+WIP cycle.
+            // Used for SFDP-detected chips reporting byte granularity (BFPT DWORD1
+            // bit[2]=0) that don't have AAI_WORD — matches flashprog spi_chip_write_1.
+            1
+        } else {
+            // Page-granularity program: up to a full page per command, respecting
+            // page boundaries and the master's maximum write length.
+            let page_offset = (current_addr as usize) % page_size;
+            let bytes_to_page_end = page_size - page_offset;
+            core::cmp::min(core::cmp::min(bytes_to_page_end, remaining), max_write)
+        };
 
         let chunk = &data[offset..offset + chunk_size];
 
