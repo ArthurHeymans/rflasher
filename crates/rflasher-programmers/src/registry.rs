@@ -425,6 +425,9 @@ pub fn open_flash(
     programmer: &str,
     db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    // Not every compiled programmer arm uses the database (e.g. linux-mtd);
+    // in feature combinations where none does, this suppresses the unused
+    // `db` parameter warning.
     let _ = db;
     let params = parse_programmer_params(programmer)?;
 
