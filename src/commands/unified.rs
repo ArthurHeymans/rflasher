@@ -217,14 +217,18 @@ pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
 
     // Validate region bounds against the actual chip before slicing into a
     // flash-sized buffer; a corrupt FMAP could otherwise panic on read.
-    layout.validate(flash_size).map_err(|e| -> Box<dyn std::error::Error> {
-        match e {
-            LayoutError::RegionOutOfBounds => {
-                format!("Layout region extends beyond flash size ({} bytes)", flash_size).into()
+    layout
+        .validate(flash_size)
+        .map_err(|e| -> Box<dyn std::error::Error> {
+            match e {
+                LayoutError::RegionOutOfBounds => format!(
+                    "Layout region extends beyond flash size ({} bytes)",
+                    flash_size
+                )
+                .into(),
+                e => format!("Invalid layout: {}", e).into(),
             }
-            e => format!("Invalid layout: {}", e).into(),
-        }
-    })?;
+        })?;
 
     print_flash_size(flash_size);
 
@@ -582,7 +586,9 @@ pub fn run_verify_with_layout<D: FlashDevice + ?Sized>(
 
     let included: Vec<_> = layout.included_regions().collect();
     if included.is_empty() {
-        return Err("No regions selected for verification. Use --include to select regions.".into());
+        return Err(
+            "No regions selected for verification. Use --include to select regions.".into(),
+        );
     }
     display_included_regions(&included, "Verifying");
 
