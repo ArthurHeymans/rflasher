@@ -252,7 +252,7 @@ fn build_register_masks(bit_map: &WpRegBitMap, bits: &WpBits) -> (u8, u8, u8) {
 /// Write protection configuration options
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WriteOptions {
-    /// Use volatile write (doesn't persist across power cycle)
+    /// Use volatile write (currently ignored; see note below)
     ///
     /// NOTE: currently ignored — all status register writes use the
     /// non-volatile path. Volatile writes require a separate SR copy on
