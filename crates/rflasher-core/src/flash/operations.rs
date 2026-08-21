@@ -886,6 +886,10 @@ pub async fn write<M: SpiMaster + ?Sized>(
     // Get the master's maximum write length - some controllers have limits
     // smaller than a full page (e.g., Intel swseq is limited to 64 bytes)
     let max_write = master.max_write_len();
+    if max_write == 0 {
+        // A zero limit would produce zero-sized chunks and never make progress
+        return Err(Error::ProgrammerError);
+    }
 
     if enter_exit_4byte {
         protocol::enter_4byte_mode_with_features(master, features).await?;
