@@ -253,6 +253,10 @@ fn build_register_masks(bit_map: &WpRegBitMap, bits: &WpBits) -> (u8, u8, u8) {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WriteOptions {
     /// Use volatile write (doesn't persist across power cycle)
+    ///
+    /// NOTE: currently ignored — all status register writes use the
+    /// non-volatile path. Volatile writes require a separate SR copy on
+    /// some chips and are not implemented yet.
     pub volatile: bool,
     /// Use EWSR (0x50) instead of WREN (0x06) before status register writes.
     ///
