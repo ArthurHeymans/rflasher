@@ -95,18 +95,28 @@ fn log_probe_result(result: &ProbeResult) {
 ///
 /// Returns None if the string cannot be parsed.
 fn parse_speed_khz(s: &str) -> Option<u32> {
+    /// Convert a parsed value with the given unit multiplier to kHz,
+    /// rejecting non-finite, negative, and out-of-range results.
+    fn khz_from(val: f64, multiplier: f64) -> Option<u32> {
+        let khz = val * multiplier;
+        if !khz.is_finite() || !(0.0..=u32::MAX as f64).contains(&khz) {
+            return None;
+        }
+        Some(khz.round() as u32)
+    }
+
     let s = s.trim().to_lowercase();
 
     // Try with GHz suffix
     if let Some(num) = s.strip_suffix('g') {
         let val: f64 = num.trim().parse().ok()?;
-        return Some((val * 1_000_000.0).round() as u32);
+        return khz_from(val, 1_000_000.0);
     }
 
     // Try with MHz suffix
     if let Some(num) = s.strip_suffix('m') {
         let val: f64 = num.trim().parse().ok()?;
-        return Some((val * 1000.0).round() as u32);
+        return khz_from(val, 1000.0);
     }
 
     // Try with kHz suffix
