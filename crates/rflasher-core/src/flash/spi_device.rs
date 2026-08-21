@@ -4,7 +4,7 @@
 //! `FlashDevice` for SPI-based programmers.
 
 use crate::chip::{EraseBlock, WriteGranularity};
-use crate::error::{EraseFailure, Error, Result};
+use crate::error::{Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
 use crate::flash::{operations, select_erase_block};
@@ -262,37 +262,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
 impl<M: SpiMaster> SpiFlashDevice<M> {
     /// Check that a range of flash has been erased (all bytes are 0xFF)
-    ///
-    /// Uses the `FlashDevice::read` trait method, which differs from
-    /// `operations::check_erased_range` that uses the free function `read()`.
     #[maybe_async]
     async fn check_erased_range(&mut self, addr: u32, len: u32) -> Result<()> {
-        const ERASED_VALUE: u8 = 0xFF;
-        const CHUNK_SIZE: usize = 4096;
-        let mut buf = [0u8; CHUNK_SIZE];
-
-        let mut offset = 0u32;
-        while offset < len {
-            let chunk_len = core::cmp::min(CHUNK_SIZE as u32, len - offset) as usize;
-            let chunk_buf = &mut buf[..chunk_len];
-
-            FlashDevice::read(self, addr + offset, chunk_buf).await?;
-
-            if let Some((idx, &found)) = chunk_buf
-                .iter()
-                .enumerate()
-                .find(|&(_, &b)| b != ERASED_VALUE)
-            {
-                return Err(Error::EraseError(EraseFailure::VerifyFailed {
-                    addr: addr + offset + idx as u32,
-                    found,
-                }));
-            }
-
-            offset += chunk_len as u32;
-        }
-
-        Ok(())
+        operations::check_erased_range(&mut self.master, &self.ctx, addr, len).await
     }
 }
 
