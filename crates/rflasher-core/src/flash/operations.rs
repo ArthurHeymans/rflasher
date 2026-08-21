@@ -860,7 +860,9 @@ pub async fn write<M: SpiMaster + ?Sized>(
     // AAI uses 3-byte addressing only — 4-byte mode is irrelevant for SST25 chips.
     // Note: SFDP-probed chips may report WriteGranularity::Byte (BFPT DWORD1 bit[2]=0)
     // without AAI_WORD being set; those fall through to single-byte page program below.
-    if features.contains(crate::chip::Features::AAI_WORD) {
+    // Masters that cannot transfer two data bytes in one command skip AAI and use
+    // single-byte page program, which SST25 chips also support.
+    if features.contains(crate::chip::Features::AAI_WORD) && master.max_write_len() >= 2 {
         return protocol::aai_word_program(master, addr, data).await;
     }
 
