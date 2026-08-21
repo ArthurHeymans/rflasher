@@ -101,26 +101,15 @@ pub fn need_erase(have: &[u8], want: &[u8], granularity: WriteGranularity) -> bo
             // (have & want) != want means some bit in want is 1 but in have is 0
             have.iter().zip(want.iter()).any(|(h, w)| (h & w) != *w)
         }
-        WriteGranularity::Byte => {
-            // For byte-granularity, if bytes differ, the old byte must be
-            // in erased state (0xFF) to allow writing the new value
-            have.iter().zip(want.iter()).any(|(h, w)| {
-                if h == w {
-                    false // No change needed
-                } else {
-                    *h != ERASED_VALUE // Need erase if not already erased
-                }
-            })
-        }
-        WriteGranularity::Page => {
-            // For page granularity, we operate on pages (256 bytes typically)
-            // but the logic is the same as byte - if any byte differs,
-            // the source must be erased
-            have.iter().zip(want.iter()).any(
-                |(h, w)| {
-                    if h == w { false } else { *h != ERASED_VALUE }
-                },
-            )
+        WriteGranularity::Byte | WriteGranularity::Page => {
+            // Byte- and page-granularity chips behave the same at the byte
+            // level: if a byte differs, the source must be erased (0xFF) to
+            // allow writing the new value. Page granularity only restricts
+            // how many bytes may be programmed per command, not which
+            // transitions require an erase.
+            have.iter()
+                .zip(want.iter())
+                .any(|(h, w)| *h != *w && *h != ERASED_VALUE)
         }
     }
 }
