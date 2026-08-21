@@ -178,8 +178,10 @@ impl<'a> SpiCommand<'a> {
     pub fn total_bytes(&self) -> usize {
         let mut total = 1; // opcode
         total += self.address_width.bytes() as usize;
-        // Dummy cycles are in clock cycles, not bytes - depends on I/O mode
-        total += (self.dummy_cycles as usize) / 8;
+        // Dummy cycles are in clock cycles, not bytes - depends on I/O mode.
+        // Round up like header_len()/encode_header() do: a partial dummy byte
+        // still occupies a full byte on the wire.
+        total += self.dummy_cycles.div_ceil(8) as usize;
         total += self.write_data.len();
         total += self.read_buf.len();
         total
