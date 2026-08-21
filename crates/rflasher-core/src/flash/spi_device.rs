@@ -7,9 +7,8 @@ use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{EraseFailure, Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
-use crate::flash::operations::{
-    addressing_for_4byte_operation, read_dummy_cycles, select_erase_block,
-};
+use crate::flash::{operations, select_erase_block};
+use crate::flash::operations::addressing_for_4byte_operation;
 use crate::programmer::{SpiFeatures, SpiMaster};
 use crate::protocol::{self, CommandAddressing};
 use crate::wp::{
@@ -138,149 +137,20 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
-        let ctx = self.context();
-        if !ctx.is_valid_range(addr, buf.len()) {
+        if !self.context().is_valid_range(addr, buf.len()) {
             return Err(Error::AddressOutOfBounds);
         }
-
-        let chip_features = ctx.chip.features;
-        let address_mode = ctx.address_mode;
-        let try_native_4byte =
-            address_mode == AddressMode::FourByte && chip_features.supports_4ba_read();
-        let master_features = self.master.features();
-
-        let (io_mode, opcode, native_4byte) = protocol::select_read_mode(
-            master_features,
-            chip_features,
-            try_native_4byte,
-            |opcode| self.master.probe_opcode(opcode),
-        );
-
-        let (addressing, enter_exit_4byte) = if address_mode == AddressMode::FourByte {
-            addressing_for_4byte_operation(native_4byte, chip_features, master_features)?
-        } else {
-            (CommandAddressing::ThreeByte, false)
-        };
-
-        if enter_exit_4byte {
-            protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
-        }
-
-        let result = protocol::read_io_with_addressing(
-            self.master(),
-            opcode,
-            addr,
-            buf,
-            addressing,
-            io_mode,
-            read_dummy_cycles(io_mode),
-        )
-        .await;
-
-        if enter_exit_4byte
-            && let Err(e) =
-                protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
-        {
-            log::warn!("Failed to exit 4-byte address mode: {}", e);
-        }
-
-        result
+        // Delegate to the canonical free function to avoid divergent duplicates
+        operations::read(&mut self.master, &self.ctx, addr, buf).await
     }
 
     async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
-        use crate::chip::{Features, WriteGranularity};
-
-        let ctx = self.context();
-        if !ctx.is_valid_range(addr, data.len()) {
+        if !self.context().is_valid_range(addr, data.len()) {
             return Err(Error::AddressOutOfBounds);
         }
-
-        let features = ctx.chip.features;
-        let write_granularity = ctx.chip.write_granularity;
-        let page_size = ctx.page_size();
-        let use_4byte = ctx.address_mode == AddressMode::FourByte;
-        let master_features = self.master.features();
-        let use_native = use_4byte
-            && features.supports_4ba_program()
-            && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
-            && self.master.probe_opcode(crate::spi::opcodes::PP_4B);
-        let (addressing, enter_exit_4byte) = if use_4byte {
-            addressing_for_4byte_operation(use_native, features, master_features)?
-        } else {
-            (CommandAddressing::ThreeByte, false)
-        };
-        let opcode = if use_native {
-            crate::spi::opcodes::PP_4B
-        } else {
-            crate::spi::opcodes::PP
-        };
-
-        // SST25 AAI word program: chip database sets AAI_WORD for SST25VFxxxB/SST25WFxxx.
-        // These chips require a streaming protocol (0xAD) rather than page program (0x02).
-        // AAI uses 3-byte addressing only — 4-byte mode is irrelevant for SST25 chips.
-        // Note: SFDP-probed chips may report WriteGranularity::Byte (BFPT DWORD1 bit[2]=0)
-        // without AAI_WORD being set; those fall through to single-byte page program below.
-        if features.contains(Features::AAI_WORD) {
-            return protocol::aai_word_program(self.master(), addr, data).await;
-        }
-
-        // Get the master's maximum write length - some controllers have limits
-        // smaller than a full page (e.g., Intel swseq is limited to 64 bytes)
-        let max_write = self.master().max_write_len();
-
-        if enter_exit_4byte {
-            protocol::enter_4byte_mode_with_features(self.master(), features).await?;
-        }
-
-        let mut offset = 0usize;
-        let mut current_addr = addr;
-
-        while offset < data.len() {
-            let remaining = data.len() - offset;
-
-            let chunk_size = if write_granularity == WriteGranularity::Byte {
-                // Single-byte page program: one byte per WREN+PP+WIP cycle.
-                // Used for SFDP-detected chips reporting byte granularity (BFPT DWORD1
-                // bit[2]=0) that don't have AAI_WORD — matches flashprog spi_chip_write_1.
-                1
-            } else {
-                // Page-granularity program: up to a full page per command, respecting
-                // page boundaries and the master's maximum write length.
-                let page_offset = (current_addr as usize) % page_size;
-                let bytes_to_page_end = page_size - page_offset;
-                core::cmp::min(core::cmp::min(bytes_to_page_end, remaining), max_write)
-            };
-
-            let chunk = &data[offset..offset + chunk_size];
-
-            let result = protocol::program_page_with_addressing(
-                self.master(),
-                opcode,
-                current_addr,
-                chunk,
-                addressing,
-            )
-            .await;
-
-            if result.is_err() {
-                if enter_exit_4byte
-                    && let Err(e) =
-                        protocol::exit_4byte_mode_with_features(self.master(), features).await
-                {
-                    log::warn!("Failed to exit 4-byte address mode: {}", e);
-                }
-                return result;
-            }
-
-            offset += chunk_size;
-            current_addr += chunk_size as u32;
-        }
-
-        if enter_exit_4byte {
-            protocol::exit_4byte_mode_with_features(self.master(), features).await?;
-        }
-
-        Ok(())
+        // Delegate to the canonical free function (handles AAI word program,
+        // byte-granularity chips, page splitting and 4-byte addressing)
+        operations::write(&mut self.master, &self.ctx, addr, data).await
     }
 
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
