@@ -1933,7 +1933,13 @@ impl<H: HostAccess> IchSpiController<H> {
             InternalError::NotSupported("Opcode not available in OPMENU")
         })?;
 
-        let opcodes = self.opcodes.as_ref().unwrap();
+        // Invariant: init() always populates `opcodes` before the controller
+        // is returned; find_opcode_index() above already returns an error if
+        // it were somehow absent.
+        let opcodes = self
+            .opcodes
+            .as_ref()
+            .expect("opcodes initialized by IchSpiController::init");
         let spi_type = opcodes.opcode[opcode_index].spi_type;
 
         // Validate command format based on opcode type
@@ -2186,7 +2192,13 @@ impl<H: HostAccess> IchSpiController<H> {
             InternalError::NotSupported("Opcode not available in OPMENU")
         })?;
 
-        let opcodes = self.opcodes.as_ref().unwrap();
+        // Invariant: init() always populates `opcodes` before the controller
+        // is returned; find_opcode_index() above already returns an error if
+        // it were somehow absent.
+        let opcodes = self
+            .opcodes
+            .as_ref()
+            .expect("opcodes initialized by IchSpiController::init");
         let spi_type = opcodes.opcode[opcode_index].spi_type;
 
         // Validate command format based on opcode type

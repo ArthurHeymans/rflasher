@@ -352,8 +352,9 @@ fn print_chip_info(handle: &mut FlashHandle) {
             println!("SFDP:            Not detected");
         }
 
-        // Show detailed chip info if available
-        if let Some(chip) = &info.chip {
+        // Detailed chip information
+        {
+            let chip = &info.chip;
             println!();
             println!(
                 "Voltage range:   {:.1}V - {:.1}V",
