@@ -188,9 +188,10 @@ pub fn search_fmap<S: FmapSearchable>(storage: &mut S) -> Result<Layout, LayoutE
     if let Some(offset) = binary_search_fmap(storage, 0, size)? {
         match read_fmap_at(storage, offset) {
             Ok(layout) => return Ok(layout),
-            // The signature match was a false positive; fall back to the
-            // exhaustive linear scan below.
-            Err(LayoutError::InvalidFmapSignature) => {}
+            // The signature match was a false positive: either the structure
+            // does not validate, or its declared area table reads past the
+            // end of storage. Fall back to the exhaustive linear scan below.
+            Err(LayoutError::InvalidFmapSignature | LayoutError::IoError(_)) => {}
             Err(e) => return Err(e),
         }
     }
