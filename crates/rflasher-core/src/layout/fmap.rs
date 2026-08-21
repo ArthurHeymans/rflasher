@@ -160,6 +160,20 @@ impl FmapSearchable for &[u8] {
     }
 }
 
+/// Read and parse an FMAP at `offset` directly from storage, sizing the
+/// read from the header's declared area count.
+fn read_fmap_at<S: FmapSearchable>(storage: &mut S, offset: u32) -> Result<Layout, LayoutError> {
+    let mut header = [0u8; FMAP_HEADER_SIZE];
+    storage.read_at(offset, &mut header)?;
+    let nareas = u16::from_le_bytes([header[54], header[55]]) as usize;
+    if nareas > 256 {
+        return Err(LayoutError::InvalidFmapSignature);
+    }
+    let mut buf = vec![0u8; FMAP_HEADER_SIZE + nareas * FMAP_AREA_SIZE];
+    storage.read_at(offset, &mut buf)?;
+    parse_fmap_at(&buf, 0)
+}
+
 /// Search for FMAP using binary search followed by linear search
 ///
 /// This follows flashprog's strategy:
@@ -172,10 +186,13 @@ pub fn search_fmap<S: FmapSearchable>(storage: &mut S) -> Result<Layout, LayoutE
 
     // Try binary search first (check power-of-2 aligned offsets)
     if let Some(offset) = binary_search_fmap(storage, 0, size)? {
-        // Read enough to parse the FMAP
-        let mut header = vec![0u8; 4096]; // Generous size for header + areas
-        storage.read_at(offset, &mut header)?;
-        return parse_fmap_at(&header, 0);
+        match read_fmap_at(storage, offset) {
+            Ok(layout) => return Ok(layout),
+            // The signature match was a false positive; fall back to the
+            // exhaustive linear scan below.
+            Err(LayoutError::InvalidFmapSignature) => {}
+            Err(e) => return Err(e),
+        }
     }
 
     // Fallback to linear search - read entire storage and search
@@ -204,9 +221,8 @@ fn binary_search_fmap<S: FmapSearchable>(
         return Ok(None);
     }
 
-    // Buffer for reading signature and header
+    // Buffer for reading the signature
     let mut sig_buf = [0u8; 8];
-    let mut header_buf = vec![0u8; FMAP_HEADER_SIZE];
 
     // Generate strides: size/2, size/4, size/8, ... down to MIN_STRIDE
     // Using successors to generate the halving sequence
@@ -245,12 +261,11 @@ fn binary_search_fmap<S: FmapSearchable>(
                 continue;
             }
 
-            // Found potential FMAP - read and validate the header
-            if storage.read_at(offset, &mut header_buf).is_err() {
-                continue;
-            }
-
-            if is_valid_fmap_header(&header_buf) {
+            // Found a signature candidate. Full validation is deferred to
+            // the caller (read_fmap_at); a false positive here just falls
+            // back to the linear scan. Validating here would require the
+            // area records, which a fixed-size header buffer cannot hold.
+            if &sig_buf == FMAP_SIGNATURE {
                 return Ok(Some(offset));
             }
         }
