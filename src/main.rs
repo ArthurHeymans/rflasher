@@ -59,7 +59,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Read {
             programmer,
             output,
-            chip: _,
             layout,
         } => {
             let mut handle = open_flash(&programmer, &db)?;
@@ -78,7 +77,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Write {
             programmer,
             input,
-            chip: _,
             verify,
             no_erase: _,
             layout,
@@ -99,7 +97,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Erase {
             programmer,
-            chip: _,
             layout,
         } => {
             let mut handle = open_flash(&programmer, &db)?;
@@ -114,7 +111,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Verify {
             programmer,
             input,
-            chip: _,
             layout: _,
         } => {
             let mut handle = open_flash(&programmer, &db)?;
@@ -122,7 +118,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Info {
             programmer,
-            chip: _,
         } => {
             let mut handle = open_flash(&programmer, &db)?;
             print_chip_info(&mut handle);
@@ -152,38 +147,33 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Wp(subcmd) => match subcmd {
             WpCommands::Status {
                 programmer,
-                chip: _,
-            } => {
+                } => {
                 let mut handle = open_flash(&programmer, &db)?;
                 commands::wp::cmd_status(&mut handle)
             }
             WpCommands::List {
                 programmer,
-                chip: _,
-            } => {
+                } => {
                 let mut handle = open_flash(&programmer, &db)?;
                 commands::wp::cmd_list(&mut handle)
             }
             WpCommands::Enable {
                 programmer,
-                chip: _,
-                temporary,
+                    temporary,
             } => {
                 let mut handle = open_flash(&programmer, &db)?;
                 commands::wp::cmd_enable(&mut handle, temporary)
             }
             WpCommands::Disable {
                 programmer,
-                chip: _,
-                temporary,
+                    temporary,
             } => {
                 let mut handle = open_flash(&programmer, &db)?;
                 commands::wp::cmd_disable(&mut handle, temporary)
             }
             WpCommands::Range {
                 programmer,
-                chip: _,
-                temporary,
+                    temporary,
                 range,
             } => {
                 let mut handle = open_flash(&programmer, &db)?;
@@ -191,8 +181,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             WpCommands::Region {
                 programmer,
-                chip: _,
-                temporary,
+                    temporary,
                 layout,
                 region_name,
             } => {
