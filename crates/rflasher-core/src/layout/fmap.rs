@@ -289,29 +289,31 @@ pub fn parse_fmap_at(data: &[u8], offset: usize) -> Result<Layout, LayoutError> 
         .map_err(|_| LayoutError::InvalidFmapSignature)?
         .0;
 
-    let mut layout =
-        areas
-            .iter()
-            .filter(|area| area.size.get() != 0)
-            .fold(layout, |mut layout, area| {
-                let area_start = area.offset.get();
-                let area_size = area.size.get();
-                let area_flags = area.flags.get();
-                let area_name = parse_fmap_string(&area.name);
-                let end = area_start + area_size - 1;
+    for area in areas.iter().filter(|area| area.size.get() != 0) {
+        let area_start = area.offset.get();
+        let area_size = area.size.get();
+        let area_flags = area.flags.get();
+        let area_name = parse_fmap_string(&area.name);
+        // Reject areas whose range overflows the 32-bit address space;
+        // these fields come straight from untrusted flash/file contents.
+        let Some(end) = area_start.checked_add(area_size - 1) else {
+            return Err(LayoutError::InvalidFmapSignature);
+        };
 
-                let region = Region {
-                    name: area_name,
-                    start: area_start,
-                    end,
-                    readonly: (area_flags & flags::STATIC) != 0 || (area_flags & flags::RO) != 0,
-                    dangerous: false,
-                    included: false,
-                };
+        let region = Region {
+            name: area_name,
+            start: area_start,
+            end,
+            readonly: (area_flags & flags::STATIC) != 0 || (area_flags & flags::RO) != 0,
+            dangerous: false,
+            included: false,
+        };
 
-                layout.add_region(region);
-                layout
-            });
+        layout.add_region(region);
+    }
+
+    layout.sort_by_address();
+    Ok(layout)
 
     layout.sort_by_address();
     Ok(layout)
