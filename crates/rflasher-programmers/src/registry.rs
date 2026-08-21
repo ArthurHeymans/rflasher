@@ -91,15 +91,22 @@ fn log_probe_result(result: &ProbeResult) {
 /// - "1000" - plain number in kHz
 /// - "1000k" or "1000K" - kHz (same as plain)
 /// - "30m" or "30M" - MHz (multiplied by 1000)
+/// - "1g" or "1G" - GHz (multiplied by 1_000_000)
 ///
 /// Returns None if the string cannot be parsed.
 fn parse_speed_khz(s: &str) -> Option<u32> {
     let s = s.trim().to_lowercase();
 
+    // Try with GHz suffix
+    if let Some(num) = s.strip_suffix('g') {
+        let val: f64 = num.trim().parse().ok()?;
+        return Some((val * 1_000_000.0).round() as u32);
+    }
+
     // Try with MHz suffix
     if let Some(num) = s.strip_suffix('m') {
         let val: f64 = num.trim().parse().ok()?;
-        return Some((val * 1000.0) as u32);
+        return Some((val * 1000.0).round() as u32);
     }
 
     // Try with kHz suffix
