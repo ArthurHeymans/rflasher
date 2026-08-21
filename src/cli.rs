@@ -90,10 +90,6 @@ pub enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Chip name (optional, auto-detected if not specified)
-        #[arg(short, long)]
-        chip: Option<String>,
-
         #[command(flatten)]
         layout: LayoutArgs,
     },
@@ -123,10 +119,6 @@ pub enum Commands {
         #[arg(short, long)]
         input: PathBuf,
 
-        /// Chip name (optional, auto-detected if not specified)
-        #[arg(short, long)]
-        chip: Option<String>,
-
         /// Verify after writing
         #[arg(long, default_value = "true")]
         verify: bool,
@@ -145,10 +137,6 @@ pub enum Commands {
         #[arg(short, long, help = programmer_help())]
         programmer: String,
 
-        /// Chip name (optional, auto-detected if not specified)
-        #[arg(short, long)]
-        chip: Option<String>,
-
         #[command(flatten)]
         layout: LayoutArgs,
     },
@@ -163,10 +151,6 @@ pub enum Commands {
         #[arg(short, long)]
         input: PathBuf,
 
-        /// Chip name (optional, auto-detected if not specified)
-        #[arg(short, long)]
-        chip: Option<String>,
-
         #[command(flatten)]
         layout: LayoutArgs,
     },
@@ -176,10 +160,6 @@ pub enum Commands {
         /// Programmer to use
         #[arg(short, long, help = programmer_help())]
         programmer: String,
-
-        /// Chip name (optional, auto-detected if not specified)
-        #[arg(short, long)]
-        chip: Option<String>,
     },
 
     /// List supported programmers
@@ -221,10 +201,6 @@ pub enum WpCommands {
         /// Programmer to use
         #[arg(short, long, help = programmer_help())]
         programmer: String,
-
-        /// Chip name (optional, auto-detected if not specified)
-        #[arg(short, long)]
-        chip: Option<String>,
     },
 
     /// List available protection ranges
@@ -232,10 +208,6 @@ pub enum WpCommands {
         /// Programmer to use
         #[arg(short, long, help = programmer_help())]
         programmer: String,
-
-        /// Chip name (optional, auto-detected if not specified)
-        #[arg(short, long)]
-        chip: Option<String>,
     },
 
     /// Enable hardware write protection
@@ -243,10 +215,6 @@ pub enum WpCommands {
         /// Programmer to use
         #[arg(short, long, help = programmer_help())]
         programmer: String,
-
-        /// Chip name (optional, auto-detected if not specified)
-        #[arg(short, long)]
-        chip: Option<String>,
 
         /// Make changes volatile (lost on power cycle)
         #[arg(long)]
@@ -259,10 +227,6 @@ pub enum WpCommands {
         #[arg(short, long, help = programmer_help())]
         programmer: String,
 
-        /// Chip name (optional, auto-detected if not specified)
-        #[arg(short, long)]
-        chip: Option<String>,
-
         /// Make changes volatile (lost on power cycle)
         #[arg(long)]
         temporary: bool,
@@ -273,10 +237,6 @@ pub enum WpCommands {
         /// Programmer to use
         #[arg(short, long, help = programmer_help())]
         programmer: String,
-
-        /// Chip name (optional, auto-detected if not specified)
-        #[arg(short, long)]
-        chip: Option<String>,
 
         /// Make changes volatile (lost on power cycle)
         #[arg(long)]
@@ -291,10 +251,6 @@ pub enum WpCommands {
         /// Programmer to use
         #[arg(short, long, help = programmer_help())]
         programmer: String,
-
-        /// Chip name (optional, auto-detected if not specified)
-        #[arg(short, long)]
-        chip: Option<String>,
 
         /// Make changes volatile (lost on power cycle)
         #[arg(long)]
