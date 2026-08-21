@@ -195,7 +195,7 @@ rflasher read -p ch341a -o backup.bin
 rflasher write -p ch341a -i firmware.bin
 
 # Write without verification (faster, but risky)
-rflasher write -p ch341a -i firmware.bin --verify=false
+rflasher write -p ch341a -i firmware.bin --no-verify
 
 # Verify flash contents against a file
 rflasher verify -p ch341a -i firmware.bin
