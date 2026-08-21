@@ -311,6 +311,9 @@ pub fn run_write_with_layout<D: FlashDevice + ?Sized>(
 
     // Read input file
     let file_data = read_file(input)?;
+    if file_data.is_empty() {
+        return Err("Input file is empty".into());
+    }
     let file_size = file_data.len();
 
     // Display included regions
@@ -598,6 +601,9 @@ pub fn run_verify_with_layout<D: FlashDevice + ?Sized>(
     print_flash_size(flash_size);
 
     let file_data = read_file(input)?;
+    if file_data.is_empty() {
+        return Err("Input file is empty".into());
+    }
     let file_size = file_data.len();
 
     let included: Vec<_> = layout.included_regions().collect();
