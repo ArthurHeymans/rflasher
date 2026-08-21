@@ -7,8 +7,8 @@ use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
-use crate::flash::{operations, select_erase_block};
 use crate::flash::operations::addressing_for_4byte_operation;
+use crate::flash::{operations, select_erase_block};
 use crate::programmer::{SpiFeatures, SpiMaster};
 use crate::protocol::{self, CommandAddressing};
 use crate::wp::{

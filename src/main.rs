@@ -94,10 +94,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 commands::unified::run_write(handle.as_device_mut(), &input, !no_verify)
             }
         }
-        Commands::Erase {
-            programmer,
-            layout,
-        } => {
+        Commands::Erase { programmer, layout } => {
             let mut handle = open_flash(&programmer, &db)?;
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout)?;
@@ -116,14 +113,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout)?;
                 apply_region_filters(&mut layout_obj, &layout)?;
-                commands::unified::run_verify_with_layout(handle.as_device_mut(), &input, &layout_obj)
+                commands::unified::run_verify_with_layout(
+                    handle.as_device_mut(),
+                    &input,
+                    &layout_obj,
+                )
             } else {
                 commands::unified::run_verify(handle.as_device_mut(), &input)
             }
         }
-        Commands::Info {
-            programmer,
-        } => {
+        Commands::Info { programmer } => {
             let mut handle = open_flash(&programmer, &db)?;
             print_chip_info(&mut handle);
             Ok(())
@@ -150,35 +149,31 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             LayoutCommands::Create { output, size } => commands::layout::cmd_create(&output, &size),
         },
         Commands::Wp(subcmd) => match subcmd {
-            WpCommands::Status {
-                programmer,
-                } => {
+            WpCommands::Status { programmer } => {
                 let mut handle = open_flash(&programmer, &db)?;
                 commands::wp::cmd_status(&mut handle)
             }
-            WpCommands::List {
-                programmer,
-                } => {
+            WpCommands::List { programmer } => {
                 let mut handle = open_flash(&programmer, &db)?;
                 commands::wp::cmd_list(&mut handle)
             }
             WpCommands::Enable {
                 programmer,
-                    temporary,
+                temporary,
             } => {
                 let mut handle = open_flash(&programmer, &db)?;
                 commands::wp::cmd_enable(&mut handle, temporary)
             }
             WpCommands::Disable {
                 programmer,
-                    temporary,
+                temporary,
             } => {
                 let mut handle = open_flash(&programmer, &db)?;
                 commands::wp::cmd_disable(&mut handle, temporary)
             }
             WpCommands::Range {
                 programmer,
-                    temporary,
+                temporary,
                 range,
             } => {
                 let mut handle = open_flash(&programmer, &db)?;
@@ -186,7 +181,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             WpCommands::Region {
                 programmer,
-                    temporary,
+                temporary,
                 layout,
                 region_name,
             } => {
