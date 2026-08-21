@@ -8,13 +8,16 @@ use crate::error::InternalError;
 
 /// A mapped region of physical memory.
 pub struct PhysMap {
-    /// Pointer to the mapped memory.
+    /// Pointer to the mapped memory (adjusted into the requested window).
     ptr: *mut u8,
     /// Requested window size.
     size: usize,
     /// Actual mapped size, after host page alignment.
     #[cfg(all(feature = "std", target_os = "linux"))]
     map_size: usize,
+    /// Base pointer returned by mmap, before page-offset adjustment.
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    map_ptr: *mut libc::c_void,
     /// Physical address, for reporting and Linux unmapping.
     phys_addr: u64,
 }
@@ -78,6 +81,7 @@ impl PhysMap {
             ptr: adjusted_ptr,
             size,
             map_size,
+            map_ptr: ptr,
             phys_addr,
         })
     }
@@ -207,16 +211,10 @@ impl PhysMap {
 #[cfg(all(feature = "std", target_os = "linux"))]
 impl Drop for PhysMap {
     fn drop(&mut self) {
-        // SAFETY: sysconf is thread-safe and does not touch Rust-managed memory.
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-        let page_mask = page_size - 1;
-        let offset = (self.phys_addr as usize) & page_mask;
-        // SAFETY: `ptr` was adjusted by exactly this offset in `new`.
-        let original_ptr = unsafe { self.ptr.sub(offset) };
-
-        // SAFETY: this unmaps the same range created by mmap in `new`.
+        // SAFETY: this unmaps the exact range created by mmap in `new`,
+        // using the base pointer stored at construction time.
         unsafe {
-            libc::munmap(original_ptr as *mut libc::c_void, self.map_size);
+            libc::munmap(self.map_ptr, self.map_size);
         }
     }
 }
