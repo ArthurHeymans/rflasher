@@ -23,8 +23,8 @@ pub struct ChipInfo {
     pub total_size: u32,
     /// Page size in bytes
     pub page_size: u16,
-    /// Full chip details (optional, for advanced use)
-    pub chip: Option<FlashChip>,
+    /// Full chip details
+    pub chip: FlashChip,
     /// Whether chip was found in database (vs SFDP-only)
     pub from_database: bool,
     /// SFDP information if available
@@ -42,7 +42,7 @@ impl From<&FlashContext> for ChipInfo {
             jedec_device: ctx.chip.jedec_device,
             total_size: ctx.chip.total_size,
             page_size: ctx.chip.page_size,
-            chip: Some(ctx.chip.clone()),
+            chip: ctx.chip.clone(),
             from_database: true,
             sfdp: None,
             mismatches: Vec::new(),
@@ -59,7 +59,7 @@ impl From<ProbeResult> for ChipInfo {
             jedec_device: result.jedec_device,
             total_size: result.chip.total_size,
             page_size: result.chip.page_size,
-            chip: Some(result.chip),
+            chip: result.chip,
             from_database: result.from_database,
             sfdp: result.sfdp,
             mismatches: result.mismatches,

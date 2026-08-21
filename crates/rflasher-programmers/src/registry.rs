@@ -125,7 +125,7 @@ where
     log_probe_result(&result);
 
     let chip_info = ChipInfo::from(result);
-    let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone().unwrap());
+    let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
     let device = SpiFlashDevice::new(master, ctx);
     Ok(FlashHandle::with_chip_info(Box::new(device), chip_info))
 }
@@ -578,7 +578,7 @@ fn open_dediprog(
     let result = probe_detailed(&mut master, db)?;
     log_probe_result(&result);
     let chip_info = ChipInfo::from(result);
-    let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone().unwrap());
+    let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
 
     // Set flash size so OpaqueMaster bulk read/write knows the bounds
     master.set_flash_size(ctx.total_size() as u32);
@@ -948,7 +948,7 @@ fn open_sunxi_fel(
     let result = probe_detailed(&mut master, db)?;
     log_probe_result(&result);
     let chip_info = ChipInfo::from(result);
-    let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone().unwrap());
+    let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
 
     // Configure OpaqueMaster with chip info discovered during probe
     master.set_use_4byte_addr(ctx.total_size() > 16 * 1024 * 1024);
