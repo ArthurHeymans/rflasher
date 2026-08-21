@@ -280,7 +280,17 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
             }
 
             // Verify the block was erased, same as SpiFlashDevice::erase
-            check_erased_range(&mut self.master, &self.ctx, current_addr, block_size).await?;
+            if let Err(e) =
+                check_erased_range(&mut self.master, &self.ctx, current_addr, block_size).await
+            {
+                if enter_exit_4byte
+                    && let Err(exit_e) =
+                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
+                {
+                    log::warn!("Failed to exit 4-byte address mode: {}", exit_e);
+                }
+                return Err(e);
+            }
 
             current_addr += block_size;
         }
