@@ -656,8 +656,14 @@ pub async fn verify<D: FlashDevice>(device: &mut D, expected: &[u8], addr: u32) 
 
         let expected_chunk = &expected[offset..offset + chunk_size];
         if chunk_buf != expected_chunk {
+            // Locate the first differing byte so the reported address is exact
+            let rel = chunk_buf
+                .iter()
+                .zip(expected_chunk.iter())
+                .position(|(got, want)| got != want)
+                .expect("chunks differ, so a differing byte must exist");
             return Err(Error::VerifyError {
-                addr: addr + offset as u32,
+                addr: addr + (offset + rel) as u32,
             });
         }
 
