@@ -521,6 +521,9 @@ pub fn verify_flash<D: FlashDevice + ?Sized>(
 }
 
 /// Run the unified verify command
+///
+/// The image must match the flash size exactly; verifying a smaller file
+/// against offset 0 would be ambiguous and silently compare the wrong data.
 pub fn run_verify<D: FlashDevice + ?Sized>(
     device: &mut D,
     input: &Path,
@@ -532,9 +535,10 @@ pub fn run_verify<D: FlashDevice + ?Sized>(
     let expected = read_file(input)?;
 
     // Validate size
-    if expected.len() > flash_size as usize {
+    if expected.len() != flash_size as usize {
         return Err(format!(
-            "File size ({} bytes) exceeds flash size ({} bytes)",
+            "File size ({} bytes) does not match flash size ({} bytes). \
+             Use --layout/--ifd/--fmap with --region to verify a region.",
             expected.len(),
             flash_size
         )
@@ -542,6 +546,75 @@ pub fn run_verify<D: FlashDevice + ?Sized>(
     }
 
     verify_flash(device, &expected)?;
+    println!("Verification passed!");
+
+    Ok(())
+}
+
+/// Run the unified verify command with layout
+///
+/// Size rules mirror `run_write_with_layout`:
+/// - Multiple regions: file must be exactly flash size (full chip image).
+/// - Single region: file may be region-sized or smaller (compared against
+///   the start of the region) or exactly flash size.
+pub fn run_verify_with_layout<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    input: &Path,
+    layout: &Layout,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let flash_size = device.size();
+    print_flash_size(flash_size);
+
+    let file_data = read_file(input)?;
+    let file_size = file_data.len();
+
+    let included: Vec<_> = layout.included_regions().collect();
+    if included.is_empty() {
+        return Err("No regions selected for verification. Use --include to select regions.".into());
+    }
+    display_included_regions(&included, "Verifying");
+
+    if included.len() > 1 && file_size != flash_size as usize {
+        return Err(format!(
+            "Multiple regions selected: file must be exactly flash size ({} bytes), got {} bytes",
+            flash_size, file_size
+        )
+        .into());
+    }
+
+    let (image, effective_layout) = if file_size == flash_size as usize {
+        (file_data, layout.clone())
+    } else {
+        // Single region with a region-sized (or smaller) file
+        let region = &included[0];
+        let region_size = region.size() as usize;
+        if file_size > region_size {
+            return Err(format!(
+                "File size ({} bytes) larger than region '{}' ({} bytes) but smaller than flash size",
+                file_size, region.name, region_size
+            )
+            .into());
+        }
+
+        if file_size < region_size {
+            println!(
+                "Note: File ({} bytes) is smaller than region ({} bytes)",
+                file_size, region_size
+            );
+        }
+
+        let mut chip_image = vec![0xFFu8; flash_size as usize];
+        let dest_start = region.start as usize;
+        chip_image[dest_start..dest_start + file_size].copy_from_slice(&file_data);
+
+        // Only verify the portion covered by the file
+        let mut modified_layout = layout.clone();
+        modified_layout.update_region_end(&region.name, region.start + file_size as u32 - 1)?;
+
+        (chip_image, modified_layout)
+    };
+
+    verify_by_layout(device, &effective_layout, &image)?;
     println!("Verification passed!");
 
     Ok(())

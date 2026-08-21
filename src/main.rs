@@ -110,10 +110,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Verify {
             programmer,
             input,
-            layout: _,
+            layout,
         } => {
             let mut handle = open_flash(&programmer, &db)?;
-            commands::unified::run_verify(handle.as_device_mut(), &input)
+            if layout.has_layout_source() || layout.has_region_filter() {
+                let mut layout_obj = load_layout(&mut handle, &layout)?;
+                apply_region_filters(&mut layout_obj, &layout)?;
+                commands::unified::run_verify_with_layout(handle.as_device_mut(), &input, &layout_obj)
+            } else {
+                commands::unified::run_verify(handle.as_device_mut(), &input)
+            }
         }
         Commands::Info {
             programmer,
