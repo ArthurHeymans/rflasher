@@ -314,9 +314,6 @@ pub fn parse_fmap_at(data: &[u8], offset: usize) -> Result<Layout, LayoutError> 
 
     layout.sort_by_address();
     Ok(layout)
-
-    layout.sort_by_address();
-    Ok(layout)
 }
 
 /// Parse a null-terminated FMAP string
