@@ -638,6 +638,14 @@ pub fn run_verify_with_layout<D: FlashDevice + ?Sized>(
         .into());
     }
 
+    if file_size > flash_size as usize {
+        return Err(format!(
+            "File size ({} bytes) exceeds flash size ({} bytes)",
+            file_size, flash_size
+        )
+        .into());
+    }
+
     let (image, effective_layout) = if file_size == flash_size as usize {
         (file_data, layout.clone())
     } else {
