@@ -95,14 +95,16 @@ fn log_probe_result(result: &ProbeResult) {
 ///
 /// Returns None if the string cannot be parsed.
 fn parse_speed_khz(s: &str) -> Option<u32> {
+    const MAX_KHZ: u32 = u32::MAX / 1000;
+
     /// Convert a parsed value with the given unit multiplier to kHz,
-    /// rejecting non-finite, negative, and out-of-range results.
+    /// rejecting non-finite, non-positive, and out-of-range results.
     fn khz_from(val: f64, multiplier: f64) -> Option<u32> {
-        let khz = val * multiplier;
-        if !khz.is_finite() || !(0.0..=u32::MAX as f64).contains(&khz) {
+        let khz = (val * multiplier).round();
+        if !khz.is_finite() || !(1.0..=MAX_KHZ as f64).contains(&khz) {
             return None;
         }
-        Some(khz.round() as u32)
+        Some(khz as u32)
     }
 
     let s = s.trim().to_lowercase();
@@ -121,11 +123,38 @@ fn parse_speed_khz(s: &str) -> Option<u32> {
 
     // Try with kHz suffix
     if let Some(num) = s.strip_suffix('k') {
-        return num.trim().parse().ok();
+        return num
+            .trim()
+            .parse()
+            .ok()
+            .filter(|&khz| (1..=MAX_KHZ).contains(&khz));
     }
 
     // Plain number (assumed kHz)
-    s.parse().ok()
+    s.parse().ok().filter(|&khz| (1..=MAX_KHZ).contains(&khz))
+}
+
+#[cfg(test)]
+mod speed_tests {
+    use super::parse_speed_khz;
+
+    #[test]
+    fn parses_supported_speed_units() {
+        assert_eq!(parse_speed_khz("1000"), Some(1000));
+        assert_eq!(parse_speed_khz("1000K"), Some(1000));
+        assert_eq!(parse_speed_khz("30m"), Some(30_000));
+        assert_eq!(parse_speed_khz("1.5g"), Some(1_500_000));
+    }
+
+    #[test]
+    fn rejects_speeds_that_cannot_be_converted_to_hz() {
+        assert_eq!(parse_speed_khz("0"), None);
+        assert_eq!(parse_speed_khz("-5m"), None);
+        assert_eq!(parse_speed_khz("nan"), None);
+        assert_eq!(parse_speed_khz("4.294968g"), None);
+        assert_eq!(parse_speed_khz("4294968k"), None);
+        assert_eq!(parse_speed_khz("4294968"), None);
+    }
 }
 
 /// Common probe and create handle logic for SPI programmers
