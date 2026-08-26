@@ -211,10 +211,6 @@ pub enum WpCommands {
         /// Programmer to use
         #[arg(short, long, help = programmer_help())]
         programmer: String,
-
-        /// Make changes volatile (lost on power cycle)
-        #[arg(long)]
-        temporary: bool,
     },
 
     /// Disable hardware write protection
@@ -222,10 +218,6 @@ pub enum WpCommands {
         /// Programmer to use
         #[arg(short, long, help = programmer_help())]
         programmer: String,
-
-        /// Make changes volatile (lost on power cycle)
-        #[arg(long)]
-        temporary: bool,
     },
 
     /// Set protection range by address
@@ -233,10 +225,6 @@ pub enum WpCommands {
         /// Programmer to use
         #[arg(short, long, help = programmer_help())]
         programmer: String,
-
-        /// Make changes volatile (lost on power cycle)
-        #[arg(long)]
-        temporary: bool,
 
         /// Protection range as "start,length" (e.g., "0,0x100000" or "0x10000,65536")
         range: String,
@@ -247,10 +235,6 @@ pub enum WpCommands {
         /// Programmer to use
         #[arg(short, long, help = programmer_help())]
         programmer: String,
-
-        /// Make changes volatile (lost on power cycle)
-        #[arg(long)]
-        temporary: bool,
 
         #[command(flatten)]
         layout: LayoutArgs,

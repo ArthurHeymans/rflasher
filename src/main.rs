@@ -157,37 +157,26 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 let mut handle = open_flash(&programmer, &db)?;
                 commands::wp::cmd_list(&mut handle)
             }
-            WpCommands::Enable {
-                programmer,
-                temporary,
-            } => {
+            WpCommands::Enable { programmer } => {
                 let mut handle = open_flash(&programmer, &db)?;
-                commands::wp::cmd_enable(&mut handle, temporary)
+                commands::wp::cmd_enable(&mut handle)
             }
-            WpCommands::Disable {
-                programmer,
-                temporary,
-            } => {
+            WpCommands::Disable { programmer } => {
                 let mut handle = open_flash(&programmer, &db)?;
-                commands::wp::cmd_disable(&mut handle, temporary)
+                commands::wp::cmd_disable(&mut handle)
             }
-            WpCommands::Range {
-                programmer,
-                temporary,
-                range,
-            } => {
+            WpCommands::Range { programmer, range } => {
                 let mut handle = open_flash(&programmer, &db)?;
-                commands::wp::cmd_range(&mut handle, &range, temporary)
+                commands::wp::cmd_range(&mut handle, &range)
             }
             WpCommands::Region {
                 programmer,
-                temporary,
                 layout,
                 region_name,
             } => {
                 let mut handle = open_flash(&programmer, &db)?;
                 let layout_obj = load_layout(&mut handle, &layout)?;
-                commands::wp::cmd_region(&mut handle, &layout_obj, &region_name, temporary)
+                commands::wp::cmd_region(&mut handle, &layout_obj, &region_name)
             }
         },
         #[cfg(feature = "repl")]
