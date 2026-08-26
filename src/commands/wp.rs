@@ -136,64 +136,40 @@ pub fn cmd_list(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
 }
 
 /// Enable hardware write protection
-pub fn cmd_enable(handle: &mut FlashHandle, temporary: bool) -> Result<(), Box<dyn Error>> {
+pub fn cmd_enable(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
 
-    let options = WriteOptions {
-        volatile: temporary,
-        ..Default::default()
-    };
-
     handle
-        .set_wp_mode(WpMode::Hardware, options)
+        .set_wp_mode(WpMode::Hardware, WriteOptions::default())
         .map_err(|e| format!("Failed to enable write protection: {}", e))?;
 
-    println!(
-        "Hardware write protection enabled{}.",
-        if temporary { " (temporary)" } else { "" }
-    );
+    println!("Hardware write protection enabled.");
     Ok(())
 }
 
 /// Disable write protection
-pub fn cmd_disable(handle: &mut FlashHandle, temporary: bool) -> Result<(), Box<dyn Error>> {
+pub fn cmd_disable(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
 
-    let options = WriteOptions {
-        volatile: temporary,
-        ..Default::default()
-    };
-
     handle
-        .disable_wp(options)
+        .disable_wp(WriteOptions::default())
         .map_err(|e| format!("Failed to disable write protection: {}", e))?;
 
-    println!(
-        "Write protection disabled{}.",
-        if temporary { " (temporary)" } else { "" }
-    );
+    println!("Write protection disabled.");
     Ok(())
 }
 
 /// Set protection range
-pub fn cmd_range(
-    handle: &mut FlashHandle,
-    range_spec: &str,
-    temporary: bool,
-) -> Result<(), Box<dyn Error>> {
+pub fn cmd_range(handle: &mut FlashHandle, range_spec: &str) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
 
     let range = parse_range(range_spec)?;
-    let options = WriteOptions {
-        volatile: temporary,
-        ..Default::default()
-    };
     let total_size = handle.size();
 
     // Validate range doesn't exceed chip size
@@ -206,15 +182,14 @@ pub fn cmd_range(
     }
 
     handle
-        .set_wp_range(&range, options)
+        .set_wp_range(&range, WriteOptions::default())
         .map_err(|e| format!("Failed to set protection range: {}", e))?;
 
     println!(
-        "Protection range set to start=0x{:08x} length=0x{:08x} ({}){}.",
+        "Protection range set to start=0x{:08x} length=0x{:08x} ({}).",
         range.start,
         range.len,
-        format_range(&range, total_size),
-        if temporary { " (temporary)" } else { "" }
+        format_range(&range, total_size)
     );
     Ok(())
 }
@@ -224,7 +199,6 @@ pub fn cmd_region(
     handle: &mut FlashHandle,
     layout: &rflasher_core::layout::Layout,
     region_name: &str,
-    temporary: bool,
 ) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
@@ -238,26 +212,23 @@ pub fn cmd_region(
         .ok_or_else(|| format!("Region '{}' not found in layout", region_name))?;
 
     let range = WpRange::new(region.start, region.end - region.start + 1);
-    let options = WriteOptions {
-        volatile: temporary,
-        ..Default::default()
-    };
     let total_size = handle.size();
 
-    handle.set_wp_range(&range, options).map_err(|e| {
-        format!(
-            "Failed to set protection range for region '{}': {}",
-            region_name, e
-        )
-    })?;
+    handle
+        .set_wp_range(&range, WriteOptions::default())
+        .map_err(|e| {
+            format!(
+                "Failed to set protection range for region '{}': {}",
+                region_name, e
+            )
+        })?;
 
     println!(
-        "Protection set for region '{}': start=0x{:08x} length=0x{:08x} ({}){}.",
+        "Protection set for region '{}': start=0x{:08x} length=0x{:08x} ({}).",
         region_name,
         range.start,
         range.len,
-        format_range(&range, total_size),
-        if temporary { " (temporary)" } else { "" }
+        format_range(&range, total_size)
     );
     Ok(())
 }

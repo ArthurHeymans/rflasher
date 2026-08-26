@@ -322,8 +322,6 @@ rflasher wp range -p ch341a 0,0x100000
 # Set protection for a named region (requires layout)
 rflasher wp region -p ch341a --ifd bios
 
-# Make changes temporary (volatile, lost on power cycle)
-rflasher wp enable -p ch341a --temporary
 ```
 
 ### Verbosity and Debugging
