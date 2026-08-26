@@ -307,6 +307,22 @@ pub fn run_write_with_layout<D: FlashDevice + ?Sized>(
     do_verify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
+
+    // Validate region bounds against the actual chip before constructing or
+    // slicing a flash-sized image; a corrupt layout could otherwise panic.
+    layout
+        .validate(flash_size)
+        .map_err(|e| -> Box<dyn std::error::Error> {
+            match e {
+                LayoutError::RegionOutOfBounds => format!(
+                    "Layout region extends beyond flash size ({} bytes)",
+                    flash_size
+                )
+                .into(),
+                e => format!("Invalid layout: {}", e).into(),
+            }
+        })?;
+
     print_flash_size(flash_size);
 
     // Read input file
