@@ -279,19 +279,6 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
                 return result;
             }
 
-            // Verify the block was erased, same as SpiFlashDevice::erase
-            if let Err(e) =
-                check_erased_range(&mut self.master, &self.ctx, current_addr, block_size).await
-            {
-                if enter_exit_4byte
-                    && let Err(exit_e) =
-                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
-                {
-                    log::warn!("Failed to exit 4-byte address mode: {}", exit_e);
-                }
-                return Err(e);
-            }
-
             current_addr += block_size;
         }
 
@@ -299,7 +286,11 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
             protocol::exit_4byte_mode_with_features(self.master(), chip_features).await?;
         }
 
-        Ok(())
+        // Verify only after the erase loop has left its persistent 4-byte
+        // mode. The read helper manages 4-byte mode itself; calling it inside
+        // the loop would exit that mode and make the next legacy erase opcode
+        // target the wrong address.
+        check_erased_range(&mut self.master, &self.ctx, addr, len).await
     }
 }
 
