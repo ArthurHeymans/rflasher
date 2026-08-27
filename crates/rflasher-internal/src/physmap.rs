@@ -4,7 +4,7 @@
 //! builds use direct physical-address MMIO and rely on the caller/platform to
 //! have installed suitable mappings and memory attributes.
 
-use crate::error::InternalError;
+use crate::error::{InternalError, RestrictedResource};
 
 /// A mapped region of physical memory.
 pub struct PhysMap {
@@ -41,9 +41,17 @@ impl PhysMap {
             .write(true)
             .custom_flags(libc::O_SYNC)
             .open("/dev/mem")
-            .map_err(|_| InternalError::MemoryMap {
-                address: phys_addr,
-                size,
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::PermissionDenied {
+                    InternalError::PermissionDenied {
+                        resource: RestrictedResource::DevMem { address: phys_addr },
+                    }
+                } else {
+                    InternalError::MemoryMap {
+                        address: phys_addr,
+                        size,
+                    }
+                }
             })?;
 
         // SAFETY: sysconf is thread-safe and does not touch Rust-managed memory.
@@ -68,9 +76,16 @@ impl PhysMap {
         };
 
         if ptr == libc::MAP_FAILED {
-            return Err(InternalError::MemoryMap {
-                address: phys_addr,
-                size,
+            let error = std::io::Error::last_os_error();
+            return Err(if error.kind() == std::io::ErrorKind::PermissionDenied {
+                InternalError::PermissionDenied {
+                    resource: RestrictedResource::DevMem { address: phys_addr },
+                }
+            } else {
+                InternalError::MemoryMap {
+                    address: phys_addr,
+                    size,
+                }
             });
         }
 

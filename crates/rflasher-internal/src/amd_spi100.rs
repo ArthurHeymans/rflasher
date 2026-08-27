@@ -753,7 +753,7 @@ impl<H: HostAccess> Spi100Controller<H> {
         }
 
         self.send_command(&writearr[..write_len], cmd.read_buf)
-            .map_err(map_amd_error)
+            .map_err(InternalError::to_core_error)
     }
 }
 
@@ -789,21 +789,8 @@ impl<H: HostAccess> Controller for Spi100Controller<H> {
         } else {
             16 * 1024 * 1024 // Default to 16MB if not yet probed
         };
-        self.read(chip_size_u64, addr, buf).map_err(|e| match e {
-            InternalError::NoChipset
-            | InternalError::UnsupportedChipset { .. }
-            | InternalError::MultipleChipsets => CoreError::ProgrammerNotReady,
-            InternalError::PciAccess(_) | InternalError::MemoryMap { .. } => {
-                CoreError::ProgrammerError
-            }
-            InternalError::AccessDenied { .. } => CoreError::RegionProtected,
-            InternalError::Io(_) => CoreError::IoError,
-            InternalError::ChipsetEnable(_) | InternalError::SpiInit(_) => {
-                CoreError::ProgrammerError
-            }
-            InternalError::InvalidDescriptor => CoreError::ProgrammerError,
-            InternalError::NotSupported(_) => CoreError::OpcodeNotSupported,
-        })
+        self.read(chip_size_u64, addr, buf)
+            .map_err(InternalError::to_core_error)
     }
 
     fn controller_write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
@@ -923,20 +910,5 @@ impl<H: HostAccess> SpiMaster for Spi100Controller<H> {
 
     fn delay_us(&mut self, us: u32) {
         self.host.delay_us(us);
-    }
-}
-
-/// Convert AMD internal error to core error
-fn map_amd_error(e: InternalError) -> CoreError {
-    match e {
-        InternalError::NoChipset
-        | InternalError::UnsupportedChipset { .. }
-        | InternalError::MultipleChipsets => CoreError::ProgrammerNotReady,
-        InternalError::PciAccess(_) | InternalError::MemoryMap { .. } => CoreError::ProgrammerError,
-        InternalError::AccessDenied { .. } => CoreError::RegionProtected,
-        InternalError::Io(_) => CoreError::IoError,
-        InternalError::ChipsetEnable(_) | InternalError::SpiInit(_) => CoreError::ProgrammerError,
-        InternalError::InvalidDescriptor => CoreError::ProgrammerError,
-        InternalError::NotSupported(_) => CoreError::OpcodeNotSupported,
     }
 }

@@ -2,6 +2,8 @@
 
 use core::fmt;
 
+use rflasher_core::error::Error as CoreError;
+
 /// Error type for the internal programmer
 #[derive(Debug)]
 pub enum InternalError {
@@ -17,6 +19,12 @@ pub enum InternalError {
     MultipleChipsets,
     /// Failed to access PCI device
     PciAccess(PciAccessError),
+    /// Permission was denied while accessing a required system resource.
+    ///
+    /// The `resource` variant carries context such as the physical address
+    /// that could not be mapped, so failures remain diagnosable even though
+    /// the OS error code itself is not preserved here.
+    PermissionDenied { resource: RestrictedResource },
     /// Failed to map memory
     MemoryMap { address: u64, size: usize },
     /// Chipset enable failed
@@ -31,6 +39,31 @@ pub enum InternalError {
     NotSupported(&'static str),
     /// I/O error
     Io(&'static str),
+}
+
+/// A system resource whose access was denied.
+#[derive(Debug)]
+pub enum RestrictedResource {
+    /// Physical memory accessed through `/dev/mem` while mapping `address`.
+    ///
+    /// With `CONFIG_STRICT_DEVMEM`, `mmap()` fails with `EPERM` for ranges
+    /// the kernel considers reserved, so the intended address matters when
+    /// interpreting this failure.
+    DevMem { address: u64 },
+}
+
+impl fmt::Display for RestrictedResource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DevMem { address } => {
+                write!(
+                    f,
+                    "physical memory through /dev/mem (address {:#x})",
+                    address
+                )
+            }
+        }
+    }
 }
 
 /// PCI access error details
@@ -115,6 +148,9 @@ impl fmt::Display for InternalError {
             }
             Self::MultipleChipsets => write!(f, "multiple supported chipsets found"),
             Self::PciAccess(e) => write!(f, "PCI access error: {}", e),
+            Self::PermissionDenied { resource } => {
+                write!(f, "permission denied while accessing {resource}")
+            }
             Self::MemoryMap { address, size } => {
                 write!(f, "failed to map memory at {:#x} (size {})", address, size)
             }
@@ -166,6 +202,29 @@ impl fmt::Display for PciAccessError {
                 bus, device, function, register
             ),
             Self::InvalidBar(bar) => write!(f, "BAR{} not available or invalid", bar),
+        }
+    }
+}
+
+impl InternalError {
+    /// Classifies this internal error as a [`CoreError`].
+    ///
+    /// Centralizing the mapping keeps every conversion site in sync; new
+    /// `InternalError` variants cannot silently diverge between call sites.
+    pub fn to_core_error(self) -> CoreError {
+        match self {
+            Self::NoChipset | Self::UnsupportedChipset { .. } | Self::MultipleChipsets => {
+                CoreError::ProgrammerNotReady
+            }
+            Self::PciAccess(_)
+            | Self::PermissionDenied { .. }
+            | Self::MemoryMap { .. }
+            | Self::ChipsetEnable(_)
+            | Self::SpiInit(_)
+            | Self::InvalidDescriptor => CoreError::ProgrammerError,
+            Self::AccessDenied { .. } => CoreError::RegionProtected,
+            Self::Io(_) => CoreError::IoError,
+            Self::NotSupported(_) => CoreError::OpcodeNotSupported,
         }
     }
 }

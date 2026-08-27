@@ -2451,7 +2451,7 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         } else {
             self.swseq_read(addr, buf)
         };
-        result.map_err(Self::map_internal_error)
+        result.map_err(InternalError::to_core_error)
     }
 
     fn controller_write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
@@ -2462,7 +2462,7 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         } else {
             self.swseq_write(addr, data)
         };
-        result.map_err(Self::map_internal_error)
+        result.map_err(InternalError::to_core_error)
     }
 
     fn controller_erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
@@ -2473,7 +2473,7 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         } else {
             self.swseq_erase(addr, len)
         };
-        result.map_err(Self::map_internal_error)
+        result.map_err(InternalError::to_core_error)
     }
 
     fn controller_name(&self) -> &'static str {
@@ -2583,7 +2583,7 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         } else {
             self.swseq_send_command(&writearr[..write_len], cmd.read_buf)
         };
-        result.map_err(Self::map_internal_error)
+        result.map_err(InternalError::to_core_error)
     }
 
     fn probe_opcode(&self, opcode: u8) -> bool {
@@ -2594,28 +2594,6 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
 
         // Check if the opcode is in the OPMENU table
         self.has_opcode(opcode)
-    }
-}
-
-#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
-impl<H: HostAccess> IchSpiController<H> {
-    /// Map InternalError to CoreError
-    fn map_internal_error(e: InternalError) -> CoreError {
-        match e {
-            InternalError::NoChipset
-            | InternalError::UnsupportedChipset { .. }
-            | InternalError::MultipleChipsets => CoreError::ProgrammerNotReady,
-            InternalError::PciAccess(_) | InternalError::MemoryMap { .. } => {
-                CoreError::ProgrammerError
-            }
-            InternalError::AccessDenied { .. } => CoreError::RegionProtected,
-            InternalError::Io(_) => CoreError::IoError,
-            InternalError::ChipsetEnable(_) | InternalError::SpiInit(_) => {
-                CoreError::ProgrammerError
-            }
-            InternalError::InvalidDescriptor => CoreError::ProgrammerError,
-            InternalError::NotSupported(_) => CoreError::OpcodeNotSupported,
-        }
     }
 }
 
