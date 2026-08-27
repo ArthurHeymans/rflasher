@@ -7,9 +7,13 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rflasher_core::flash::unified::{WriteProgress, WriteStats};
 use rflasher_core::flash::{FlashDevice, unified};
 use rflasher_core::layout::{Layout, LayoutError};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Per-region file assignments: (region name, file path)
+pub type RegionFiles = [(String, PathBuf)];
 use std::time::Duration;
 
 // =============================================================================
@@ -75,6 +79,223 @@ fn display_included_regions(included: &[&rflasher_core::layout::Region], action:
             region.size()
         );
     });
+}
+
+/// Validate a layout against the flash size with a friendly error message
+fn validate_layout(layout: &Layout, flash_size: u32) -> Result<(), Box<dyn std::error::Error>> {
+    layout.validate(flash_size).map_err(|e| match e {
+        LayoutError::RegionOutOfBounds => format!(
+            "Layout region extends beyond flash size ({} bytes)",
+            flash_size
+        )
+        .into(),
+        e => format!("Invalid layout: {}", e).into(),
+    })
+}
+
+/// Validate per-region file assignments against the final filtered layout.
+pub(crate) fn validate_region_files(
+    layout: &Layout,
+    region_files: &RegionFiles,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut seen = HashSet::new();
+
+    for (name, _) in region_files {
+        if !seen.insert(name.as_str()) {
+            return Err(format!("Region '{}' was given more than one file", name).into());
+        }
+
+        let region = layout
+            .find_region(name)
+            .ok_or_else(|| format!("Region '{}' not found in layout", name))?;
+        if !region.included {
+            return Err(format!("Region '{}' has a file assignment but is excluded", name).into());
+        }
+    }
+
+    Ok(())
+}
+
+/// Ensure every included region has a per-region file assigned.
+///
+/// Used when no whole-image file was given, so regions without their own
+/// file would have no data source (write/verify) or destination (read).
+fn require_full_region_file_coverage(
+    included: &[&rflasher_core::layout::Region],
+    region_files: &RegionFiles,
+    what: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let missing: Vec<_> = included
+        .iter()
+        .filter(|r| !region_files.iter().any(|(name, _)| *name == r.name))
+        .map(|r| r.name.as_str())
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "No {} file given and no NAME:FILE for region(s): {}",
+            what,
+            missing.join(", ")
+        )
+        .into())
+    }
+}
+
+/// Overlay per-region files onto a full-chip image.
+///
+/// Each file is copied to its region's base address and must not exceed the
+/// region size. Returns an adjusted layout where regions covered by a file
+/// smaller than the region are shrunk to the file's extent.
+fn apply_region_files(
+    layout: &Layout,
+    image: &mut [u8],
+    region_files: &RegionFiles,
+) -> Result<Layout, Box<dyn std::error::Error>> {
+    validate_region_files(layout, region_files)?;
+
+    let mut effective = layout.clone();
+
+    for (name, path) in region_files {
+        let region = layout
+            .find_region(name)
+            .ok_or_else(|| format!("Region '{}' not found in layout", name))?;
+        let data = read_file(path)?;
+        if data.is_empty() {
+            return Err(format!("Region file {:?} is empty", path).into());
+        }
+
+        let region_size = region.size() as usize;
+        if data.len() > region_size {
+            return Err(format!(
+                "File {:?} ({} bytes) larger than region '{}' ({} bytes)",
+                path,
+                data.len(),
+                name,
+                region_size
+            )
+            .into());
+        }
+
+        let start = region.start as usize;
+        image[start..start + data.len()].copy_from_slice(&data);
+
+        if data.len() < region_size {
+            println!(
+                "Note: File {:?} ({} bytes) is smaller than region '{}' ({} bytes)",
+                path,
+                data.len(),
+                name,
+                region_size
+            );
+            effective.update_region_end(name, region.start + data.len() as u32 - 1)?;
+        }
+    }
+
+    Ok(effective)
+}
+
+/// Build the full-chip image to write/verify from an optional whole-image
+/// file plus per-region files.
+///
+/// Returns the image, the effective layout (regions shrunk to partial file
+/// extents), and the effective number of bytes covered.
+fn build_image(
+    input: Option<&Path>,
+    layout: &Layout,
+    region_files: &RegionFiles,
+    included: &[&rflasher_core::layout::Region],
+    flash_size: u32,
+) -> Result<(Vec<u8>, Layout, usize), Box<dyn std::error::Error>> {
+    if !region_files.is_empty() {
+        // Per-region files, optionally on top of a full chip image
+        let mut image = match input {
+            Some(path) => {
+                let data = read_file(path)?;
+                if data.len() != flash_size as usize {
+                    return Err(format!(
+                        "With per-region files, FILE must be a full chip image ({} bytes), got {} bytes",
+                        flash_size,
+                        data.len()
+                    )
+                    .into());
+                }
+                data
+            }
+            None => {
+                require_full_region_file_coverage(included, region_files, "input")?;
+                vec![0xFFu8; flash_size as usize]
+            }
+        };
+
+        let effective_layout = apply_region_files(layout, &mut image, region_files)?;
+        let covered = effective_layout
+            .included_regions()
+            .map(|r| r.size() as usize)
+            .sum();
+        return Ok((image, effective_layout, covered));
+    }
+
+    // Single whole-image file; interpretation depends on its size
+    let input = input.ok_or("Input file required (no per-region NAME:FILE given)")?;
+    let file_data = read_file(input)?;
+    if file_data.is_empty() {
+        return Err("Input file is empty".into());
+    }
+    let file_size = file_data.len();
+
+    if file_size > flash_size as usize {
+        return Err(format!(
+            "File size ({} bytes) exceeds flash size ({} bytes)",
+            file_size, flash_size
+        )
+        .into());
+    }
+
+    if included.len() > 1 && file_size != flash_size as usize {
+        return Err(format!(
+            "Multiple regions selected: file must be exactly flash size ({} bytes), got {} bytes",
+            flash_size, file_size
+        )
+        .into());
+    }
+
+    if file_size == flash_size as usize {
+        // Full flash image
+        let covered = included.iter().map(|r| r.size() as usize).sum();
+        return Ok((file_data, layout.clone(), covered));
+    }
+
+    // Single region, file <= region size
+    let region = &included[0];
+    let region_size = region.size() as usize;
+
+    if file_size > region_size {
+        return Err(format!(
+            "File size ({} bytes) larger than region '{}' ({} bytes) but smaller than flash size",
+            file_size, region.name, region_size
+        )
+        .into());
+    }
+
+    let mut chip_image = vec![0xFFu8; flash_size as usize];
+    let dest_start = region.start as usize;
+    chip_image[dest_start..dest_start + file_size].copy_from_slice(&file_data);
+
+    // Shrink the region to the portion covered by the file
+    let effective_layout = if file_size < region_size {
+        println!(
+            "Note: File ({} bytes) is smaller than region ({} bytes)",
+            file_size, region_size
+        );
+        let mut modified_layout = layout.clone();
+        modified_layout.update_region_end(&region.name, region.start + file_size as u32 - 1)?;
+        modified_layout
+    } else {
+        layout.clone()
+    };
+
+    Ok((chip_image, effective_layout, file_size))
 }
 
 /// Create a layout covering the entire flash
@@ -204,31 +425,26 @@ pub fn run_read<D: FlashDevice + ?Sized>(
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let layout = full_flash_layout(device.size());
-    run_read_with_layout(device, output, &layout)
+    run_read_with_layout(device, Some(output), &layout, &[])
 }
 
 /// Run the unified read command with layout
+///
+/// `output` receives the full (0xFF-padded) image when given. Each entry in
+/// `region_files` additionally gets that region's data written to its own
+/// file. At least one destination must cover every included region.
 pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
-    output: &Path,
+    output: Option<&Path>,
     layout: &Layout,
+    region_files: &RegionFiles,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
 
     // Validate region bounds against the actual chip before slicing into a
     // flash-sized buffer; a corrupt FMAP could otherwise panic on read.
-    layout
-        .validate(flash_size)
-        .map_err(|e| -> Box<dyn std::error::Error> {
-            match e {
-                LayoutError::RegionOutOfBounds => format!(
-                    "Layout region extends beyond flash size ({} bytes)",
-                    flash_size
-                )
-                .into(),
-                e => format!("Invalid layout: {}", e).into(),
-            }
-        })?;
+    validate_layout(layout, flash_size)?;
+    validate_region_files(layout, region_files)?;
 
     print_flash_size(flash_size);
 
@@ -236,6 +452,10 @@ pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
     let included: Vec<_> = layout.included_regions().collect();
     if included.is_empty() {
         return Err("No regions selected for reading. Use --include to select regions.".into());
+    }
+
+    if output.is_none() {
+        require_full_region_file_coverage(&included, region_files, "output")?;
     }
 
     display_included_regions(&included, "Reading");
@@ -272,15 +492,32 @@ pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
 
     pb.finish_with_message("Read complete");
 
-    // Write to file
-    let mut file = File::create(output)?;
-    file.write_all(&data)?;
+    // Write per-region files
+    for (name, path) in region_files {
+        let region = layout
+            .find_region(name)
+            .ok_or_else(|| format!("Region '{}' not found in layout", name))?;
+        let region_data = &data[region.start as usize..=region.end as usize];
+        std::fs::write(path, region_data)?;
+        println!(
+            "Wrote region '{}' ({} bytes) to {:?}",
+            name,
+            region_data.len(),
+            path
+        );
+    }
 
-    println!("Wrote {} bytes to {:?}", data.len(), output);
-    println!(
-        "  ({} bytes from included regions, rest filled with 0xFF)",
-        bytes_read
-    );
+    // Write full image
+    if let Some(output) = output {
+        let mut file = File::create(output)?;
+        file.write_all(&data)?;
+
+        println!("Wrote {} bytes to {:?}", data.len(), output);
+        println!(
+            "  ({} bytes from included regions, rest filled with 0xFF)",
+            bytes_read
+        );
+    }
 
     Ok(())
 }
@@ -296,41 +533,29 @@ pub fn run_write<D: FlashDevice + ?Sized>(
     do_verify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut layout = full_flash_layout(device.size());
-    run_write_with_layout(device, input, &mut layout, do_verify)
+    run_write_with_layout(device, Some(input), &mut layout, &[], do_verify)
 }
 
 /// Run the unified write command with layout
+///
+/// `region_files` provide per-region data (each file written at its region's
+/// base address). `input`, when given alongside region files, must be a full
+/// chip image and supplies data for the remaining regions; without region
+/// files the size-based rules documented on the CLI apply.
 pub fn run_write_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
-    input: &Path,
+    input: Option<&Path>,
     layout: &mut Layout,
+    region_files: &RegionFiles,
     do_verify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
 
     // Validate region bounds against the actual chip before constructing or
     // slicing a flash-sized image; a corrupt layout could otherwise panic.
-    layout
-        .validate(flash_size)
-        .map_err(|e| -> Box<dyn std::error::Error> {
-            match e {
-                LayoutError::RegionOutOfBounds => format!(
-                    "Layout region extends beyond flash size ({} bytes)",
-                    flash_size
-                )
-                .into(),
-                e => format!("Invalid layout: {}", e).into(),
-            }
-        })?;
+    validate_layout(layout, flash_size)?;
 
     print_flash_size(flash_size);
-
-    // Read input file
-    let file_data = read_file(input)?;
-    if file_data.is_empty() {
-        return Err("Input file is empty".into());
-    }
-    let file_size = file_data.len();
 
     // Display included regions
     let included: Vec<_> = layout.included_regions().collect();
@@ -347,63 +572,8 @@ pub fn run_write_with_layout<D: FlashDevice + ?Sized>(
         return Err(format!("Cannot write to readonly region(s): {}", names.join(", ")).into());
     }
 
-    // Validate file size
-    if file_size > flash_size as usize {
-        return Err(format!(
-            "File size ({} bytes) exceeds flash size ({} bytes)",
-            file_size, flash_size
-        )
-        .into());
-    }
-
-    if included.len() > 1 && file_size != flash_size as usize {
-        return Err(format!(
-            "Multiple regions selected: file must be exactly flash size ({} bytes), got {} bytes",
-            flash_size, file_size
-        )
-        .into());
-    }
-
-    let (image, effective_write_size) = if file_size == flash_size as usize {
-        // Full flash image
-        (file_data, included.iter().map(|r| r.size() as usize).sum())
-    } else {
-        // Single region, file <= region size
-        let region = &included[0];
-        let region_size = region.size() as usize;
-
-        if file_size > region_size {
-            return Err(format!(
-                "File size ({} bytes) larger than region '{}' ({} bytes) but smaller than flash size",
-                file_size, region.name, region_size
-            )
-            .into());
-        }
-
-        let mut chip_image = vec![0xFFu8; flash_size as usize];
-        let dest_start = region.start as usize;
-        chip_image[dest_start..dest_start + file_size].copy_from_slice(&file_data);
-
-        if file_size < region_size {
-            println!(
-                "Note: File ({} bytes) is smaller than region ({} bytes)",
-                file_size, region_size
-            );
-        }
-
-        (chip_image, file_size)
-    };
-
-    // Adjust layout if file is smaller than region
-    let effective_layout = if included.len() == 1 && file_size < included[0].size() as usize {
-        let region = &included[0];
-        let mut modified_layout = layout.clone();
-        let actual_end = region.start + file_size as u32 - 1;
-        modified_layout.update_region_end(&region.name, actual_end)?;
-        modified_layout
-    } else {
-        layout.clone()
-    };
+    let (image, effective_layout, effective_write_size) =
+        build_image(input, layout, region_files, &included, flash_size)?;
 
     // Smart write using layout
     let mut progress = IndicatifProgress::new();
@@ -588,39 +758,20 @@ pub fn run_verify<D: FlashDevice + ?Sized>(
 
 /// Run the unified verify command with layout
 ///
-/// Size rules mirror `run_write_with_layout`:
-/// - Multiple regions: file must be exactly flash size (full chip image).
-/// - Single region: file may be region-sized or smaller (compared against
-///   the start of the region) or exactly flash size.
+/// Size rules mirror `run_write_with_layout`, including per-region files.
 pub fn run_verify_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
-    input: &Path,
+    input: Option<&Path>,
     layout: &Layout,
+    region_files: &RegionFiles,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
 
     // Validate region bounds against the actual chip before slicing into a
     // flash-sized buffer; a corrupt FMAP could otherwise panic on verify.
-    layout
-        .validate(flash_size)
-        .map_err(|e| -> Box<dyn std::error::Error> {
-            match e {
-                LayoutError::RegionOutOfBounds => format!(
-                    "Layout region extends beyond flash size ({} bytes)",
-                    flash_size
-                )
-                .into(),
-                e => format!("Invalid layout: {}", e).into(),
-            }
-        })?;
+    validate_layout(layout, flash_size)?;
 
     print_flash_size(flash_size);
-
-    let file_data = read_file(input)?;
-    if file_data.is_empty() {
-        return Err("Input file is empty".into());
-    }
-    let file_size = file_data.len();
 
     let included: Vec<_> = layout.included_regions().collect();
     if included.is_empty() {
@@ -630,53 +781,8 @@ pub fn run_verify_with_layout<D: FlashDevice + ?Sized>(
     }
     display_included_regions(&included, "Verifying");
 
-    if included.len() > 1 && file_size != flash_size as usize {
-        return Err(format!(
-            "Multiple regions selected: file must be exactly flash size ({} bytes), got {} bytes",
-            flash_size, file_size
-        )
-        .into());
-    }
-
-    if file_size > flash_size as usize {
-        return Err(format!(
-            "File size ({} bytes) exceeds flash size ({} bytes)",
-            file_size, flash_size
-        )
-        .into());
-    }
-
-    let (image, effective_layout) = if file_size == flash_size as usize {
-        (file_data, layout.clone())
-    } else {
-        // Single region with a region-sized (or smaller) file
-        let region = &included[0];
-        let region_size = region.size() as usize;
-        if file_size > region_size {
-            return Err(format!(
-                "File size ({} bytes) larger than region '{}' ({} bytes) but smaller than flash size",
-                file_size, region.name, region_size
-            )
-            .into());
-        }
-
-        if file_size < region_size {
-            println!(
-                "Note: File ({} bytes) is smaller than region ({} bytes)",
-                file_size, region_size
-            );
-        }
-
-        let mut chip_image = vec![0xFFu8; flash_size as usize];
-        let dest_start = region.start as usize;
-        chip_image[dest_start..dest_start + file_size].copy_from_slice(&file_data);
-
-        // Only verify the portion covered by the file
-        let mut modified_layout = layout.clone();
-        modified_layout.update_region_end(&region.name, region.start + file_size as u32 - 1)?;
-
-        (chip_image, modified_layout)
-    };
+    let (image, effective_layout, _) =
+        build_image(input, layout, region_files, &included, flash_size)?;
 
     verify_by_layout(device, &effective_layout, &image)?;
     println!("Verification passed!");
@@ -728,5 +834,145 @@ pub fn verify_by_layout<D: FlashDevice + ?Sized>(
             pb.abandon_with_message("Verification failed!");
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rflasher_core::layout::{LayoutSource, Region};
+
+    const FLASH_SIZE: u32 = 0x1000;
+
+    /// Layout with two included regions: a (0x000-0x7FF), b (0x800-0xFFF)
+    fn two_region_layout() -> Layout {
+        let mut layout = Layout::with_source(LayoutSource::Manual);
+        for (name, start, end) in [("a", 0x000, 0x7FF), ("b", 0x800, 0xFFF)] {
+            let mut region = Region::new(name, start, end);
+            region.included = true;
+            layout.add_region(region);
+        }
+        layout
+    }
+
+    fn temp_file(name: &str, data: &[u8]) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("rflasher-test-{}-{}", std::process::id(), name));
+        std::fs::write(&path, data).unwrap();
+        path
+    }
+
+    #[test]
+    fn region_files_without_image_file() {
+        let layout = two_region_layout();
+        let included: Vec<_> = layout.included_regions().collect();
+        let files = vec![
+            ("a".to_string(), temp_file("a.bin", &[0xAA; 0x800])),
+            ("b".to_string(), temp_file("b.bin", &[0xBB; 0x800])),
+        ];
+
+        let (image, effective, covered) =
+            build_image(None, &layout, &files, &included, FLASH_SIZE).unwrap();
+
+        assert_eq!(covered, 0x1000);
+        assert!(image[..0x800].iter().all(|&b| b == 0xAA));
+        assert!(image[0x800..].iter().all(|&b| b == 0xBB));
+        assert_eq!(effective.included_regions().count(), 2);
+    }
+
+    #[test]
+    fn partial_region_file_shrinks_region() {
+        let layout = two_region_layout();
+        let included: Vec<_> = layout.included_regions().collect();
+        let files = vec![
+            ("a".to_string(), temp_file("a-part.bin", &[0xAA; 0x100])),
+            ("b".to_string(), temp_file("b-full.bin", &[0xBB; 0x800])),
+        ];
+
+        let (image, effective, covered) =
+            build_image(None, &layout, &files, &included, FLASH_SIZE).unwrap();
+
+        assert_eq!(covered, 0x100 + 0x800);
+        assert!(image[..0x100].iter().all(|&b| b == 0xAA));
+        assert!(image[0x100..0x800].iter().all(|&b| b == 0xFF));
+        assert_eq!(effective.find_region("a").unwrap().end, 0x0FF);
+    }
+
+    #[test]
+    fn missing_region_file_without_image_errors() {
+        let layout = two_region_layout();
+        let included: Vec<_> = layout.included_regions().collect();
+        let files = vec![("a".to_string(), temp_file("a-only.bin", &[0xAA; 0x800]))];
+
+        let err = build_image(None, &layout, &files, &included, FLASH_SIZE).unwrap_err();
+        assert!(err.to_string().contains("b"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn region_file_plus_full_image_fills_rest() {
+        let layout = two_region_layout();
+        let included: Vec<_> = layout.included_regions().collect();
+        let full = temp_file("full.bin", &[0x11; 0x1000]);
+        let files = vec![("b".to_string(), temp_file("b2.bin", &[0xBB; 0x800]))];
+
+        let (image, _, covered) =
+            build_image(Some(&full), &layout, &files, &included, FLASH_SIZE).unwrap();
+
+        assert_eq!(covered, 0x1000);
+        assert!(image[..0x800].iter().all(|&b| b == 0x11));
+        assert!(image[0x800..].iter().all(|&b| b == 0xBB));
+    }
+
+    #[test]
+    fn region_file_plus_partial_image_errors() {
+        let layout = two_region_layout();
+        let included: Vec<_> = layout.included_regions().collect();
+        let small = temp_file("small.bin", &[0x11; 0x800]);
+        let files = vec![("b".to_string(), temp_file("b3.bin", &[0xBB; 0x800]))];
+
+        assert!(build_image(Some(&small), &layout, &files, &included, FLASH_SIZE).is_err());
+    }
+
+    #[test]
+    fn oversized_region_file_errors() {
+        let layout = two_region_layout();
+        let included: Vec<_> = layout.included_regions().collect();
+        let files = vec![("a".to_string(), temp_file("a-big.bin", &[0xAA; 0x900]))];
+
+        assert!(build_image(None, &layout, &files, &included, FLASH_SIZE).is_err());
+    }
+
+    #[test]
+    fn duplicate_region_files_error() {
+        let layout = two_region_layout();
+        let included: Vec<_> = layout.included_regions().collect();
+        let full = temp_file("duplicate-full.bin", &[0x11; FLASH_SIZE as usize]);
+        let files = vec![
+            ("a".to_string(), temp_file("a-first.bin", &[0xAA; 0x100])),
+            ("a".to_string(), temp_file("a-second.bin", &[0xBB; 0x800])),
+        ];
+
+        let err = build_image(Some(&full), &layout, &files, &included, FLASH_SIZE).unwrap_err();
+        assert!(
+            err.to_string().contains("more than one file"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn excluded_region_file_errors() {
+        let mut layout = two_region_layout();
+        layout.exclude_region("a").unwrap();
+        let included: Vec<_> = layout.included_regions().collect();
+        let full = temp_file("excluded-full.bin", &[0x11; FLASH_SIZE as usize]);
+        let files = vec![("a".to_string(), temp_file("a-excluded.bin", &[0xAA; 0x800]))];
+
+        let err = build_image(Some(&full), &layout, &files, &included, FLASH_SIZE).unwrap_err();
+        assert!(
+            err.to_string().contains("excluded"),
+            "unexpected error: {}",
+            err
+        );
     }
 }

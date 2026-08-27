@@ -174,10 +174,10 @@ rflasher probe -p ch341a
 rflasher info -p ch341a
 
 # Read flash to a file
-rflasher read -p ch341a -o flash_backup.bin
+rflasher read -p ch341a flash_backup.bin
 
 # Write a file to flash (with automatic erase and verify)
-rflasher write -p ch341a -i firmware.bin
+rflasher write -p ch341a firmware.bin
 
 # Erase entire chip
 rflasher erase -p ch341a
@@ -189,19 +189,23 @@ rflasher erase -p ch341a
 
 ```bash
 # Read entire flash chip
-rflasher read -p ch341a -o backup.bin
+rflasher read -p ch341a backup.bin
 
 # Write and verify (default behavior)
-rflasher write -p ch341a -i firmware.bin
+rflasher write -p ch341a firmware.bin
 
 # Write without verification (faster, but risky)
-rflasher write -p ch341a -i firmware.bin --no-verify
+rflasher write -p ch341a firmware.bin --no-verify
+
+# Short aliases (r/w/v, and E for erase) and the RFLASHER_PROGRAMMER env var also work
+export RFLASHER_PROGRAMMER=ch341a
+rflasher r backup.bin
 
 # Verify flash contents against a file
-rflasher verify -p ch341a -i firmware.bin
+rflasher verify -p ch341a firmware.bin
 
-# Erase specific region (64 KiB starting at 0x10000)
-rflasher erase -p ch341a --start 0x10000 --length 0x10000
+# Erase only a specific layout region
+rflasher erase -p ch341a --ifd -r bios
 ```
 
 ### Programmer-Specific Options
@@ -244,13 +248,13 @@ rflasher probe -p linux_spi:dev=/dev/spidev0.0,spispeed=4000
 rflasher probe -p linux_gpio_spi:gpiochip=0,cs=25,sck=11,mosi=10,miso=9
 
 # Linux GPIO with custom speed
-rflasher read -p linux_gpio_spi:dev=/dev/gpiochip0,cs=25,sck=11,mosi=10,miso=9,spispeed=500 -o flash.bin
+rflasher read -p linux_gpio_spi:dev=/dev/gpiochip0,cs=25,sck=11,mosi=10,miso=9,spispeed=500 flash.bin
 
 # Linux MTD device
 rflasher probe -p linux_mtd:dev=0
 
 # Linux MTD - read from device 0
-rflasher read -p linux_mtd:dev=0 -o flash_backup.bin
+rflasher read -p linux_mtd:dev=0 flash_backup.bin
 ```
 
 ### Internal Programmer and Embedded Reuse
@@ -276,24 +280,32 @@ Firmware code can pass its own PCI scan results to `find_intel_chipset_in_device
 
 Flash layouts allow you to work with specific regions of the flash chip (e.g., BIOS, ME, GbE regions on Intel systems).
 
+`--region`/`--include` accept `NAME[:FILE]`. With a `FILE`, each region reads to / writes from its own file instead of a full chip image; the positional file can then be omitted. Per-region files must not exceed their region's size, and a smaller file covers only the start of the region. When a positional file is combined with per-region files, it must be a full chip image and supplies the data for regions without their own file.
+
 ```bash
 # Extract Intel Flash Descriptor from a flash image
-rflasher layout ifd -i flash.bin -o layout.toml
+rflasher layout ifd flash.bin -o layout.toml
 
 # Extract FMAP from a Chromebook flash image
-rflasher layout fmap -i chromebook.bin -o layout.toml
+rflasher layout fmap chromebook.bin -o layout.toml
 
 # Show layout from a file
-rflasher layout show -f layout.toml
+rflasher layout show layout.toml
 
 # Create a new layout template
-rflasher layout create -o custom.toml --size "16 MiB"
+rflasher layout create custom.toml --size "16 MiB"
 
-# Read only the BIOS region (using IFD from chip)
-rflasher read -p ch341a --ifd --region bios -o bios.bin
+# Read only the BIOS region into its own file (using IFD from chip)
+rflasher read -p ch341a --ifd -r bios:bios.bin
 
-# Write to a specific region from a layout file
-rflasher write -p ch341a --layout layout.toml --region bios -i bios_update.bin
+# Read several regions, each to its own file
+rflasher read -p ch341a --ifd --include bios:bios.bin,me:me.bin
+
+# Write a region from its own file (per-region NAME:FILE)
+rflasher write -p ch341a --layout layout.toml -r bios:bios_update.bin
+
+# Read/write a region out of a full chip image instead
+rflasher write -p ch341a --ifd -r bios full_image.bin
 
 # Erase multiple regions
 rflasher erase -p ch341a --ifd --include bios,descriptor

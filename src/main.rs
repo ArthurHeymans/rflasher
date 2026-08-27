@@ -50,80 +50,82 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     log::info!("Loaded {} chip definitions", db.len());
 
+    let programmer = cli.programmer;
+
     match cli.command {
-        Commands::Probe { programmer } => {
+        Commands::Probe => {
             // Probe doesn't use the device, just shows info
-            let _handle = open_flash(&programmer, &db)?;
+            let _handle = open_flash(require_programmer(&programmer)?, &db)?;
             Ok(())
         }
-        Commands::Read {
-            programmer,
-            output,
-            layout,
-        } => {
-            let mut handle = open_flash(&programmer, &db)?;
+        Commands::Read { file, layout } => {
+            let mut handle = open_flash(require_programmer(&programmer)?, &db)?;
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout)?;
-                apply_region_filters(&mut layout_obj, &layout)?;
+                let region_files = apply_region_filters(&mut layout_obj, &layout)?;
                 commands::unified::run_read_with_layout(
                     handle.as_device_mut(),
-                    &output,
+                    file.as_deref(),
                     &layout_obj,
+                    &region_files,
                 )
             } else {
-                commands::unified::run_read(handle.as_device_mut(), &output)
+                let file = file.ok_or("Output file required")?;
+                commands::unified::run_read(handle.as_device_mut(), &file)
             }
         }
         Commands::Write {
-            programmer,
-            input,
+            file,
             no_verify,
             layout,
         } => {
-            let mut handle = open_flash(&programmer, &db)?;
+            let mut handle = open_flash(require_programmer(&programmer)?, &db)?;
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout)?;
-                apply_region_filters(&mut layout_obj, &layout)?;
+                let region_files = apply_region_filters(&mut layout_obj, &layout)?;
                 commands::unified::run_write_with_layout(
                     handle.as_device_mut(),
-                    &input,
+                    file.as_deref(),
                     &mut layout_obj,
+                    &region_files,
                     !no_verify,
                 )
             } else {
-                commands::unified::run_write(handle.as_device_mut(), &input, !no_verify)
+                let file = file.ok_or("Input file required")?;
+                commands::unified::run_write(handle.as_device_mut(), &file, !no_verify)
             }
         }
-        Commands::Erase { programmer, layout } => {
-            let mut handle = open_flash(&programmer, &db)?;
+        Commands::Erase { layout } => {
+            let mut handle = open_flash(require_programmer(&programmer)?, &db)?;
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout)?;
-                apply_region_filters(&mut layout_obj, &layout)?;
+                let region_files = apply_region_filters(&mut layout_obj, &layout)?;
+                if !region_files.is_empty() {
+                    return Err("Per-region files (NAME:FILE) make no sense for erase".into());
+                }
                 commands::unified::run_erase_with_layout(handle.as_device_mut(), &layout_obj)
             } else {
                 commands::unified::run_erase(handle.as_device_mut())
             }
         }
-        Commands::Verify {
-            programmer,
-            input,
-            layout,
-        } => {
-            let mut handle = open_flash(&programmer, &db)?;
+        Commands::Verify { file, layout } => {
+            let mut handle = open_flash(require_programmer(&programmer)?, &db)?;
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout)?;
-                apply_region_filters(&mut layout_obj, &layout)?;
+                let region_files = apply_region_filters(&mut layout_obj, &layout)?;
                 commands::unified::run_verify_with_layout(
                     handle.as_device_mut(),
-                    &input,
+                    file.as_deref(),
                     &layout_obj,
+                    &region_files,
                 )
             } else {
-                commands::unified::run_verify(handle.as_device_mut(), &input)
+                let file = file.ok_or("Input file required")?;
+                commands::unified::run_verify(handle.as_device_mut(), &file)
             }
         }
-        Commands::Info { programmer } => {
-            let mut handle = open_flash(&programmer, &db)?;
+        Commands::Info => {
+            let mut handle = open_flash(require_programmer(&programmer)?, &db)?;
             print_chip_info(&mut handle);
             Ok(())
         }
@@ -148,42 +150,35 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             LayoutCommands::Create { output, size } => commands::layout::cmd_create(&output, &size),
         },
-        Commands::Wp(subcmd) => match subcmd {
-            WpCommands::Status { programmer } => {
-                let mut handle = open_flash(&programmer, &db)?;
-                commands::wp::cmd_status(&mut handle)
+        Commands::Wp(subcmd) => {
+            let mut handle = open_flash(require_programmer(&programmer)?, &db)?;
+            match subcmd {
+                WpCommands::Status => commands::wp::cmd_status(&mut handle),
+                WpCommands::List => commands::wp::cmd_list(&mut handle),
+                WpCommands::Enable => commands::wp::cmd_enable(&mut handle),
+                WpCommands::Disable => commands::wp::cmd_disable(&mut handle),
+                WpCommands::Range { range } => commands::wp::cmd_range(&mut handle, &range),
+                WpCommands::Region {
+                    layout,
+                    region_name,
+                } => {
+                    let layout_obj = load_layout(&mut handle, &layout)?;
+                    commands::wp::cmd_region(&mut handle, &layout_obj, &region_name)
+                }
             }
-            WpCommands::List { programmer } => {
-                let mut handle = open_flash(&programmer, &db)?;
-                commands::wp::cmd_list(&mut handle)
-            }
-            WpCommands::Enable { programmer } => {
-                let mut handle = open_flash(&programmer, &db)?;
-                commands::wp::cmd_enable(&mut handle)
-            }
-            WpCommands::Disable { programmer } => {
-                let mut handle = open_flash(&programmer, &db)?;
-                commands::wp::cmd_disable(&mut handle)
-            }
-            WpCommands::Range { programmer, range } => {
-                let mut handle = open_flash(&programmer, &db)?;
-                commands::wp::cmd_range(&mut handle, &range)
-            }
-            WpCommands::Region {
-                programmer,
-                layout,
-                region_name,
-            } => {
-                let mut handle = open_flash(&programmer, &db)?;
-                let layout_obj = load_layout(&mut handle, &layout)?;
-                commands::wp::cmd_region(&mut handle, &layout_obj, &region_name)
-            }
-        },
+        }
         #[cfg(feature = "repl")]
-        Commands::Repl { programmer, script } => {
-            commands::repl::cmd_repl(&programmer, script.as_deref())
+        Commands::Repl { script } => {
+            commands::repl::cmd_repl(require_programmer(&programmer)?, script.as_deref())
         }
     }
+}
+
+/// Require a programmer to be specified via -p/--programmer or RFLASHER_PROGRAMMER
+fn require_programmer(programmer: &Option<String>) -> Result<&str, Box<dyn std::error::Error>> {
+    programmer.as_deref().ok_or_else(|| {
+        "No programmer specified. Use -p/--programmer or set RFLASHER_PROGRAMMER.".into()
+    })
 }
 
 /// Load the chip database from the specified path or default locations
@@ -272,20 +267,28 @@ fn load_layout(
     }
 }
 
-/// Apply region filters (--include, --exclude, --region) to a layout
+/// Apply region filters (--include, --exclude, --region) to a layout.
+///
+/// Returns the per-region file assignments collected from NAME:FILE specs.
 fn apply_region_filters(
     layout: &mut Layout,
     args: &LayoutArgs,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Handle --region shorthand (equivalent to --include with one region)
-    if let Some(region_name) = &args.region {
-        layout.include_region(region_name)?;
-    }
+) -> Result<Vec<(String, std::path::PathBuf)>, Box<dyn std::error::Error>> {
+    // --region is shorthand for --include with one region
+    let specs = args.region.iter().chain(args.include.iter());
 
-    // Handle --include
-    for name in &args.include {
-        layout.include_region(name)?;
-    }
+    let region_files: Vec<_> = specs
+        .map(|spec| {
+            layout.include_region(&spec.name)?;
+            Ok(spec
+                .file
+                .as_ref()
+                .map(|file| (spec.name.clone(), file.clone())))
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
 
     // Handle --exclude (only applies if some regions are already included)
     for name in &args.exclude {
@@ -297,7 +300,9 @@ fn apply_region_filters(
         layout.include_all();
     }
 
-    Ok(())
+    commands::unified::validate_region_files(layout, &region_files)?;
+
+    Ok(region_files)
 }
 
 fn print_chip_info(handle: &mut FlashHandle) {
