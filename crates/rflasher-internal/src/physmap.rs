@@ -4,7 +4,20 @@
 //! builds use direct physical-address MMIO and rely on the caller/platform to
 //! have installed suitable mappings and memory attributes.
 
-use crate::error::{InternalError, RestrictedResource};
+use crate::error::InternalError;
+#[cfg(all(feature = "std", target_os = "linux"))]
+use crate::error::RestrictedResource;
+
+#[cfg(all(feature = "std", target_os = "linux"))]
+fn map_physmap_error(error: std::io::Error, address: u64, size: usize) -> InternalError {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        InternalError::PermissionDenied {
+            resource: RestrictedResource::DevMem { address, size },
+        }
+    } else {
+        InternalError::MemoryMap { address, size }
+    }
+}
 
 /// A mapped region of physical memory.
 pub struct PhysMap {
@@ -41,18 +54,7 @@ impl PhysMap {
             .write(true)
             .custom_flags(libc::O_SYNC)
             .open("/dev/mem")
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::PermissionDenied {
-                    InternalError::PermissionDenied {
-                        resource: RestrictedResource::DevMem { address: phys_addr },
-                    }
-                } else {
-                    InternalError::MemoryMap {
-                        address: phys_addr,
-                        size,
-                    }
-                }
-            })?;
+            .map_err(|error| map_physmap_error(error, phys_addr, size))?;
 
         // SAFETY: sysconf is thread-safe and does not touch Rust-managed memory.
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
@@ -76,17 +78,11 @@ impl PhysMap {
         };
 
         if ptr == libc::MAP_FAILED {
-            let error = std::io::Error::last_os_error();
-            return Err(if error.kind() == std::io::ErrorKind::PermissionDenied {
-                InternalError::PermissionDenied {
-                    resource: RestrictedResource::DevMem { address: phys_addr },
-                }
-            } else {
-                InternalError::MemoryMap {
-                    address: phys_addr,
-                    size,
-                }
-            });
+            return Err(map_physmap_error(
+                std::io::Error::last_os_error(),
+                phys_addr,
+                size,
+            ));
         }
 
         // SAFETY: `offset` is within the mapped page-aligned range.
@@ -268,6 +264,49 @@ impl crate::host::MmioAccess for PhysMap {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    use super::map_physmap_error;
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    use crate::error::{InternalError, RestrictedResource};
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
+    fn permission_errors_retain_the_requested_mapping_range() {
+        let error = map_physmap_error(
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            0xfedc_0000,
+            8192,
+        );
+
+        assert!(matches!(
+            error,
+            InternalError::PermissionDenied {
+                resource: RestrictedResource::DevMem {
+                    address: 0xfedc_0000,
+                    size: 8192,
+                }
+            }
+        ));
+    }
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
+    fn non_permission_errors_remain_memory_map_failures() {
+        let error = map_physmap_error(
+            std::io::Error::from(std::io::ErrorKind::InvalidInput),
+            0xfedc_0000,
+            4096,
+        );
+
+        assert!(matches!(
+            error,
+            InternalError::MemoryMap {
+                address: 0xfedc_0000,
+                size: 4096,
+            }
+        ));
+    }
+
     #[test]
     #[ignore]
     fn test_physmap_create() {

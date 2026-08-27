@@ -864,8 +864,20 @@ fn open_linux_gpio_spi(
 }
 
 #[cfg(feature = "internal")]
+fn restricted_resource_hint(resource: &rflasher_internal::RestrictedResource) -> &'static str {
+    use rflasher_internal::RestrictedResource;
+
+    match resource {
+        RestrictedResource::DevMem { .. } => {
+            "Internal flashing requires privileged access to physical memory through /dev/mem.\n\
+             Try running rflasher with sudo. If access is still blocked, boot Linux with the iomem=relaxed kernel parameter."
+        }
+    }
+}
+
+#[cfg(feature = "internal")]
 fn format_internal_init_error(error: &rflasher_internal::InternalError) -> String {
-    use rflasher_internal::{InternalError, RestrictedResource};
+    use rflasher_internal::InternalError;
 
     let hint = match error {
         InternalError::NoChipset | InternalError::UnsupportedChipset { .. } => {
@@ -874,19 +886,7 @@ fn format_internal_init_error(error: &rflasher_internal::InternalError) -> Strin
         InternalError::MultipleChipsets => {
             "Multiple supported chipsets were found; internal programmer selection is ambiguous."
         }
-        InternalError::PciAccess(
-            rflasher_internal::PciAccessError::ConfigRead { .. }
-            | rflasher_internal::PciAccessError::ConfigWrite { .. },
-        ) => {
-            "Accessing PCI configuration space usually requires elevated privileges.\n\
-             Try running rflasher with sudo."
-        }
-        InternalError::PermissionDenied {
-            resource: RestrictedResource::DevMem { .. },
-        } => {
-            "Internal flashing requires privileged access to physical memory through /dev/mem.\n\
-             Try running rflasher with sudo. If access is still blocked, boot Linux with the iomem=relaxed kernel parameter."
-        }
+        InternalError::PermissionDenied { resource } => restricted_resource_hint(resource),
         InternalError::NotSupported("SPI100 not in use") => {
             "The AMD SPI100 controller is not configured or in use."
         }
@@ -919,15 +919,17 @@ mod internal_error_tests {
     }
 
     #[test]
-    fn pci_config_access_failure_recommends_sudo() {
+    fn generic_pci_config_failure_does_not_assume_a_permission_cause() {
         let error = InternalError::PciAccess(PciAccessError::ConfigRead {
             bus: 0,
             device: 0x1f,
             function: 0,
             register: 0xf0,
         });
+        let message = format_internal_init_error(&error);
 
-        assert!(format_internal_init_error(&error).contains("sudo"));
+        assert!(message.contains("failed to read PCI config"));
+        assert!(!message.contains("sudo"));
     }
 
     #[test]
@@ -935,6 +937,7 @@ mod internal_error_tests {
         let error = InternalError::PermissionDenied {
             resource: RestrictedResource::DevMem {
                 address: 0xfedc_0000,
+                size: 8192,
             },
         };
         let message = format_internal_init_error(&error);
@@ -944,6 +947,7 @@ mod internal_error_tests {
         // The failing physical address must survive into user-facing output
         // so CONFIG_STRICT_DEVMEM range failures remain diagnosable.
         assert!(message.contains("0xfedc0000"));
+        assert!(message.contains("size 8192"));
     }
 
     #[test]

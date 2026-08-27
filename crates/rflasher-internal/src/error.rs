@@ -44,22 +44,21 @@ pub enum InternalError {
 /// A system resource whose access was denied.
 #[derive(Debug)]
 pub enum RestrictedResource {
-    /// Physical memory accessed through `/dev/mem` while mapping `address`.
+    /// Physical memory accessed through `/dev/mem` while mapping a range.
     ///
     /// With `CONFIG_STRICT_DEVMEM`, `mmap()` fails with `EPERM` for ranges
-    /// the kernel considers reserved, so the intended address matters when
-    /// interpreting this failure.
-    DevMem { address: u64 },
+    /// the kernel considers reserved, so both the intended address and size
+    /// matter when interpreting this failure.
+    DevMem { address: u64, size: usize },
 }
 
 impl fmt::Display for RestrictedResource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DevMem { address } => {
+            Self::DevMem { address, size } => {
                 write!(
                     f,
-                    "physical memory through /dev/mem (address {:#x})",
-                    address
+                    "physical memory through /dev/mem (address {address:#x}, size {size})"
                 )
             }
         }
