@@ -60,7 +60,7 @@ pub use amd_enable::{AmdSpi100Info, enable_amd_spi100, enable_amd_spi100_with_ho
 pub use amd_pci::{AMD_CHIPSETS, AMD_VID, AmdChipset, AmdChipsetEnable};
 pub use amd_spi100::Spi100Controller;
 pub use chipset::{BusType, ChipsetEnable, IchChipset, TestStatus};
-pub use error::{InternalError, PciAccessError};
+pub use error::{InternalError, PciAccessError, RestrictedResource};
 #[cfg(all(feature = "std", target_os = "linux"))]
 pub use host::LinuxHost;
 pub use host::{DefaultPciAccess, HostAccess, MmioAccess, PciAddress, PciConfigAccess};
