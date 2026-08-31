@@ -164,7 +164,7 @@ async fn probe_and_create_handle<M>(
     db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>>
 where
-    M: rflasher_core::programmer::SpiMaster + 'static,
+    M: rflasher_core::programmer::SpiMaster + Send + 'static,
 {
     let mut master = master;
     let result = probe_detailed(&mut master, db).await?;

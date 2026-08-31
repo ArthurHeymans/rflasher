@@ -8,6 +8,7 @@ description = "Steel Scheme REPL for scripting raw SPI commands"
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std"] }
+futures-lite = "2"
 steel-core = "0.7"
 steel-parser = "0.7"
 rustyline = { version = "14.0", features = ["derive"] }

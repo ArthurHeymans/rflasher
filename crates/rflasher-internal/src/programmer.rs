@@ -64,7 +64,7 @@ impl InternalOptions {
 #[cfg(all(feature = "std", target_os = "linux"))]
 pub struct InternalProgrammer {
     /// The underlying SPI controller (Intel or AMD)
-    controller: Box<dyn Controller>,
+    controller: Box<dyn Controller + Send>,
     /// Flash size detected via hardware sequencing
     flash_size: usize,
 }

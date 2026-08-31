@@ -87,13 +87,14 @@ fn parse_number(s: &str) -> Result<u32, Box<dyn Error>> {
 }
 
 /// Show current write protection status
-pub fn cmd_status(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_status(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
 
     let config = handle
         .read_wp_config()
+        .await
         .map_err(|e| format!("Failed to read WP config: {}", e))?;
     let total_size = handle.size();
 
@@ -109,7 +110,7 @@ pub fn cmd_status(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
 }
 
 /// List available protection ranges
-pub fn cmd_list(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_list(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
@@ -136,13 +137,14 @@ pub fn cmd_list(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
 }
 
 /// Enable hardware write protection
-pub fn cmd_enable(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_enable(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
 
     handle
         .set_wp_mode(WpMode::Hardware, WriteOptions::default())
+        .await
         .map_err(|e| format!("Failed to enable write protection: {}", e))?;
 
     println!("Hardware write protection enabled.");
@@ -150,13 +152,14 @@ pub fn cmd_enable(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
 }
 
 /// Disable write protection
-pub fn cmd_disable(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_disable(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
 
     handle
         .disable_wp(WriteOptions::default())
+        .await
         .map_err(|e| format!("Failed to disable write protection: {}", e))?;
 
     println!("Write protection disabled.");
@@ -164,7 +167,7 @@ pub fn cmd_disable(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
 }
 
 /// Set protection range
-pub fn cmd_range(handle: &mut FlashHandle, range_spec: &str) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_range(handle: &mut FlashHandle, range_spec: &str) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
@@ -183,6 +186,7 @@ pub fn cmd_range(handle: &mut FlashHandle, range_spec: &str) -> Result<(), Box<d
 
     handle
         .set_wp_range(&range, WriteOptions::default())
+        .await
         .map_err(|e| format!("Failed to set protection range: {}", e))?;
 
     println!(
@@ -195,7 +199,7 @@ pub fn cmd_range(handle: &mut FlashHandle, range_spec: &str) -> Result<(), Box<d
 }
 
 /// Set protection by region name
-pub fn cmd_region(
+pub async fn cmd_region(
     handle: &mut FlashHandle,
     layout: &rflasher_core::layout::Layout,
     region_name: &str,
@@ -216,6 +220,7 @@ pub fn cmd_region(
 
     handle
         .set_wp_range(&range, WriteOptions::default())
+        .await
         .map_err(|e| {
             format!(
                 "Failed to set protection range for region '{}': {}",

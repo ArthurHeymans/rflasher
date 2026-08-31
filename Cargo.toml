@@ -48,6 +48,7 @@ thiserror = "2"
 env_logger = "0.11"
 tokio = { version = "1", features = ["full"] }
 nusb = "0.2.6"
+futures-lite = "2"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 indicatif = "0.17"
@@ -123,6 +124,7 @@ rflasher-core = { workspace = true, features = ["std"] }
 rflasher-chips.workspace = true
 rflasher-programmers = { workspace = true, features = ["std"] }
 rflasher-repl = { version = "0.1.0", path = "crates/rflasher-repl", optional = true }
+futures-lite.workspace = true
 clap.workspace = true
 clap_mangen = "0.2"
 env_logger.workspace = true

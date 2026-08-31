@@ -120,12 +120,12 @@ impl<D: FlashDevice> DynFlashDevice for D {
 /// implementing the real async `FlashDevice` trait, so generic core
 /// algorithms keep working on it.
 pub struct ErasedFlashDevice {
-    inner: Box<dyn DynFlashDevice>,
+    inner: Box<dyn DynFlashDevice + Send>,
 }
 
 impl ErasedFlashDevice {
     /// Erase a concrete flash device.
-    pub fn new<D: FlashDevice + 'static>(device: D) -> Self {
+    pub fn new<D: FlashDevice + Send + 'static>(device: D) -> Self {
         Self {
             inner: Box::new(device),
         }
@@ -223,12 +223,12 @@ impl<M: SpiMaster> DynSpiMaster for M {
 /// Used by the REPL, which selects a backend at runtime but drives it through
 /// the ordinary `SpiMaster` trait.
 pub struct ErasedSpiMaster {
-    inner: Box<dyn DynSpiMaster>,
+    inner: Box<dyn DynSpiMaster + Send>,
 }
 
 impl ErasedSpiMaster {
     /// Erase a concrete SPI master.
-    pub fn new<M: SpiMaster + 'static>(master: M) -> Self {
+    pub fn new<M: SpiMaster + Send + 'static>(master: M) -> Self {
         Self {
             inner: Box::new(master),
         }

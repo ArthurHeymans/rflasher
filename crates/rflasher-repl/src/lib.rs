@@ -54,8 +54,7 @@ use steel::rvals::SteelVal;
 use steel::steel_vm::engine::Engine;
 use steel_parser::interner::InternedString;
 
-/// Boxed SPI master type for dynamic dispatch
-pub type BoxedSpiMaster = Box<dyn SpiMaster + Send>;
+
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -162,15 +161,18 @@ fn collect_globals(_engine: &Engine) -> HashSet<InternedString> {
     globals
 }
 
-/// Run the Steel REPL with a boxed SPI master
-pub fn run_repl_boxed(master: BoxedSpiMaster) -> Result<(), ReplError> {
+/// Run the Steel REPL with the given SPI master
+///
+/// The REPL's Scheme callbacks are synchronous; each SPI operation is
+/// bridged to the async `SpiMaster` API with a local `block_on`.
+pub fn run_repl<M: SpiMaster + Send + 'static>(master: M) -> Result<(), ReplError> {
     let mut engine = Engine::new();
 
     // Wrap master in Arc<Mutex> for thread-safe access from Steel
     let master = Arc::new(Mutex::new(master));
 
     // Register the SPI module
-    let module = spi_module::create_spi_module_boxed(Arc::clone(&master));
+    let module = spi_module::create_spi_module(Arc::clone(&master));
     engine.register_module(module);
 
     // Register the SPI25 constants module
@@ -310,17 +312,12 @@ fn print_help() {
 ///
 /// This takes ownership of the SPI master and provides it to the Scheme
 /// environment for executing SPI commands.
-pub fn run_repl<M: SpiMaster + Send + 'static>(master: M) -> Result<(), ReplError> {
-    run_repl_boxed(Box::new(master))
-}
-
-/// Run a Steel script with a boxed SPI master
-pub fn run_script_boxed(master: BoxedSpiMaster, script: String) -> Result<(), ReplError> {
+pub fn run_script<M: SpiMaster + Send + 'static>(master: M, script: String) -> Result<(), ReplError> {
     let mut engine = Engine::new();
 
     let master = Arc::new(Mutex::new(master));
 
-    let module = spi_module::create_spi_module_boxed(Arc::clone(&master));
+    let module = spi_module::create_spi_module(Arc::clone(&master));
     engine.register_module(module);
 
     let constants_module = spi_module::create_constants_module();
@@ -350,12 +347,4 @@ pub fn run_script_boxed(master: BoxedSpiMaster, script: String) -> Result<(), Re
     }
 
     Ok(())
-}
-
-/// Run a Steel script file with the given SPI master
-pub fn run_script<M: SpiMaster + Send + 'static>(
-    master: M,
-    script: String,
-) -> Result<(), ReplError> {
-    run_script_boxed(Box::new(master), script)
 }

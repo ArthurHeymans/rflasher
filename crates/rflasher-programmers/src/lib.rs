@@ -52,18 +52,20 @@ pub mod serprog;
 #[path = "backends/sunxi_fel/mod.rs"]
 pub mod sunxi_fel;
 
-#[cfg(feature = "std")]
+// The registry and its erasure layer are native-only: WASM frontends select
+// and construct their backend explicitly (WebUSB permission flow).
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod erased;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod handle;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod registry;
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use erased::{ErasedFlashDevice, ErasedSpiMaster};
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use handle::{ChipInfo, FlashHandle};
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use registry::{
     BoxedSpiMaster, ProgrammerInfo, ProgrammerParams, available_programmers, open_flash,
     open_spi_programmer, parse_programmer_params, programmer_names_short,

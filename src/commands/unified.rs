@@ -420,12 +420,12 @@ impl WriteProgress for IndicatifProgress {
 const READ_CHUNK_SIZE: usize = 4096;
 
 /// Run the unified read command
-pub fn run_read<D: FlashDevice + ?Sized>(
+pub async fn run_read<D: FlashDevice + ?Sized>(
     device: &mut D,
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let layout = full_flash_layout(device.size());
-    run_read_with_layout(device, Some(output), &layout, &[])
+    run_read_with_layout(device, Some(output), &layout, &[]).await
 }
 
 /// Run the unified read command with layout
@@ -433,7 +433,7 @@ pub fn run_read<D: FlashDevice + ?Sized>(
 /// `output` receives the full (0xFF-padded) image when given. Each entry in
 /// `region_files` additionally gets that region's data written to its own
 /// file. At least one destination must cover every included region.
-pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
+pub async fn run_read_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     output: Option<&Path>,
     layout: &Layout,
@@ -471,24 +471,21 @@ pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
     pb.set_style(create_progress_bar_style()?);
 
     // Read each included region
-    let bytes_read = included
-        .iter()
-        .flat_map(|region| {
-            (region.start..=region.end)
-                .step_by(READ_CHUNK_SIZE)
-                .map(move |offset| (region, offset))
-        })
-        .try_fold(0usize, |bytes_read, (region, offset)| {
-            let remaining = (region.end - offset + 1) as usize;
-            let chunk_size = std::cmp::min(READ_CHUNK_SIZE, remaining);
-            let chunk = &mut data[offset as usize..offset as usize + chunk_size];
+    let mut bytes_read = 0usize;
+    for (region, offset) in included.iter().flat_map(|region| {
+        (region.start..=region.end)
+            .step_by(READ_CHUNK_SIZE)
+            .map(move |offset| (region, offset))
+    }) {
+        let remaining = (region.end - offset + 1) as usize;
+        let chunk_size = std::cmp::min(READ_CHUNK_SIZE, remaining);
+        let chunk = &mut data[offset as usize..offset as usize + chunk_size];
 
-            device.read(offset, chunk)?;
+        device.read(offset, chunk).await?;
 
-            let new_bytes_read = bytes_read + chunk_size;
-            pb.set_position(new_bytes_read as u64);
-            Ok::<_, Box<dyn std::error::Error>>(new_bytes_read)
-        })?;
+        bytes_read += chunk_size;
+        pb.set_position(bytes_read as u64);
+    }
 
     pb.finish_with_message("Read complete");
 
@@ -527,13 +524,13 @@ pub fn run_read_with_layout<D: FlashDevice + ?Sized>(
 // =============================================================================
 
 /// Run the unified write command
-pub fn run_write<D: FlashDevice + ?Sized>(
+pub async fn run_write<D: FlashDevice + ?Sized>(
     device: &mut D,
     input: &Path,
     do_verify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut layout = full_flash_layout(device.size());
-    run_write_with_layout(device, Some(input), &mut layout, &[], do_verify)
+    run_write_with_layout(device, Some(input), &mut layout, &[], do_verify).await
 }
 
 /// Run the unified write command with layout
@@ -542,7 +539,7 @@ pub fn run_write<D: FlashDevice + ?Sized>(
 /// base address). `input`, when given alongside region files, must be a full
 /// chip image and supplies data for the remaining regions; without region
 /// files the size-based rules documented on the CLI apply.
-pub fn run_write_with_layout<D: FlashDevice + ?Sized>(
+pub async fn run_write_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     input: Option<&Path>,
     layout: &mut Layout,
@@ -577,12 +574,13 @@ pub fn run_write_with_layout<D: FlashDevice + ?Sized>(
 
     // Smart write using layout
     let mut progress = IndicatifProgress::new();
-    let stats = unified::smart_write_by_layout(device, &effective_layout, &image, &mut progress)?;
+    let stats =
+        unified::smart_write_by_layout(device, &effective_layout, &image, &mut progress).await?;
 
     // Verify if requested
     if do_verify {
         if stats.flash_modified {
-            verify_by_layout(device, &effective_layout, &image)?;
+            verify_by_layout(device, &effective_layout, &image).await?;
         } else {
             println!("Skipping verification - no changes were made");
         }
@@ -601,15 +599,15 @@ pub fn run_write_with_layout<D: FlashDevice + ?Sized>(
 // =============================================================================
 
 /// Run the unified erase command
-pub fn run_erase<D: FlashDevice + ?Sized>(
+pub async fn run_erase<D: FlashDevice + ?Sized>(
     device: &mut D,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let layout = full_flash_layout(device.size());
-    run_erase_with_layout(device, &layout)
+    run_erase_with_layout(device, &layout).await
 }
 
 /// Run the unified erase command with layout
-pub fn run_erase_with_layout<D: FlashDevice + ?Sized>(
+pub async fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -641,10 +639,10 @@ pub fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     pb.set_style(create_spinner_style()?);
     pb.enable_steady_tick(Duration::from_millis(100));
 
-    included.iter().try_for_each(|region| {
+    for region in &included {
         pb.set_message(format!("Erasing {}...", region.name));
-        unified::erase_region(device, region)
-    })?;
+        unified::erase_region(device, region).await?;
+    }
 
     pb.finish_with_message("Erase complete");
 
@@ -688,7 +686,7 @@ fn verify_chunk(
 }
 
 /// Verify flash contents against expected data
-pub fn verify_flash<D: FlashDevice + ?Sized>(
+pub async fn verify_flash<D: FlashDevice + ?Sized>(
     device: &mut D,
     expected: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -697,21 +695,22 @@ pub fn verify_flash<D: FlashDevice + ?Sized>(
 
     let pb = create_progress_bar_with_phase(total_size as u64, "Verifying")?;
 
-    let result = (0..total_size)
-        .step_by(READ_CHUNK_SIZE)
-        .try_for_each(|offset| {
+    let result = async {
+        for offset in (0..total_size).step_by(READ_CHUNK_SIZE) {
             let chunk_size = std::cmp::min(READ_CHUNK_SIZE, total_size - offset);
             let chunk = &mut buf[..chunk_size];
 
-            device.read(offset as u32, chunk)?;
+            device.read(offset as u32, chunk).await?;
 
             // Compare
             let expected_chunk = &expected[offset..offset + chunk_size];
             verify_chunk(chunk, expected_chunk, offset, None)?;
 
             pb.set_position((offset + chunk_size) as u64);
-            Ok::<_, Box<dyn std::error::Error>>(())
-        });
+        }
+        Ok::<_, Box<dyn std::error::Error>>(())
+    }
+    .await;
 
     match result {
         Ok(()) => {
@@ -729,7 +728,7 @@ pub fn verify_flash<D: FlashDevice + ?Sized>(
 ///
 /// The image must match the flash size exactly; verifying a smaller file
 /// against offset 0 would be ambiguous and silently compare the wrong data.
-pub fn run_verify<D: FlashDevice + ?Sized>(
+pub async fn run_verify<D: FlashDevice + ?Sized>(
     device: &mut D,
     input: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -750,7 +749,7 @@ pub fn run_verify<D: FlashDevice + ?Sized>(
         .into());
     }
 
-    verify_flash(device, &expected)?;
+    verify_flash(device, &expected).await?;
     println!("Verification passed!");
 
     Ok(())
@@ -759,7 +758,7 @@ pub fn run_verify<D: FlashDevice + ?Sized>(
 /// Run the unified verify command with layout
 ///
 /// Size rules mirror `run_write_with_layout`, including per-region files.
-pub fn run_verify_with_layout<D: FlashDevice + ?Sized>(
+pub async fn run_verify_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     input: Option<&Path>,
     layout: &Layout,
@@ -784,14 +783,14 @@ pub fn run_verify_with_layout<D: FlashDevice + ?Sized>(
     let (image, effective_layout, _) =
         build_image(input, layout, region_files, &included, flash_size)?;
 
-    verify_by_layout(device, &effective_layout, &image)?;
+    verify_by_layout(device, &effective_layout, &image).await?;
     println!("Verification passed!");
 
     Ok(())
 }
 
 /// Verify included regions against expected data
-pub fn verify_by_layout<D: FlashDevice + ?Sized>(
+pub async fn verify_by_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
     expected: &[u8],
@@ -803,27 +802,28 @@ pub fn verify_by_layout<D: FlashDevice + ?Sized>(
 
     let mut buf = vec![0u8; READ_CHUNK_SIZE];
 
-    let result = included
-        .iter()
-        .flat_map(|region| {
+    let result = async {
+        let mut bytes_verified = 0usize;
+        for (region, offset) in included.iter().flat_map(|region| {
             (region.start..=region.end)
                 .step_by(READ_CHUNK_SIZE)
                 .map(move |offset| (region, offset))
-        })
-        .try_fold(0usize, |bytes_verified, (region, offset)| {
+        }) {
             let chunk_size = std::cmp::min(READ_CHUNK_SIZE, (region.end - offset + 1) as usize);
             let chunk = &mut buf[..chunk_size];
 
-            device.read(offset, chunk)?;
+            device.read(offset, chunk).await?;
 
             // Compare
             let expected_chunk = &expected[offset as usize..offset as usize + chunk_size];
             verify_chunk(chunk, expected_chunk, offset as usize, Some(&region.name))?;
 
-            let new_bytes_verified = bytes_verified + chunk_size;
-            pb.set_position(new_bytes_verified as u64);
-            Ok::<_, Box<dyn std::error::Error>>(new_bytes_verified)
-        });
+            bytes_verified += chunk_size;
+            pb.set_position(bytes_verified as u64);
+        }
+        Ok::<_, Box<dyn std::error::Error>>(())
+    }
+    .await;
 
     match result {
         Ok(_) => {

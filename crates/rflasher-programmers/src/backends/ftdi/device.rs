@@ -32,7 +32,7 @@ pub struct Ftdi {
 
 impl Ftdi {
     /// Open an FTDI device with the given configuration
-    pub fn open(config: &FtdiConfig) -> Result<Self> {
+    pub async fn open(config: &FtdiConfig) -> Result<Self> {
         log::info!(
             "Opening FTDI {} channel {}",
             config.device_type.name(),
@@ -94,13 +94,13 @@ impl Ftdi {
     }
 
     /// Open the first available FTDI device
-    pub fn open_first() -> Result<Self> {
-        Self::open(&FtdiConfig::default())
+    pub async fn open_first() -> Result<Self> {
+        Self::open(&FtdiConfig::default()).await
     }
 
     /// Open a specific device type
-    pub fn open_device(device_type: FtdiDeviceType) -> Result<Self> {
-        Self::open(&FtdiConfig::for_device(device_type))
+    pub async fn open_device(device_type: FtdiDeviceType) -> Result<Self> {
+        Self::open(&FtdiConfig::for_device(device_type)).await
     }
 
     /// Initialize the MPSSE engine
