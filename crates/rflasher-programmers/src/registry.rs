@@ -641,7 +641,10 @@ async fn open_dediprog(
     // Use HybridFlashDevice: OpaqueMaster for fast bulk read/write (CMD_READ/CMD_WRITE),
     // SpiMaster for erase, status register access, and write protection
     let device = HybridFlashDevice::new(master, ctx);
-    Ok(FlashHandle::with_chip_info(ErasedFlashDevice::new(device), chip_info))
+    Ok(FlashHandle::with_chip_info(
+        ErasedFlashDevice::new(device),
+        chip_info,
+    ))
 }
 
 #[cfg(feature = "serprog-native")]
@@ -686,7 +689,8 @@ async fn open_serprog(
         SerprogConnection::Serial { device, baud } => {
             let transport = crate::serprog::SerialTransport::open(&device, baud)
                 .map_err(|e| format!("Failed to open serial port {}: {}", device, e))?;
-            let mut serprog = crate::serprog::Serprog::new(transport).await
+            let mut serprog = crate::serprog::Serprog::new(transport)
+                .await
                 .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
 
             if let Some(speed_khz) = spispeed {
@@ -707,7 +711,8 @@ async fn open_serprog(
         SerprogConnection::Tcp { host, port } => {
             let transport = crate::serprog::TcpTransport::connect(&host, port)
                 .map_err(|e| format!("Failed to connect to {}:{}: {}", host, port, e))?;
-            let mut serprog = crate::serprog::Serprog::new(transport).await
+            let mut serprog = crate::serprog::Serprog::new(transport)
+                .await
                 .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
 
             if let Some(speed_khz) = spispeed {
@@ -811,7 +816,9 @@ async fn open_linux_spi(
 }
 
 #[cfg(feature = "linux-mtd")]
-async fn open_linux_mtd(params: &ProgrammerParams) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+async fn open_linux_mtd(
+    params: &ProgrammerParams,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use crate::linux_mtd::{LinuxMtd, parse_options};
 
     log::info!("Opening Linux MTD programmer...");
@@ -842,7 +849,9 @@ async fn open_linux_mtd(params: &ProgrammerParams) -> Result<FlashHandle, Box<dy
 
     let mut device = OpaqueFlashDevice::new(mtd, flash_size);
     device.set_erase_block_size(erase_size);
-    Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(device)))
+    Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(
+        device,
+    )))
 }
 
 #[cfg(feature = "linux-gpio")]
@@ -998,7 +1007,9 @@ async fn open_internal(
         log::info!("Flash size: {} bytes (from IFD)", flash_size);
 
         let device = OpaqueFlashDevice::new(programmer, flash_size);
-        Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(device)))
+        Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(
+            device,
+        )))
     }
 }
 
@@ -1016,14 +1027,16 @@ async fn open_raiden(
     let config =
         parse_options(&options).map_err(|e| format!("Invalid raiden parameters: {}", e))?;
 
-    let master = RaidenDebugSpi::open_with_config(&config).await.map_err(|e| {
-        format!(
-            "Failed to open Raiden Debug SPI device: {}\n\
+    let master = RaidenDebugSpi::open_with_config(&config)
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to open Raiden Debug SPI device: {}\n\
              Make sure a Chrome OS debug device (SuzyQable, Servo, C2D2) is connected\n\
              and you have USB permissions.",
-            e
-        )
-    })?;
+                e
+            )
+        })?;
 
     probe_and_create_handle(master, db).await
 }
@@ -1060,7 +1073,10 @@ async fn open_sunxi_fel(
     // (batched SPI commands with on-SoC busy-wait), SpiMaster for WP and
     // status register access
     let device = HybridFlashDevice::new(master, ctx);
-    Ok(FlashHandle::with_chip_info(ErasedFlashDevice::new(device), chip_info))
+    Ok(FlashHandle::with_chip_info(
+        ErasedFlashDevice::new(device),
+        chip_info,
+    ))
 }
 
 // Programmer information and listing

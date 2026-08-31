@@ -9,7 +9,6 @@
 use std::time::Duration;
 
 use nusb::Endpoint;
-#[cfg(all(feature = "std", not(feature = "wasm")))]
 use nusb::transfer::{Buffer, Bulk, In, Out};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};

@@ -54,8 +54,6 @@ use steel::rvals::SteelVal;
 use steel::steel_vm::engine::Engine;
 use steel_parser::interner::InternedString;
 
-
-
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Get the ASCII art banner
@@ -312,7 +310,10 @@ fn print_help() {
 ///
 /// This takes ownership of the SPI master and provides it to the Scheme
 /// environment for executing SPI commands.
-pub fn run_script<M: SpiMaster + Send + 'static>(master: M, script: String) -> Result<(), ReplError> {
+pub fn run_script<M: SpiMaster + Send + 'static>(
+    master: M,
+    script: String,
+) -> Result<(), ReplError> {
     let mut engine = Engine::new();
 
     let master = Arc::new(Mutex::new(master));

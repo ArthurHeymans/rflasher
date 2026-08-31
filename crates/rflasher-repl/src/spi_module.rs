@@ -541,8 +541,7 @@ fn spi_execute<M: SpiMaster>(
         read_buf: &mut read_buf,
     };
 
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     if read_len > 0 {
         Ok(bytes_to_steel(&read_buf))
@@ -555,8 +554,7 @@ fn spi_simple<M: SpiMaster>(master: &SharedMaster<M>, opcode: u8) -> Result<Stee
     let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
 
     let mut cmd = SpiCommand::simple(opcode);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     Ok(SteelVal::BoolV(true))
 }
@@ -570,8 +568,7 @@ fn spi_read_reg<M: SpiMaster>(
 
     let mut buf = vec![0u8; len];
     let mut cmd = SpiCommand::read_reg(opcode, &mut buf);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     if len == 1 {
         Ok(SteelVal::IntV(buf[0] as isize))
@@ -589,8 +586,7 @@ fn spi_write_reg<M: SpiMaster>(
 
     let bytes = steel_to_bytes(&data)?;
     let mut cmd = SpiCommand::write_reg(opcode, &bytes);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     Ok(SteelVal::BoolV(true))
 }
@@ -605,8 +601,7 @@ fn spi_read_3b<M: SpiMaster>(
 
     let mut buf = vec![0u8; len];
     let mut cmd = SpiCommand::read_3b(opcode, addr, &mut buf);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     Ok(bytes_to_steel(&buf))
 }
@@ -621,8 +616,7 @@ fn spi_read_4b<M: SpiMaster>(
 
     let mut buf = vec![0u8; len];
     let mut cmd = SpiCommand::read_4b(opcode, addr, &mut buf);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     Ok(bytes_to_steel(&buf))
 }
@@ -656,8 +650,7 @@ fn spi_read_multi<M: SpiMaster>(
         read_buf: &mut buf,
     };
 
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     Ok(bytes_to_steel(&buf))
 }
@@ -672,8 +665,7 @@ fn spi_write_3b<M: SpiMaster>(
 
     let bytes = steel_to_bytes(&data)?;
     let mut cmd = SpiCommand::write_3b(opcode, addr, &bytes);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     Ok(SteelVal::BoolV(true))
 }
@@ -688,8 +680,7 @@ fn spi_write_4b<M: SpiMaster>(
 
     let bytes = steel_to_bytes(&data)?;
     let mut cmd = SpiCommand::write_4b(opcode, addr, &bytes);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     Ok(SteelVal::BoolV(true))
 }
@@ -699,8 +690,7 @@ fn read_jedec_id<M: SpiMaster>(master: &SharedMaster<M>) -> Result<SteelVal, Str
 
     let mut buf = [0u8; 3];
     let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut buf);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     let manufacturer = buf[0] as isize;
     let device = ((buf[1] as isize) << 8) | (buf[2] as isize);
@@ -715,8 +705,7 @@ fn read_status<M: SpiMaster>(master: &SharedMaster<M>, opcode: u8) -> Result<isi
 
     let mut buf = [0u8; 1];
     let mut cmd = SpiCommand::read_reg(opcode, &mut buf);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     Ok(buf[0] as isize)
 }
@@ -725,8 +714,7 @@ fn write_simple<M: SpiMaster>(master: &SharedMaster<M>, opcode: u8) -> Result<bo
     let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
 
     let mut cmd = SpiCommand::simple(opcode);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     Ok(true)
 }
@@ -740,14 +728,12 @@ fn write_status<M: SpiMaster>(
 
     // First send WREN
     let mut wren = SpiCommand::simple(opcodes::WREN);
-    block_on(m.execute(&mut wren))
-        .map_err(|e| format!("WREN error: {}", e))?;
+    block_on(m.execute(&mut wren)).map_err(|e| format!("WREN error: {}", e))?;
 
     // Then write status
     let data = [value];
     let mut cmd = SpiCommand::write_reg(opcode, &data);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     Ok(true)
 }
@@ -771,8 +757,7 @@ fn read_sfdp<M: SpiMaster>(
         read_buf: &mut buf,
     };
 
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("SPI error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("SPI error: {}", e))?;
 
     Ok(bytes_to_steel(&buf))
 }
@@ -808,8 +793,7 @@ fn erase_block<M: SpiMaster>(
 
     // Send WREN first
     let mut wren = SpiCommand::simple(opcodes::WREN);
-    block_on(m.execute(&mut wren))
-        .map_err(|e| format!("WREN error: {}", e))?;
+    block_on(m.execute(&mut wren)).map_err(|e| format!("WREN error: {}", e))?;
 
     // Send erase command
     let mut cmd = if use_4byte {
@@ -817,8 +801,7 @@ fn erase_block<M: SpiMaster>(
     } else {
         SpiCommand::erase_3b(opcode, addr)
     };
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("erase error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("erase error: {}", e))?;
 
     Ok(true)
 }
@@ -843,8 +826,7 @@ fn page_program<M: SpiMaster>(
 
     // Send WREN first
     let mut wren = SpiCommand::simple(opcodes::WREN);
-    block_on(m.execute(&mut wren))
-        .map_err(|e| format!("WREN error: {}", e))?;
+    block_on(m.execute(&mut wren)).map_err(|e| format!("WREN error: {}", e))?;
 
     // Send page program command
     let mut cmd = if use_4byte {
@@ -852,8 +834,7 @@ fn page_program<M: SpiMaster>(
     } else {
         SpiCommand::write_3b(opcodes::PP, addr, &bytes)
     };
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("page program error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("page program error: {}", e))?;
 
     // Drop the lock before polling
     drop(m);
@@ -869,13 +850,11 @@ fn chip_erase<M: SpiMaster>(master: &SharedMaster<M>) -> Result<bool, String> {
 
     // Send WREN first
     let mut wren = SpiCommand::simple(opcodes::WREN);
-    block_on(m.execute(&mut wren))
-        .map_err(|e| format!("WREN error: {}", e))?;
+    block_on(m.execute(&mut wren)).map_err(|e| format!("WREN error: {}", e))?;
 
     // Send chip erase command
     let mut cmd = SpiCommand::simple(opcodes::CE_C7);
-    block_on(m.execute(&mut cmd))
-        .map_err(|e| format!("chip erase error: {}", e))?;
+    block_on(m.execute(&mut cmd)).map_err(|e| format!("chip erase error: {}", e))?;
 
     Ok(true)
 }

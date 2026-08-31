@@ -92,4 +92,3 @@ pub mod error;
 // Re-exports
 pub use device::{LinuxGpioSpi, LinuxGpioSpiConfig, parse_options};
 pub use error::{LinuxGpioError, Result};
-

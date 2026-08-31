@@ -8,7 +8,6 @@
 
 use std::time::Duration;
 
-#[cfg(all(feature = "std", not(feature = "wasm")))]
 use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Out, Recipient};
 use nusb::{Endpoint, Interface};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};

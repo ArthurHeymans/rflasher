@@ -267,12 +267,16 @@ The low-level Intel ICH/PCH and AMD SPI100 controller code is also structured fo
 - `map_mmio` for controller register and optional flash memory windows.
 - `delay_us` for short controller polling delays.
 
-For a synchronous `no_std` firmware integration, depend on the crates without default features:
+For a `no_std` firmware integration, depend on the crates without default features:
 
 ```toml
-rflasher-core = { version = "0.1", default-features = false, features = ["is_sync"] }
-rflasher-internal = { version = "0.1", default-features = false, features = ["is_sync"] }
+rflasher-core = { version = "0.1", default-features = false }
+rflasher-internal = { version = "0.1", default-features = false }
 ```
+
+All I/O trait methods are `async fn`; a firmware without an executor can
+drive them with a minimal `block_on` (e.g. `futures_lite::future::block_on`),
+since the controllers never actually suspend.
 
 Firmware code can pass its own PCI scan results to `find_intel_chipset_in_devices` / `find_amd_chipset_in_devices`, then construct controllers with `IchSpiController::new_with_host(...)` or `AmdSpi100Info::create_controller_with_host(...)`.
 
@@ -548,25 +552,37 @@ trunk serve
 rflasher uses a workspace structure with clear separation of concerns:
 
 - **`rflasher-chip-types`** - Shared `no_std` SPI NOR chip data model and provider trait
-- **`rflasher-core`** - `no_std` SPI protocol, probing, and flash operations (supports both sync and async via `maybe-async`)
+- **`rflasher-core`** - `no_std` SPI protocol, probing, and flash operations (async, runtime-neutral)
 - **`rflasher-chips`** - Runtime RON loading and optional compiled chip database provider, with chip type re-exports
 - **`rflasher-chips-codegen`** - Build-time code generator for the compiled chip database
 - **`rflasher-programmers`** - Feature-gated external programmer backends plus the native high-level registry and `FlashHandle`
-- **`rflasher-internal`** - Internal chipset SPI controller support. It remains separate so firmware such as CrabEFI can use it with `default-features = false` and `is_sync`, without `std`
+- **`rflasher-internal`** - Internal chipset SPI controller support. It remains separate so firmware such as CrabEFI can use it with `default-features = false`, without `std`
 - **`rflasher-pci`** - Small `no_std` PCI configuration-space abstraction used by the internal programmer
 - **`rflasher-repl`** - Steel Scheme scripting support for native applications
-- **`rflasher-wasm`** - Browser-based web interface using egui, WebSerial, and WebUSB in async mode
+- **`rflasher-wasm`** - Browser-based web interface using egui, WebSerial, and WebUSB
 
 The `rflasher-programmers` crate contains modules for CH341A, CH347, Dediprog, serprog, FTDI, FT4222H, Raiden, sunxi FEL, Linux SPI/GPIO/MTD, and the dummy backend. Cargo features select which modules and optional dependencies are compiled.
 
-### Async/Sync Architecture
+### Async Architecture
 
-The core library uses the [`maybe-async`](https://crates.io/crates/maybe-async) crate to support both synchronous (for CLI/native applications) and asynchronous (for WASM/browser applications) operation from a single codebase:
+All operational APIs (`SpiMaster`, `OpaqueMaster`, `FlashDevice`, probing,
+flash operations) are async on every target, and the core stays
+executor-independent — no Tokio or other runtime is required:
 
-- **Sync mode** (CLI): Enabled with the `is_sync` feature flag, compiles to blocking synchronous code
-- **Async mode** (WASM): Default mode, uses async/await for non-blocking browser operations
+- **Native CLI**: blocks exactly once, in `main`, with
+  `futures_lite::future::block_on` around the async command handlers.
+  Genuinely blocking backends (Linux spidev/MTD/GPIO, serial serprog,
+  libftdi) simply perform their blocking calls inside async methods.
+- **WASM**: the browser event loop drives the same async operations over
+  WebUSB/WebSerial.
 
-This design allows the same flash operations, chip database, and programmer traits to work seamlessly in both native CLI applications and browser-based WASM environments without code duplication.
+Because `async fn` traits are not usable as trait objects, runtime
+programmer selection goes through object-erasure adapters
+(`ErasedFlashDevice`, `ErasedSpiMaster`) in `rflasher-programmers`; the one
+boxed future per operation is negligible next to USB and flash latency.
+This design allows the same flash operations, chip database, and programmer
+traits to work in both native CLI applications and browser-based WASM
+environments without code duplication.
 
 ## Safety Warnings
 

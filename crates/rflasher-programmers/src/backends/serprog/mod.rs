@@ -39,7 +39,8 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-// Allow async fn in traits - we use maybe-async for dual sync/async support
+// Allow async fn in traits; dynamic dispatch is provided by dedicated
+// object-erasure adapters where needed.
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;

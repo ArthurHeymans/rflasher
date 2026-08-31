@@ -66,4 +66,3 @@ pub mod error;
 // Re-exports
 pub use device::{LinuxSpi, LinuxSpiConfig, mode, parse_options};
 pub use error::{LinuxSpiError, Result};
-

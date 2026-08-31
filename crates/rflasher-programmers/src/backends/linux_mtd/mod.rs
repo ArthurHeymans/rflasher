@@ -80,4 +80,3 @@ pub mod error;
 // Re-exports
 pub use device::{LinuxMtd, LinuxMtdConfig, MtdInfo, parse_options};
 pub use error::{LinuxMtdError, Result};
-
