@@ -8,7 +8,6 @@ use super::error::{Result, SerprogError};
 use super::protocol::*;
 use super::transport::Transport;
 
-use maybe_async::maybe_async;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
@@ -34,7 +33,6 @@ impl<T: Transport> Serprog<T> {
     /// 2. Query interface version
     /// 3. Query command map
     /// 4. Query programmer capabilities
-    #[maybe_async]
     pub async fn new(transport: T) -> Result<Self> {
         let mut serprog = Self {
             transport,
@@ -137,7 +135,6 @@ impl<T: Transport> Serprog<T> {
     /// Set the SPI clock frequency in Hz
     ///
     /// Returns the actual frequency set by the programmer.
-    #[maybe_async]
     pub async fn set_spi_speed(&mut self, freq_hz: u32) -> Result<u32> {
         if !self.info.supports_cmd(S_CMD_S_SPI_FREQ) {
             log::warn!("serprog: Setting SPI clock rate is not supported");
@@ -160,7 +157,6 @@ impl<T: Transport> Serprog<T> {
     }
 
     /// Set which SPI chip select to use (0-255)
-    #[maybe_async]
     pub async fn set_spi_cs(&mut self, cs: u8) -> Result<()> {
         if !self.info.supports_cmd(S_CMD_S_SPI_CS) {
             return Err(SerprogError::CommandNotSupported(S_CMD_S_SPI_CS));
@@ -180,7 +176,6 @@ impl<T: Transport> Serprog<T> {
     /// Perform an SPI operation
     ///
     /// This is the core function for SPI communication, implementing S_CMD_O_SPIOP.
-    #[maybe_async]
     pub async fn spi_op(&mut self, write_data: &[u8], read_buf: &mut [u8]) -> Result<()> {
         let writecnt = write_data.len();
         let readcnt = read_buf.len();
@@ -201,7 +196,6 @@ impl<T: Transport> Serprog<T> {
     }
 
     /// Disable output drivers (called on drop in sync mode)
-    #[maybe_async]
     pub async fn shutdown(&mut self) {
         // Disable output drivers if supported
         if self.info.supports_cmd(S_CMD_S_PIN_STATE)
@@ -219,7 +213,6 @@ impl<T: Transport> Serprog<T> {
     /// Synchronize the protocol
     ///
     /// This brings the serial protocol to a known waiting-for-command state.
-    #[maybe_async]
     async fn synchronize(&mut self) -> Result<()> {
         // Try a simple test first
         if self.test_sync().await? {
@@ -256,7 +249,6 @@ impl<T: Transport> Serprog<T> {
     /// Test synchronization by sending SYNCNOP
     ///
     /// Returns true if synchronized, false if not.
-    #[maybe_async]
     async fn test_sync(&mut self) -> Result<bool> {
         // Send SYNCNOP
         if !self.transport.write_nonblock(&[S_CMD_SYNCNOP], 1).await? {
@@ -299,7 +291,6 @@ impl<T: Transport> Serprog<T> {
     }
 
     /// Execute a serprog command
-    #[maybe_async]
     async fn do_command(&mut self, cmd: u8, params: &[u8], ret_buf: &mut [u8]) -> Result<()> {
         // Check command availability
         if self.auto_check && !self.info.supports_cmd(cmd) {
@@ -339,7 +330,6 @@ impl<T: Transport> Serprog<T> {
     }
 
     /// Execute a command and return the result in a fixed-size array
-    #[maybe_async]
     async fn do_command_ret<const N: usize>(&mut self, cmd: u8) -> Result<[u8; N]> {
         let mut buf = [0u8; N];
         self.do_command(cmd, &[], &mut buf).await?;
@@ -347,7 +337,6 @@ impl<T: Transport> Serprog<T> {
     }
 
     /// Query interface version
-    #[maybe_async]
     async fn query_iface(&mut self) -> Result<u16> {
         let mut buf = [0u8; 2];
         // Don't use auto_check for Q_IFACE
@@ -360,7 +349,6 @@ impl<T: Transport> Serprog<T> {
     }
 
     /// Query command map
-    #[maybe_async]
     async fn query_cmdmap(&mut self) -> Result<CommandMap> {
         let mut cmdmap = CommandMap::new();
         // Don't use auto_check for Q_CMDMAP
@@ -373,7 +361,6 @@ impl<T: Transport> Serprog<T> {
     }
 
     /// Query bus type
-    #[maybe_async]
     async fn query_bustype(&mut self) -> Result<u8> {
         let buf = self.do_command_ret::<1>(S_CMD_Q_BUSTYPE).await?;
         Ok(buf[0])
@@ -393,7 +380,6 @@ impl<T: Transport> Drop for Serprog<T> {
     }
 }
 
-#[maybe_async(AFIT)]
 impl<T: Transport> SpiMaster for Serprog<T> {
     fn features(&self) -> SpiFeatures {
         // Serprog supports 4-byte addressing (handled in software)

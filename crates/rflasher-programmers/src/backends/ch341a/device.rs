@@ -11,7 +11,6 @@
 #[cfg(feature = "is_sync")]
 use std::time::Duration;
 
-use maybe_async::maybe_async;
 use nusb::Endpoint;
 #[cfg(all(feature = "std", not(feature = "wasm")))]
 use nusb::MaybeFuture;
@@ -294,7 +293,6 @@ impl Ch341a {
 
 impl Ch341a {
     /// Configure the CH341A for SPI mode
-    #[maybe_async]
     async fn configure(&mut self) -> Result<()> {
         // Set I2C/SPI mode to 100kHz base (the actual SPI speed is ~2MHz)
         self.config_stream(CH341A_STM_I2C_100K).await?;
@@ -307,7 +305,6 @@ impl Ch341a {
     }
 
     /// Configure the stream interface speed
-    #[maybe_async]
     async fn config_stream(&mut self, speed: u8) -> Result<()> {
         let buf = vec![
             CH341A_CMD_I2C_STREAM,
@@ -320,7 +317,6 @@ impl Ch341a {
     }
 
     /// Enable or disable output pins
-    #[maybe_async]
     async fn enable_pins(&mut self, enable: bool) -> Result<()> {
         let dir = if enable {
             UIO_DIR_OUTPUT
@@ -341,7 +337,6 @@ impl Ch341a {
     }
 
     /// Write data to USB endpoint
-    #[maybe_async]
     async fn usb_write(&mut self, data: &[u8]) -> Result<()> {
         let buf = Buffer::from(data.to_vec());
         self.out_ep.submit(buf);
@@ -368,7 +363,6 @@ impl Ch341a {
     /// This pipelining is critical for USB 1.1 performance: the device produces
     /// IN responses as it processes each SPI_STREAM packet from the OUT data,
     /// and having multiple IN transfers pre-queued ensures we never miss data.
-    #[maybe_async]
     async fn spi_transfer(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         let writecnt = write_data.len();
         let readcnt = read_len;
@@ -518,7 +512,6 @@ impl Ch341a {
     }
 
     /// Cancel and drain all pending transfers on both endpoints.
-    #[maybe_async]
     async fn drain_all_pending(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         self.out_ep.cancel_all();
@@ -571,7 +564,6 @@ impl Ch341a {
 // SpiMaster trait implementation
 // ---------------------------------------------------------------------------
 
-#[maybe_async(AFIT)]
 impl SpiMaster for Ch341a {
     fn features(&self) -> SpiFeatures {
         // CH341A supports 4-byte addressing (software handled)

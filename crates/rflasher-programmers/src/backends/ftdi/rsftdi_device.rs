@@ -11,7 +11,6 @@
 use std::time::Duration;
 
 use ftdi_nusb::FtdiDevice;
-use maybe_async::maybe_async;
 #[cfg(feature = "is_sync")]
 use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
@@ -238,7 +237,6 @@ impl Ftdi {
 
 impl Ftdi {
     /// Initialize the MPSSE engine with MPSSE commands
-    #[maybe_async]
     async fn init_mpsse(&mut self, config: &FtdiConfig) -> Result<()> {
         let mut buf = Vec::with_capacity(32);
 
@@ -293,7 +291,6 @@ impl Ftdi {
     }
 
     /// Send data to the FTDI device
-    #[maybe_async]
     async fn send(&mut self, data: &[u8]) -> Result<()> {
         self.device
             .write_all(data)
@@ -304,7 +301,6 @@ impl Ftdi {
     }
 
     /// Receive data from the FTDI device
-    #[maybe_async]
     async fn recv(&mut self, len: usize) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; len];
         let mut total = 0;
@@ -342,7 +338,6 @@ impl Ftdi {
     }
 
     /// Perform an SPI transfer via MPSSE commands
-    #[maybe_async]
     async fn spi_transfer(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         let writecnt = write_data.len();
         let readcnt = read_len;
@@ -397,7 +392,6 @@ impl Ftdi {
     }
 
     /// Release I/O pins (set all as inputs)
-    #[maybe_async]
     async fn release_pins(&mut self) -> Result<()> {
         let buf = [SET_BITS_LOW, 0x00, 0x00];
         self.send(&buf).await
@@ -408,7 +402,6 @@ impl Ftdi {
 // SpiMaster trait implementation
 // ---------------------------------------------------------------------------
 
-#[maybe_async(AFIT)]
 impl SpiMaster for Ftdi {
     fn features(&self) -> SpiFeatures {
         // FTDI MPSSE supports 4-byte addressing (software handled)

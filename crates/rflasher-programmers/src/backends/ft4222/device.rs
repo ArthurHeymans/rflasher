@@ -10,7 +10,6 @@
 
 use std::time::Duration;
 
-use maybe_async::maybe_async;
 #[cfg(all(feature = "std", not(feature = "wasm")))]
 use nusb::MaybeFuture;
 use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Out, Recipient};
@@ -212,7 +211,6 @@ impl Ft4222 {
 #[cfg_attr(all(feature = "wasm", feature = "is_sync"), allow(dead_code))]
 impl Ft4222 {
     /// Open a specific FT4222H device.
-    #[maybe_async]
     async fn open_device(device_info: &nusb::DeviceInfo, config: SpiConfig) -> Result<Self> {
         #[cfg(feature = "is_sync")]
         log::info!(
@@ -320,7 +318,6 @@ impl Ft4222 {
     }
 
     /// Initialize the FT4222H for SPI master mode.
-    #[maybe_async]
     async fn init(&mut self) -> Result<()> {
         let (chip_version, version2, version3) = self.get_version().await?;
         log::info!(
@@ -355,7 +352,6 @@ impl Ft4222 {
     }
 
     /// Get device version information (matching flashprog's `ft4222_get_version`).
-    #[maybe_async]
     async fn get_version(&self) -> Result<(u32, u32, u32)> {
         let data = nusb_await!(self.interface.control_in(
             ControlIn {
@@ -385,7 +381,6 @@ impl Ft4222 {
     }
 
     /// Get the number of CS channels available.
-    #[maybe_async]
     async fn get_num_channels(&self) -> Result<u8> {
         let data = nusb_await!(self.interface.control_in(
             ControlIn {
@@ -424,7 +419,6 @@ impl Ft4222 {
     }
 
     /// Reset the device (matching flashprog's `ft4222_reset`).
-    #[maybe_async]
     async fn reset(&self) -> Result<()> {
         self.control_out_with_index(FT4222_RESET_REQUEST, FT4222_RESET_SIO, 0, &[])
             .await?;
@@ -434,7 +428,6 @@ impl Ft4222 {
     }
 
     /// Flush device buffers.
-    #[maybe_async]
     async fn flush(&self) -> Result<()> {
         for _ in 0..6 {
             if let Err(e) = self
@@ -457,7 +450,6 @@ impl Ft4222 {
     }
 
     /// Set the FT4222 system clock.
-    #[maybe_async]
     async fn set_sys_clock(&self, clock: SystemClock) -> Result<()> {
         self.config_request(FT4222_SET_CLOCK, clock.index() as u8)
             .await?;
@@ -466,7 +458,6 @@ impl Ft4222 {
     }
 
     /// Configure the FT4222 for SPI master mode.
-    #[maybe_async]
     async fn configure_spi_master(&mut self) -> Result<()> {
         let cs = self.config.cs;
 
@@ -493,7 +484,6 @@ impl Ft4222 {
     }
 
     /// Change the active number of SPI I/O lines.
-    #[maybe_async]
     async fn set_io_lines(&mut self, lines: u8) -> Result<()> {
         if lines != self.io_lines {
             self.config_request(FT4222_SPI_SET_IO_LINES, lines).await?;
@@ -506,14 +496,12 @@ impl Ft4222 {
     }
 
     /// Send a control OUT transfer with the default `control_index`.
-    #[maybe_async]
     async fn control_out(&self, request: u8, value: u16, data: &[u8]) -> Result<()> {
         self.control_out_with_index(request, value, self.control_index as u16, data)
             .await
     }
 
     /// Send a control OUT transfer with an explicit index.
-    #[maybe_async]
     async fn control_out_with_index(
         &self,
         request: u8,
@@ -538,7 +526,6 @@ impl Ft4222 {
     }
 
     /// Send an FT4222 config request.
-    #[maybe_async]
     async fn config_request(&self, cmd: u8, data: u8) -> Result<()> {
         let value = ((data as u16) << 8) | (cmd as u16);
         nusb_await!(self.interface.control_out(
@@ -558,7 +545,6 @@ impl Ft4222 {
     }
 
     /// Write data to the bulk OUT endpoint.
-    #[maybe_async]
     async fn bulk_write(&mut self, data: &[u8]) -> Result<()> {
         let out_ep = self
             .out_endpoint
@@ -604,7 +590,6 @@ impl Ft4222 {
     }
 
     /// Read data from the bulk IN endpoint.
-    #[maybe_async]
     async fn bulk_read(&mut self, len: usize) -> Result<Vec<u8>> {
         let in_ep = self
             .in_endpoint
@@ -645,7 +630,6 @@ impl Ft4222 {
     }
 
     /// Perform a single-I/O SPI transfer using pipelined USB transfers.
-    #[maybe_async]
     async fn spi_transfer_single(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         self.set_io_lines(1).await?;
 
@@ -739,7 +723,6 @@ impl Ft4222 {
 
     /// Perform a multi-I/O SPI transfer (half duplex).
     #[allow(dead_code)]
-    #[maybe_async]
     async fn spi_transfer_multi(
         &mut self,
         single_data: &[u8],
@@ -804,7 +787,6 @@ impl Ft4222 {
     }
 }
 
-#[maybe_async(AFIT)]
 impl SpiMaster for Ft4222 {
     fn features(&self) -> SpiFeatures {
         SpiFeatures::FOUR_BYTE_ADDR

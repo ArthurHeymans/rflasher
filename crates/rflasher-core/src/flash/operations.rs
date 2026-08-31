@@ -13,7 +13,6 @@ use crate::chip::{EraseBlock, Features, WriteGranularity};
 use crate::error::{EraseFailure, Error, Result};
 use crate::programmer::{SpiFeatures, SpiMaster};
 use crate::protocol::{self, CommandAddressing};
-use maybe_async::maybe_async;
 
 use super::context::{AddressMode, FlashContext};
 
@@ -710,7 +709,6 @@ impl ProbeResult {
 /// Returns detailed information about what was found, allowing the caller
 /// to decide how to handle mismatches or unknown chips.
 #[cfg(feature = "std")]
-#[maybe_async]
 pub async fn probe_detailed<M, P>(master: &mut M, provider: &P) -> Result<ProbeResult>
 where
     M: SpiMaster + ?Sized,
@@ -782,7 +780,6 @@ where
 ///
 /// Automatically selects the best I/O mode based on programmer and chip capabilities.
 /// Uses dual or quad I/O when both the programmer and chip support it.
-#[maybe_async]
 pub async fn read<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -840,7 +837,6 @@ pub async fn read<M: SpiMaster + ?Sized>(
 /// Respects the programmer's `max_write_len()` to avoid sending chunks
 /// larger than the hardware can handle (e.g., Intel swseq is limited to
 /// 64 bytes).
-#[maybe_async]
 pub async fn write<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -945,7 +941,6 @@ pub async fn write<M: SpiMaster + ?Sized>(
 /// Reads through the full read path (I/O mode selection, 4-byte addressing)
 /// and returns [`Error::EraseError`] with the exact address of the first
 /// non-erased byte on failure.
-#[maybe_async]
 pub async fn check_erased_range<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,

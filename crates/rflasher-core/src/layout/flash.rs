@@ -8,7 +8,6 @@ use std::vec;
 
 use crate::flash::{self, FlashContext};
 use crate::programmer::SpiMaster;
-use maybe_async::maybe_async;
 
 use super::{Layout, LayoutError, fmap, has_fmap, has_ifd, ifd, is_valid_fmap_header};
 
@@ -42,7 +41,6 @@ const FMAP_AREA_SIZE: usize = 42;
 /// let layout = read_ifd_from_flash(master, &ctx)?;
 /// println!("Found {} regions", layout.len());
 /// ```
-#[maybe_async]
 pub async fn read_ifd_from_flash<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -80,7 +78,6 @@ pub async fn read_ifd_from_flash<M: SpiMaster + ?Sized>(
 /// let layout = read_fmap_from_flash(master, &ctx)?;
 /// println!("Found {} regions", layout.len());
 /// ```
-#[maybe_async]
 pub async fn read_fmap_from_flash<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -101,7 +98,6 @@ pub async fn read_fmap_from_flash<M: SpiMaster + ?Sized>(
 ///
 /// This follows flashprog's approach of checking aligned locations first
 /// since FMAPs are commonly placed at power-of-2 boundaries.
-#[maybe_async]
 async fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -194,7 +190,6 @@ async fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
 }
 
 /// Linear search for FMAP by reading the entire region
-#[maybe_async]
 async fn fmap_lsearch_rom<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -217,7 +212,6 @@ async fn fmap_lsearch_rom<M: SpiMaster + ?Sized>(
 }
 
 /// Read FMAP from a specific offset in flash
-#[maybe_async]
 async fn read_fmap_at_offset<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -257,7 +251,6 @@ async fn read_fmap_at_offset<M: SpiMaster + ?Sized>(
 ///
 /// # Returns
 /// A Layout from either IFD or FMAP, or an error if neither is found.
-#[maybe_async]
 pub async fn read_layout_from_flash<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,

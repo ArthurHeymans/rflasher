@@ -1,13 +1,12 @@
 //! Programmer trait definitions
 //!
-//! These traits use `maybe_async` to support both sync and async modes.
-//! - By default, traits are async (suitable for WASM/web, Embassy, tokio)
-//! - With the `is_sync` feature, traits become synchronous
+//! These traits are async on every target. Native applications block on
+//! them at their outermost boundary (e.g. `futures_lite::future::block_on`
+//! in the CLI); WASM drives them from the browser event loop.
 
 use crate::error::Result;
 use crate::spi::SpiCommand;
 use bitflags::bitflags;
-use maybe_async::maybe_async;
 
 bitflags! {
     /// SPI master feature flags
@@ -44,11 +43,10 @@ impl Default for SpiFeatures {
     }
 }
 
-/// SPI Master trait (sync or async depending on `is_sync` feature)
+/// SPI Master trait
 ///
 /// This trait represents a programmer that can execute SPI commands.
-/// - With `is_sync` feature: blocking/synchronous
-/// - Without `is_sync` feature: async (for WASM, Embassy, tokio)
+/// Operational methods are async; metadata queries are synchronous.
 ///
 /// ## Multi-I/O Support
 ///
@@ -68,7 +66,6 @@ impl Default for SpiFeatures {
 /// ## Example: Hardware-accelerated programmer
 ///
 /// ```ignore
-/// #[maybe_async]
 /// impl SpiMaster for FT4222 {
 ///     fn features(&self) -> SpiFeatures {
 ///         SpiFeatures::FOUR_BYTE_ADDR | SpiFeatures::DUAL | SpiFeatures::QUAD
@@ -83,7 +80,6 @@ impl Default for SpiFeatures {
 ///     }
 /// }
 /// ```
-#[maybe_async(AFIT)]
 pub trait SpiMaster {
     /// Get the features supported by this programmer
     ///
@@ -136,7 +132,6 @@ pub trait SpiMaster {
 /// Some programmers (like Intel internal flash controller) don't expose
 /// raw SPI access. Instead, they provide higher-level read/write/erase
 /// operations that handle the protocol internally.
-#[maybe_async(AFIT)]
 pub trait OpaqueMaster {
     /// Get the total flash size in bytes
     fn size(&self) -> usize;
@@ -163,34 +158,9 @@ pub trait OpaqueMaster {
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
 }
 
-// Blanket impl for boxed SPI masters to allow trait objects (sync mode only)
-// In async mode, traits with async fn are not object-safe
-#[cfg(all(feature = "alloc", feature = "is_sync"))]
-impl SpiMaster for alloc::boxed::Box<dyn SpiMaster + Send> {
-    fn features(&self) -> SpiFeatures {
-        (**self).features()
-    }
-
-    fn max_read_len(&self) -> usize {
-        (**self).max_read_len()
-    }
-
-    fn max_write_len(&self) -> usize {
-        (**self).max_write_len()
-    }
-
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
-        (**self).execute(cmd)
-    }
-
-    fn probe_opcode(&self, opcode: u8) -> bool {
-        (**self).probe_opcode(opcode)
-    }
-
-    fn delay_us(&mut self, us: u32) {
-        (**self).delay_us(us)
-    }
-}
+// Note: `SpiMaster` uses `async fn` and is therefore not directly usable as
+// a trait object. Dynamic dispatch is provided by the object-erasure
+// adapters in `rflasher-programmers`.
 
 /// Helper function for implementing `SpiMaster::execute()`.
 ///

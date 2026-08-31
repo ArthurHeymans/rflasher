@@ -11,7 +11,6 @@
 #[cfg(feature = "is_sync")]
 use std::time::Duration;
 
-use maybe_async::maybe_async;
 use nusb::Endpoint;
 #[cfg(all(feature = "std", not(feature = "wasm")))]
 use nusb::MaybeFuture;
@@ -398,7 +397,6 @@ impl Ch347 {
     }
 
     /// Configure the CH347 for SPI mode
-    #[maybe_async]
     async fn configure(&mut self) -> Result<()> {
         let config_buf = self.config.build_config_buffer();
 
@@ -420,7 +418,6 @@ impl Ch347 {
     }
 
     /// Control chip select lines
-    #[maybe_async]
     async fn cs_control(&mut self, assert: bool) -> Result<()> {
         let cs_value = if assert {
             CH347_CS_ASSERT | CH347_CS_CHANGE
@@ -452,7 +449,6 @@ impl Ch347 {
     }
 
     /// Write data via SPI (CS must already be asserted)
-    #[maybe_async]
     async fn spi_write(&mut self, data: &[u8]) -> Result<()> {
         let mut bytes_written = 0;
         let mut resp_buf = [0u8; 4];
@@ -480,7 +476,6 @@ impl Ch347 {
     }
 
     /// Read data via SPI (CS must already be asserted)
-    #[maybe_async]
     async fn spi_read(&mut self, data: &mut [u8]) -> Result<()> {
         let readcnt = data.len();
 
@@ -531,7 +526,6 @@ impl Ch347 {
     }
 
     /// Perform an SPI transfer (write then read)
-    #[maybe_async]
     async fn spi_transfer(&mut self, write_data: &[u8], read_buf: &mut [u8]) -> Result<()> {
         // Assert CS
         self.cs_control(true).await?;
@@ -553,7 +547,6 @@ impl Ch347 {
     }
 
     /// Write data to USB endpoint
-    #[maybe_async]
     async fn usb_write(&mut self, data: &[u8]) -> Result<()> {
         let mut buf = Buffer::new(data.len());
         buf.extend_from_slice(data);
@@ -572,7 +565,6 @@ impl Ch347 {
     }
 
     /// Read data from USB endpoint
-    #[maybe_async]
     async fn usb_read(&mut self, buffer: &mut [u8]) -> Result<usize> {
         let max_packet_size = self.in_ep.max_packet_size();
         // Request length must be multiple of max packet size
@@ -601,7 +593,6 @@ impl Ch347 {
 // SpiMaster trait implementation
 // ---------------------------------------------------------------------------
 
-#[maybe_async(AFIT)]
 impl SpiMaster for Ch347 {
     fn features(&self) -> SpiFeatures {
         // CH347 supports 4-byte addressing (software handled)

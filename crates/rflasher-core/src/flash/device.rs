@@ -10,7 +10,6 @@ use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::Result;
 #[cfg(feature = "alloc")]
 use crate::wp::{WpConfig, WpError, WpMode, WpRange, WpResult, WriteOptions};
-use maybe_async::maybe_async;
 
 /// Unified trait for flash devices
 ///
@@ -39,7 +38,6 @@ use maybe_async::maybe_async;
 ///     Ok(buf)
 /// }
 /// ```
-#[maybe_async(AFIT)]
 pub trait FlashDevice {
     /// Get the total flash size in bytes
     fn size(&self) -> u32;
@@ -187,7 +185,6 @@ pub trait FlashDevice {
 /// This is separate from the main trait to keep the core trait minimal and
 /// easier to implement, while still providing useful derived functionality.
 #[cfg(feature = "alloc")]
-#[maybe_async(AFIT)]
 pub trait FlashDeviceExt: FlashDevice {
     /// Read the entire flash contents
     async fn read_all(&mut self) -> Result<alloc::vec::Vec<u8>> {
@@ -206,67 +203,6 @@ pub trait FlashDeviceExt: FlashDevice {
 #[cfg(feature = "alloc")]
 impl<D: FlashDevice + ?Sized> FlashDeviceExt for D {}
 
-// Blanket impl for boxed FlashDevice to allow trait objects (sync mode only).
-// In async mode, traits with async fn are not object-safe.
-#[cfg(all(feature = "alloc", feature = "is_sync"))]
-impl FlashDevice for alloc::boxed::Box<dyn FlashDevice + Send> {
-    fn size(&self) -> u32 {
-        (**self).size()
-    }
-
-    fn erase_granularity(&self) -> u32 {
-        (**self).erase_granularity()
-    }
-
-    fn write_granularity(&self) -> WriteGranularity {
-        (**self).write_granularity()
-    }
-
-    fn erase_blocks(&self) -> &[EraseBlock] {
-        (**self).erase_blocks()
-    }
-
-    fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
-        (**self).read(addr, buf)
-    }
-
-    fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
-        (**self).write(addr, data)
-    }
-
-    fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
-        (**self).erase(addr, len)
-    }
-
-    fn is_valid_range(&self, addr: u32, len: usize) -> bool {
-        (**self).is_valid_range(addr, len)
-    }
-
-    fn wp_supported(&self) -> bool {
-        (**self).wp_supported()
-    }
-
-    fn read_wp_config(&mut self) -> WpResult<WpConfig> {
-        (**self).read_wp_config()
-    }
-
-    fn write_wp_config(&mut self, config: &WpConfig, options: WriteOptions) -> WpResult<()> {
-        (**self).write_wp_config(config, options)
-    }
-
-    fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
-        (**self).set_wp_mode(mode, options)
-    }
-
-    fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
-        (**self).set_wp_range(range, options)
-    }
-
-    fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
-        (**self).disable_wp(options)
-    }
-
-    fn get_available_wp_ranges(&self) -> alloc::vec::Vec<WpRange> {
-        (**self).get_available_wp_ranges()
-    }
-}
+// Note: `FlashDevice` uses `async fn` and is therefore not directly usable
+// as a trait object. Dynamic dispatch is provided by the object-erasure
+// adapters in `rflasher-programmers`.

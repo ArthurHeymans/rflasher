@@ -14,7 +14,6 @@ use crate::protocol::{self, CommandAddressing};
 use crate::wp::{
     self, RangeDecoder, WpBits, WpConfig, WpMode, WpRange, WpRegBitMap, WpResult, WriteOptions,
 };
-use maybe_async::maybe_async;
 
 /// Flash device adapter for SPI-based programmers
 ///
@@ -78,7 +77,6 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     }
 }
 
-#[maybe_async(AFIT)]
 impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     fn size(&self) -> u32 {
         self.context().total_size() as u32
@@ -255,7 +253,6 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
 impl<M: SpiMaster> SpiFlashDevice<M> {
     /// Check that a range of flash has been erased (all bytes are 0xFF)
-    #[maybe_async]
     async fn check_erased_range(&mut self, addr: u32, len: u32) -> Result<()> {
         operations::check_erased_range(&mut self.master, &self.ctx, addr, len).await
     }
@@ -288,14 +285,12 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     }
 
     /// Read current write protection bits
-    #[maybe_async]
     pub async fn read_wp_bits(&mut self) -> WpResult<WpBits> {
         let bit_map = self.wp_bit_map();
         wp::read_wp_bits(&mut self.master, &bit_map).await
     }
 
     /// Read current write protection configuration
-    #[maybe_async]
     pub async fn read_wp_config(&mut self) -> WpResult<WpConfig> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
@@ -319,7 +314,6 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     }
 
     /// Write write protection bits
-    #[maybe_async]
     pub async fn write_wp_bits(&mut self, bits: &WpBits, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
         let options = self.chip_write_options(options);
@@ -327,7 +321,6 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     }
 
     /// Write write protection configuration
-    #[maybe_async]
     pub async fn write_wp_config(
         &mut self,
         config: &WpConfig,
@@ -349,7 +342,6 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     }
 
     /// Set write protection mode
-    #[maybe_async]
     pub async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
         let options = self.chip_write_options(options);
@@ -357,7 +349,6 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     }
 
     /// Set protected range
-    #[maybe_async]
     pub async fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
@@ -375,7 +366,6 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     }
 
     /// Disable write protection
-    #[maybe_async]
     pub async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
         let options = self.chip_write_options(options);

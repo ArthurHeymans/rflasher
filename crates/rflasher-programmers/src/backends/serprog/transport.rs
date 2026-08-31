@@ -6,14 +6,12 @@
 use super::error::Result;
 #[cfg(feature = "is_sync")]
 use super::error::SerprogError;
-use maybe_async::maybe_async;
 
 /// Transport trait for reading and writing bytes
 ///
 /// This trait uses `maybe_async` to support both sync and async modes:
 /// - With `is_sync` feature: blocking/synchronous
 /// - Without `is_sync` feature: async (for WASM, Embassy, tokio)
-#[maybe_async(AFIT)]
 pub trait Transport {
     /// Write bytes to the transport
     async fn write(&mut self, data: &[u8]) -> Result<()>;
@@ -44,7 +42,6 @@ pub mod serial {
     //! Serial port transport implementation (sync mode)
 
     use super::*;
-    use maybe_async::maybe_async;
     use serialport::{DataBits, FlowControl, Parity, SerialPort, StopBits};
     use std::io::{Read, Write};
     use std::time::Duration;
@@ -81,7 +78,6 @@ pub mod serial {
         }
     }
 
-    #[maybe_async(AFIT)]
     impl Transport for SerialTransport {
         async fn write(&mut self, data: &[u8]) -> Result<()> {
             self.port.write_all(data)?;
@@ -139,7 +135,6 @@ pub mod tcp {
     //! TCP socket transport implementation (sync mode)
 
     use super::*;
-    use maybe_async::maybe_async;
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::Duration;
@@ -181,7 +176,6 @@ pub mod tcp {
         }
     }
 
-    #[maybe_async(AFIT)]
     impl Transport for TcpTransport {
         async fn write(&mut self, data: &[u8]) -> Result<()> {
             self.stream.write_all(data)?;

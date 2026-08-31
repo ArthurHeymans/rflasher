@@ -10,7 +10,6 @@
 
 use std::time::Duration;
 
-use maybe_async::maybe_async;
 use nusb::Endpoint;
 #[cfg(all(feature = "std", not(feature = "wasm")))]
 use nusb::MaybeFuture;
@@ -433,7 +432,6 @@ impl Dediprog {
 impl Dediprog {
     /// Initialize device after USB connection is established.
     /// Shared between native and WASM paths.
-    #[maybe_async]
     async fn init_device(&mut self, config: &DediprogConfig) -> Result<()> {
         // Try to read device string (may need set_voltage first for old devices)
         if self.read_device_string().await.is_err() {
@@ -491,7 +489,6 @@ impl Dediprog {
     }
 
     /// Read the device string and parse device type/firmware
-    #[maybe_async]
     async fn read_device_string(&mut self) -> Result<()> {
         let mut buf = [0u8; 33];
         let len = self
@@ -562,7 +559,6 @@ impl Dediprog {
     }
 
     /// Read the device ID (serial number from sticker)
-    #[maybe_async]
     #[allow(dead_code)] // Only called from native open_with_config
     async fn read_device_id(&mut self) -> Result<u32> {
         if self.device_type >= DeviceType::SF600PG2 {
@@ -601,7 +597,6 @@ impl Dediprog {
     }
 
     /// Set voltage for old firmware (< 6.0.0)
-    #[maybe_async]
     async fn set_voltage_old(&mut self) -> Result<()> {
         let mut buf = [0u8; 1];
         let ret = self
@@ -616,7 +611,6 @@ impl Dediprog {
     }
 
     /// Set the LED state
-    #[maybe_async]
     async fn set_leds(&mut self, led: Led) -> Result<()> {
         if self.protocol >= Protocol::V2 {
             // New protocol: value contains LED state
@@ -640,7 +634,6 @@ impl Dediprog {
     }
 
     /// Set the target flash
-    #[maybe_async]
     async fn set_target(&mut self, target: Target) -> Result<()> {
         self.control_write(Command::SetTarget, target as u16, 0, &[])
             .await?;
@@ -648,7 +641,6 @@ impl Dediprog {
     }
 
     /// Set the SPI clock speed
-    #[maybe_async]
     async fn set_spi_speed(&mut self, speed_index: usize) -> Result<()> {
         if self.device_type < DeviceType::SF600PG2
             && self.firmware_version < firmware_version(5, 0, 0)
@@ -668,7 +660,6 @@ impl Dediprog {
     }
 
     /// Set the SPI voltage
-    #[maybe_async]
     async fn set_voltage(&mut self, millivolt: u16) -> Result<()> {
         let selector = voltage_selector(millivolt)
             .ok_or_else(|| DediprogError::InvalidParameter(format!("voltage: {}", millivolt)))?;
@@ -696,7 +687,6 @@ impl Dediprog {
     }
 
     /// Leave standalone mode (SF600 only)
-    #[maybe_async]
     async fn leave_standalone_mode(&mut self) -> Result<()> {
         if self.device_type != DeviceType::SF600 {
             return Ok(());
@@ -709,7 +699,6 @@ impl Dediprog {
     }
 
     /// Set the I/O mode for multi-I/O operations
-    #[maybe_async]
     async fn set_io_mode(&mut self, mode: DpIoMode) -> Result<()> {
         if !self.device_type.is_sf600_class() {
             return Ok(());
@@ -727,7 +716,6 @@ impl Dediprog {
     }
 
     /// USB control read
-    #[maybe_async]
     async fn control_read(
         &mut self,
         cmd: Command,
@@ -740,7 +728,6 @@ impl Dediprog {
     }
 
     /// USB control read (raw)
-    #[maybe_async]
     async fn control_read_raw(
         &mut self,
         #[allow(unused_variables)] request_type: u8,
@@ -781,7 +768,6 @@ impl Dediprog {
     }
 
     /// USB control write
-    #[maybe_async]
     async fn control_write(
         &mut self,
         cmd: Command,
@@ -793,7 +779,6 @@ impl Dediprog {
     }
 
     /// USB control write (raw)
-    #[maybe_async]
     async fn control_write_raw(
         &mut self,
         request: u8,
@@ -824,7 +809,6 @@ impl Dediprog {
     }
 
     /// Bulk read
-    #[maybe_async]
     #[allow(dead_code)] // Only called from read_device_id (native path)
     async fn bulk_read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let mut in_ep: Endpoint<Bulk, In> = self
@@ -851,7 +835,6 @@ impl Dediprog {
 
     /// Bulk write
     #[allow(dead_code)]
-    #[maybe_async]
     async fn bulk_write(&mut self, data: &[u8]) -> Result<()> {
         let mut out_ep: Endpoint<Bulk, Out> = self
             .iface()
@@ -871,7 +854,6 @@ impl Dediprog {
     }
 
     /// Send a transceive command (generic SPI command)
-    #[maybe_async]
     async fn spi_transceive(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         // Set to single I/O mode for generic commands
         self.set_io_mode(DpIoMode::Single).await?;
@@ -1054,7 +1036,6 @@ impl Dediprog {
     /// Start and len MUST be 512-byte aligned. Uses a single large URB so the
     /// kernel handles all USB scheduling internally -- avoids per-packet
     /// userspace round-trips through nusb's epoll background thread.
-    #[maybe_async]
     async fn bulk_read_flash(&mut self, start: u32, buf: &mut [u8]) -> Result<()> {
         let len = buf.len();
         if len == 0 {
@@ -1119,7 +1100,6 @@ impl Dediprog {
     /// USB buffer with each 256-byte page padded to 512 bytes (0xFF fill),
     /// then submits it as one large URB. The firmware reads 512 bytes at a
     /// time and handles WREN, page program, and WIP polling internally.
-    #[maybe_async]
     async fn bulk_write_flash(&mut self, start: u32, data: &[u8]) -> Result<()> {
         const PAGE_SIZE: usize = 256;
         let len = data.len();
@@ -1183,7 +1163,6 @@ impl Dediprog {
 
     /// Slow read via SPI transceive (for unaligned head/tail residuals).
     /// Reads up to 16 bytes per USB control transfer using standard READ (0x03).
-    #[maybe_async]
     async fn slow_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
         let mut offset = 0usize;
         while offset < buf.len() {
@@ -1199,7 +1178,6 @@ impl Dediprog {
 
     /// Slow write via SPI transceive (for unaligned head/tail residuals).
     /// Sends individual WREN + PP + RDSR poll sequences, max 11 bytes data per transfer.
-    #[maybe_async]
     async fn slow_write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
         let max_write = 16 - 5; // 11 bytes per transceive (16 - 1 opcode - 3 addr - 1 margin)
         let mut offset = 0usize;
@@ -1248,7 +1226,6 @@ impl Dediprog {
 // OpaqueMaster trait implementation
 // ---------------------------------------------------------------------------
 
-#[maybe_async(AFIT)]
 impl OpaqueMaster for Dediprog {
     fn size(&self) -> usize {
         self.flash_size.unwrap_or(0) as usize
@@ -1383,7 +1360,6 @@ impl OpaqueMaster for Dediprog {
 // SpiMaster trait implementation
 // ---------------------------------------------------------------------------
 
-#[maybe_async(AFIT)]
 impl SpiMaster for Dediprog {
     fn features(&self) -> SpiFeatures {
         let mut features = SpiFeatures::empty();

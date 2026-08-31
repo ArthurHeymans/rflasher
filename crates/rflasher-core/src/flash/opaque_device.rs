@@ -8,7 +8,6 @@ use crate::error::{Error, Result};
 use crate::flash::device::FlashDevice;
 use crate::programmer::OpaqueMaster;
 use crate::spi::opcodes;
-use maybe_async::maybe_async;
 
 /// Default erase block size for opaque programmers (4KB)
 ///
@@ -76,7 +75,6 @@ impl<M: OpaqueMaster> OpaqueFlashDevice<M> {
     }
 }
 
-#[maybe_async(AFIT)]
 impl<M: OpaqueMaster> FlashDevice for OpaqueFlashDevice<M> {
     fn size(&self) -> u32 {
         self.size

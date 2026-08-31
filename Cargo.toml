@@ -30,8 +30,7 @@ license = "GPL-2.0-or-later"
 repository = "https://github.com/ArthurHeymans/rflasher"
 
 [workspace.dependencies]
-# Internal crates - NOTE: is_sync is NOT included here to allow async builds (WASM)
-# Crates that need sync mode should add `features = ["is_sync"]` explicitly
+# Internal crates
 rflasher-chip-types = { version = "0.1.0", path = "crates/rflasher-chip-types", default-features = false }
 rflasher-core = { version = "0.1.0", path = "crates/rflasher-core", default-features = false }
 rflasher-chips = { version = "0.1.0", path = "crates/rflasher-chips" }
@@ -64,7 +63,6 @@ prettyplease = "0.2"
 # no_std compatible
 heapless = "0.8"
 once_cell = { version = "1.21", default-features = false }
-maybe-async = "0.2"
 zerocopy = { version = "0.8", features = ["derive"] }
 
 [package]
@@ -121,9 +119,9 @@ portable-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi
 static-linux-programmers = ["portable-programmers", "linux-spi", "linux-mtd", "internal"]
 
 [dependencies]
-rflasher-core = { workspace = true, features = ["std", "is_sync"] }
+rflasher-core = { workspace = true, features = ["std"] }
 rflasher-chips.workspace = true
-rflasher-programmers = { workspace = true, features = ["std", "is_sync"] }
+rflasher-programmers = { workspace = true, features = ["std"] }
 rflasher-repl = { version = "0.1.0", path = "crates/rflasher-repl", optional = true }
 clap.workspace = true
 clap_mangen = "0.2"

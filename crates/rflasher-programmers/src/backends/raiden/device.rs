@@ -5,7 +5,6 @@
 
 use std::time::Duration;
 
-use maybe_async::maybe_async;
 #[cfg(feature = "is_sync")]
 use nusb::MaybeFuture;
 use nusb::transfer::{Buffer, Bulk, In, Out};
@@ -346,7 +345,6 @@ impl RaidenDebugSpi {
 #[cfg_attr(all(feature = "wasm", feature = "is_sync"), allow(dead_code))]
 impl RaidenDebugSpi {
     /// Enable the SPI bridge for a specific target.
-    #[maybe_async]
     async fn enable_target(&mut self, target: Target) -> Result<()> {
         let request = target.enable_request();
 
@@ -376,7 +374,6 @@ impl RaidenDebugSpi {
     }
 
     /// Disable the SPI bridge.
-    #[maybe_async]
     async fn disable(&mut self) -> Result<()> {
         log::debug!("Disabling SPI bridge (interface {})", self.interface_num);
 
@@ -397,7 +394,6 @@ impl RaidenDebugSpi {
     }
 
     /// Configure V2 protocol parameters.
-    #[maybe_async]
     async fn configure_v2(&mut self) -> Result<()> {
         log::debug!("Querying V2 device configuration");
 
@@ -436,7 +432,6 @@ impl RaidenDebugSpi {
     }
 
     /// Send a packet to the device.
-    #[maybe_async]
     async fn write_packet(&mut self, data: &[u8]) -> Result<()> {
         let mut out_ep: Endpoint<Bulk, Out> = self
             .interface
@@ -454,7 +449,6 @@ impl RaidenDebugSpi {
     }
 
     /// Read a packet from the device.
-    #[maybe_async]
     async fn read_packet(&mut self) -> Result<Vec<u8>> {
         let mut in_ep: Endpoint<Bulk, In> = self
             .interface
@@ -475,7 +469,6 @@ impl RaidenDebugSpi {
     }
 
     /// Execute an SPI transaction using V1 protocol.
-    #[maybe_async]
     async fn spi_transfer_v1(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         if write_data.len() > V1_MAX_PAYLOAD {
             return Err(RaidenError::InvalidParameter(format!(
@@ -519,7 +512,6 @@ impl RaidenDebugSpi {
     }
 
     /// Execute an SPI transaction using V2 protocol.
-    #[maybe_async]
     async fn spi_transfer_v2(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         let write_len = write_data.len();
 
@@ -601,7 +593,6 @@ impl RaidenDebugSpi {
     }
 
     /// Execute an SPI transaction.
-    #[maybe_async]
     async fn spi_transfer(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         for retry in 0..WRITE_RETRIES {
             let result = if self.protocol_version >= PROTOCOL_V2 {
@@ -633,7 +624,6 @@ impl Drop for RaidenDebugSpi {
     }
 }
 
-#[maybe_async(AFIT)]
 impl SpiMaster for RaidenDebugSpi {
     fn features(&self) -> SpiFeatures {
         SpiFeatures::FOUR_BYTE_ADDR

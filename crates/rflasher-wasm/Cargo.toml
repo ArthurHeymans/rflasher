@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 default = []
 
 [dependencies]
-# Internal crates (async mode - explicitly NO is_sync feature)
+# Internal crates
 # We override the workspace dependency to ensure async mode for WASM
 rflasher-core = { version = "0.1.0", path = "../rflasher-core", default-features = false, features = ["std", "alloc"] }
 rflasher-chips = { version = "0.1.0", path = "../rflasher-chips", features = ["static-chips"] }
@@ -90,8 +90,6 @@ web-sys = { version = "0.3", features = [
     "UsbTransferStatus",
 ] }
 
-# maybe-async for Transport trait
-maybe-async.workspace = true
 
 # Logging
 log = { workspace = true }
