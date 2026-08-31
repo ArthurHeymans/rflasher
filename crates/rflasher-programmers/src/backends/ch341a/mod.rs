@@ -4,9 +4,8 @@
 //! The CH341A is a cheap and widely available USB programmer commonly used
 //! for programming SPI flash chips.
 //!
-//! Uses `maybe_async` to support both sync and async modes:
-//! - With `is_sync` feature (native CLI): blocking/synchronous
-//! - Without `is_sync` (WASM): async with WebUSB
+//! Async on every target: native drives the async API with a `block_on`
+//! boundary in the application, WASM uses WebUSB.
 //!
 //! # Protocol Overview
 //!
@@ -21,12 +20,14 @@
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
-//! let mut ch341a = Ch341a::open()?;
+//! # futures_lite::future::block_on(async {
+//! let mut ch341a = Ch341a::open().await?;
 //! let mut id = [0u8; 3];
 //! let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut id); // JEDEC ID
-//! ch341a.execute(&mut cmd)?;
+//! ch341a.execute(&mut cmd).await?;
 //! println!("JEDEC ID: {:02X} {:02X} {:02X}", id[0], id[1], id[2]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # }).unwrap();
 //! ```
 
 #[cfg(any(feature = "std", feature = "wasm"))]

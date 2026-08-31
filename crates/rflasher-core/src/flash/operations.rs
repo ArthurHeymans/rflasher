@@ -1,6 +1,6 @@
 //! High-level flash operations
 //!
-//! Uses `maybe_async` to support both sync and async modes.
+//! The API is async on every target.
 
 #[cfg(feature = "alloc")]
 use alloc::vec;

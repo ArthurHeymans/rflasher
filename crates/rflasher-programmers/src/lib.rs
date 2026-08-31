@@ -1,10 +1,13 @@
 //! Programmer backends and high-level flash programming abstractions.
 //!
-//! Backends are selected independently with Cargo features. Native synchronous
-//! applications normally enable [`portable-programmers`](#features), while the
-//! WebAssembly frontend enables `wasm` together with the required backend
+//! Backends are selected independently with Cargo features. Native
+//! applications normally enable [`portable-programmers`](#features), while
+//! the WebAssembly frontend enables `wasm` together with the required backend
 //! features. Firmware-oriented internal chipset access remains in the separate
 //! `rflasher-internal` crate so it can be used without `std`.
+//!
+//! All operational APIs are async on every target; native applications block
+//! on them at their outermost boundary (e.g. `futures_lite::future::block_on`).
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(async_fn_in_trait)]
@@ -49,16 +52,18 @@ pub mod serprog;
 #[path = "backends/sunxi_fel/mod.rs"]
 pub mod sunxi_fel;
 
-// The registry uses synchronous trait objects and is intentionally unavailable
-// in async/WASM builds.
-#[cfg(all(feature = "std", feature = "is_sync"))]
+#[cfg(feature = "std")]
+mod erased;
+#[cfg(feature = "std")]
 mod handle;
-#[cfg(all(feature = "std", feature = "is_sync"))]
+#[cfg(feature = "std")]
 mod registry;
 
-#[cfg(all(feature = "std", feature = "is_sync"))]
+#[cfg(feature = "std")]
+pub use erased::{ErasedFlashDevice, ErasedSpiMaster};
+#[cfg(feature = "std")]
 pub use handle::{ChipInfo, FlashHandle};
-#[cfg(all(feature = "std", feature = "is_sync"))]
+#[cfg(feature = "std")]
 pub use registry::{
     BoxedSpiMaster, ProgrammerInfo, ProgrammerParams, available_programmers, open_flash,
     open_spi_programmer, parse_programmer_params, programmer_names_short,

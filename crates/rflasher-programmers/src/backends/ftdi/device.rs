@@ -7,7 +7,6 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use ftdi::{BitMode, Device, Interface, find_by_vid_pid};
-use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::default_execute_with_vec;
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
@@ -252,9 +251,9 @@ impl Ftdi {
     }
 
     /// List available FTDI devices
-    pub fn list_devices() -> Result<Vec<FtdiDeviceInfo>> {
+    pub async fn list_devices() -> Result<Vec<FtdiDeviceInfo>> {
         let devices = nusb::list_devices()
-            .wait()
+            .await
             .map_err(|e| FtdiError::UsbError(e.to_string()))?
             .filter_map(|dev| {
                 let vid = dev.vendor_id();
@@ -309,14 +308,14 @@ impl SpiMaster for Ftdi {
         256
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         default_execute_with_vec(cmd, self.features(), |write_data, read_len| {
             self.spi_transfer(write_data, read_len)
                 .map_err(|_| CoreError::ProgrammerError)
         })
     }
 
-    fn delay_us(&mut self, us: u32) {
+    async fn delay_us(&mut self, us: u32) {
         // For FTDI, we just use a regular sleep
         // The MPSSE doesn't have built-in delay commands for arbitrary times
         std::thread::sleep(Duration::from_micros(us as u64));

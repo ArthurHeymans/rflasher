@@ -81,22 +81,3 @@ pub mod error;
 pub use device::{LinuxMtd, LinuxMtdConfig, MtdInfo, parse_options};
 pub use error::{LinuxMtdError, Result};
 
-/// Open a Linux MTD device and return a boxed OpaqueMaster
-///
-/// This is a convenience function for use in the CLI programmer dispatch.
-///
-/// # Arguments
-///
-/// * `options` - Slice of (key, value) pairs from programmer string parsing
-///
-/// # Example Options
-///
-/// - `dev=0` - Required: MTD device number
-pub fn open_linux_mtd(
-    options: &[(&str, &str)],
-) -> std::result::Result<Box<dyn rflasher_core::programmer::OpaqueMaster>, Box<dyn std::error::Error>>
-{
-    let config = parse_options(options)?;
-    let mtd = LinuxMtd::open(&config)?;
-    Ok(Box::new(mtd))
-}

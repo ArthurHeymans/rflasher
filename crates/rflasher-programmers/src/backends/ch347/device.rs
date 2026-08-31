@@ -3,17 +3,13 @@
 //! This module provides the main `Ch347` struct that implements USB
 //! communication with the CH347 programmer and the `SpiMaster` trait.
 //!
-//! Uses `maybe_async` to support both sync and async modes from a single
-//! codebase:
-//! - With `is_sync` feature (native CLI): all async is stripped, blocking USB
-//! - Without `is_sync` (WASM): full async with WebUSB
+//! Async on every target: native drives the same async code with a
+//! `block_on` boundary in the application, WASM uses WebUSB.
 
-#[cfg(feature = "is_sync")]
 use std::time::Duration;
 
 use nusb::Endpoint;
 #[cfg(all(feature = "std", not(feature = "wasm")))]
-use nusb::MaybeFuture;
 use nusb::transfer::{Buffer, Bulk, In, Out};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
@@ -31,14 +27,8 @@ use super::protocol::*;
 /// In async mode: awaits indefinitely.
 macro_rules! ep_wait {
     ($ep:expr, $timeout:expr) => {{
-        #[cfg(feature = "is_sync")]
-        {
-            $ep.wait_next_complete($timeout)
-        }
-        #[cfg(not(feature = "is_sync"))]
-        {
-            Some($ep.next_complete().await)
-        }
+        let _ = $timeout;
+        Some($ep.next_complete().await)
     }};
 }
 
@@ -51,8 +41,7 @@ macro_rules! ep_wait {
 /// This struct represents a connection to a CH347 USB device and implements
 /// the `SpiMaster` trait for communicating with SPI flash chips.
 ///
-/// On native (with `is_sync`), all methods are synchronous and blocking.
-/// On WASM (without `is_sync`), methods are async and use WebUSB.
+/// The API is async on every target; WASM uses WebUSB transfers.
 pub struct Ch347 {
     /// USB interface (kept alive to maintain device claim on WASM)
     #[cfg(feature = "wasm")]
@@ -77,26 +66,26 @@ impl Ch347 {
     ///
     /// Searches for a CH347 device (VID:1a86 PID:55db or 55de) and opens it.
     /// Returns an error if no device is found or if the device cannot be opened.
-    pub fn open() -> Result<Self> {
-        Self::open_with_config(SpiConfig::default())
+    pub async fn open() -> Result<Self> {
+        Self::open_with_config(SpiConfig::default()).await
     }
 
     /// Open a CH347 device with custom configuration
-    pub fn open_with_config(config: SpiConfig) -> Result<Self> {
-        Self::open_nth_with_config(0, config)
+    pub async fn open_with_config(config: SpiConfig) -> Result<Self> {
+        Self::open_nth_with_config(0, config).await
     }
 
     /// Open the nth CH347 device (0-indexed) with default configuration
     ///
     /// Useful when multiple CH347 devices are connected.
-    pub fn open_nth(index: usize) -> Result<Self> {
-        Self::open_nth_with_config(index, SpiConfig::default())
+    pub async fn open_nth(index: usize) -> Result<Self> {
+        Self::open_nth_with_config(index, SpiConfig::default()).await
     }
 
     /// Open the nth CH347 device with custom configuration
-    pub fn open_nth_with_config(index: usize, config: SpiConfig) -> Result<Self> {
+    pub async fn open_nth_with_config(index: usize, config: SpiConfig) -> Result<Self> {
         let devices: Vec<_> = nusb::list_devices()
-            .wait()
+            .await
             .map_err(|e| Ch347Error::OpenFailed(e.to_string()))?
             .filter(|d| {
                 d.vendor_id() == CH347_USB_VENDOR
@@ -122,7 +111,7 @@ impl Ch347 {
 
         let device = device_info
             .open()
-            .wait()
+            .await
             .map_err(|e| Ch347Error::OpenFailed(e.to_string()))?;
 
         // Get device descriptor for version info
@@ -146,7 +135,7 @@ impl Ch347 {
         // Claim interface
         let interface = device
             .claim_interface(iface_num)
-            .wait()
+            .await
             .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
 
         // Open bulk endpoints
@@ -167,15 +156,15 @@ impl Ch347 {
         };
 
         // Configure the device for SPI mode
-        ch347.configure()?;
+        ch347.configure().await?;
 
         Ok(ch347)
     }
 
     /// List all connected CH347 devices
-    pub fn list_devices() -> Result<Vec<Ch347DeviceInfo>> {
+    pub async fn list_devices() -> Result<Vec<Ch347DeviceInfo>> {
         let devices: Vec<_> = nusb::list_devices()
-            .wait()
+            .await
             .map_err(|e| Ch347Error::OpenFailed(e.to_string()))?
             .filter(|d| {
                 d.vendor_id() == CH347_USB_VENDOR
@@ -199,27 +188,27 @@ impl Ch347 {
     /// Update SPI configuration
     ///
     /// This sends the new configuration to the device.
-    pub fn set_config(&mut self, config: SpiConfig) -> Result<()> {
+    pub async fn set_config(&mut self, config: SpiConfig) -> Result<()> {
         self.config = config;
-        self.configure()
+        self.configure().await
     }
 
     /// Set the SPI clock speed
-    pub fn set_speed(&mut self, speed: SpiSpeed) -> Result<()> {
+    pub async fn set_speed(&mut self, speed: SpiSpeed) -> Result<()> {
         self.config.speed = speed;
-        self.configure()
+        self.configure().await
     }
 
     /// Set which chip select to use
-    pub fn set_cs(&mut self, cs: ChipSelect) -> Result<()> {
+    pub async fn set_cs(&mut self, cs: ChipSelect) -> Result<()> {
         self.config.cs = cs;
-        self.configure()
+        self.configure().await
     }
 
     /// Set the SPI mode
-    pub fn set_mode(&mut self, mode: SpiMode) -> Result<()> {
+    pub async fn set_mode(&mut self, mode: SpiMode) -> Result<()> {
         self.config.mode = mode;
-        self.configure()
+        self.configure().await
     }
 }
 
@@ -256,7 +245,7 @@ impl std::fmt::Display for Ch347DeviceInfo {
 // WASM-only methods (WebUSB device picker, async open, shutdown)
 // ---------------------------------------------------------------------------
 
-#[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 impl Ch347 {
     /// Request a CH347 device via the WebUSB permission prompt
     ///
@@ -382,7 +371,7 @@ fn find_vendor_interface(config_desc: &nusb::descriptors::ConfigurationDescripto
 }
 
 // ---------------------------------------------------------------------------
-// Shared methods (sync or async via maybe_async)
+// Shared methods (async on every target)
 // ---------------------------------------------------------------------------
 
 impl Ch347 {
@@ -636,12 +625,12 @@ impl SpiMaster for Ch347 {
         // Simple delay
         // The CH347 doesn't have a built-in delay command like the CH341A
         if us > 0 {
-            #[cfg(feature = "is_sync")]
+            #[cfg(not(target_arch = "wasm32"))]
             {
                 std::thread::sleep(Duration::from_micros(us as u64));
             }
 
-            #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+            #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
             {
                 let delay_ms = ((us as f64) / 1000.0).ceil() as i32;
                 if delay_ms > 0 {

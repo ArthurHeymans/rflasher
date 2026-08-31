@@ -4,9 +4,8 @@
 //! The CH347 is a high-speed USB 2.0 (480 Mbps) device that supports
 //! SPI, I2C, UART, and JTAG interfaces.
 //!
-//! Uses `maybe_async` to support both sync and async modes:
-//! - With `is_sync` feature (native CLI): blocking/synchronous
-//! - Without `is_sync` (WASM): async with WebUSB
+//! Async on every target: native drives the async API with a `block_on`
+//! boundary in the application, WASM uses WebUSB.
 //!
 //! # Protocol Overview
 //!
@@ -31,21 +30,23 @@
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
+//! # futures_lite::future::block_on(async {
 //! // Open with default settings (7.5 MHz, mode 0, CS0)
-//! let mut ch347 = Ch347::open()?;
+//! let mut ch347 = Ch347::open().await?;
 //!
 //! // Or with custom configuration
 //! let config = SpiConfig::new()
 //!     .with_speed(SpiSpeed::Speed30M)
 //!     .with_cs(ChipSelect::CS1);
-//! let mut ch347 = Ch347::open_with_config(config)?;
+//! let mut ch347 = Ch347::open_with_config(config).await?;
 //!
 //! // Read JEDEC ID
 //! let mut id = [0u8; 3];
 //! let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut id);
-//! ch347.execute(&mut cmd)?;
+//! ch347.execute(&mut cmd).await?;
 //! println!("JEDEC ID: {:02X} {:02X} {:02X}", id[0], id[1], id[2]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # }).unwrap();
 //! ```
 //!
 //! # Limitations

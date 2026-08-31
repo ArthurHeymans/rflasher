@@ -37,13 +37,15 @@
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
-//! let mut fel = SunxiFel::open()?;
+//! # futures_lite::future::block_on(async {
+//! let mut fel = SunxiFel::open().await?;
 //! println!("Connected to: {}", fel.soc_name());
 //! let mut id = [0u8; 3];
 //! let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut id);
-//! fel.execute(&mut cmd)?;
+//! fel.execute(&mut cmd).await?;
 //! println!("JEDEC ID: {:02X} {:02X} {:02X}", id[0], id[1], id[2]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # }).unwrap();
 //! ```
 
 #[cfg(feature = "std")]

@@ -15,6 +15,7 @@
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
+//! # futures_lite::future::block_on(async {
 //! // Open with default settings (2 MHz, mode 0)
 //! let mut spi = LinuxSpi::open_device("/dev/spidev0.0")?;
 //!
@@ -27,9 +28,10 @@
 //! // Read JEDEC ID
 //! let mut id = [0u8; 3];
 //! let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut id);
-//! spi.execute(&mut cmd)?;
+//! spi.execute(&mut cmd).await?;
 //! println!("JEDEC ID: {:02X} {:02X} {:02X}", id[0], id[1], id[2]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # }).unwrap();
 //! ```
 //!
 //! # Usage with rflasher CLI
@@ -65,24 +67,3 @@ pub mod error;
 pub use device::{LinuxSpi, LinuxSpiConfig, mode, parse_options};
 pub use error::{LinuxSpiError, Result};
 
-/// Open a Linux SPI device and return a boxed SpiMaster
-///
-/// This is a convenience function for use in the CLI programmer dispatch.
-///
-/// # Arguments
-///
-/// * `options` - Slice of (key, value) pairs from programmer string parsing
-///
-/// # Example Options
-///
-/// - `dev=/dev/spidev0.0` - Required: device path
-/// - `spispeed=4000` - Optional: speed in kHz (default: 2000)
-/// - `mode=0` - Optional: SPI mode 0-3 (default: 0)
-pub fn open_linux_spi(
-    options: &[(&str, &str)],
-) -> std::result::Result<Box<dyn rflasher_core::programmer::SpiMaster>, Box<dyn std::error::Error>>
-{
-    let config = parse_options(options)?;
-    let spi = LinuxSpi::open(&config)?;
-    Ok(Box::new(spi))
-}

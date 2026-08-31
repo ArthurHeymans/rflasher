@@ -3,15 +3,12 @@
 //! This module provides the main `Ft4222` struct that implements USB
 //! communication with the FT4222H SPI master and the `SpiMaster` trait.
 //!
-//! Uses `maybe_async` to support both sync and async modes from a single
-//! codebase:
-//! - With `is_sync` feature (native CLI): all async is stripped, blocking USB
-//! - Without `is_sync` (WASM): full async with WebUSB
+//! Async on every target: native drives the async API with a `block_on`
+//! boundary in the application, WASM uses WebUSB.
 
 use std::time::Duration;
 
 #[cfg(all(feature = "std", not(feature = "wasm")))]
-use nusb::MaybeFuture;
 use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Out, Recipient};
 use nusb::{Endpoint, Interface};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
@@ -30,31 +27,16 @@ use super::protocol::*;
 /// In async mode: awaits indefinitely (timeout is ignored).
 macro_rules! ep_wait {
     ($ep:expr, $timeout:expr) => {{
-        #[cfg(feature = "is_sync")]
-        {
-            $ep.wait_next_complete($timeout)
-        }
-        #[cfg(not(feature = "is_sync"))]
-        {
-            Some($ep.next_complete().await)
-        }
+        let _ = $timeout;
+        Some($ep.next_complete().await)
     }};
 }
 
 /// Resolve an nusb `MaybeFuture` to its output.
-/// In sync mode: calls `.wait()`.
+/// In sync mode: calls `.await`.
 /// In async mode: awaits the future.
 macro_rules! nusb_await {
-    ($expr:expr) => {{
-        #[cfg(feature = "is_sync")]
-        {
-            $expr.wait()
-        }
-        #[cfg(not(feature = "is_sync"))]
-        {
-            $expr.await
-        }
-    }};
+    ($expr:expr) => {{ $expr.await }};
 }
 
 /// FT4222H USB SPI Master programmer
@@ -104,36 +86,36 @@ pub struct Ft4222 {
 #[cfg(all(feature = "std", not(feature = "wasm")))]
 impl Ft4222 {
     /// Open an FT4222H device with default configuration.
-    pub fn open() -> Result<Self> {
-        Self::open_with_config(SpiConfig::default())
+    pub async fn open() -> Result<Self> {
+        Self::open_with_config(SpiConfig::default()).await
     }
 
     /// Open an FT4222H device with custom configuration.
-    pub fn open_with_config(config: SpiConfig) -> Result<Self> {
-        Self::open_nth_with_config(0, config)
+    pub async fn open_with_config(config: SpiConfig) -> Result<Self> {
+        Self::open_nth_with_config(0, config).await
     }
 
     /// Open the nth FT4222H device (0-indexed) with default configuration.
-    pub fn open_nth(index: usize) -> Result<Self> {
-        Self::open_nth_with_config(index, SpiConfig::default())
+    pub async fn open_nth(index: usize) -> Result<Self> {
+        Self::open_nth_with_config(index, SpiConfig::default()).await
     }
 
     /// Open the nth FT4222H device with custom configuration.
-    pub fn open_nth_with_config(index: usize, config: SpiConfig) -> Result<Self> {
+    pub async fn open_nth_with_config(index: usize, config: SpiConfig) -> Result<Self> {
         let devices: Vec<_> = nusb::list_devices()
-            .wait()
+            .await
             .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?
             .filter(|d| d.vendor_id() == FTDI_VID && d.product_id() == FT4222H_PID)
             .collect();
 
         let device_info = devices.get(index).ok_or(Ft4222Error::DeviceNotFound)?;
-        Self::open_device(device_info, config)
+        Self::open_device(device_info, config).await
     }
 
     /// List all connected FT4222H devices.
-    pub fn list_devices() -> Result<Vec<Ft4222DeviceInfo>> {
+    pub async fn list_devices() -> Result<Vec<Ft4222DeviceInfo>> {
         let devices: Vec<_> = nusb::list_devices()
-            .wait()
+            .await
             .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?
             .filter(|d| d.vendor_id() == FTDI_VID && d.product_id() == FT4222H_PID)
             .map(|d| Ft4222DeviceInfo {
@@ -150,7 +132,7 @@ impl Ft4222 {
 // WASM-only methods (WebUSB device picker, async open, shutdown)
 // ---------------------------------------------------------------------------
 
-#[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 impl Ft4222 {
     /// Request an FT4222H device via the WebUSB permission prompt.
     ///
@@ -205,20 +187,13 @@ impl Ft4222 {
 }
 
 // ---------------------------------------------------------------------------
-// Shared methods (sync or async via maybe_async)
+// Shared methods (async on every target)
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(all(feature = "wasm", feature = "is_sync"), allow(dead_code))]
+#[cfg_attr(any(), allow(dead_code))]
 impl Ft4222 {
     /// Open a specific FT4222H device.
     async fn open_device(device_info: &nusb::DeviceInfo, config: SpiConfig) -> Result<Self> {
-        #[cfg(feature = "is_sync")]
-        log::info!(
-            "Opening FT4222H device at bus {} address {}",
-            device_info.bus_id(),
-            device_info.device_address()
-        );
-        #[cfg(not(feature = "is_sync"))]
         log::info!(
             "Opening FT4222H device VID={:04X} PID={:04X}",
             device_info.vendor_id(),
@@ -828,9 +803,9 @@ impl SpiMaster for Ft4222 {
             return;
         }
 
-        #[cfg(feature = "is_sync")]
+        #[cfg(not(target_arch = "wasm32"))]
         const SPIN_THRESHOLD_US: u32 = 100;
-        #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+        #[cfg(target_arch = "wasm32")]
         const SPIN_THRESHOLD_US: u32 = 1_000;
 
         if us < SPIN_THRESHOLD_US {
@@ -841,12 +816,12 @@ impl SpiMaster for Ft4222 {
             return;
         }
 
-        #[cfg(feature = "is_sync")]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             std::thread::sleep(Duration::from_micros(us as u64));
         }
 
-        #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+        #[cfg(target_arch = "wasm32")]
         {
             let delay_ms = ((us as f64) / 1000.0).ceil() as i32;
             if delay_ms > 0 {

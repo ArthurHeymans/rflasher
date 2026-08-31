@@ -37,22 +37,24 @@
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
+//! # futures_lite::future::block_on(async {
 //! // Open with default settings (first device, AP target)
-//! let mut raiden = RaidenDebugSpi::open()?;
+//! let mut raiden = RaidenDebugSpi::open().await?;
 //!
 //! // Or with specific configuration
 //! let config = RaidenConfig {
 //!     serial: Some("SERIALNUM".to_string()),
 //!     target: Target::Ec,
 //! };
-//! let mut raiden = RaidenDebugSpi::open_with_config(&config)?;
+//! let mut raiden = RaidenDebugSpi::open_with_config(&config).await?;
 //!
 //! // Read JEDEC ID
 //! let mut id = [0u8; 3];
 //! let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut id);
-//! raiden.execute(&mut cmd)?;
+//! raiden.execute(&mut cmd).await?;
 //! println!("JEDEC ID: {:02X} {:02X} {:02X}", id[0], id[1], id[2]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # }).unwrap();
 //! ```
 
 #[cfg(any(feature = "std", feature = "wasm"))]

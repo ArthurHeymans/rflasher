@@ -3,6 +3,7 @@
 //! This is similar to flashprog's `struct flashctx` which combines
 //! chip information and programmer access into a single handle.
 
+use crate::erased::ErasedFlashDevice;
 use rflasher_core::chip::FlashChip;
 use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult};
 use rflasher_core::sfdp::{SfdpInfo, SfdpMismatch};
@@ -78,14 +79,14 @@ impl From<ProbeResult> for ChipInfo {
 /// The handle owns the flash device (which includes the programmer).
 pub struct FlashHandle {
     /// The underlying flash device (type-erased, owned)
-    device: Box<dyn FlashDevice>,
+    device: ErasedFlashDevice,
     /// Chip information (only available for SPI programmers where we probed)
     chip_info: Option<ChipInfo>,
 }
 
 impl FlashHandle {
     /// Create a new handle with chip information (SPI programmers)
-    pub(crate) fn with_chip_info(device: Box<dyn FlashDevice>, chip_info: ChipInfo) -> Self {
+    pub(crate) fn with_chip_info(device: ErasedFlashDevice, chip_info: ChipInfo) -> Self {
         Self {
             device,
             chip_info: Some(chip_info),
@@ -94,7 +95,7 @@ impl FlashHandle {
 
     /// Create a new handle without chip information (opaque programmers)
     #[cfg(any(feature = "linux-mtd", feature = "internal"))]
-    pub(crate) fn without_chip_info(device: Box<dyn FlashDevice>) -> Self {
+    pub(crate) fn without_chip_info(device: ErasedFlashDevice) -> Self {
         Self {
             device,
             chip_info: None,
@@ -119,8 +120,12 @@ impl FlashHandle {
     /// # Arguments
     /// * `addr` - Starting address (must be < flash size)
     /// * `buf` - Buffer to read into
-    pub fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), Box<dyn std::error::Error>> {
-        self.device.read(addr, buf).map_err(Into::into)
+    pub async fn read(
+        &mut self,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.device.read(addr, buf).await.map_err(Into::into)
     }
 
     /// Write data to flash
@@ -131,8 +136,12 @@ impl FlashHandle {
     /// # Arguments
     /// * `addr` - Starting address (must be < flash size)
     /// * `data` - Data to write
-    pub fn write(&mut self, addr: u32, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-        self.device.write(addr, data).map_err(Into::into)
+    pub async fn write(
+        &mut self,
+        addr: u32,
+        data: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.device.write(addr, data).await.map_err(Into::into)
     }
 
     /// Erase flash region
@@ -140,15 +149,17 @@ impl FlashHandle {
     /// # Arguments
     /// * `addr` - Starting address (must be < flash size)
     /// * `len` - Length to erase in bytes
-    pub fn erase(&mut self, addr: u32, len: u32) -> Result<(), Box<dyn std::error::Error>> {
-        self.device.erase(addr, len).map_err(Into::into)
+    pub async fn erase(&mut self, addr: u32, len: u32) -> Result<(), Box<dyn std::error::Error>> {
+        self.device.erase(addr, len).await.map_err(Into::into)
     }
 
-    /// Get mutable reference to the underlying FlashDevice
+    /// Get mutable reference to the underlying flash device
     ///
-    /// This is used by command implementations that need the FlashDevice trait.
-    pub fn as_device_mut(&mut self) -> &mut dyn FlashDevice {
-        self.device.as_mut()
+    /// This is used by command implementations that need the FlashDevice
+    /// trait. The returned type implements the ordinary async `FlashDevice`
+    /// trait via dynamic dispatch.
+    pub fn as_device_mut(&mut self) -> &mut ErasedFlashDevice {
+        &mut self.device
     }
 
     /// Search for and read FMAP layout from flash
@@ -162,10 +173,10 @@ impl FlashHandle {
     ///
     /// # Example
     /// ```ignore
-    /// let layout = handle.read_fmap()?;
+    /// let layout = handle.read_fmap().await?;
     /// println!("Found {} regions", layout.len());
     /// ```
-    pub fn read_fmap(
+    pub async fn read_fmap(
         &mut self,
     ) -> Result<rflasher_core::layout::Layout, Box<dyn std::error::Error>> {
         use rflasher_core::layout::search_fmap;
@@ -177,7 +188,7 @@ impl FlashHandle {
         );
         log::debug!("Searching for FMAP in flash chip...");
 
-        let layout = search_fmap(self)?;
+        let layout = search_fmap(self).await?;
         log::debug!("Found FMAP with {} regions", layout.len());
 
         Ok(layout)
@@ -195,28 +206,32 @@ impl FlashHandle {
     }
 
     /// Read current write protection configuration
-    pub fn read_wp_config(&mut self) -> WpResult<WpConfig> {
-        self.device.read_wp_config()
+    pub async fn read_wp_config(&mut self) -> WpResult<WpConfig> {
+        self.device.read_wp_config().await
     }
 
     /// Write write protection configuration
-    pub fn write_wp_config(&mut self, config: &WpConfig, options: WriteOptions) -> WpResult<()> {
-        self.device.write_wp_config(config, options)
+    pub async fn write_wp_config(
+        &mut self,
+        config: &WpConfig,
+        options: WriteOptions,
+    ) -> WpResult<()> {
+        self.device.write_wp_config(config, options).await
     }
 
     /// Set write protection mode only
-    pub fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
-        self.device.set_wp_mode(mode, options)
+    pub async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
+        self.device.set_wp_mode(mode, options).await
     }
 
     /// Set protected range only
-    pub fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
-        self.device.set_wp_range(range, options)
+    pub async fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
+        self.device.set_wp_range(range, options).await
     }
 
     /// Disable all write protection
-    pub fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
-        self.device.disable_wp(options)
+    pub async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
+        self.device.disable_wp(options).await
     }
 
     /// Get all available protection ranges
@@ -231,12 +246,13 @@ impl rflasher_core::layout::FmapSearchable for FlashHandle {
         self.device.size()
     }
 
-    fn read_at(
+    async fn read_at(
         &mut self,
         offset: u32,
         buf: &mut [u8],
     ) -> Result<(), rflasher_core::layout::LayoutError> {
         self.read(offset, buf)
+            .await
             .map_err(|e| rflasher_core::layout::LayoutError::IoError(e.to_string()))
     }
 }

@@ -184,7 +184,7 @@ impl SpiMaster for DummyFlash {
         self.config.page_size
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
         // Note: DummyFlash accepts all I/O modes since it's an in-memory emulator.
         // The io_mode field is ignored because we just simulate the flash behavior
         // without actually transferring data on physical wires.
@@ -276,7 +276,7 @@ impl SpiMaster for DummyFlash {
         }
     }
 
-    fn delay_us(&mut self, _us: u32) {
+    async fn delay_us(&mut self, _us: u32) {
         // No delay needed for in-memory operations
     }
 }
@@ -284,12 +284,13 @@ impl SpiMaster for DummyFlash {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_lite::future::block_on;
     use rflasher_core::protocol;
 
     #[test]
     fn test_read_jedec_id() {
         let mut flash = DummyFlash::new_default();
-        let (mfr, dev) = protocol::read_jedec_id(&mut flash).unwrap();
+        let (mfr, dev) = block_on(protocol::read_jedec_id(&mut flash)).unwrap();
         assert_eq!(mfr, 0xEF);
         assert_eq!(dev, 0x4018);
     }
@@ -300,14 +301,14 @@ mod tests {
 
         // Write some data
         let data = [0x12, 0x34, 0x56, 0x78];
-        protocol::write_enable(&mut flash).unwrap();
+        block_on(protocol::write_enable(&mut flash)).unwrap();
         let mut cmd = SpiCommand::write_3b(opcodes::PP, 0x1000, &data);
-        flash.execute(&mut cmd).unwrap();
+        block_on(flash.execute(&mut cmd)).unwrap();
 
         // Read it back
         let mut buf = [0u8; 4];
         let mut cmd = SpiCommand::read_3b(opcodes::READ, 0x1000, &mut buf);
-        flash.execute(&mut cmd).unwrap();
+        block_on(flash.execute(&mut cmd)).unwrap();
 
         assert_eq!(buf, data);
     }
@@ -318,25 +319,25 @@ mod tests {
 
         // Write some data
         let data = [0x00u8; 256];
-        protocol::write_enable(&mut flash).unwrap();
+        block_on(protocol::write_enable(&mut flash)).unwrap();
         let mut cmd = SpiCommand::write_3b(opcodes::PP, 0, &data);
-        flash.execute(&mut cmd).unwrap();
+        block_on(flash.execute(&mut cmd)).unwrap();
 
         // Verify it's written
         let mut buf = [0xFFu8; 256];
         let mut cmd = SpiCommand::read_3b(opcodes::READ, 0, &mut buf);
-        flash.execute(&mut cmd).unwrap();
+        block_on(flash.execute(&mut cmd)).unwrap();
         assert_eq!(buf, data);
 
         // Erase the sector
-        protocol::write_enable(&mut flash).unwrap();
+        block_on(protocol::write_enable(&mut flash)).unwrap();
         let mut cmd = SpiCommand::erase_3b(opcodes::SE_20, 0);
-        flash.execute(&mut cmd).unwrap();
+        block_on(flash.execute(&mut cmd)).unwrap();
 
         // Verify it's erased
         let mut buf = [0x00u8; 256];
         let mut cmd = SpiCommand::read_3b(opcodes::READ, 0, &mut buf);
-        flash.execute(&mut cmd).unwrap();
+        block_on(flash.execute(&mut cmd)).unwrap();
         assert!(buf.iter().all(|&b| b == 0xFF));
     }
 }

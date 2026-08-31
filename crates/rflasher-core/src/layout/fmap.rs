@@ -138,7 +138,7 @@ pub trait FmapSearchable {
     fn size(&self) -> u32;
 
     /// Read data from an offset
-    fn read_at(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), LayoutError>;
+    async fn read_at(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), LayoutError>;
 }
 
 /// Implement FmapSearchable for byte slices (file buffers)
@@ -147,7 +147,7 @@ impl FmapSearchable for &[u8] {
         self.len() as u32
     }
 
-    fn read_at(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), LayoutError> {
+    async fn read_at(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), LayoutError> {
         let offset = offset as usize;
         let end = offset + buf.len();
 
@@ -162,15 +162,18 @@ impl FmapSearchable for &[u8] {
 
 /// Read and parse an FMAP at `offset` directly from storage, sizing the
 /// read from the header's declared area count.
-fn read_fmap_at<S: FmapSearchable>(storage: &mut S, offset: u32) -> Result<Layout, LayoutError> {
+async fn read_fmap_at<S: FmapSearchable>(
+    storage: &mut S,
+    offset: u32,
+) -> Result<Layout, LayoutError> {
     let mut header = [0u8; FMAP_HEADER_SIZE];
-    storage.read_at(offset, &mut header)?;
+    storage.read_at(offset, &mut header).await?;
     let nareas = u16::from_le_bytes([header[54], header[55]]) as usize;
     if nareas > 256 {
         return Err(LayoutError::InvalidFmapSignature);
     }
     let mut buf = vec![0u8; FMAP_HEADER_SIZE + nareas * FMAP_AREA_SIZE];
-    storage.read_at(offset, &mut buf)?;
+    storage.read_at(offset, &mut buf).await?;
     parse_fmap_at(&buf, 0)
 }
 
@@ -181,12 +184,12 @@ fn read_fmap_at<S: FmapSearchable>(storage: &mut S, offset: u32) -> Result<Layou
 /// 2. Linear search as fallback (slow but comprehensive)
 ///
 /// Works on both file buffers and flash chips through the FmapSearchable trait.
-pub fn search_fmap<S: FmapSearchable>(storage: &mut S) -> Result<Layout, LayoutError> {
+pub async fn search_fmap<S: FmapSearchable>(storage: &mut S) -> Result<Layout, LayoutError> {
     let size = storage.size();
 
     // Try binary search first (check power-of-2 aligned offsets)
-    if let Some(offset) = binary_search_fmap(storage, 0, size)? {
-        match read_fmap_at(storage, offset) {
+    if let Some(offset) = binary_search_fmap(storage, 0, size).await? {
+        match read_fmap_at(storage, offset).await {
             Ok(layout) => return Ok(layout),
             // The signature match was a false positive: either the structure
             // does not validate, or its declared area table reads past the
@@ -198,7 +201,7 @@ pub fn search_fmap<S: FmapSearchable>(storage: &mut S) -> Result<Layout, LayoutE
 
     // Fallback to linear search - read entire storage and search
     let mut buffer = vec![0u8; size as usize];
-    storage.read_at(0, &mut buffer)?;
+    storage.read_at(0, &mut buffer).await?;
 
     if let Some(offset) = find_fmap(&buffer) {
         parse_fmap_at(&buffer, offset)
@@ -211,7 +214,7 @@ pub fn search_fmap<S: FmapSearchable>(storage: &mut S) -> Result<Layout, LayoutE
 ///
 /// Follows flashprog's algorithm: start with largest stride (size/2) and
 /// halve on each iteration. Skip offsets already checked by larger strides.
-fn binary_search_fmap<S: FmapSearchable>(
+async fn binary_search_fmap<S: FmapSearchable>(
     storage: &mut S,
     rom_offset: u32,
     len: u32,
@@ -253,7 +256,7 @@ fn binary_search_fmap<S: FmapSearchable>(
                 offset_0_checked = true;
             }
             // Read signature first (8 bytes) - cheap check
-            if storage.read_at(offset, &mut sig_buf).is_err() {
+            if storage.read_at(offset, &mut sig_buf).await.is_err() {
                 continue;
             }
 

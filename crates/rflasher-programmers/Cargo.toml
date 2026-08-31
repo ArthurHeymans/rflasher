@@ -109,3 +109,6 @@ gloo-timers = { version = "0.3", features = ["futures"], optional = true }
 no-default-features = true
 features = ["portable-programmers"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+[dev-dependencies]
+futures-lite = "2"

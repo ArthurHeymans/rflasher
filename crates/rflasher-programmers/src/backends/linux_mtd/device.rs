@@ -259,7 +259,7 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
         self.info.total_size as usize
     }
 
-    fn read(&mut self, addr: u32, buf: &mut [u8]) -> rflasher_core::error::Result<()> {
+    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> rflasher_core::error::Result<()> {
         // Seek to the address
         self.file
             .seek(SeekFrom::Start(addr as u64))
@@ -286,7 +286,7 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
         Ok(())
     }
 
-    fn write(&mut self, addr: u32, data: &[u8]) -> rflasher_core::error::Result<()> {
+    async fn write(&mut self, addr: u32, data: &[u8]) -> rflasher_core::error::Result<()> {
         if !self.info.is_writable {
             return Err(rflasher_core::error::Error::WriteProtected);
         }
@@ -324,7 +324,7 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
         Ok(())
     }
 
-    fn erase(&mut self, addr: u32, len: u32) -> rflasher_core::error::Result<()> {
+    async fn erase(&mut self, addr: u32, len: u32) -> rflasher_core::error::Result<()> {
         if !self.info.requires_erase {
             // Device doesn't require erase (e.g., RAM-backed MTD)
             return Ok(());

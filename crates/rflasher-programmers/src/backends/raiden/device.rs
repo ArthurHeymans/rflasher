@@ -5,8 +5,6 @@
 
 use std::time::Duration;
 
-#[cfg(feature = "is_sync")]
-use nusb::MaybeFuture;
 use nusb::transfer::{Buffer, Bulk, In, Out};
 use nusb::{Endpoint, Interface};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
@@ -18,37 +16,22 @@ use super::protocol::*;
 
 macro_rules! ep_wait {
     ($ep:expr, $timeout:expr) => {{
-        #[cfg(feature = "is_sync")]
-        {
-            $ep.wait_next_complete($timeout)
-        }
-        #[cfg(not(feature = "is_sync"))]
-        {
-            Some($ep.next_complete().await)
-        }
+        let _ = $timeout;
+        Some($ep.next_complete().await)
     }};
 }
 
 macro_rules! nusb_await {
-    ($expr:expr) => {{
-        #[cfg(feature = "is_sync")]
-        {
-            $expr.wait()
-        }
-        #[cfg(not(feature = "is_sync"))]
-        {
-            $expr.await
-        }
-    }};
+    ($expr:expr) => {{ $expr.await }};
 }
 
 macro_rules! platform_sleep {
     ($dur:expr) => {{
-        #[cfg(feature = "is_sync")]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             std::thread::sleep($dur);
         }
-        #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+        #[cfg(target_arch = "wasm32")]
         {
             let ms = $dur.as_millis() as i32;
             let promise = js_sys::Promise::new(&mut |resolve, _| {
@@ -105,13 +88,13 @@ pub struct RaidenDebugSpi {
 #[cfg(all(feature = "std", not(feature = "wasm")))]
 impl RaidenDebugSpi {
     /// Open a Raiden Debug SPI device with default configuration.
-    pub fn open() -> Result<Self> {
-        Self::open_with_config(&RaidenConfig::default())
+    pub async fn open() -> Result<Self> {
+        Self::open_with_config(&RaidenConfig::default()).await
     }
 
     /// Open a Raiden Debug SPI device with specific configuration.
-    pub fn open_with_config(config: &RaidenConfig) -> Result<Self> {
-        let devices = Self::find_devices(config.serial.as_deref())?;
+    pub async fn open_with_config(config: &RaidenConfig) -> Result<Self> {
+        let devices = Self::find_devices(config.serial.as_deref()).await?;
 
         if devices.is_empty() {
             return Err(RaidenError::DeviceNotFound);
@@ -133,12 +116,12 @@ impl RaidenDebugSpi {
         let device = device_info
             .info
             .open()
-            .wait()
+            .await
             .map_err(|e| RaidenError::OpenFailed(e.to_string()))?;
 
         let interface = device
             .claim_interface(device_info.interface_num)
-            .wait()
+            .await
             .map_err(|e| RaidenError::ClaimFailed(e.to_string()))?;
 
         let mut raiden = Self {
@@ -152,20 +135,20 @@ impl RaidenDebugSpi {
             supports_full_duplex: false,
         };
 
-        raiden.enable_target(config.target)?;
+        raiden.enable_target(config.target).await?;
 
         if raiden.protocol_version >= PROTOCOL_V2 {
-            raiden.configure_v2()?;
+            raiden.configure_v2().await?;
         }
 
         Ok(raiden)
     }
 
     /// Find all Raiden Debug SPI devices.
-    fn find_devices(serial_filter: Option<&str>) -> Result<Vec<RaidenDeviceInfo>> {
+    async fn find_devices(serial_filter: Option<&str>) -> Result<Vec<RaidenDeviceInfo>> {
         let mut devices = Vec::new();
 
-        for dev_info in nusb::list_devices().wait()? {
+        for dev_info in nusb::list_devices().await? {
             if dev_info.vendor_id() != GOOGLE_VID {
                 continue;
             }
@@ -189,7 +172,7 @@ impl RaidenDebugSpi {
                     continue;
                 }
 
-                let device = match dev_info.open().wait() {
+                let device = match dev_info.open().await {
                     Ok(device) => device,
                     Err(e) => {
                         log::debug!("Failed to open device for endpoint discovery: {}", e);
@@ -241,12 +224,12 @@ impl RaidenDebugSpi {
     }
 
     /// List all connected Raiden Debug SPI devices.
-    pub fn list_devices() -> Result<Vec<RaidenDeviceInfo>> {
-        Self::find_devices(None)
+    pub async fn list_devices() -> Result<Vec<RaidenDeviceInfo>> {
+        Self::find_devices(None).await
     }
 }
 
-#[cfg(all(feature = "wasm", not(feature = "is_sync"), target_arch = "wasm32"))]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 impl RaidenDebugSpi {
     /// Request a Raiden device via the WebUSB permission prompt.
     pub async fn request_device() -> Result<nusb::DeviceInfo> {
@@ -342,7 +325,7 @@ impl RaidenDebugSpi {
     }
 }
 
-#[cfg_attr(all(feature = "wasm", feature = "is_sync"), allow(dead_code))]
+#[cfg_attr(any(), allow(dead_code))]
 impl RaidenDebugSpi {
     /// Enable the SPI bridge for a specific target.
     async fn enable_target(&mut self, target: Target) -> Result<()> {
@@ -615,10 +598,11 @@ impl RaidenDebugSpi {
     }
 }
 
-#[cfg(feature = "is_sync")]
+// Native-only best-effort cleanup; WASM uses explicit shutdown instead.
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for RaidenDebugSpi {
     fn drop(&mut self) {
-        if let Err(e) = self.disable() {
+        if let Err(e) = futures_lite::future::block_on(self.disable()) {
             log::warn!("Failed to disable SPI bridge on close: {}", e);
         }
     }
@@ -671,7 +655,7 @@ impl SpiMaster for RaidenDebugSpi {
 }
 
 /// Information about a connected Raiden Debug SPI device
-#[cfg_attr(all(feature = "wasm", not(feature = "is_sync")), allow(dead_code))]
+#[cfg_attr(all(feature = "wasm", target_arch = "wasm32"), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct RaidenDeviceInfo {
     /// nusb device info

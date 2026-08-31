@@ -4,7 +4,7 @@
 //! SPI-based flash chips (via `SpiMaster` + `FlashContext`) and opaque
 //! programmers (via `OpaqueMaster`).
 //!
-//! Uses `maybe_async` to support both sync and async modes.
+//! The API is async on every target.
 
 use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::Result;

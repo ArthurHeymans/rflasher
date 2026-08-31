@@ -2,7 +2,7 @@
 //!
 //! This module provides the main `Serprog` struct that implements the
 //! serprog protocol and the `SpiMaster` trait.
-//! Uses `maybe_async` to support both sync and async modes.
+//! The API is async on every target.
 
 use super::error::{Result, SerprogError};
 use super::protocol::*;
@@ -367,13 +367,14 @@ impl<T: Transport> Serprog<T> {
     }
 }
 
-// Drop implementation only for sync mode (async requires explicit shutdown)
-#[cfg(feature = "is_sync")]
+// Native-only best-effort cleanup; WASM uses explicit shutdown instead.
+#[cfg(not(target_arch = "wasm32"))]
 impl<T: Transport> Drop for Serprog<T> {
     fn drop(&mut self) {
         // Disable output drivers if supported
         if self.info.supports_cmd(S_CMD_S_PIN_STATE)
-            && self.do_command(S_CMD_S_PIN_STATE, &[0], &mut []).is_ok()
+            && futures_lite::future::block_on(self.do_command(S_CMD_S_PIN_STATE, &[0], &mut []))
+                .is_ok()
         {
             log::debug!("serprog: Output drivers disabled");
         }
@@ -419,18 +420,15 @@ impl<T: Transport> SpiMaster for Serprog<T> {
     async fn delay_us(&mut self, us: u32) {
         // For serprog, we just use a standard delay
         // The protocol has O_DELAY but it's for the operation buffer (non-SPI)
-        #[cfg(feature = "is_sync")]
+        #[cfg(not(target_arch = "wasm32"))]
         {
-            #[cfg(feature = "std")]
             std::thread::sleep(std::time::Duration::from_micros(us as u64));
         }
 
-        #[cfg(not(feature = "is_sync"))]
+        #[cfg(target_arch = "wasm32")]
         {
-            // In async mode, we need an async sleep
-            // This will be provided by the runtime (tokio, wasm, etc.)
-            // For now, just a no-op placeholder - actual implementations
-            // should provide a proper async delay
+            // No async timer is wired up for serprog on WASM; the WebSerial
+            // transport's own pacing dominates, so this stays a no-op.
             let _ = us;
         }
     }

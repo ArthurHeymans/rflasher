@@ -182,11 +182,11 @@ impl OpaqueMaster for InternalProgrammer {
         self.flash_size
     }
 
-    fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
+    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
         self.controller.controller_read(addr, buf, self.flash_size)
     }
 
-    fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
+    async fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
         if !self.writes_enabled() {
             return Err(CoreError::WriteProtected);
         }
@@ -194,7 +194,7 @@ impl OpaqueMaster for InternalProgrammer {
         self.controller.controller_write(addr, data)
     }
 
-    fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
+    async fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
         if !self.writes_enabled() {
             return Err(CoreError::WriteProtected);
         }
@@ -229,7 +229,7 @@ impl SpiMaster for InternalProgrammer {
         self.controller.max_write_len()
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         self.controller.execute(cmd)
     }
 
@@ -237,7 +237,7 @@ impl SpiMaster for InternalProgrammer {
         self.controller.probe_opcode(opcode)
     }
 
-    fn delay_us(&mut self, us: u32) {
+    async fn delay_us(&mut self, us: u32) {
         std::thread::sleep(std::time::Duration::from_micros(us as u64));
     }
 }
@@ -273,26 +273,26 @@ impl InternalProgrammer {
     }
 }
 
-#[cfg(all(feature = "is_sync", not(all(feature = "std", target_os = "linux"))))]
+#[cfg(not(all(feature = "std", target_os = "linux")))]
 impl OpaqueMaster for InternalProgrammer {
     fn size(&self) -> usize {
         0
     }
 
-    fn read(&mut self, _addr: u32, _buf: &mut [u8]) -> CoreResult<()> {
+    async fn read(&mut self, _addr: u32, _buf: &mut [u8]) -> CoreResult<()> {
         Err(CoreError::ProgrammerNotReady)
     }
 
-    fn write(&mut self, _addr: u32, _data: &[u8]) -> CoreResult<()> {
+    async fn write(&mut self, _addr: u32, _data: &[u8]) -> CoreResult<()> {
         Err(CoreError::ProgrammerNotReady)
     }
 
-    fn erase(&mut self, _addr: u32, _len: u32) -> CoreResult<()> {
+    async fn erase(&mut self, _addr: u32, _len: u32) -> CoreResult<()> {
         Err(CoreError::ProgrammerNotReady)
     }
 }
 
-#[cfg(all(feature = "is_sync", not(all(feature = "std", target_os = "linux"))))]
+#[cfg(not(all(feature = "std", target_os = "linux")))]
 impl SpiMaster for InternalProgrammer {
     fn features(&self) -> SpiFeatures {
         SpiFeatures::empty()
@@ -306,7 +306,7 @@ impl SpiMaster for InternalProgrammer {
         0
     }
 
-    fn execute(&mut self, _cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, _cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         Err(CoreError::ProgrammerNotReady)
     }
 
@@ -314,7 +314,7 @@ impl SpiMaster for InternalProgrammer {
         false
     }
 
-    fn delay_us(&mut self, _us: u32) {}
+    async fn delay_us(&mut self, _us: u32) {}
 }
 
 #[cfg(test)]

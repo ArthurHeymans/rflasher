@@ -1,18 +1,15 @@
 //! FTDI MPSSE device implementation using ftdi-nusb (shared by native and wasm)
 //!
 //! This module provides the `Ftdi` struct using the pure-Rust `ftdi-nusb` crate
-//! (backed by `nusb`). It uses `maybe_async` to support both native sync and
-//! WASM async modes from a single codebase.
+//! (backed by `nusb`). The API is async on every target.
 //!
 //! ftdi-nusb handles USB communication, modem status byte stripping, and endpoint
 //! management. This module layers MPSSE SPI protocol on top.
 
-#[cfg(feature = "is_sync")]
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use ftdi_nusb::FtdiDevice;
-#[cfg(feature = "is_sync")]
-use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
@@ -23,8 +20,7 @@ use super::rsftdi_error::{FtdiError, Result};
 /// FTDI MPSSE programmer (ftdi-nusb backend, shared by native and wasm)
 ///
 /// This struct represents a connection to an FTDI device using the MPSSE
-/// engine for SPI communication. It uses the pure-Rust `ftdi-nusb` crate
-/// and supports both native sync and WASM async modes via `maybe_async`.
+/// engine for SPI communication. It uses the pure-Rust `ftdi-nusb` crate.
 pub struct Ftdi {
     /// ftdi-nusb device context
     device: FtdiDevice,
@@ -34,6 +30,24 @@ pub struct Ftdi {
     aux_bits: u8,
     /// Pin direction
     pindir: u8,
+}
+
+/// Resolve an `ftdi-nusb` call to its output.
+///
+/// ftdi-nusb 0.2 exposes a blocking API on native (its `std` feature selects
+/// `is_sync`) and an async API on WASM. This macro papers over the split
+/// until an async-native ftdi-nusb release exists.
+macro_rules! ftdi_call {
+    ($expr:expr) => {{
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            $expr
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            $expr.await
+        }
+    }};
 }
 
 // ---------------------------------------------------------------------------
@@ -56,7 +70,7 @@ fn map_interface(iface: FtdiInterface) -> ftdi_nusb::Interface {
 #[cfg(all(feature = "ftdi-native", not(target_arch = "wasm32")))]
 impl Ftdi {
     /// Open an FTDI device with the given configuration
-    pub fn open(config: &FtdiConfig) -> Result<Self> {
+    pub async fn open(config: &FtdiConfig) -> Result<Self> {
         log::info!(
             "Opening FTDI {} channel {} (ftdi-nusb backend)",
             config.device_type.name(),
@@ -97,7 +111,7 @@ impl Ftdi {
         };
 
         // Initialize MPSSE
-        ftdi.init_mpsse(config)?;
+        ftdi.init_mpsse(config).await?;
 
         log::info!(
             "FTDI configured for SPI at {:.2} MHz (ftdi-nusb backend)",
@@ -108,19 +122,19 @@ impl Ftdi {
     }
 
     /// Open the first available FTDI device
-    pub fn open_first() -> Result<Self> {
-        Self::open(&FtdiConfig::default())
+    pub async fn open_first() -> Result<Self> {
+        Self::open(&FtdiConfig::default()).await
     }
 
     /// Open a specific device type
-    pub fn open_device(device_type: FtdiDeviceType) -> Result<Self> {
-        Self::open(&FtdiConfig::for_device(device_type))
+    pub async fn open_device(device_type: FtdiDeviceType) -> Result<Self> {
+        Self::open(&FtdiConfig::for_device(device_type)).await
     }
 
     /// List available FTDI devices
-    pub fn list_devices() -> Result<Vec<FtdiDeviceInfo>> {
+    pub async fn list_devices() -> Result<Vec<FtdiDeviceInfo>> {
         let devices = nusb::list_devices()
-            .wait()
+            .await
             .map_err(|e| FtdiError::UsbError(e.to_string()))?
             .filter_map(|dev| {
                 let vid = dev.vendor_id();
@@ -142,12 +156,12 @@ impl Ftdi {
     }
 }
 
-// Drop implementation only for sync mode (async requires explicit shutdown)
-#[cfg(feature = "is_sync")]
+// Native-only best-effort cleanup; WASM uses explicit shutdown instead.
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Ftdi {
     fn drop(&mut self) {
         // Release I/O pins on close
-        if let Err(e) = self.release_pins() {
+        if let Err(e) = futures_lite::future::block_on(self.release_pins()) {
             log::warn!("Failed to release pins on close: {}", e);
         }
     }
@@ -232,7 +246,7 @@ impl Ftdi {
 }
 
 // ---------------------------------------------------------------------------
-// Shared methods (sync or async via maybe_async)
+// Shared methods (async on every target)
 // ---------------------------------------------------------------------------
 
 impl Ftdi {
@@ -292,9 +306,7 @@ impl Ftdi {
 
     /// Send data to the FTDI device
     async fn send(&mut self, data: &[u8]) -> Result<()> {
-        self.device
-            .write_all(data)
-            .await
+        ftdi_call!(self.device.write_all(data))
             .map_err(|e| FtdiError::TransferFailed(format!("Write failed: {}", e)))?;
         log::trace!("Sent {} bytes", data.len());
         Ok(())
@@ -306,14 +318,14 @@ impl Ftdi {
         let mut total = 0;
 
         while total < len {
-            match self.device.read_data(&mut buf[total..]).await {
+            match ftdi_call!(self.device.read_data(&mut buf[total..])) {
                 Ok(0) => {
                     // No data available, wait a bit
-                    #[cfg(feature = "is_sync")]
+                    #[cfg(not(target_arch = "wasm32"))]
                     {
                         std::thread::sleep(Duration::from_micros(100));
                     }
-                    #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+                    #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
                     {
                         let promise = js_sys::Promise::new(&mut |resolve, _| {
                             let window = web_sys::window().unwrap();
@@ -447,12 +459,12 @@ impl SpiMaster for Ftdi {
 
     async fn delay_us(&mut self, us: u32) {
         if us > 0 {
-            #[cfg(feature = "is_sync")]
+            #[cfg(not(target_arch = "wasm32"))]
             {
                 std::thread::sleep(Duration::from_micros(us as u64));
             }
 
-            #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+            #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
             {
                 let delay_ms = ((us as f64) / 1000.0).ceil() as i32;
                 if delay_ms > 0 {

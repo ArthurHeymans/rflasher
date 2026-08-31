@@ -3,16 +3,13 @@
 //! This module provides the main `Dediprog` struct that implements USB
 //! communication with Dediprog SF100/SF200/SF600/SF700 programmers.
 //!
-//! Uses `maybe_async` to support both sync and async modes from a single
-//! codebase:
-//! - With `is_sync` feature (native CLI): all async is stripped, blocking USB
-//! - Without `is_sync` (WASM): full async with WebUSB
+//! Async on every target: native drives the async API with a `block_on`
+//! boundary in the application, WASM uses WebUSB.
 
 use std::time::Duration;
 
 use nusb::Endpoint;
 #[cfg(all(feature = "std", not(feature = "wasm")))]
-use nusb::MaybeFuture;
 use nusb::transfer::{Buffer, Bulk, In, Out};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
@@ -34,31 +31,16 @@ use super::protocol::*;
 /// Returns `Option<Completion>`.
 macro_rules! ep_wait {
     ($ep:expr, $timeout:expr) => {{
-        #[cfg(feature = "is_sync")]
-        {
-            $ep.wait_next_complete($timeout)
-        }
-        #[cfg(not(feature = "is_sync"))]
-        {
-            Some($ep.next_complete().await)
-        }
+        let _ = $timeout;
+        Some($ep.next_complete().await)
     }};
 }
 
 /// Resolve an nusb `MaybeFuture` to its output.
-/// In sync mode: calls `.wait()` (blocking).
+/// In sync mode: calls `.await` (blocking).
 /// In async mode: `.await`s the future.
 macro_rules! nusb_await {
-    ($expr:expr) => {{
-        #[cfg(feature = "is_sync")]
-        {
-            $expr.wait()
-        }
-        #[cfg(not(feature = "is_sync"))]
-        {
-            $expr.await
-        }
-    }};
+    ($expr:expr) => {{ $expr.await }};
 }
 
 /// Platform-aware sleep/delay.
@@ -66,11 +48,11 @@ macro_rules! nusb_await {
 /// In async mode (WASM): setTimeout-based delay.
 macro_rules! platform_sleep {
     ($dur:expr) => {{
-        #[cfg(feature = "is_sync")]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             std::thread::sleep($dur);
         }
-        #[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+        #[cfg(target_arch = "wasm32")]
         {
             // Browser setTimeout resolution is 1 ms minimum.  For sub-ms
             // durations we still yield via setTimeout(0) so the event loop
@@ -214,15 +196,15 @@ impl Dediprog {
 #[cfg(all(feature = "std", not(feature = "wasm")))]
 impl Dediprog {
     /// Open the first available Dediprog device
-    pub fn open() -> Result<Self> {
-        Self::open_with_config(DediprogConfig::default())
+    pub async fn open() -> Result<Self> {
+        Self::open_with_config(DediprogConfig::default()).await
     }
 
     /// Open a Dediprog device with the specified configuration
-    pub fn open_with_config(config: DediprogConfig) -> Result<Self> {
+    pub async fn open_with_config(config: DediprogConfig) -> Result<Self> {
         // Find matching devices
         let devices: Vec<_> = nusb::list_devices()
-            .wait()
+            .await
             .map_err(|e| DediprogError::OpenFailed(e.to_string()))?
             .filter(|d| {
                 d.vendor_id() == DEDIPROG_USB_VENDOR && d.product_id() == DEDIPROG_USB_PRODUCT
@@ -236,10 +218,10 @@ impl Dediprog {
         // If searching by ID, try each device
         if let Some(ref target_id) = config.device_id {
             for device_info in &devices {
-                match Self::try_open_device(device_info, &config) {
+                match Self::try_open_device(device_info, &config).await {
                     Ok(mut dediprog) => {
                         // Read device ID and check
-                        if let Ok(id) = dediprog.read_device_id() {
+                        if let Ok(id) = dediprog.read_device_id().await {
                             let id_str = format!("SF{:06}", id);
                             if id_str.contains(target_id) || target_id.contains(&id_str) {
                                 log::info!("Found Dediprog with ID {}", id_str);
@@ -260,11 +242,14 @@ impl Dediprog {
             .get(config.device_index)
             .ok_or(DediprogError::DeviceNotFound)?;
 
-        Self::try_open_device(device_info, &config)
+        Self::try_open_device(device_info, &config).await
     }
 
     /// Try to open a specific USB device (native/blocking)
-    fn try_open_device(device_info: &nusb::DeviceInfo, config: &DediprogConfig) -> Result<Self> {
+    async fn try_open_device(
+        device_info: &nusb::DeviceInfo,
+        config: &DediprogConfig,
+    ) -> Result<Self> {
         log::info!(
             "Opening Dediprog at bus {} address {}",
             device_info.bus_id(),
@@ -273,13 +258,13 @@ impl Dediprog {
 
         let device = device_info
             .open()
-            .wait()
+            .await
             .map_err(|e| DediprogError::OpenFailed(e.to_string()))?;
 
         // Claim interface 0
         let interface = device
             .claim_interface(0)
-            .wait()
+            .await
             .map_err(|e| DediprogError::ClaimFailed(e.to_string()))?;
 
         let mut dediprog = Self {
@@ -295,14 +280,14 @@ impl Dediprog {
             flash_size: None,
         };
 
-        dediprog.init_device(config)?;
+        dediprog.init_device(config).await?;
         Ok(dediprog)
     }
 
     /// List all connected Dediprog devices
-    pub fn list_devices() -> Result<Vec<DediprogDeviceInfo>> {
+    pub async fn list_devices() -> Result<Vec<DediprogDeviceInfo>> {
         let devices: Vec<_> = nusb::list_devices()
-            .wait()
+            .await
             .map_err(|e| DediprogError::OpenFailed(e.to_string()))?
             .filter(|d| {
                 d.vendor_id() == DEDIPROG_USB_VENDOR && d.product_id() == DEDIPROG_USB_PRODUCT
@@ -338,14 +323,18 @@ impl std::fmt::Display for DediprogDeviceInfo {
     }
 }
 
-// Drop implementation only for sync mode (async requires explicit shutdown)
-#[cfg(feature = "is_sync")]
+// Native-only best-effort cleanup. On WASM, dropping mid-operation from a
+// cancelled task must not block the event loop; explicit shutdown is used
+// there instead.
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Dediprog {
     fn drop(&mut self) {
-        // Reset I/O mode
-        let _ = self.set_io_mode(DpIoMode::Single);
-        // Turn off voltage
-        let _ = self.set_voltage(0);
+        futures_lite::future::block_on(async {
+            // Reset I/O mode
+            let _ = self.set_io_mode(DpIoMode::Single).await;
+            // Turn off voltage
+            let _ = self.set_voltage(0).await;
+        });
     }
 }
 
@@ -353,7 +342,7 @@ impl Drop for Dediprog {
 // WASM-only methods (WebUSB device picker, async open, shutdown)
 // ---------------------------------------------------------------------------
 
-#[cfg(all(feature = "wasm", not(feature = "is_sync")))]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 impl Dediprog {
     /// Request a Dediprog device via the WebUSB permission prompt
     ///
@@ -422,13 +411,13 @@ impl Dediprog {
 }
 
 // ---------------------------------------------------------------------------
-// Shared methods (sync or async via maybe_async)
+// Shared methods (async on every target)
 // ---------------------------------------------------------------------------
 
 // When all features are enabled simultaneously (e.g. --all-features in CI),
 // the mutually-exclusive open() methods are both excluded, making these shared
 // helpers appear unused. Allow dead_code for that configuration.
-#[cfg_attr(all(feature = "wasm", feature = "is_sync"), allow(dead_code))]
+#[cfg_attr(any(), allow(dead_code))]
 impl Dediprog {
     /// Initialize device after USB connection is established.
     /// Shared between native and WASM paths.
@@ -740,13 +729,13 @@ impl Dediprog {
         // address when recipient is Endpoint, rejecting Dediprog's
         // protocol-specific index values with IndexSizeError.  The firmware
         // dispatches on bRequest only, so Device works fine.
-        #[cfg(feature = "is_sync")]
+        #[cfg(not(target_arch = "wasm32"))]
         let recipient = if request_type & 0x03 == 0x02 {
             nusb::transfer::Recipient::Endpoint
         } else {
             nusb::transfer::Recipient::Other
         };
-        #[cfg(not(feature = "is_sync"))]
+        #[cfg(target_arch = "wasm32")]
         let recipient = nusb::transfer::Recipient::Device;
 
         let data = nusb_await!(self.iface().control_in(
@@ -787,9 +776,9 @@ impl Dediprog {
         data: &[u8],
     ) -> Result<()> {
         // See control_read_raw for rationale on the recipient override.
-        #[cfg(feature = "is_sync")]
+        #[cfg(not(target_arch = "wasm32"))]
         let recipient = nusb::transfer::Recipient::Endpoint;
-        #[cfg(not(feature = "is_sync"))]
+        #[cfg(target_arch = "wasm32")]
         let recipient = nusb::transfer::Recipient::Device;
 
         nusb_await!(self.iface().control_out(
@@ -883,9 +872,9 @@ impl Dediprog {
             let to_read = (read_len - total_read).min(64);
 
             // See control_read_raw for rationale on the recipient override.
-            #[cfg(feature = "is_sync")]
+            #[cfg(not(target_arch = "wasm32"))]
             let recipient = nusb::transfer::Recipient::Endpoint;
-            #[cfg(not(feature = "is_sync"))]
+            #[cfg(target_arch = "wasm32")]
             let recipient = nusb::transfer::Recipient::Device;
 
             let data = nusb_await!(self.iface().control_in(

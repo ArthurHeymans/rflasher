@@ -378,14 +378,14 @@ impl SpiMaster for LinuxSpi {
         self.max_kernel_buf_size.saturating_sub(5)
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         default_execute(cmd, self.features(), |write_data, read_buf| {
             self.spi_transfer(write_data, read_buf)
                 .map_err(|_| CoreError::ProgrammerError)
         })
     }
 
-    fn delay_us(&mut self, us: u32) {
+    async fn delay_us(&mut self, us: u32) {
         std::thread::sleep(std::time::Duration::from_micros(us as u64));
     }
 }
