@@ -485,8 +485,8 @@ pub fn get_device_info(vid: u16, pid: u16) -> Option<&'static SupportedDevice> {
 
 /// Configuration for opening an FTDI device
 ///
-/// This struct is shared across all backends (std/libftdi1, native/rs-ftdi,
-/// and wasm/WebUSB). Validation methods return `Result<Self, String>` so
+/// This struct is shared across both transports (native nusb and
+/// wasm/WebUSB). Validation methods return `Result<Self, String>` so
 /// they are error-type-agnostic.
 #[derive(Debug, Clone)]
 pub struct FtdiConfig {

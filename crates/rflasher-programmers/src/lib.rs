@@ -30,7 +30,7 @@ pub mod dummy;
 #[cfg(feature = "ft4222")]
 #[path = "backends/ft4222/mod.rs"]
 pub mod ft4222;
-#[cfg(any(feature = "ftdi", feature = "ftdi-native", feature = "ftdi-wasm"))]
+#[cfg(any(feature = "ftdi", feature = "ftdi-wasm"))]
 #[path = "backends/ftdi/mod.rs"]
 pub mod ftdi;
 #[cfg(all(feature = "linux-gpio", target_os = "linux"))]

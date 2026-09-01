@@ -359,7 +359,7 @@ pub async fn open_spi_programmer(
             }
         }
 
-        #[cfg(any(feature = "ftdi", feature = "ftdi-native"))]
+        #[cfg(feature = "ftdi")]
         "ftdi" | "ft2232_spi" | "ft4232_spi" => {
             use crate::ftdi::{parse_options, Ftdi};
             log::info!("Opening FTDI programmer for REPL...");
@@ -499,7 +499,7 @@ pub async fn open_flash(
         #[cfg(feature = "serprog-native")]
         "serprog" => open_serprog(&params, db).await,
 
-        #[cfg(any(feature = "ftdi", feature = "ftdi-native"))]
+        #[cfg(feature = "ftdi")]
         "ftdi" | "ft2232_spi" | "ft4232_spi" => open_ftdi(&params, db).await,
 
         #[cfg(feature = "ft4222")]
@@ -733,7 +733,7 @@ async fn open_serprog(
     }
 }
 
-#[cfg(any(feature = "ftdi", feature = "ftdi-native"))]
+#[cfg(feature = "ftdi")]
 async fn open_ftdi(
     params: &ProgrammerParams,
     db: &dyn ChipProvider,
@@ -1132,7 +1132,7 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
             "Serial Flasher Protocol over serial/network (dev=<port>,ip=<host:port>,spispeed=<khz>)",
     });
 
-    #[cfg(any(feature = "ftdi", feature = "ftdi-native"))]
+    #[cfg(feature = "ftdi")]
     programmers.push(ProgrammerInfo {
         name: "ftdi",
         aliases: &["ft2232_spi", "ft4232_spi"],

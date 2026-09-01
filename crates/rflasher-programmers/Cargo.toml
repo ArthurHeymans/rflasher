@@ -30,9 +30,8 @@ sunxi-fel = ["std", "dep:nusb"]
 serprog = ["std", "dep:embedded-io", "dep:embedded-io-async", "dep:thiserror"]
 serprog-native = ["serprog", "dep:serialport"]
 
-# FTDI backends
-ftdi = ["std", "dep:ftdi", "dep:nusb", "dep:futures-lite"]
-ftdi-native = [
+# FTDI backends (pure-Rust ftdi-nusb MPSSE)
+ftdi = [
     "std",
     "dep:ftdi-nusb",
     "ftdi-nusb/smol",
@@ -57,7 +56,7 @@ portable-programmers = [
     "ch347",
     "dediprog",
     "serprog-native",
-    "ftdi-native",
+    "ftdi",
     "ft4222",
     "raiden",
     "sunxi-fel",
@@ -75,7 +74,6 @@ embedded-io-async = { workspace = true, optional = true }
 nusb = { workspace = true, optional = true }
 futures-lite = { version = "2", optional = true }
 
-ftdi = { version = "0.1", optional = true }
 ftdi-nusb = { version = "0.3.0", default-features = false, optional = true }
 serialport = { version = "4.5", optional = true }
 gpiocdev = { version = "0.8", features = ["uapi_v1", "uapi_v2"], optional = true }

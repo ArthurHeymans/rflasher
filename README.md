@@ -86,7 +86,7 @@ cd rflasher
 # Build with default features (most common programmers)
 cargo build --release
 
-# Build with all programmers (includes FTDI, requires libftdi1-dev)
+# Build with all programmers
 cargo build --release --features all-programmers
 
 # Build with specific programmers only
@@ -99,10 +99,6 @@ cargo install --path .
 ### System Requirements
 
 - **Rust toolchain** 1.85 or later (edition 2024)
-- **libftdi1** (optional, for FTDI programmer support)
-  - Debian/Ubuntu: `sudo apt install libftdi1-dev`
-  - Fedora: `sudo dnf install libftdi-devel`
-  - Arch: `sudo pacman -S libftdi`
 
 ### Chip Database
 
@@ -573,8 +569,8 @@ executor-independent — no Tokio or other runtime is required:
 
 - **Native CLI**: blocks exactly once, in `main`, with
   `futures_lite::future::block_on` around the async command handlers.
-  Genuinely blocking backends (Linux spidev/MTD/GPIO, serial serprog,
-  libftdi) simply perform their blocking calls inside async methods.
+  Genuinely blocking backends (Linux spidev/MTD/GPIO, serial serprog)
+  simply perform their blocking calls inside async methods.
 - **WASM**: the browser event loop drives the same async operations over
   WebUSB/WebSerial.
 

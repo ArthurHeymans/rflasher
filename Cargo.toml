@@ -94,8 +94,6 @@ ch347 = ["rflasher-programmers/ch347"]
 dediprog = ["rflasher-programmers/dediprog"]
 serprog = ["rflasher-programmers/serprog-native"]
 ftdi = ["rflasher-programmers/ftdi"]
-# Use pure-Rust ftdi-nusb backend for FTDI MPSSE (instead of C libftdi1)
-ftdi-native = ["rflasher-programmers/ftdi-native"]
 ft4222 = ["rflasher-programmers/ft4222"]
 linux-spi = ["rflasher-programmers/linux-spi"]
 linux-mtd = ["rflasher-programmers/linux-mtd"]
@@ -109,12 +107,10 @@ repl = ["dep:rflasher-repl"]
 
 # Enable all programmers
 all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "sunxi-fel"]
-# Enable all programmers with pure-Rust FTDI backend
-all-programmers-native = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi-native", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "sunxi-fel"]
 
 # Cross-platform desktop programmers: nusb-backed USB programmers plus serprog and dummy.
 # Excludes Linux-only devices and the Linux userspace internal chipset backend.
-portable-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi-native", "ft4222", "raiden", "sunxi-fel"]
+portable-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "raiden", "sunxi-fel"]
 # Static Linux (musl) builds: portable programmers plus Linux-only backends that
 # are pure libc syscalls and need no C libraries (internal chipset, spidev, mtd).
 static-linux-programmers = ["portable-programmers", "linux-spi", "linux-mtd", "internal"]
