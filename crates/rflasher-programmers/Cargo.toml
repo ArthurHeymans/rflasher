@@ -34,15 +34,14 @@ serprog-native = ["serprog", "dep:serialport"]
 ftdi = ["std", "dep:ftdi", "dep:nusb", "dep:futures-lite"]
 ftdi-native = [
     "std",
-        "dep:ftdi-nusb",
-    "ftdi-nusb/std",
+    "dep:ftdi-nusb",
+    "ftdi-nusb/smol",
     "dep:nusb",
     "dep:futures-lite",
 ]
 ftdi-wasm = [
     "wasm",
     "dep:ftdi-nusb",
-    "ftdi-nusb/wasm",
     "dep:nusb",
 ]
 # Linux-only programmer backends
@@ -76,7 +75,7 @@ embedded-io-async = { workspace = true, optional = true }
 nusb = { workspace = true, optional = true }
 futures-lite = { version = "2", optional = true }
 ftdi = { version = "0.1", optional = true }
-ftdi-nusb = { version = "0.2", default-features = false, optional = true }
+ftdi-nusb = { git = "https://github.com/ArthurHeymans/ftdi-nusb", rev = "e8d1aaf2f78c77395275e086b43068c9149c1874", default-features = false, optional = true }
 serialport = { version = "4.5", optional = true }
 gpiocdev = { version = "0.8", features = ["uapi_v1", "uapi_v2"], optional = true }
 libc = { version = "0.2", optional = true }

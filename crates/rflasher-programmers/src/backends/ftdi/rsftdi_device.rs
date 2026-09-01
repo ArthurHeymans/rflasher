@@ -32,24 +32,6 @@ pub struct Ftdi {
     pindir: u8,
 }
 
-/// Resolve an `ftdi-nusb` call to its output.
-///
-/// ftdi-nusb 0.2 exposes a blocking API on native (its `std` feature selects
-/// `is_sync`) and an async API on WASM. This macro papers over the split
-/// until an async-native ftdi-nusb release exists.
-macro_rules! ftdi_call {
-    ($expr:expr) => {{
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            $expr
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            $expr.await
-        }
-    }};
-}
-
 // ---------------------------------------------------------------------------
 // Helper: convert our FtdiInterface to ftdi-nusb's Interface
 // ---------------------------------------------------------------------------
@@ -84,6 +66,7 @@ impl Ftdi {
         log::debug!("Looking for FTDI device VID={:04X} PID={:04X}", vid, pid);
 
         let mut device = FtdiDevice::open_with_interface(vid, pid, interface)
+            .await
             .map_err(|e| FtdiError::OpenFailed(format!("{}", e)))?;
 
         log::debug!("Opened FTDI device VID={:04X} PID={:04X}", vid, pid);
@@ -91,16 +74,19 @@ impl Ftdi {
         // Reset USB device
         device
             .usb_reset()
+            .await
             .map_err(|e| FtdiError::ConfigFailed(format!("USB reset failed: {}", e)))?;
 
         // Set latency timer (2ms for best performance)
         device
             .set_latency_timer(2)
+            .await
             .map_err(|e| FtdiError::ConfigFailed(format!("Set latency timer failed: {}", e)))?;
 
         // Set MPSSE bitbang mode
         device
             .set_bitmode(0x00, ftdi_nusb::BitMode::Mpsse)
+            .await
             .map_err(|e| FtdiError::ConfigFailed(format!("Set MPSSE mode failed: {}", e)))?;
 
         let mut ftdi = Ftdi {
@@ -306,7 +292,9 @@ impl Ftdi {
 
     /// Send data to the FTDI device
     async fn send(&mut self, data: &[u8]) -> Result<()> {
-        ftdi_call!(self.device.write_all(data))
+        self.device
+            .write_all(data)
+            .await
             .map_err(|e| FtdiError::TransferFailed(format!("Write failed: {}", e)))?;
         log::trace!("Sent {} bytes", data.len());
         Ok(())
@@ -318,7 +306,7 @@ impl Ftdi {
         let mut total = 0;
 
         while total < len {
-            match ftdi_call!(self.device.read_data(&mut buf[total..])) {
+            match self.device.read_data(&mut buf[total..]).await {
                 Ok(0) => {
                     // No data available, wait a bit
                     #[cfg(not(target_arch = "wasm32"))]
