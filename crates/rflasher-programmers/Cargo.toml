@@ -21,11 +21,11 @@ wasm = [
 
 # Programmer backends
 dummy = ["alloc"]
-ch341a = ["std", "dep:nusb", "dep:futures-lite"]
-ch347 = ["std", "dep:nusb", "dep:futures-lite"]
-dediprog = ["std", "dep:nusb", "dep:futures-lite"]
-ft4222 = ["std", "dep:nusb", "dep:futures-lite"]
-raiden = ["std", "dep:nusb", "dep:futures-lite", "dep:zerocopy"]
+ch341a = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
+ch347 = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
+dediprog = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
+ft4222 = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
+raiden = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer", "dep:zerocopy"]
 sunxi-fel = ["std", "dep:nusb"]
 serprog = ["std", "dep:embedded-io", "dep:embedded-io-async", "dep:thiserror"]
 serprog-native = ["serprog", "dep:serialport"]
@@ -74,6 +74,7 @@ embedded-io-async = { workspace = true, optional = true }
 
 nusb = { workspace = true, optional = true }
 futures-lite = { version = "2", optional = true }
+
 ftdi = { version = "0.1", optional = true }
 ftdi-nusb = { git = "https://github.com/ArthurHeymans/ftdi-nusb", rev = "e8d1aaf2f78c77395275e086b43068c9149c1874", default-features = false, optional = true }
 serialport = { version = "4.5", optional = true }
@@ -103,6 +104,9 @@ wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = { version = "0.3", optional = true }
 gloo-timers = { version = "0.3", features = ["futures"], optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+futures-timer = { version = "3", optional = true }
 
 [package.metadata.docs.rs]
 no-default-features = true

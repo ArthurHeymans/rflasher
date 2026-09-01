@@ -98,7 +98,7 @@ cargo install --path .
 
 ### System Requirements
 
-- **Rust toolchain** 1.70 or later
+- **Rust toolchain** 1.85 or later (edition 2024)
 - **libftdi1** (optional, for FTDI programmer support)
   - Debian/Ubuntu: `sudo apt install libftdi1-dev`
   - Fedora: `sudo dnf install libftdi-devel`
@@ -275,8 +275,10 @@ rflasher-internal = { version = "0.1", default-features = false }
 ```
 
 All I/O trait methods are `async fn`; a firmware without an executor can
-drive them with a minimal `block_on` (e.g. `futures_lite::future::block_on`),
-since the controllers never actually suspend.
+drive them to completion with its own minimal `block_on` — a poll loop with a
+no-op waker is enough, since the controllers never actually suspend. (Std
+executors like `futures_lite::future::block_on` are not available in `no_std`
+builds; embedded executors such as Embassy also work.)
 
 Firmware code can pass its own PCI scan results to `find_intel_chipset_in_devices` / `find_amd_chipset_in_devices`, then construct controllers with `IchSpiController::new_with_host(...)` or `AmdSpi100Info::create_controller_with_host(...)`.
 

@@ -52,6 +52,17 @@ pub mod serprog;
 #[path = "backends/sunxi_fel/mod.rs"]
 pub mod sunxi_fel;
 
+// Shared endpoint-completion timeout helper for the nusb-backed programmers.
+#[cfg(any(
+    feature = "ch341a",
+    feature = "ch347",
+    feature = "dediprog",
+    feature = "ft4222",
+    feature = "raiden"
+))]
+#[path = "backends/usb_ep.rs"]
+pub(crate) mod usb_ep;
+
 // The registry and its erasure layer are native-only: WASM frontends select
 // and construct their backend explicitly (WebUSB permission flow).
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]

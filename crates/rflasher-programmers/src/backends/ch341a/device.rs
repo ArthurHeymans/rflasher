@@ -16,26 +16,17 @@ use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
 
 use super::error::{Ch341aError, Result};
 use super::protocol::*;
+use crate::usb_ep::EpWaitExt;
 
 // ---------------------------------------------------------------------------
 // Platform-specific endpoint wait macros
 // ---------------------------------------------------------------------------
-// These macros provide a uniform interface over nusb's blocking (native)
-// and async (WASM) completion APIs. Using macros avoids the borrow issues
-// that arise with &mut Endpoint in free functions, since the macro expands
-// inline and Rust can split borrows on struct fields.
-
-/// Wait for the next completion on an endpoint, with timeout.
-/// In sync mode: blocks with the given timeout.
-/// In async mode: awaits indefinitely (timeout is ignored — nusb's async
-/// API does not support timeouts natively; the caller should add an external
-/// timeout wrapper if needed).
-/// Returns `Option<Completion>`.
+/// Wait for the next completion on an endpoint, giving up after the timeout.
+/// Returns `Option<Completion>` (`None` on timeout).
 macro_rules! ep_wait {
-    ($ep:expr, $timeout:expr) => {{
-        let _ = $timeout;
-        Some($ep.next_complete().await)
-    }};
+    ($ep:expr, $timeout:expr) => {
+        $ep.next_complete_timeout($timeout).await
+    };
 }
 
 /// Try to get the next completion without blocking (non-blocking poll).

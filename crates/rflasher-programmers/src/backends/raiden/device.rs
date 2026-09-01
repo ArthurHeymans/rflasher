@@ -13,12 +13,14 @@ use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
 
 use super::error::{RaidenError, Result};
 use super::protocol::*;
+use crate::usb_ep::EpWaitExt;
 
+/// Wait for the next completion on an endpoint, giving up after the timeout.
+/// Returns `Option<Completion>` (`None` on timeout).
 macro_rules! ep_wait {
-    ($ep:expr, $timeout:expr) => {{
-        let _ = $timeout;
-        Some($ep.next_complete().await)
-    }};
+    ($ep:expr, $timeout:expr) => {
+        $ep.next_complete_timeout($timeout).await
+    };
 }
 
 macro_rules! nusb_await {

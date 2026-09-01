@@ -16,6 +16,7 @@ use rflasher_core::spi::{SpiCommand, check_io_mode_supported, opcodes};
 
 use super::error::{DediprogError, Result};
 use super::protocol::*;
+use crate::usb_ep::EpWaitExt;
 
 // ---------------------------------------------------------------------------
 // Platform-specific endpoint wait macros
@@ -23,16 +24,12 @@ use super::protocol::*;
 // These macros provide a uniform interface over nusb's blocking (native)
 // and async (WASM) completion APIs.
 
-/// Wait for the next completion on an endpoint, with timeout.
-/// In sync mode: blocks with the given timeout.
-/// In async mode: awaits indefinitely (timeout is ignored -- nusb's async
-/// API does not support timeouts natively).
-/// Returns `Option<Completion>`.
+/// Wait for the next completion on an endpoint, giving up after the timeout.
+/// Returns `Option<Completion>` (`None` on timeout).
 macro_rules! ep_wait {
-    ($ep:expr, $timeout:expr) => {{
-        let _ = $timeout;
-        Some($ep.next_complete().await)
-    }};
+    ($ep:expr, $timeout:expr) => {
+        $ep.next_complete_timeout($timeout).await
+    };
 }
 
 /// Resolve an nusb `MaybeFuture` to its output.
@@ -1063,10 +1060,10 @@ impl Dediprog {
 
         // Scale timeout with transfer size: 10 s base + ~30 us per byte
         // (accommodates the slowest SPI speed of 375 kHz ~ 47 KiB/s)
-        let _timeout =
+        let timeout =
             Duration::from_secs(ASYNC_TIMEOUT_SECS) + Duration::from_micros(len as u64 * 30);
 
-        let result = ep_wait!(in_ep, _timeout).ok_or(DediprogError::Timeout)?;
+        let result = ep_wait!(in_ep, timeout).ok_or(DediprogError::Timeout)?;
         result
             .status
             .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
@@ -1138,10 +1135,10 @@ impl Dediprog {
 
         // Scale timeout with transfer size: 10 s base + 10 ms per page
         // (accommodates worst-case page-program time of typical NOR flash)
-        let _timeout =
+        let timeout =
             Duration::from_secs(ASYNC_TIMEOUT_SECS) + Duration::from_millis(count as u64 * 10);
 
-        let result = ep_wait!(out_ep, _timeout).ok_or(DediprogError::Timeout)?;
+        let result = ep_wait!(out_ep, timeout).ok_or(DediprogError::Timeout)?;
         result
             .status
             .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
