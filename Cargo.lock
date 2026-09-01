@@ -1204,8 +1204,9 @@ dependencies = [
 
 [[package]]
 name = "ftdi-nusb"
-version = "0.2.0"
-source = "git+https://github.com/ArthurHeymans/ftdi-nusb?rev=e8d1aaf2f78c77395275e086b43068c9149c1874#e8d1aaf2f78c77395275e086b43068c9149c1874"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea9f51291e4b1fc406826ca889011256c94ed8763487490bb4d3bec0126067c7"
 dependencies = [
  "futures-lite",
  "futures-timer",

@@ -15,6 +15,18 @@ use rflasher_core::spi::SpiCommand;
 use super::error::{FtdiError, Result};
 use super::protocol::*;
 
+// MPSSE wire constants private to the legacy libftdi backend.
+const MPSSE_DO_WRITE: u8 = 0x10;
+const MPSSE_DO_READ: u8 = 0x20;
+const MPSSE_WRITE_NEG: u8 = 0x01;
+const SET_BITS_LOW: u8 = 0x80;
+const SET_BITS_HIGH: u8 = 0x82;
+const LOOPBACK_END: u8 = 0x85;
+const TCK_DIVISOR: u8 = 0x86;
+const SEND_IMMEDIATE: u8 = 0x87;
+const DIS_DIV_5: u8 = 0x8a;
+const FTDI_HW_BUFFER_SIZE: usize = 4096;
+
 /// FTDI MPSSE programmer
 ///
 /// This struct represents a connection to an FTDI device using the MPSSE

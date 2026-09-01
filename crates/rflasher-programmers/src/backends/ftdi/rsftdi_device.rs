@@ -3,13 +3,19 @@
 //! This module provides the `Ftdi` struct using the pure-Rust `ftdi-nusb` crate
 //! (backed by `nusb`). The API is async on every target.
 //!
-//! ftdi-nusb handles USB communication, modem status byte stripping, and endpoint
-//! management. This module layers MPSSE SPI protocol on top.
+//! ftdi-nusb handles USB communication, MPSSE state, and SPI transactions. This
+//! module only maps rflasher's flashrom-compatible configuration and traits.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
-use ftdi_nusb::FtdiDevice;
+use ftdi_nusb::{
+    FtdiDevice,
+    mpsse::{
+        MpsseContext,
+        spi::{SpiConfig, SpiDevice, SpiMode},
+    },
+};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
@@ -24,12 +30,10 @@ use super::rsftdi_error::{FtdiError, Result};
 pub struct Ftdi {
     /// ftdi-nusb device context
     device: FtdiDevice,
-    /// Current CS bits state
-    cs_bits: u8,
-    /// Auxiliary bits
-    aux_bits: u8,
-    /// Pin direction
-    pindir: u8,
+    /// MPSSE engine state paired with `device`
+    mpsse: MpsseContext,
+    /// Configured SPI bus and adapter pin state
+    spi: SpiDevice,
 }
 
 // ---------------------------------------------------------------------------
@@ -83,21 +87,7 @@ impl Ftdi {
             .await
             .map_err(|e| FtdiError::ConfigFailed(format!("Set latency timer failed: {}", e)))?;
 
-        // Set MPSSE bitbang mode
-        device
-            .set_bitmode(0x00, ftdi_nusb::BitMode::Mpsse)
-            .await
-            .map_err(|e| FtdiError::ConfigFailed(format!("Set MPSSE mode failed: {}", e)))?;
-
-        let mut ftdi = Ftdi {
-            device,
-            cs_bits: config.cs_bits,
-            aux_bits: config.aux_bits,
-            pindir: config.pindir,
-        };
-
-        // Initialize MPSSE
-        ftdi.init_mpsse(config).await?;
+        let ftdi = Self::configure(device, config).await?;
 
         log::info!(
             "FTDI configured for SPI at {:.2} MHz (ftdi-nusb backend)",
@@ -197,21 +187,7 @@ impl Ftdi {
             .await
             .map_err(|e| FtdiError::ConfigFailed(format!("Set latency timer failed: {}", e)))?;
 
-        // Set MPSSE bitbang mode
-        device
-            .set_bitmode(0x00, ftdi_nusb::BitMode::Mpsse)
-            .await
-            .map_err(|e| FtdiError::ConfigFailed(format!("Set MPSSE mode failed: {}", e)))?;
-
-        let mut ftdi = Ftdi {
-            device,
-            cs_bits: config.cs_bits,
-            aux_bits: config.aux_bits,
-            pindir: config.pindir,
-        };
-
-        // Initialize MPSSE
-        ftdi.init_mpsse(config).await?;
+        let ftdi = Self::configure(device, config).await?;
 
         log::info!(
             "FTDI configured for SPI at {:.2} MHz (ftdi-nusb WebUSB)",
@@ -236,165 +212,57 @@ impl Ftdi {
 // ---------------------------------------------------------------------------
 
 impl Ftdi {
-    /// Initialize the MPSSE engine with MPSSE commands
-    async fn init_mpsse(&mut self, config: &FtdiConfig) -> Result<()> {
-        let mut buf = Vec::with_capacity(32);
-
-        // Disable divide-by-5 prescaler for 60 MHz base clock (H devices)
-        if config.device_type.is_high_speed() {
-            log::debug!("Disabling divide-by-5 prescaler for 60 MHz clock");
-            buf.push(DIS_DIV_5);
-        }
-
-        // Set clock divisor
-        // Divisor value for MPSSE is (divisor / 2 - 1)
-        let divisor_val = config.divisor / 2 - 1;
+    async fn configure(mut device: FtdiDevice, config: &FtdiConfig) -> Result<Self> {
+        let clock_hz = if config.device_type.is_high_speed() {
+            60_000_000 / u32::from(config.divisor)
+        } else {
+            12_000_000 / u32::from(config.divisor)
+        };
         log::debug!(
             "Setting clock divisor to {} (SPI clock: {:.2} MHz)",
             config.divisor,
             config.spi_clock_mhz()
         );
-        buf.push(TCK_DIVISOR);
-        buf.push((divisor_val & 0xFF) as u8);
-        buf.push(((divisor_val >> 8) & 0xFF) as u8);
 
-        // Disconnect loopback
-        log::debug!("Disabling loopback");
-        buf.push(LOOPBACK_END);
-
-        // Set initial data bits (low byte)
-        log::debug!(
-            "Setting data bits: cs_bits=0x{:02X} aux_bits=0x{:02X} pindir=0x{:02X}",
-            config.cs_bits,
-            config.aux_bits,
-            config.pindir
-        );
-        buf.push(SET_BITS_LOW);
-        buf.push(config.cs_bits | config.aux_bits);
-        buf.push(config.pindir);
-
-        // Set high byte pins if needed
-        if config.pindir_high != 0 {
-            log::debug!(
-                "Setting high byte pins: aux_bits_high=0x{:02X} pindir_high=0x{:02X}",
-                config.aux_bits_high,
-                config.pindir_high
-            );
-            buf.push(SET_BITS_HIGH);
-            buf.push(config.aux_bits_high);
-            buf.push(config.pindir_high);
-        }
-
-        self.send(&buf).await?;
-
-        Ok(())
-    }
-
-    /// Send data to the FTDI device
-    async fn send(&mut self, data: &[u8]) -> Result<()> {
-        self.device
-            .write_all(data)
+        let mut mpsse = MpsseContext::init(&mut device, clock_hz)
             .await
-            .map_err(|e| FtdiError::TransferFailed(format!("Write failed: {}", e)))?;
-        log::trace!("Sent {} bytes", data.len());
-        Ok(())
+            .map_err(|e| FtdiError::ConfigFailed(format!("MPSSE init failed: {e}")))?;
+        let spi = {
+            let mut session = mpsse.session(&mut device)?;
+            session.set_clock_divisor(config.divisor).await?;
+            SpiDevice::with_config(
+                &mut session,
+                SpiConfig::new(SpiMode::Mode0)
+                    .with_cs_mask(config.cs_bits, true)
+                    .with_low_pins(config.aux_bits, config.pindir)
+                    .with_high_pins(config.aux_bits_high, config.pindir_high),
+            )
+            .await?
+        };
+
+        Ok(Self { device, mpsse, spi })
     }
 
-    /// Receive data from the FTDI device
-    async fn recv(&mut self, len: usize) -> Result<Vec<u8>> {
-        let mut buf = vec![0u8; len];
-        let mut total = 0;
-
-        while total < len {
-            match self.device.read_data(&mut buf[total..]).await {
-                Ok(0) => {
-                    // No data available, wait a bit
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        std::thread::sleep(Duration::from_micros(100));
-                    }
-                    #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-                    {
-                        let promise = js_sys::Promise::new(&mut |resolve, _| {
-                            let window = web_sys::window().unwrap();
-                            window
-                                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 1)
-                                .unwrap();
-                        });
-                        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-                    }
-                }
-                Ok(n) => {
-                    total += n;
-                }
-                Err(e) => {
-                    return Err(FtdiError::TransferFailed(format!("Read failed: {}", e)));
-                }
-            }
-        }
-
-        log::trace!("Received {} bytes", total);
-        Ok(buf)
-    }
-
-    /// Perform an SPI transfer via MPSSE commands
+    /// Perform an SPI transfer through ftdi-nusb's MPSSE SPI implementation.
     async fn spi_transfer(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
-        let writecnt = write_data.len();
-        let readcnt = read_len;
-
-        // Validate lengths
-        if writecnt > 65536 || readcnt > 65536 {
+        if write_data.len() > 65536 || read_len > 65536 {
             return Err(FtdiError::TransferFailed(
                 "Transfer length exceeds 64KB limit".to_string(),
             ));
         }
 
-        // Build MPSSE command buffer
-        let mut buf = Vec::with_capacity(FTDI_HW_BUFFER_SIZE);
-
-        // Assert CS
-        buf.push(SET_BITS_LOW);
-        buf.push(self.aux_bits);
-        buf.push(self.pindir);
-
-        // Write command (opcode + address + data)
-        if writecnt > 0 {
-            buf.push(MPSSE_DO_WRITE | MPSSE_WRITE_NEG);
-            buf.push(((writecnt - 1) & 0xFF) as u8);
-            buf.push((((writecnt - 1) >> 8) & 0xFF) as u8);
-            buf.extend_from_slice(write_data);
-        }
-
-        // Read command
-        if readcnt > 0 {
-            buf.push(MPSSE_DO_READ);
-            buf.push(((readcnt - 1) & 0xFF) as u8);
-            buf.push((((readcnt - 1) >> 8) & 0xFF) as u8);
-        }
-
-        // Deassert CS
-        buf.push(SET_BITS_LOW);
-        buf.push(self.cs_bits | self.aux_bits);
-        buf.push(self.pindir);
-
-        // Send immediate to flush
-        buf.push(SEND_IMMEDIATE);
-
-        // Send command
-        self.send(&buf).await?;
-
-        // Read response if needed
-        if readcnt > 0 {
-            self.recv(readcnt).await
-        } else {
-            Ok(Vec::new())
-        }
+        let Self { device, mpsse, spi } = self;
+        let mut session = mpsse.session(device)?;
+        spi.write_read(&mut session, write_data, read_len)
+            .await
+            .map_err(Into::into)
     }
 
-    /// Release I/O pins (set all as inputs)
+    /// Release I/O pins (set all as inputs).
     async fn release_pins(&mut self) -> Result<()> {
-        let buf = [SET_BITS_LOW, 0x00, 0x00];
-        self.send(&buf).await
+        let Self { device, mpsse, .. } = self;
+        mpsse.session(device)?.release_pins().await?;
+        Ok(())
     }
 }
 
