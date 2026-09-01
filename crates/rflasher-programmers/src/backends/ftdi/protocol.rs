@@ -1,9 +1,6 @@
-//! FTDI MPSSE protocol constants
+//! Flashrom-compatible FTDI adapter presets, USB IDs, and option handling.
 //!
-//! Based on flashprog/ft2232_spi.c and FTDI MPSSE documentation.
-
-// Allow unused constants - they're provided for completeness
-#![allow(dead_code)]
+//! Based on flashprog/ft2232_spi.c.
 
 // ============================================================================
 // USB VID/PID constants
@@ -76,124 +73,17 @@ pub const GOOGLE_SERVO_V2_PID0: u16 = 0x5002;
 pub const GOOGLE_SERVO_V2_PID1: u16 = 0x5003;
 
 // ============================================================================
-// MPSSE Commands
+// Flashrom-compatible defaults
 // ============================================================================
 
-/// Write bytes on negative clock edge (SPI mode 0/2)
-pub const MPSSE_DO_WRITE: u8 = 0x10;
+/// Default CS mask (ADBUS3, deasserted high).
+pub const DEFAULT_CS_BITS: u8 = 0x08;
 
-/// Read bytes on positive clock edge (SPI mode 0/2)
-pub const MPSSE_DO_READ: u8 = 0x20;
+/// Default directions (SK, DO, and CS are outputs; DI is input).
+pub const DEFAULT_PINDIR: u8 = 0x0b;
 
-/// Write on negative clock edge
-pub const MPSSE_WRITE_NEG: u8 = 0x01;
-
-/// Read on negative clock edge
-pub const MPSSE_READ_NEG: u8 = 0x04;
-
-/// LSB first (not used - SPI is MSB first)
-pub const MPSSE_LSB: u8 = 0x08;
-
-/// Bit mode (transfer bits instead of bytes)
-pub const MPSSE_BITMODE: u8 = 0x02;
-
-/// Set data bits low byte
-pub const SET_BITS_LOW: u8 = 0x80;
-
-/// Set data bits high byte
-pub const SET_BITS_HIGH: u8 = 0x82;
-
-/// Get data bits low byte
-pub const GET_BITS_LOW: u8 = 0x81;
-
-/// Get data bits high byte
-pub const GET_BITS_HIGH: u8 = 0x83;
-
-/// Disable loopback mode
-pub const LOOPBACK_END: u8 = 0x85;
-
-/// Set clock divisor
-pub const TCK_DIVISOR: u8 = 0x86;
-
-/// Disable divide-by-5 prescaler (60 MHz clock)
-pub const DIS_DIV_5: u8 = 0x8A;
-
-/// Enable divide-by-5 prescaler (12 MHz clock)
-pub const EN_DIV_5: u8 = 0x8B;
-
-/// Enable 3-phase clocking (for I2C)
-pub const EN_3_PHASE: u8 = 0x8C;
-
-/// Disable 3-phase clocking
-pub const DIS_3_PHASE: u8 = 0x8D;
-
-/// Enable adaptive clocking
-pub const CLK_ADAPTIVE: u8 = 0x96;
-
-/// Disable adaptive clocking
-pub const CLK_NO_ADAPTIVE: u8 = 0x97;
-
-/// Send immediate (flush buffers)
-pub const SEND_IMMEDIATE: u8 = 0x87;
-
-/// Wait on I/O high
-pub const WAIT_ON_HIGH: u8 = 0x88;
-
-/// Wait on I/O low
-pub const WAIT_ON_LOW: u8 = 0x89;
-
-// ============================================================================
-// Buffer sizes
-// ============================================================================
-
-/// FTDI hardware buffer size in bytes
-pub const FTDI_HW_BUFFER_SIZE: usize = 4096;
-
-/// Default clock divisor (15 MHz at 60 MHz base clock)
+/// Default clock divisor (30 MHz at a 60 MHz base clock).
 pub const DEFAULT_DIVISOR: u16 = 2;
-
-// ============================================================================
-// Pin assignments (low byte)
-//
-// TCK/SK is bit 0.  (clock)
-// TDI/DO is bit 1.  (data out)
-// TDO/DI is bit 2.  (data in)
-// TMS/CS is bit 3.  (chip select)
-// GPIOL0 is bit 4.
-// GPIOL1 is bit 5.
-// GPIOL2 is bit 6.
-// GPIOL3 is bit 7.
-// ============================================================================
-
-/// Bit position for SK (clock)
-pub const PIN_SK: u8 = 0;
-
-/// Bit position for DO (data out / MOSI)
-pub const PIN_DO: u8 = 1;
-
-/// Bit position for DI (data in / MISO)
-pub const PIN_DI: u8 = 2;
-
-/// Bit position for CS (chip select)
-pub const PIN_CS: u8 = 3;
-
-/// Bit position for GPIOL0
-pub const PIN_GPIOL0: u8 = 4;
-
-/// Bit position for GPIOL1
-pub const PIN_GPIOL1: u8 = 5;
-
-/// Bit position for GPIOL2
-pub const PIN_GPIOL2: u8 = 6;
-
-/// Bit position for GPIOL3
-pub const PIN_GPIOL3: u8 = 7;
-
-/// Default CS bits (CS high)
-pub const DEFAULT_CS_BITS: u8 = 1 << PIN_CS;
-
-/// Default pin direction (SK, DO, CS as outputs)
-pub const DEFAULT_PINDIR: u8 = (1 << PIN_SK) | (1 << PIN_DO) | (1 << PIN_CS);
 
 // ============================================================================
 // Supported device types
@@ -581,14 +471,8 @@ pub const SUPPORTED_DEVICES: &[SupportedDevice] = &[
     },
 ];
 
-/// Check if a VID/PID pair matches a supported FTDI device
-pub fn is_supported_device(vid: u16, pid: u16) -> bool {
-    SUPPORTED_DEVICES
-        .iter()
-        .any(|d| d.vendor_id == vid && d.product_id == pid)
-}
-
-/// Get device info for a VID/PID pair
+/// Get device info for a VID/PID pair.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn get_device_info(vid: u16, pid: u16) -> Option<&'static SupportedDevice> {
     SUPPORTED_DEVICES
         .iter()

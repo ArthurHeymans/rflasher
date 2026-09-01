@@ -17,7 +17,6 @@ use crate::flash::operations::{
     coalesce_write_ranges, plan_optimal_erase, plan_optimal_erase_region,
 };
 use crate::layout::{Layout, LayoutError, Region};
-use maybe_async::maybe_async;
 
 // =============================================================================
 // Re-exports from operations.rs
@@ -61,7 +60,6 @@ const WRITE_CHUNK_SIZE: usize = 256 * 1024;
 /// Read flash contents into a buffer
 ///
 /// This is a convenience function that reads with progress reporting.
-#[maybe_async]
 pub async fn read_with_progress<D: FlashDevice, P: WriteProgress>(
     device: &mut D,
     buf: &mut [u8],
@@ -105,7 +103,6 @@ pub async fn read_with_progress<D: FlashDevice, P: WriteProgress>(
 ///
 /// # Returns
 /// Statistics about the operations performed
-#[maybe_async]
 pub async fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     data: &[u8],
@@ -233,7 +230,6 @@ pub async fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
 ///
 /// Similar to `smart_write` but only operates on a specific region of flash.
 /// Uses the optimal erase algorithm to minimize erase operations.
-#[maybe_async]
 pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     addr: u32,
@@ -423,7 +419,6 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
 ///
 /// # Returns
 /// Combined statistics about all operations performed
-#[maybe_async]
 pub async fn smart_write_by_layout<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     layout: &Layout,
@@ -515,7 +510,6 @@ pub async fn smart_write_by_layout<D: FlashDevice + ?Sized, P: WriteProgress>(
 /// Read all included regions from flash into a buffer
 ///
 /// Regions that are not included will be left unchanged in the buffer.
-#[maybe_async]
 pub async fn read_by_layout<D: FlashDevice>(
     device: &mut D,
     layout: &Layout,
@@ -544,7 +538,6 @@ pub async fn read_by_layout<D: FlashDevice>(
 }
 
 /// Erase all included regions in a layout
-#[maybe_async]
 pub async fn erase_by_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
@@ -569,7 +562,6 @@ pub async fn erase_by_layout<D: FlashDevice + ?Sized>(
 /// This uses the optimal erase algorithm to minimize the number of erase operations.
 /// It handles region boundaries that don't align with erase block boundaries
 /// by preserving data outside the region.
-#[maybe_async]
 pub async fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Region) -> Result<()> {
     if !device.is_valid_range(region.start, region.size() as usize) {
         return Err(Error::AddressOutOfBounds);
@@ -640,7 +632,6 @@ pub async fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Regi
 ///
 /// # Returns
 /// `Ok(())` if verification passes, `Err(VerifyError)` if mismatch detected
-#[maybe_async]
 pub async fn verify<D: FlashDevice>(device: &mut D, expected: &[u8], addr: u32) -> Result<()> {
     if !device.is_valid_range(addr, expected.len()) {
         return Err(Error::AddressOutOfBounds);
@@ -674,7 +665,6 @@ pub async fn verify<D: FlashDevice>(device: &mut D, expected: &[u8], addr: u32) 
 }
 
 /// Verify all included regions match expected data
-#[maybe_async]
 pub async fn verify_by_layout<D: FlashDevice>(
     device: &mut D,
     layout: &Layout,

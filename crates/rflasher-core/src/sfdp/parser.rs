@@ -2,21 +2,19 @@
 //!
 //! This module provides functions to read and parse SFDP data from flash chips.
 //!
-//! Uses `maybe_async` to support both sync and async modes.
+//! All SFDP I/O helpers are async.
 
 #[cfg(feature = "std")]
 use crate::chip::ChipProvider;
 use crate::error::{Error, Result};
 use crate::programmer::SpiMaster;
 use crate::protocol;
-use maybe_async::maybe_async;
 
 use super::types::*;
 
 /// Read raw SFDP data from flash
 ///
 /// This is a low-level function that reads SFDP data at the specified address.
-#[maybe_async]
 pub async fn read_sfdp<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -26,7 +24,6 @@ pub async fn read_sfdp<M: SpiMaster + ?Sized>(
 }
 
 /// Parse the SFDP header and verify signature
-#[maybe_async]
 async fn parse_header<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpHeader> {
     let mut buf = [0u8; 8];
 
@@ -69,7 +66,6 @@ async fn parse_header<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpHeade
 }
 
 /// Read and parse a parameter header
-#[maybe_async]
 async fn read_param_header<M: SpiMaster + ?Sized>(
     master: &mut M,
     index: usize,
@@ -271,7 +267,6 @@ fn parse_bfpt_dword16(dword: u32, params: &mut BasicFlashParams) {
 }
 
 /// Parse the Basic Flash Parameter Table
-#[maybe_async]
 async fn parse_bfpt<M: SpiMaster + ?Sized>(
     master: &mut M,
     header: &ParameterHeader,
@@ -342,7 +337,6 @@ async fn parse_bfpt<M: SpiMaster + ?Sized>(
 }
 
 /// Parse the 4-Byte Address Instruction Table
-#[maybe_async]
 async fn parse_4byte_addr_table<M: SpiMaster + ?Sized>(
     master: &mut M,
     header: &ParameterHeader,
@@ -395,7 +389,6 @@ async fn parse_4byte_addr_table<M: SpiMaster + ?Sized>(
 /// println!("Flash size: {} bytes", info.total_size());
 /// println!("Page size: {} bytes", info.page_size());
 /// ```
-#[maybe_async]
 pub async fn probe<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpInfo> {
     // Read and parse the SFDP header
     let header = parse_header(master).await?;
@@ -458,7 +451,6 @@ pub async fn probe<M: SpiMaster + ?Sized>(master: &mut M) -> Result<SfdpInfo> {
 /// Check if SFDP is supported without fully parsing
 ///
 /// This is a quick check that only reads the SFDP signature.
-#[maybe_async]
 pub async fn is_supported<M: SpiMaster + ?Sized>(master: &mut M) -> bool {
     let mut buf = [0u8; 4];
     if read_sfdp(master, 0x00, &mut buf).await.is_err() {
@@ -881,7 +873,6 @@ impl SfdpProbeResult {
 ///
 /// Returns a result containing all discovered information.
 #[cfg(feature = "std")]
-#[maybe_async]
 pub async fn probe_with_database<M, P>(master: &mut M, provider: &P) -> Result<SfdpProbeResult>
 where
     M: SpiMaster + ?Sized,
@@ -1043,7 +1034,6 @@ mod tests {
         }
     }
 
-    #[maybe_async::maybe_async(AFIT)]
     impl crate::programmer::SpiMaster for MockSfdpFlash {
         fn features(&self) -> crate::programmer::SpiFeatures {
             crate::programmer::SpiFeatures::empty()
@@ -1098,10 +1088,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "is_sync")]
     fn test_parse_mx25l6436e_sfdp() {
         let mut mock = MockSfdpFlash::new();
-        let info = probe(&mut mock).expect("SFDP probe should succeed");
+        let info =
+            futures_lite::future::block_on(probe(&mut mock)).expect("SFDP probe should succeed");
 
         // Verify SFDP header
         assert!(info.header.is_valid(), "SFDP signature should be valid");
@@ -1169,7 +1159,8 @@ mod tests {
     #[cfg(feature = "alloc")]
     fn test_mx25l6436e_to_flash_chip() {
         let mut mock = MockSfdpFlash::new();
-        let info = probe(&mut mock).expect("SFDP probe should succeed");
+        let info =
+            futures_lite::future::block_on(probe(&mut mock)).expect("SFDP probe should succeed");
 
         // Convert to FlashChip
         let chip = to_flash_chip(&info, 0xC2, 0x2017); // Macronix MX25L6436E JEDEC ID
@@ -1323,10 +1314,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "is_sync")]
     fn test_mx25l6436e_fast_read_params() {
         let mut mock = MockSfdpFlash::new();
-        let info = probe(&mut mock).expect("SFDP probe should succeed");
+        let info =
+            futures_lite::future::block_on(probe(&mut mock)).expect("SFDP probe should succeed");
 
         let params = &info.basic_params;
 

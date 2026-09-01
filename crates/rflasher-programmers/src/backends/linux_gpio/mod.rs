@@ -20,6 +20,7 @@
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
+//! # futures_lite::future::block_on(async {
 //! // Configure GPIO pins for SPI
 //! let config = LinuxGpioSpiConfig::new("/dev/gpiochip0", 25, 11, 10, 9);
 //! //                                    device          CS  SCK MOSI MISO
@@ -29,9 +30,10 @@
 //! // Read JEDEC ID
 //! let mut id = [0u8; 3];
 //! let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut id);
-//! spi.execute(&mut cmd)?;
+//! spi.execute(&mut cmd).await?;
 //! println!("JEDEC ID: {:02X} {:02X} {:02X}", id[0], id[1], id[2]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # }).unwrap();
 //! ```
 //!
 //! # Usage with rflasher CLI
@@ -90,31 +92,3 @@ pub mod error;
 // Re-exports
 pub use device::{LinuxGpioSpi, LinuxGpioSpiConfig, parse_options};
 pub use error::{LinuxGpioError, Result};
-
-/// Open a Linux GPIO SPI device and return a boxed SpiMaster
-///
-/// This is a convenience function for use in the CLI programmer dispatch.
-///
-/// # Arguments
-///
-/// * `options` - Slice of (key, value) pairs from programmer string parsing
-///
-/// # Example Options
-///
-/// - `dev=/dev/gpiochip0` - GPIO chip device path (or use gpiochip=N)
-/// - `gpiochip=0` - GPIO chip number (alternative to dev)
-/// - `cs=25` - CS pin GPIO offset (required)
-/// - `sck=11` - SCK pin GPIO offset (required)
-/// - `mosi=10` or `io0=10` - MOSI pin GPIO offset (required)
-/// - `miso=9` or `io1=9` - MISO pin GPIO offset (required)
-/// - `io2=N` - IO2 pin for quad mode (optional)
-/// - `io3=N` - IO3 pin for quad mode (optional)
-/// - `spispeed=100` - SPI speed in kHz (optional, default ~100 kHz)
-pub fn open_linux_gpio_spi(
-    options: &[(&str, &str)],
-) -> std::result::Result<Box<dyn rflasher_core::programmer::SpiMaster>, Box<dyn std::error::Error>>
-{
-    let config = parse_options(options)?;
-    let spi = LinuxGpioSpi::open(&config)?;
-    Ok(Box::new(spi))
-}

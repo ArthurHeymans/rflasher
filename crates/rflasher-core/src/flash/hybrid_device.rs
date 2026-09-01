@@ -32,7 +32,6 @@ use crate::protocol::{self, CommandAddressing};
 use crate::wp::{
     self, RangeDecoder, WpBits, WpConfig, WpMode, WpRange, WpRegBitMap, WpResult, WriteOptions,
 };
-use maybe_async::maybe_async;
 
 /// Flash device adapter for hybrid programmers (SpiMaster + OpaqueMaster)
 ///
@@ -94,7 +93,6 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     }
 }
 
-#[maybe_async(AFIT)]
 impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
     fn size(&self) -> u32 {
         self.ctx.total_size() as u32
@@ -314,14 +312,12 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     }
 
     /// Read current write protection bits
-    #[maybe_async]
     pub async fn read_wp_bits(&mut self) -> WpResult<WpBits> {
         let bit_map = self.wp_bit_map();
         wp::read_wp_bits(&mut self.master, &bit_map).await
     }
 
     /// Read current write protection configuration
-    #[maybe_async]
     pub async fn read_wp_config(&mut self) -> WpResult<WpConfig> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
@@ -330,14 +326,12 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     }
 
     /// Write write protection bits
-    #[maybe_async]
     pub async fn write_wp_bits(&mut self, bits: &WpBits, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
         wp::write_wp_bits(&mut self.master, bits, &bit_map, options).await
     }
 
     /// Write write protection configuration
-    #[maybe_async]
     pub async fn write_wp_config(
         &mut self,
         config: &WpConfig,
@@ -358,14 +352,12 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     }
 
     /// Set write protection mode
-    #[maybe_async]
     pub async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
         wp::set_wp_mode(&mut self.master, mode, &bit_map, options).await
     }
 
     /// Set protected range
-    #[maybe_async]
     pub async fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
@@ -382,7 +374,6 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     }
 
     /// Disable all write protection
-    #[maybe_async]
     pub async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
         wp::disable_wp(&mut self.master, &bit_map, options).await

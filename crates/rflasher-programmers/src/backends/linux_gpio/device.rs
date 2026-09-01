@@ -646,7 +646,7 @@ impl SpiMaster for LinuxGpioSpi {
         usize::MAX
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         // Use multi-IO execution if the command requests it
         if cmd.io_mode != IoMode::Single {
             return self.execute_multi_io(cmd);
@@ -669,7 +669,7 @@ impl SpiMaster for LinuxGpioSpi {
         Ok(())
     }
 
-    fn delay_us(&mut self, us: u32) {
+    async fn delay_us(&mut self, us: u32) {
         std::thread::sleep(std::time::Duration::from_micros(us as u64));
     }
 }

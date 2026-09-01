@@ -62,7 +62,7 @@ pub fn cmd_fmap(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::
     let data = fs::read(input)?;
 
     // Use the generic search algorithm on the file buffer
-    let layout = search_fmap(&mut data.as_slice())?;
+    let layout = futures_lite::future::block_on(search_fmap(&mut data.as_slice()))?;
     print_layout(&layout);
 
     if let Some(out) = output {

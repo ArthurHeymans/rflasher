@@ -3,9 +3,7 @@
 //! This module implements the common SPI flash command sequences
 //! as defined by JEDEC.
 //!
-//! Uses `maybe_async` to support both sync and async modes:
-//! - With `is_sync` feature: blocking/synchronous
-//! - Without `is_sync` feature: async (for WASM, Embassy, tokio)
+//! All protocol helpers are async.
 //!
 //! ## Multi-IO Support
 //!
@@ -21,7 +19,6 @@
 use crate::error::{Error, Result};
 use crate::programmer::{SpiFeatures, SpiMaster};
 use crate::spi::{AddressWidth, IoMode, SpiCommand, opcodes};
-use maybe_async::maybe_async;
 
 // Timing constants for SPI flash operations
 /// Poll interval for status register write completion (microseconds)
@@ -75,7 +72,6 @@ impl CommandAddressing {
 /// Read the JEDEC ID from a flash chip
 ///
 /// Returns (manufacturer_id, device_id) on success.
-#[maybe_async]
 pub async fn read_jedec_id<M: SpiMaster + ?Sized>(master: &mut M) -> Result<(u8, u16)> {
     let mut buf = [0u8; 3];
     let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut buf);
@@ -88,7 +84,6 @@ pub async fn read_jedec_id<M: SpiMaster + ?Sized>(master: &mut M) -> Result<(u8,
 }
 
 /// Read the status register 1
-#[maybe_async]
 pub async fn read_status1<M: SpiMaster + ?Sized>(master: &mut M) -> Result<u8> {
     let mut buf = [0u8; 1];
     let mut cmd = SpiCommand::read_reg(opcodes::RDSR, &mut buf);
@@ -97,7 +92,6 @@ pub async fn read_status1<M: SpiMaster + ?Sized>(master: &mut M) -> Result<u8> {
 }
 
 /// Read the status register 2
-#[maybe_async]
 pub async fn read_status2<M: SpiMaster + ?Sized>(master: &mut M) -> Result<u8> {
     let mut buf = [0u8; 1];
     let mut cmd = SpiCommand::read_reg(opcodes::RDSR2, &mut buf);
@@ -106,7 +100,6 @@ pub async fn read_status2<M: SpiMaster + ?Sized>(master: &mut M) -> Result<u8> {
 }
 
 /// Read the status register 3
-#[maybe_async]
 pub async fn read_status3<M: SpiMaster + ?Sized>(master: &mut M) -> Result<u8> {
     let mut buf = [0u8; 1];
     let mut cmd = SpiCommand::read_reg(opcodes::RDSR3, &mut buf);
@@ -115,7 +108,6 @@ pub async fn read_status3<M: SpiMaster + ?Sized>(master: &mut M) -> Result<u8> {
 }
 
 /// Send the Write Enable command (WREN, 0x06)
-#[maybe_async]
 pub async fn write_enable<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     let mut cmd = SpiCommand::simple(opcodes::WREN);
     master.execute(&mut cmd).await
@@ -125,14 +117,12 @@ pub async fn write_enable<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
 ///
 /// Used on legacy SST25 chips instead of WREN before a WRSR command.
 /// Not a general write-enable — it only enables the next WRSR to succeed.
-#[maybe_async]
 pub async fn write_enable_ewsr<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     let mut cmd = SpiCommand::simple(opcodes::EWSR);
     master.execute(&mut cmd).await
 }
 
 /// Send the Write Disable command (WRDI, 0x04)
-#[maybe_async]
 pub async fn write_disable<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     let mut cmd = SpiCommand::simple(opcodes::WRDI);
     master.execute(&mut cmd).await
@@ -152,7 +142,6 @@ pub async fn write_disable<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> 
 /// * 4KB sector erase: 10,000us (10ms)
 /// * 32KB/64KB block erase: 100,000us (100ms)
 /// * Chip erase: 1,000,000us (1s)
-#[maybe_async]
 pub async fn wait_ready<M: SpiMaster + ?Sized>(
     master: &mut M,
     poll_delay_us: u32,
@@ -177,7 +166,6 @@ pub async fn wait_ready<M: SpiMaster + ?Sized>(
 ///
 /// Sends WREN (0x06) before writing. For chips that require EWSR (0x50)
 /// instead (legacy SST25 chips), use [`write_status1_ewsr`].
-#[maybe_async]
 pub async fn write_status1<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> Result<()> {
     write_enable(master).await?;
     let data = [value];
@@ -190,7 +178,6 @@ pub async fn write_status1<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> 
 /// Write the status register 1, using EWSR (0x50) instead of WREN
 ///
 /// Required for legacy SST25 chips (those with the `WRSR_EWSR` feature flag).
-#[maybe_async]
 pub async fn write_status1_ewsr<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> Result<()> {
     write_enable_ewsr(master).await?;
     let data = [value];
@@ -203,7 +190,6 @@ pub async fn write_status1_ewsr<M: SpiMaster + ?Sized>(master: &mut M, value: u8
 ///
 /// Some chips require writing both registers in a single command.
 /// For chips that require EWSR, use [`write_status12_ewsr`].
-#[maybe_async]
 pub async fn write_status12<M: SpiMaster + ?Sized>(master: &mut M, sr1: u8, sr2: u8) -> Result<()> {
     write_enable(master).await?;
     let data = [sr1, sr2];
@@ -214,7 +200,6 @@ pub async fn write_status12<M: SpiMaster + ?Sized>(master: &mut M, sr1: u8, sr2:
 }
 
 /// Write status registers 1 and 2 together, using EWSR (0x50) instead of WREN
-#[maybe_async]
 pub async fn write_status12_ewsr<M: SpiMaster + ?Sized>(
     master: &mut M,
     sr1: u8,
@@ -228,7 +213,6 @@ pub async fn write_status12_ewsr<M: SpiMaster + ?Sized>(
 }
 
 /// Read data from flash with an explicitly selected opcode, I/O mode, and addressing mode.
-#[maybe_async]
 pub async fn read_io_with_addressing<M: SpiMaster + ?Sized>(
     master: &mut M,
     opcode: u8,
@@ -242,7 +226,6 @@ pub async fn read_io_with_addressing<M: SpiMaster + ?Sized>(
 }
 
 /// Read data from flash with an explicitly selected opcode and addressing mode.
-#[maybe_async]
 pub async fn read_with_addressing<M: SpiMaster + ?Sized>(
     master: &mut M,
     opcode: u8,
@@ -254,7 +237,6 @@ pub async fn read_with_addressing<M: SpiMaster + ?Sized>(
 }
 
 /// Read data from flash using 3-byte addressing
-#[maybe_async]
 pub async fn read_3b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -271,7 +253,6 @@ pub async fn read_3b<M: SpiMaster + ?Sized>(
 }
 
 /// Read data from flash using native 4-byte addressing opcode
-#[maybe_async]
 pub async fn read_4b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -291,7 +272,6 @@ pub async fn read_4b<M: SpiMaster + ?Sized>(
 ///
 /// The data must not cross a page boundary.
 /// Page program typically takes 0.7-5ms, we poll every 10us with 10ms timeout.
-#[maybe_async]
 pub async fn program_page_with_addressing<M: SpiMaster + ?Sized>(
     master: &mut M,
     opcode: u8,
@@ -321,7 +301,6 @@ pub async fn program_page_with_addressing<M: SpiMaster + ?Sized>(
 }
 
 /// Program a single page (up to page_size bytes) using 3-byte addressing
-#[maybe_async]
 pub async fn program_page_3b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -338,7 +317,6 @@ pub async fn program_page_3b<M: SpiMaster + ?Sized>(
 }
 
 /// Program a single page using native 4-byte addressing opcode
-#[maybe_async]
 pub async fn program_page_4b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -378,7 +356,6 @@ pub async fn program_page_4b<M: SpiMaster + ?Sized>(
 /// # Arguments
 /// * `addr` - Start address
 /// * `data` - Data to write
-#[maybe_async]
 pub async fn aai_word_program<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -448,7 +425,6 @@ pub async fn aai_word_program<M: SpiMaster + ?Sized>(
 /// SST26 chips use a separate block-protection register (not SR BP bits).
 /// This function sends WREN + ULBPR to clear all per-block protection bits.
 /// Must be called before writing to any region that may be protected.
-#[maybe_async]
 pub async fn sst26_global_unprotect<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     write_enable(master).await?;
     let mut cmd = SpiCommand::simple(opcodes::ULBPR);
@@ -461,7 +437,6 @@ pub async fn sst26_global_unprotect<M: SpiMaster + ?Sized>(master: &mut M) -> Re
 /// - 4KB sector: 10ms poll, 1s timeout (typical 45-400ms)
 /// - 32KB block: 100ms poll, 4s timeout (typical 120-1600ms)
 /// - 64KB block: 100ms poll, 4s timeout (typical 150-2000ms)
-#[maybe_async]
 pub async fn erase_block<M: SpiMaster + ?Sized>(
     master: &mut M,
     opcode: u8,
@@ -494,7 +469,6 @@ pub async fn erase_block<M: SpiMaster + ?Sized>(
 ///
 /// Chip erase typically takes 25-100s for large chips.
 /// We poll every 1s with a 200s timeout.
-#[maybe_async]
 pub async fn chip_erase<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     write_enable(master).await?;
 
@@ -506,14 +480,12 @@ pub async fn chip_erase<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
 }
 
 /// Enter 4-byte address mode with the plain B7h instruction.
-#[maybe_async]
 pub async fn enter_4byte_mode<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     let mut cmd = SpiCommand::simple(opcodes::EN4B);
     master.execute(&mut cmd).await
 }
 
 /// Exit 4-byte address mode with the plain E9h instruction.
-#[maybe_async]
 pub async fn exit_4byte_mode<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     let mut cmd = SpiCommand::simple(opcodes::EX4B);
     master.execute(&mut cmd).await
@@ -532,7 +504,6 @@ fn extended_address_write_opcode(features: crate::chip::Features) -> Result<u8> 
 }
 
 /// Write the high address byte to the chip's extended address register.
-#[maybe_async]
 pub async fn set_extended_address<M: SpiMaster + ?Sized>(
     master: &mut M,
     features: crate::chip::Features,
@@ -546,7 +517,6 @@ pub async fn set_extended_address<M: SpiMaster + ?Sized>(
 }
 
 /// Enter 4-byte address mode using the method described by the chip features.
-#[maybe_async]
 pub async fn enter_4byte_mode_with_features<M: SpiMaster + ?Sized>(
     master: &mut M,
     features: crate::chip::Features,
@@ -566,7 +536,6 @@ pub async fn enter_4byte_mode_with_features<M: SpiMaster + ?Sized>(
 }
 
 /// Exit 4-byte address mode using the method described by the chip features.
-#[maybe_async]
 pub async fn exit_4byte_mode_with_features<M: SpiMaster + ?Sized>(
     master: &mut M,
     features: crate::chip::Features,
@@ -586,7 +555,6 @@ pub async fn exit_4byte_mode_with_features<M: SpiMaster + ?Sized>(
 }
 
 /// Send software reset sequence
-#[maybe_async]
 pub async fn software_reset<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     let mut cmd = SpiCommand::simple(opcodes::RSTEN);
     master.execute(&mut cmd).await?;
@@ -598,7 +566,6 @@ pub async fn software_reset<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()>
 }
 
 /// Read SFDP (Serial Flash Discoverable Parameters)
-#[maybe_async]
 pub async fn read_sfdp<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -627,14 +594,12 @@ pub async fn read_sfdp<M: SpiMaster + ?Sized>(
 }
 
 /// Check if the Write Enable Latch is set
-#[maybe_async]
 pub async fn check_wel<M: SpiMaster + ?Sized>(master: &mut M) -> Result<bool> {
     let status = read_status1(master).await?;
     Ok(status & opcodes::SR1_WEL != 0)
 }
 
 /// Check if a write or erase operation is in progress
-#[maybe_async]
 pub async fn is_busy<M: SpiMaster + ?Sized>(master: &mut M) -> Result<bool> {
     let status = read_status1(master).await?;
     Ok(status & opcodes::SR1_WIP != 0)
@@ -645,7 +610,6 @@ pub async fn is_busy<M: SpiMaster + ?Sized>(master: &mut M) -> Result<bool> {
 // ============================================================================
 
 /// Internal helper to perform a chunked multi-IO read
-#[maybe_async]
 async fn read_multi_io<M: SpiMaster + ?Sized>(
     master: &mut M,
     opcode: u8,
@@ -687,7 +651,6 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
 /// Read data using Dual Output mode (1-1-2) with 3-byte address
 ///
 /// Uses opcode 0x3B with 8 dummy cycles.
-#[maybe_async]
 pub async fn read_dual_out_3b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -708,7 +671,6 @@ pub async fn read_dual_out_3b<M: SpiMaster + ?Sized>(
 /// Read data using Dual I/O mode (1-2-2) with 3-byte address
 ///
 /// Uses opcode 0xBB with mode byte and dummy cycles.
-#[maybe_async]
 pub async fn read_dual_io_3b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -730,7 +692,6 @@ pub async fn read_dual_io_3b<M: SpiMaster + ?Sized>(
 ///
 /// Uses opcode 0x6B with 8 dummy cycles.
 /// Requires Quad Enable (QE) bit to be set.
-#[maybe_async]
 pub async fn read_quad_out_3b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -752,7 +713,6 @@ pub async fn read_quad_out_3b<M: SpiMaster + ?Sized>(
 ///
 /// Uses opcode 0xEB with mode byte and dummy cycles.
 /// Requires Quad Enable (QE) bit to be set.
-#[maybe_async]
 pub async fn read_quad_io_3b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -771,7 +731,6 @@ pub async fn read_quad_io_3b<M: SpiMaster + ?Sized>(
 }
 
 /// Read data using Dual Output mode (1-1-2) with 4-byte address
-#[maybe_async]
 pub async fn read_dual_out_4b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -790,7 +749,6 @@ pub async fn read_dual_out_4b<M: SpiMaster + ?Sized>(
 }
 
 /// Read data using Dual I/O mode (1-2-2) with 4-byte address
-#[maybe_async]
 pub async fn read_dual_io_4b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -809,7 +767,6 @@ pub async fn read_dual_io_4b<M: SpiMaster + ?Sized>(
 }
 
 /// Read data using Quad Output mode (1-1-4) with 4-byte address
-#[maybe_async]
 pub async fn read_quad_out_4b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -828,7 +785,6 @@ pub async fn read_quad_out_4b<M: SpiMaster + ?Sized>(
 }
 
 /// Read data using Quad I/O mode (1-4-4) with 4-byte address
-#[maybe_async]
 pub async fn read_quad_io_4b<M: SpiMaster + ?Sized>(
     master: &mut M,
     addr: u32,
@@ -869,7 +825,6 @@ pub enum QuadEnableMethod {
 }
 
 /// Enable quad mode using the appropriate method for the chip
-#[maybe_async]
 pub async fn enable_quad_mode<M: SpiMaster + ?Sized>(
     master: &mut M,
     method: QuadEnableMethod,
@@ -913,7 +868,6 @@ pub async fn enable_quad_mode<M: SpiMaster + ?Sized>(
 }
 
 /// Disable quad mode using the appropriate method for the chip
-#[maybe_async]
 pub async fn disable_quad_mode<M: SpiMaster + ?Sized>(
     master: &mut M,
     method: QuadEnableMethod,
@@ -953,7 +907,6 @@ pub async fn disable_quad_mode<M: SpiMaster + ?Sized>(
 }
 
 /// Write SR2 directly using opcode 0x31
-#[maybe_async]
 async fn write_status2_direct<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> Result<()> {
     write_enable(master).await?;
     let data = [value];
@@ -964,7 +917,6 @@ async fn write_status2_direct<M: SpiMaster + ?Sized>(master: &mut M, value: u8) 
 }
 
 /// Check if quad mode is enabled
-#[maybe_async]
 pub async fn is_quad_enabled<M: SpiMaster + ?Sized>(
     master: &mut M,
     method: QuadEnableMethod,
@@ -993,7 +945,6 @@ pub async fn is_quad_enabled<M: SpiMaster + ?Sized>(
 /// Enter QPI mode (4-4-4)
 ///
 /// Different chips use different opcodes - common ones are 0x35 and 0x38.
-#[maybe_async]
 pub async fn enter_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) -> Result<()> {
     let mut cmd = SpiCommand::simple(opcode);
     master.execute(&mut cmd).await
@@ -1003,7 +954,6 @@ pub async fn enter_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) -
 ///
 /// Common exit opcodes are 0xF5 and 0xFF.
 /// Note: This command must be sent in QPI mode (4-4-4).
-#[maybe_async]
 pub async fn exit_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) -> Result<()> {
     let mut cmd = SpiCommand {
         opcode,

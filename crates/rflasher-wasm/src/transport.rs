@@ -8,7 +8,6 @@
 // Allow deprecated JsStatic - single-threaded WASM doesn't need thread_local_v2
 #![allow(deprecated)]
 
-use maybe_async::maybe_async;
 use rflasher_programmers::serprog::Transport;
 use rflasher_programmers::serprog::error::{Result, SerprogError};
 use wasm_bindgen::prelude::*;
@@ -166,7 +165,6 @@ impl WebSerialTransport {
     }
 }
 
-#[maybe_async(AFIT)]
 impl Transport for WebSerialTransport {
     async fn write(&mut self, data: &[u8]) -> Result<()> {
         log::info!(

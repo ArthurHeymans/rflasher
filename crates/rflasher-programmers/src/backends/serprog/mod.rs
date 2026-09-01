@@ -3,9 +3,7 @@
 //! This crate implements the serprog protocol for communication with
 //! microcontroller-based flash programmers.
 //!
-//! Uses `maybe_async` to support both sync and async modes:
-//! - With `is_sync` feature: blocking/synchronous operations
-//! - Without `is_sync` feature: async operations (for WASM, Embassy, tokio)
+//! The API is async on every target.
 //!
 //! # Protocol Overview
 //!
@@ -19,7 +17,7 @@
 //! - TCP socket: `host:port` (sync mode only)
 //! - Custom transports: Implement the `Transport` trait for WebSerial, etc.
 //!
-//! # Example (sync mode)
+//! # Example
 //!
 //! ```ignore
 //! use rflasher_programmers::serprog::{Serprog, SerialTransport};
@@ -41,7 +39,8 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-// Allow async fn in traits - we use maybe-async for dual sync/async support
+// Allow async fn in traits; dynamic dispatch is provided by dedicated
+// object-erasure adapters where needed.
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
@@ -136,43 +135,16 @@ impl SerprogConnection {
     }
 }
 
-/// Open a serprog connection and return a boxed SpiMaster
-///
-/// This is a convenience function that handles both serial and TCP connections
-/// and returns a type-erased SpiMaster.
-#[cfg(feature = "serprog-native")]
-pub fn open_serprog(
-    options: &str,
-) -> std::result::Result<
-    Box<dyn rflasher_core::programmer::SpiMaster + Send>,
-    Box<dyn std::error::Error>,
-> {
-    let conn = SerprogConnection::parse(options)?;
-
-    match conn {
-        SerprogConnection::Serial { device, baud } => {
-            let transport = SerialTransport::open(&device, baud)?;
-            let serprog = Serprog::new(transport)?;
-            Ok(Box::new(serprog))
-        }
-        SerprogConnection::Tcp { host, port } => {
-            let transport = TcpTransport::connect(&host, port)?;
-            let serprog = Serprog::new(transport)?;
-            Ok(Box::new(serprog))
-        }
-    }
-}
-
 /// Open a serprog connection via serial port
 #[cfg(feature = "serprog-native")]
-pub fn open_serial(device: &str, baud: Option<u32>) -> Result<Serprog<SerialTransport>> {
+pub async fn open_serial(device: &str, baud: Option<u32>) -> Result<Serprog<SerialTransport>> {
     let transport = SerialTransport::open(device, baud)?;
-    Serprog::new(transport)
+    Serprog::new(transport).await
 }
 
 /// Open a serprog connection via TCP
 #[cfg(feature = "serprog-native")]
-pub fn open_tcp(host: &str, port: u16) -> Result<Serprog<TcpTransport>> {
+pub async fn open_tcp(host: &str, port: u16) -> Result<Serprog<TcpTransport>> {
     let transport = TcpTransport::connect(host, port)?;
-    Serprog::new(transport)
+    Serprog::new(transport).await
 }

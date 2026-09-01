@@ -33,21 +33,23 @@
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
+//! # futures_lite::future::block_on(async {
 //! // Open with default settings (10 MHz, CS0)
-//! let mut ft4222 = Ft4222::open()?;
+//! let mut ft4222 = Ft4222::open().await?;
 //!
 //! // Or with custom configuration
 //! let config = SpiConfig::new()
 //!     .with_speed_khz(20_000)  // 20 MHz
 //!     .with_cs(1);             // Use CS1
-//! let mut ft4222 = Ft4222::open_with_config(config)?;
+//! let mut ft4222 = Ft4222::open_with_config(config).await?;
 //!
 //! // Read JEDEC ID
 //! let mut id = [0u8; 3];
 //! let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut id);
-//! ft4222.execute(&mut cmd)?;
+//! ft4222.execute(&mut cmd).await?;
 //! println!("JEDEC ID: {:02X} {:02X} {:02X}", id[0], id[1], id[2]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # }).unwrap();
 //! ```
 //!
 //! # Programmer Options

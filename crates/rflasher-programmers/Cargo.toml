@@ -7,10 +7,9 @@ repository.workspace = true
 description = "Programmer backends and high-level programmer registry for rflasher"
 
 [features]
-default = ["std", "is_sync"]
+default = ["std"]
 alloc = ["rflasher-core/alloc"]
 std = ["alloc", "rflasher-core/std"]
-is_sync = ["rflasher-core/is_sync", "maybe-async/is_sync"]
 wasm = [
     "std",
     "dep:web-sys",
@@ -21,42 +20,39 @@ wasm = [
 ]
 
 # Programmer backends
-dummy = ["alloc", "is_sync"]
-ch341a = ["std", "dep:nusb", "dep:futures-lite"]
-ch347 = ["std", "dep:nusb", "dep:futures-lite"]
-dediprog = ["std", "dep:nusb", "dep:futures-lite"]
-ft4222 = ["std", "dep:nusb", "dep:futures-lite"]
-raiden = ["std", "dep:nusb", "dep:futures-lite", "dep:zerocopy"]
-sunxi-fel = ["std", "is_sync", "dep:nusb"]
+dummy = ["alloc"]
+ch341a = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
+ch347 = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
+dediprog = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
+ft4222 = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
+raiden = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer", "dep:zerocopy"]
+sunxi-fel = ["std", "dep:nusb"]
 serprog = ["std", "dep:embedded-io", "dep:embedded-io-async", "dep:thiserror"]
-serprog-native = ["serprog", "is_sync", "dep:serialport"]
+serprog-native = ["serprog", "dep:serialport"]
 
 # FTDI backends
-ftdi = ["std", "is_sync", "dep:ftdi", "dep:nusb", "dep:futures-lite"]
+ftdi = ["std", "dep:ftdi", "dep:nusb", "dep:futures-lite"]
 ftdi-native = [
     "std",
-    "is_sync",
     "dep:ftdi-nusb",
-    "ftdi-nusb/std",
+    "ftdi-nusb/smol",
     "dep:nusb",
     "dep:futures-lite",
 ]
 ftdi-wasm = [
     "wasm",
     "dep:ftdi-nusb",
-    "ftdi-nusb/wasm",
     "dep:nusb",
 ]
 # Linux-only programmer backends
-linux-spi = ["std", "is_sync", "dep:libc", "dep:nix", "dep:thiserror"]
-linux-mtd = ["std", "is_sync", "dep:libc", "dep:nix", "dep:thiserror"]
-linux-gpio = ["std", "is_sync", "dep:gpiocdev", "dep:thiserror"]
-internal = ["std", "is_sync", "dep:rflasher-internal"]
+linux-spi = ["std", "dep:libc", "dep:nix", "dep:thiserror"]
+linux-mtd = ["std", "dep:libc", "dep:nix", "dep:thiserror"]
+linux-gpio = ["std", "dep:gpiocdev", "dep:thiserror"]
+internal = ["std", "dep:rflasher-internal"]
 
 portable-programmers = [
     "std",
-    "is_sync",
-    "dummy",
+        "dummy",
     "ch341a",
     "ch347",
     "dediprog",
@@ -71,7 +67,6 @@ portable-programmers = [
 rflasher-core.workspace = true
 rflasher-internal = { version = "0.1.0", path = "../rflasher-internal", optional = true }
 log.workspace = true
-maybe-async.workspace = true
 thiserror = { workspace = true, optional = true }
 zerocopy = { workspace = true, optional = true }
 embedded-io = { workspace = true, optional = true }
@@ -79,8 +74,9 @@ embedded-io-async = { workspace = true, optional = true }
 
 nusb = { workspace = true, optional = true }
 futures-lite = { version = "2", optional = true }
+
 ftdi = { version = "0.1", optional = true }
-ftdi-nusb = { version = "0.2", default-features = false, optional = true }
+ftdi-nusb = { version = "0.3.0", default-features = false, optional = true }
 serialport = { version = "4.5", optional = true }
 gpiocdev = { version = "0.8", features = ["uapi_v1", "uapi_v2"], optional = true }
 libc = { version = "0.2", optional = true }
@@ -109,7 +105,13 @@ wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = { version = "0.3", optional = true }
 gloo-timers = { version = "0.3", features = ["futures"], optional = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+futures-timer = { version = "3", optional = true }
+
 [package.metadata.docs.rs]
 no-default-features = true
 features = ["portable-programmers"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+[dev-dependencies]
+futures-lite = "2"

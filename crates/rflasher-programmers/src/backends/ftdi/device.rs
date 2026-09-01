@@ -7,7 +7,6 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use ftdi::{BitMode, Device, Interface, find_by_vid_pid};
-use nusb::MaybeFuture;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::default_execute_with_vec;
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
@@ -15,6 +14,18 @@ use rflasher_core::spi::SpiCommand;
 
 use super::error::{FtdiError, Result};
 use super::protocol::*;
+
+// MPSSE wire constants private to the legacy libftdi backend.
+const MPSSE_DO_WRITE: u8 = 0x10;
+const MPSSE_DO_READ: u8 = 0x20;
+const MPSSE_WRITE_NEG: u8 = 0x01;
+const SET_BITS_LOW: u8 = 0x80;
+const SET_BITS_HIGH: u8 = 0x82;
+const LOOPBACK_END: u8 = 0x85;
+const TCK_DIVISOR: u8 = 0x86;
+const SEND_IMMEDIATE: u8 = 0x87;
+const DIS_DIV_5: u8 = 0x8a;
+const FTDI_HW_BUFFER_SIZE: usize = 4096;
 
 /// FTDI MPSSE programmer
 ///
@@ -33,7 +44,7 @@ pub struct Ftdi {
 
 impl Ftdi {
     /// Open an FTDI device with the given configuration
-    pub fn open(config: &FtdiConfig) -> Result<Self> {
+    pub async fn open(config: &FtdiConfig) -> Result<Self> {
         log::info!(
             "Opening FTDI {} channel {}",
             config.device_type.name(),
@@ -95,13 +106,13 @@ impl Ftdi {
     }
 
     /// Open the first available FTDI device
-    pub fn open_first() -> Result<Self> {
-        Self::open(&FtdiConfig::default())
+    pub async fn open_first() -> Result<Self> {
+        Self::open(&FtdiConfig::default()).await
     }
 
     /// Open a specific device type
-    pub fn open_device(device_type: FtdiDeviceType) -> Result<Self> {
-        Self::open(&FtdiConfig::for_device(device_type))
+    pub async fn open_device(device_type: FtdiDeviceType) -> Result<Self> {
+        Self::open(&FtdiConfig::for_device(device_type)).await
     }
 
     /// Initialize the MPSSE engine
@@ -252,9 +263,9 @@ impl Ftdi {
     }
 
     /// List available FTDI devices
-    pub fn list_devices() -> Result<Vec<FtdiDeviceInfo>> {
+    pub async fn list_devices() -> Result<Vec<FtdiDeviceInfo>> {
         let devices = nusb::list_devices()
-            .wait()
+            .await
             .map_err(|e| FtdiError::UsbError(e.to_string()))?
             .filter_map(|dev| {
                 let vid = dev.vendor_id();
@@ -309,14 +320,14 @@ impl SpiMaster for Ftdi {
         256
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         default_execute_with_vec(cmd, self.features(), |write_data, read_len| {
             self.spi_transfer(write_data, read_len)
                 .map_err(|_| CoreError::ProgrammerError)
         })
     }
 
-    fn delay_us(&mut self, us: u32) {
+    async fn delay_us(&mut self, us: u32) {
         // For FTDI, we just use a regular sleep
         // The MPSSE doesn't have built-in delay commands for arbitrary times
         std::thread::sleep(Duration::from_micros(us as u64));

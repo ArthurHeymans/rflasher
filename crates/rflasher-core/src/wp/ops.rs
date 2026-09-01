@@ -11,7 +11,6 @@ use super::types::{
 use crate::error::Error;
 use crate::programmer::SpiMaster;
 use crate::protocol;
-use maybe_async::maybe_async;
 
 /// Write protection result type with detailed error information
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +66,6 @@ impl std::error::Error for WpError {}
 pub type WpResult<T> = core::result::Result<T, WpError>;
 
 /// Read a single bit from the appropriate status register
-#[maybe_async]
 async fn read_bit<M: SpiMaster + ?Sized>(
     master: &mut M,
     bit_info: &RegBitInfo,
@@ -93,7 +91,6 @@ async fn read_bit<M: SpiMaster + ?Sized>(
 }
 
 /// Read all write protection bits from the chip
-#[maybe_async]
 pub async fn read_wp_bits<M: SpiMaster + ?Sized>(
     master: &mut M,
     bit_map: &WpRegBitMap,
@@ -132,7 +129,6 @@ pub async fn read_wp_bits<M: SpiMaster + ?Sized>(
 }
 
 /// Read the current write protection configuration
-#[maybe_async]
 pub async fn read_wp_config<M: SpiMaster + ?Sized>(
     master: &mut M,
     bit_map: &WpRegBitMap,
@@ -200,7 +196,6 @@ fn build_register_values(bits: &WpBits, bit_map: &WpRegBitMap) -> (u8, u8, u8) {
 }
 
 /// Read current register values preserving non-WP bits
-#[maybe_async]
 async fn read_current_registers<M: SpiMaster + ?Sized>(master: &mut M) -> WpResult<(u8, u8, u8)> {
     let sr1 = protocol::read_status1(master).await?;
     let sr2 = protocol::read_status2(master).await.unwrap_or(0);
@@ -266,7 +261,6 @@ pub struct WriteOptions {
 }
 
 /// Write WP bits to the chip
-#[maybe_async]
 pub async fn write_wp_bits<M: SpiMaster + ?Sized>(
     master: &mut M,
     bits: &WpBits,
@@ -323,7 +317,6 @@ pub async fn write_wp_bits<M: SpiMaster + ?Sized>(
 }
 
 /// Set the write protection mode
-#[maybe_async]
 pub async fn set_wp_mode<M: SpiMaster + ?Sized>(
     master: &mut M,
     mode: WpMode,
@@ -357,7 +350,6 @@ pub async fn set_wp_mode<M: SpiMaster + ?Sized>(
 }
 
 /// Set the protected range
-#[maybe_async]
 pub async fn set_wp_range<M: SpiMaster + ?Sized>(
     master: &mut M,
     range: &WpRange,
@@ -395,7 +387,6 @@ pub async fn set_wp_range<M: SpiMaster + ?Sized>(
 }
 
 /// Write complete write protection configuration
-#[maybe_async]
 pub async fn write_wp_config<M: SpiMaster + ?Sized>(
     master: &mut M,
     config: &WpConfig,
@@ -412,7 +403,6 @@ pub async fn write_wp_config<M: SpiMaster + ?Sized>(
 }
 
 /// Disable all write protection
-#[maybe_async]
 pub async fn disable_wp<M: SpiMaster + ?Sized>(
     master: &mut M,
     bit_map: &WpRegBitMap,

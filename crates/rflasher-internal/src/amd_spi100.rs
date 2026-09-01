@@ -881,10 +881,7 @@ impl Spi100Controller {
 // SpiMaster trait implementation for AMD SPI100
 // =============================================================================
 
-#[cfg(all(
-    feature = "is_sync",
-    any(all(feature = "std", target_os = "linux"), not(feature = "std"))
-))]
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
 impl<H: HostAccess> SpiMaster for Spi100Controller<H> {
     fn features(&self) -> SpiFeatures {
         // AMD SPI100 supports standard SPI only (no dual/quad modes exposed to software)
@@ -899,7 +896,7 @@ impl<H: HostAccess> SpiMaster for Spi100Controller<H> {
         SPI100_MAX_DATA_WRITE
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         self.execute_spi_command(cmd)
     }
 
@@ -908,7 +905,7 @@ impl<H: HostAccess> SpiMaster for Spi100Controller<H> {
         true
     }
 
-    fn delay_us(&mut self, us: u32) {
+    async fn delay_us(&mut self, us: u32) {
         self.host.delay_us(us);
     }
 }

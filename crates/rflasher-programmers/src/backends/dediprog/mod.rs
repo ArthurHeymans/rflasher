@@ -16,9 +16,8 @@
 //! - V2: Extended protocol (SF100/SF200 >= 5.5, SF600 6.9-7.2.21)
 //! - V3: Latest protocol (SF600 >= 7.2.22, SF600PG2, SF700)
 //!
-//! Uses `maybe_async` to support both sync and async modes:
-//! - With `is_sync` feature (native CLI): blocking/synchronous
-//! - Without `is_sync` (WASM): async with WebUSB
+//! Async on every target: native drives the async API with a `block_on`
+//! boundary in the application, WASM uses WebUSB.
 //!
 //! # Example
 //!
@@ -27,14 +26,16 @@
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
-//! let mut dediprog = Dediprog::open()?;
+//! # futures_lite::future::block_on(async {
+//! let mut dediprog = Dediprog::open().await?;
 //! println!("Device: {}", dediprog.device_string());
 //!
 //! let mut id = [0u8; 3];
 //! let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut id);
-//! dediprog.execute(&mut cmd)?;
+//! dediprog.execute(&mut cmd).await?;
 //! println!("JEDEC ID: {:02X} {:02X} {:02X}", id[0], id[1], id[2]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # }).unwrap();
 //! ```
 //!
 //! # Configuration Options
@@ -58,9 +59,11 @@
 //!     ("voltage", "3.5"),
 //!     ("iomode", "dual"),
 //! ];
+//! # futures_lite::future::block_on(async {
 //! let config = parse_options(&options)?;
-//! let dediprog = Dediprog::open_with_config(config)?;
+//! let dediprog = Dediprog::open_with_config(config).await?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # }).unwrap();
 //! ```
 
 #[cfg(any(feature = "std", feature = "wasm"))]

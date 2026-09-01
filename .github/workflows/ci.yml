@@ -108,10 +108,10 @@ jobs:
         run: cargo check -p rflasher-chip-types --no-default-features --features alloc --target x86_64-unknown-none
       - name: Check rflasher-core without std
         run: cargo check -p rflasher-core --no-default-features --target x86_64-unknown-none
-      - name: Check rflasher-core sync without std
-        run: cargo check -p rflasher-core --no-default-features --features is_sync --target x86_64-unknown-none
-      - name: Check rflasher-internal sync without std
-        run: cargo check -p rflasher-internal --no-default-features --features is_sync --target x86_64-unknown-none
+      - name: Check rflasher-core with alloc without std
+        run: cargo check -p rflasher-core --no-default-features --features alloc --target x86_64-unknown-none
+      - name: Check rflasher-internal without std
+        run: cargo check -p rflasher-internal --no-default-features --target x86_64-unknown-none
 
   wasm:
     name: WASM Build

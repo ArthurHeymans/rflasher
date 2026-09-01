@@ -22,7 +22,6 @@
 //! - read/write/erase → OpaqueMaster (firmware-accelerated)
 //! - WP/status regs   → SpiMaster (generic SPI commands)
 
-use nusb::MaybeFuture;
 use nusb::transfer::{Bulk, In, Out};
 use rflasher_core::chip::EraseBlock;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
@@ -52,9 +51,9 @@ pub struct SunxiFel {
 
 impl SunxiFel {
     /// Open the first available FEL device
-    pub fn open() -> Result<Self> {
+    pub async fn open() -> Result<Self> {
         let devices: Vec<_> = nusb::list_devices()
-            .wait()
+            .await
             .map_err(|e| Error::Usb(format!("failed to enumerate USB devices: {}", e)))?
             .filter(|d| d.vendor_id() == FEL_VID && d.product_id() == FEL_PID)
             .collect();
@@ -69,12 +68,12 @@ impl SunxiFel {
 
         let device = device_info
             .open()
-            .wait()
+            .await
             .map_err(|e| Error::Usb(format!("failed to open device: {}", e)))?;
 
         let interface = device
             .claim_interface(0)
-            .wait()
+            .await
             .map_err(|e| Error::Usb(format!("failed to claim interface: {}", e)))?;
 
         // Find bulk endpoints
@@ -490,7 +489,7 @@ impl SpiMaster for SunxiFel {
         self.spi_info.swaplen as usize
     }
 
-    fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         let header_len = cmd.header_len();
         let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
         cmd.encode_header(&mut write_data);
@@ -500,7 +499,7 @@ impl SpiMaster for SunxiFel {
             .map_err(|_| CoreError::ProgrammerError)
     }
 
-    fn delay_us(&mut self, us: u32) {
+    async fn delay_us(&mut self, us: u32) {
         std::thread::sleep(std::time::Duration::from_micros(us as u64));
     }
 }
@@ -516,19 +515,19 @@ impl OpaqueMaster for SunxiFel {
         0
     }
 
-    fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
+    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
         self.fast_read(addr, buf, self.use_4byte_addr)
             .map_err(|_| CoreError::ReadError { addr })
     }
 
-    fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
+    async fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
         // Batched page program with on-SoC busy-wait.
         // Page size is always 256 for standard SPI NOR.
         self.batched_write(addr, data, 256, self.use_4byte_addr)
             .map_err(|_| CoreError::WriteError { addr })
     }
 
-    fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
+    async fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
         // Use the chip's actual erase block table (from RON/SFDP) to select
         // the right opcode and block size. If no erase blocks are configured,
         // return Err so the hybrid adapter falls back to SPI-based erase.

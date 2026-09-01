@@ -11,9 +11,8 @@
 //! - **`ftdi-native`**: Pure-Rust `ftdi-nusb` backend
 //! - **`ftdi-wasm`**: WebUSB backend using `ftdi-nusb` and `nusb`
 //!
-//! Uses `maybe_async` to support both sync and async modes (native + wasm):
-//! - With `is_sync` feature (native CLI): blocking/synchronous
-//! - Without `is_sync` (WASM): async with WebUSB
+//! Async on every target: native drives the async API with a `block_on`
+//! boundary in the application, WASM uses WebUSB.
 //!
 //! # Supported Devices
 //!
@@ -36,24 +35,26 @@
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
+//! # futures_lite::future::block_on(async {
 //! // Open with default settings (FT4232H channel A)
-//! let mut ftdi = Ftdi::open_first()?;
+//! let mut ftdi = Ftdi::open_first().await?;
 //!
 //! // Or open a specific device type
-//! let mut ftdi = Ftdi::open_device(FtdiDeviceType::Ft2232H)?;
+//! let mut ftdi = Ftdi::open_device(FtdiDeviceType::Ft2232H).await?;
 //!
 //! // Or with full configuration
 //! let config = FtdiConfig::for_device(FtdiDeviceType::Ft2232H)
 //!     .interface(rflasher_programmers::ftdi::FtdiInterface::B)?
 //!     .divisor(4)?;
-//! let mut ftdi = Ftdi::open(&config)?;
+//! let mut ftdi = Ftdi::open(&config).await?;
 //!
 //! // Read JEDEC ID
 //! let mut id = [0u8; 3];
 //! let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut id);
-//! ftdi.execute(&mut cmd)?;
+//! ftdi.execute(&mut cmd).await?;
 //! println!("JEDEC ID: {:02X} {:02X} {:02X}", id[0], id[1], id[2]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # }).unwrap();
 //! ```
 //!
 //! # Programmer Options
@@ -94,7 +95,7 @@ mod device;
 mod error;
 
 // Pure-Rust rs-ftdi backend, shared by `native` and `wasm` features.
-// Uses maybe_async for sync (native) / async (wasm) polymorphism.
+// Async on every target.
 #[cfg(any(feature = "ftdi-native", feature = "wasm"))]
 mod rsftdi_device;
 #[cfg(any(feature = "ftdi-native", feature = "wasm"))]
