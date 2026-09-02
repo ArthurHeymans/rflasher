@@ -35,7 +35,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libudev-dev libftdi1-dev
+          sudo apt-get install -y libudev-dev
       - name: Run Clippy
         run: |
           cargo clippy --workspace --exclude rflasher-wasm --all-targets --features rflasher/linux-gpio -- -D warnings
@@ -53,7 +53,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libudev-dev libftdi1-dev
+          sudo apt-get install -y libudev-dev
       - name: Run tests
         run: cargo test --workspace --exclude rflasher-wasm --features rflasher/linux-gpio
 
@@ -69,7 +69,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libudev-dev libftdi1-dev
+          sudo apt-get install -y libudev-dev
       - name: Build all native programmers
         run: cargo build -p rflasher --no-default-features --features all-programmers --release
       - name: Validate packaged static chip database

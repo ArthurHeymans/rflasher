@@ -5,11 +5,10 @@
 //!
 //! # Backends
 //!
-//! Three backends are available:
+//! The backend is the pure-Rust `ftdi-nusb` crate on every target:
 //!
-//! - **`ftdi`**: Uses libftdi1 C bindings (`ftdi` crate)
-//! - **`ftdi-native`**: Pure-Rust `ftdi-nusb` backend
-//! - **`ftdi-wasm`**: WebUSB backend using `ftdi-nusb` and `nusb`
+//! - **`ftdi`**: native `nusb` USB transport
+//! - **`ftdi-wasm`**: WebUSB transport
 //!
 //! Async on every target: native drives the async API with a `block_on`
 //! boundary in the application, WASM uses WebUSB.
@@ -88,41 +87,19 @@
 //! | 20      | 3 MHz     |
 //! | 60      | 1 MHz     |
 
-// libftdi1 C backend (default `std` feature)
-#[cfg(all(feature = "std", not(feature = "ftdi-native"), not(feature = "wasm")))]
+// Pure-Rust ftdi-nusb backend, shared by native and wasm. Async on every
+// target.
 mod device;
-#[cfg(all(feature = "std", not(feature = "ftdi-native"), not(feature = "wasm")))]
 mod error;
 
-// Pure-Rust rs-ftdi backend, shared by `native` and `wasm` features.
-// Async on every target.
-#[cfg(any(feature = "ftdi-native", feature = "wasm"))]
-mod rsftdi_device;
-#[cfg(any(feature = "ftdi-native", feature = "wasm"))]
-mod rsftdi_error;
-
-// Protocol constants are shared by all backends
-#[cfg(any(feature = "std", feature = "ftdi-native", feature = "wasm"))]
+// Adapter configuration and device tables
 mod protocol;
 
-// Re-exports: same public API regardless of backend
-#[cfg(all(feature = "std", not(feature = "ftdi-native"), not(feature = "wasm")))]
-pub use device::{Ftdi, FtdiDeviceInfo, parse_options};
-#[cfg(all(feature = "std", not(feature = "ftdi-native"), not(feature = "wasm")))]
+pub use device::Ftdi;
+// parse_options and device enumeration are native-only; in WASM the UI
+// provides configuration directly.
+#[cfg(all(feature = "ftdi", not(target_arch = "wasm32")))]
+pub use device::{FtdiDeviceInfo, parse_options};
 pub use error::{FtdiError, Result};
 
-// rs-ftdi backend (native sync or wasm async)
-#[cfg(any(feature = "ftdi-native", feature = "wasm"))]
-pub use rsftdi_device::Ftdi;
-#[cfg(all(feature = "ftdi-native", not(target_arch = "wasm32")))]
-pub use rsftdi_device::{FtdiDeviceInfo, parse_options};
-#[cfg(any(feature = "ftdi-native", feature = "wasm"))]
-pub use rsftdi_error::{FtdiError, Result};
-
-// parse_options is only available in native/std mode (not wasm)
-// In WASM, the UI provides configuration directly
-
-// FtdiConfig, FtdiDeviceType, FtdiInterface, and SUPPORTED_DEVICES are
-// shared across all backends and live in the protocol module.
-#[cfg(any(feature = "std", feature = "ftdi-native", feature = "wasm"))]
 pub use protocol::{FtdiConfig, FtdiDeviceType, FtdiInterface, SUPPORTED_DEVICES};

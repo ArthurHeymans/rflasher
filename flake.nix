@@ -35,7 +35,6 @@
 
           runtimeBuildInputs = p: [
             p.udev
-            p.libftdi1
             p.pciutils
           ];
 
