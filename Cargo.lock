@@ -3032,7 +3032,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rflasher"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -3051,7 +3051,7 @@ dependencies = [
 
 [[package]]
 name = "rflasher-chip-types"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bitflags 2.13.1",
  "heapless",
@@ -3061,7 +3061,7 @@ dependencies = [
 
 [[package]]
 name = "rflasher-chips"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "once_cell",
  "rflasher-chip-types",
@@ -3073,7 +3073,7 @@ dependencies = [
 
 [[package]]
 name = "rflasher-chips-codegen"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -3085,7 +3085,7 @@ dependencies = [
 
 [[package]]
 name = "rflasher-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bitflags 2.13.1",
  "embedded-io",
@@ -3101,7 +3101,7 @@ dependencies = [
 
 [[package]]
 name = "rflasher-internal"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "log",
@@ -3112,7 +3112,7 @@ dependencies = [
 
 [[package]]
 name = "rflasher-pci"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "pci_types",
@@ -3120,7 +3120,7 @@ dependencies = [
 
 [[package]]
 name = "rflasher-programmers"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "embedded-io",
  "embedded-io-async",
@@ -3146,7 +3146,7 @@ dependencies = [
 
 [[package]]
 name = "rflasher-repl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "colored",
  "crossbeam-utils",
@@ -3162,7 +3162,7 @@ dependencies = [
 
 [[package]]
 name = "rflasher-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "console_error_panic_hook",
  "console_log",
