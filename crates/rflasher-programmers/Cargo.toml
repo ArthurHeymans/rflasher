@@ -64,7 +64,7 @@ portable-programmers = [
 
 [dependencies]
 rflasher-core.workspace = true
-rflasher-internal = { version = "0.1.0", path = "../rflasher-internal", optional = true }
+rflasher-internal = { version = "0.2.0", path = "../rflasher-internal", optional = true }
 log.workspace = true
 thiserror = { workspace = true, optional = true }
 zerocopy = { workspace = true, optional = true }
