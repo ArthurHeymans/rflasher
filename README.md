@@ -4,388 +4,170 @@
   <img src="docs/images/rflasher.png" alt="rflasher logo" width="160">
 </p>
 
-A modern Rust implementation for reading, writing, and erasing SPI flash chips. This is a loose port of [flashprog](https://github.com/SourceArcade/flashprog).
+rflasher reads, writes, and erases SPI flash chips from Rust. It is heavily inspired by [flashprog](https://github.com/SourceArcade/flashprog) and supports 480+ chips (`rflasher list-chips`) and most common programmers: CH341A/CH347, Dediprog, FTDI (MPSSE and FT4222H), serprog, Raiden debug hardware, internal Intel/AMD chipset controllers, Allwinner FEL, and Linux spidev/MTD/GPIO. The same codebase also runs in the browser via WebSerial/WebUSB, and the core crates are `no_std` for reuse in firmware.
 
-> **⚠️ ALPHA SOFTWARE WARNING**
+Only SPI NOR flash is in scope.
+
+> **⚠️ Alpha software**
 >
-> rflasher is currently in **alpha stage** and should **not be relied upon for production use**. For critical flash programming tasks, please use the original [flashprog](https://github.com/SourceArcade/flashprog) instead. This project is under active development and may contain bugs that could damage your hardware or data.
-
-## Features
-
-- **Modern Rust Architecture**: Clean separation of concerns with workspace organization
-- **Dual-Mode Support**: Synchronous CLI and asynchronous WASM/browser support from a single codebase
-- **Web Interface**: Browser-based UI using egui and WebSerial API for programming flash chips directly in Chrome/Edge
-- **`no_std` Compatible Core**: Core flash and selected internal-controller logic can be reused in firmware/embedded environments.
-- **RON-based Chip Database**: Human-readable chip definitions with build-time code generation
-- **Trait-based Programmer Abstraction**: Extensible design for adding new programmers
-- **Layout Support**: Intel Flash Descriptor (IFD) and FMAP parsing for region-based operations
-- **Progress Reporting**: Real-time progress bars for all operations using `indicatif`
-- **Safety Features**: Write protection detection, verification, and region-based access control
-- **Experimental REPL**: Steel Scheme-based REPL for scripting raw SPI commands (requires `--features repl`)
-
-## Supported Programmers
-
-Currently, rflasher supports the following programmers:
-
-### SPI-based Programmers
-
-- **CH341A** - USB SPI programmer (VID: 0x1A86, PID: 0x5512)
-- **CH347** - USB SPI programmer (VID: 0x1A86, PID: 0x55DB/0x55DE)
-- **Dediprog** - Professional USB SPI programmers (SF100, SF200, SF600, SF600PG2, SF700)
-- **Serprog** - Serial Flasher Protocol (serial port and TCP/IP)
-- **FTDI** - MPSSE-based programmers (FT2232H, FT4232H, FT232H, and compatible devices)
-- **FT4222H** - FTDI FT4222H USB to SPI bridge (VID: 0x0403, PID: 0x601C)
-- **Raiden** - Chrome OS debug hardware (SuzyQable, Servo V4, C2D2, uServo, Servo Micro)
-- **Internal** - Built-in chipset SPI controllers (Intel ICH7-500 Series, AMD FCH 790b)
-- **Linux SPI** - Native Linux spidev interface (`/dev/spidevX.Y`)
-- **Linux GPIO** - GPIO bitbang SPI via Linux character device (`/dev/gpiochipN`)
-- **Dummy** - In-memory flash emulator for testing
-
-### Opaque Programmers
-
-- **Linux MTD** - Linux Memory Technology Device interface (`/dev/mtdN`) for NOR flash
-
-## Supported Flash Chips
-
-Currently includes **482 flash chips** from:
-
-- **AMIC** - A25L and A25LQ series (21 chips)
-- **Atmel** - AT25DF and AT26DF series (31 chips)
-- **Boya** - BY25Q series (10 chips)
-- **Eon** - EN25F, EN25Q, EN25QH, EN25B, EN25P, and EN25S series (47 chips)
-- **ESI** - ES25P series (3 chips)
-- **ESMT** - F25L series (7 chips)
-- **Fudan** - FM25F and FM25Q series (12 chips)
-- **GigaDevice** - GD25Q, GD25LQ, GD25WQ, GD25VQ, GD25B, GD25LB, GD25LE, and GD25LR series (61 chips)
-- **Intel** - 25F series (6 chips)
-- **ISSI** - IS25LP and IS25WP series (10 chips)
-- **Macronix** - MX25L, MX25U, MX25R, and MX66 series (53 chips)
-- **Micron/Numonyx** - N25Q, MT25Q, MT25QL, MT25QU, and M25P series (55 chips)
-- **Nantronics** - N25S series (5 chips)
-- **PMC** - Pm25L series (17 chips)
-- **Puya** - P25Q and PY25Q/PY25F/PY25R series (30 chips)
-- **Sanyo** - LE25FU and LE25FW series (12 chips)
-- **Spansion** - S25FL series (27 chips)
-- **SST** - SST25VF, SST25LF, SST25WF, and SST26VF series (34 chips)
-- **Winbond** - W25Q, W25X, W25P, and W25R series (54 chips)
-- **XMC** - XM25QH and XM25QU series (6 chips)
-- **XTX** - XT25F series (11 chips)
-- **Zetta** - ZD25D and ZD25LQ series (4 chips)
-
-Chip definitions are stored as RON files in `crates/rflasher-chips/data/vendors/` and can be easily extended. See the [chip database structure](crates/rflasher-chips/data/vendors/) for examples.
+> rflasher is not ready for production use. For anything critical, use [flashprog](https://github.com/SourceArcade/flashprog) instead.
+>
+> Before writing: make sure the programmer voltage matches the chip (3.3 V for most SPI flash), check write protection status, and always read a backup first. Corrupting the wrong region (e.g. the Intel ME region) can brick the device permanently.
 
 ## Installation
 
-### Build from Source
+Build from source (Rust 1.85+):
 
 ```bash
-# Clone the repository
-git clone https://github.com/user/rflasher
+git clone https://github.com/ArthurHeymans/rflasher
 cd rflasher
-
-# Build with default features (most common programmers)
-cargo build --release
-
-# Build with all programmers
-cargo build --release --features all-programmers
-
-# Build with specific programmers only
-cargo build --release --no-default-features --features ch341a,serprog
-
-# Install to ~/.cargo/bin
+cargo build --release                                          # default programmers
+cargo build --release --features all-programmers               # everything
+cargo build --release --no-default-features --features ch341a,serprog  # pick your own
 cargo install --path .
 ```
 
-### System Requirements
+### USB device permissions
 
-- **Rust toolchain** 1.85 or later (edition 2024)
+USB programmers (CH341A, CH347, FTDI, Dediprog, Raiden) need udev rules for non-root access, e.g.:
 
-### Chip Database
+```text
+# CH341A
+SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5512", MODE="0660", GROUP="plugdev"
 
-The flash chip database is bundled into builds that enable `static-chips`. The CLI can also load RON files at runtime from these default search paths:
+# Raiden Debug SPI / Cr50 (Google debug hardware)
+# The backend matches on vendor ID alone, so this rule covers all Google
+# devices; add ATTR{idProduct} matches if you want it narrower.
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", MODE="0660", GROUP="plugdev"
+```
 
-1. `./crates/rflasher-chips/data/vendors/` (repository development)
-2. `./chips/vendors/` (compatible local override)
-3. `/usr/share/rflasher/chips/` (system-wide installation)
-4. `/usr/local/share/rflasher/chips/` (local installation)
+Install to `/etc/udev/rules.d/`, run `udevadm control --reload-rules && udevadm trigger`, and add your user to the `plugdev` group (create the group first if your distro doesn't have it).
 
-You can also specify a custom path with `--chip-db <path>`.
+### Man page
 
-### USB Device Permissions
-
-For WebUSB programmers, you may need to set up udev rules. This includes
-CH341A, CH347, FTDI, Dediprog, and Raiden Debug SPI / Cr50 devices.
+The man page is generated from the CLI definitions:
 
 ```bash
-# Copy udev rules (create this file based on your needs)
-sudo cp 50-rflasher.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-```
-
-Example udev rules:
-
-```
-# CH341A USB programmer
-SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5512", MODE="0666"
-
-# Raiden Debug SPI / Cr50 (Google debug hardware, VID:18d1; product ID varies)
-SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", MODE="0666"
-```
-
-### Man Page
-
-A man page is available in the `man/` directory. To view it locally:
-
-```bash
+cargo run --bin gen-manpage   # writes man/rflasher.1
 man -l man/rflasher.1
 ```
 
-To install system-wide:
+## Usage
 
 ```bash
-sudo cp man/rflasher.1 /usr/local/share/man/man1/
-sudo mandb
-```
-
-The man page is automatically generated from the CLI definitions using `clap_mangen`. To regenerate it:
-
-```bash
-cargo run --bin gen-manpage
-```
-
-## Quick Start
-
-```bash
-# List available programmers
-rflasher list-programmers
-
-# List supported chips
-rflasher list-chips
-
-# Probe for a flash chip using CH341A
-rflasher probe -p ch341a
-
-# Show detailed chip information
-rflasher info -p ch341a
-
-# Read flash to a file
-rflasher read -p ch341a flash_backup.bin
-
-# Write a file to flash (with automatic erase and verify)
-rflasher write -p ch341a firmware.bin
-
-# Erase entire chip
+rflasher probe -p ch341a                # detect the flash chip
+rflasher info -p ch341a                 # detailed chip information
+rflasher read -p ch341a backup.bin      # read flash to a file
+rflasher write -p ch341a firmware.bin   # erase, write and verify
 rflasher erase -p ch341a
-```
-
-## Usage Examples
-
-### Basic Operations
-
-```bash
-# Read entire flash chip
-rflasher read -p ch341a backup.bin
-
-# Write and verify (default behavior)
-rflasher write -p ch341a firmware.bin
-
-# Write without verification (faster, but risky)
-rflasher write -p ch341a firmware.bin --no-verify
-
-# Short aliases (r/w/v, and E for erase) and the RFLASHER_PROGRAMMER env var also work
-export RFLASHER_PROGRAMMER=ch341a
-rflasher r backup.bin
-
-# Verify flash contents against a file
 rflasher verify -p ch341a firmware.bin
-
-# Erase only a specific layout region
-rflasher erase -p ch341a --ifd -r bios
+rflasher list-chips                     # supported chips
+rflasher list-programmers               # available programmers
 ```
 
-### Programmer-Specific Options
+Short aliases exist (`r`/`w`/`v`, `E` for erase), the programmer can be set with the `RFLASHER_PROGRAMMER` environment variable, and `-v`/`-vv` increase log verbosity. `rflasher write -p ch341a firmware.bin --no-verify` skips verification.
+
+### Programmers
+
+| Programmer | Parameters | Example |
+|---|---|---|
+| `ch341a` | — | `rflasher probe -p ch341a` |
+| `ch347` | — | `rflasher probe -p ch347` |
+| `serprog` | `dev=`, baud rate, or `ip=` | `rflasher probe -p serprog:dev=/dev/ttyUSB0:115200`<br>`rflasher probe -p serprog:ip=192.168.1.100:5000` |
+| `dediprog` | `spispeed=` | `rflasher probe -p dediprog:spispeed=12M` |
+| `ftdi` | `type=`, `port=`, `divisor=` | `rflasher probe -p ftdi:type=2232h,port=B,divisor=10` |
+| `ft4222` | `spispeed=`, `cs=` | `rflasher probe -p ft4222:spispeed=20000,cs=0` |
+| `raiden` | — | `rflasher probe -p raiden` |
+| `internal` | — | `rflasher probe -p internal` |
+| `linux_spi` | `dev=`, `spispeed=` | `rflasher probe -p linux_spi:dev=/dev/spidev0.0,spispeed=4000` |
+| `linux_gpio_spi` | `gpiochip=`, `cs=`, `sck=`, `mosi=`, `miso=`, `spispeed=` | `rflasher probe -p linux_gpio_spi:gpiochip=0,cs=25,sck=11,mosi=10,miso=9` |
+| `linux_mtd` | `dev=` | `rflasher read -p linux_mtd:dev=0 backup.bin` |
+| `sunxi_fel` | — | `rflasher probe -p sunxi_fel` (Allwinner SoC in FEL mode) |
+| `dummy` | — | in-memory flash emulator for testing |
+
+Run `rflasher <command> --help` or see the man page for the full option list.
+
+The `internal` programmer uses the chipset's SPI controller on Linux via PCI sysfs and `/dev/mem`, so it usually requires root. Its controller code is `no_std` and can be reused in firmware; see [crates/rflasher-internal](crates/rflasher-internal/README.md).
+
+### Chip database
+
+Chips are defined as RON files in `crates/rflasher-chips/data/vendors/`. Builds with the `static-chips` feature embed the database; otherwise RON files are loaded at runtime from:
+
+1. `./crates/rflasher-chips/data/vendors/`
+2. `./chips/vendors/`
+3. `/usr/share/rflasher/chips/`
+4. `/usr/local/share/rflasher/chips/`
+
+or from a custom path given with `--chip-db <path>`.
+
+### Layouts and regions
+
+Intel Flash Descriptor (IFD) and FMAP layouts let you operate on specific flash regions (BIOS, ME, GbE, ...).
+
+`--region`/`--include` accept `NAME[:FILE]`. With a `FILE`, each region reads to / writes from its own file instead of a full chip image, and the positional file can be omitted. Per-region files must not exceed their region's size; a smaller file covers only the start of the region. When a positional file is combined with per-region files, it must be a full chip image and supplies the data for regions without their own file.
 
 ```bash
-# CH341A (USB)
-rflasher probe -p ch341a
-
-# Serprog via serial port
-rflasher probe -p serprog:dev=/dev/ttyUSB0
-
-# Serprog via serial with custom baud rate
-rflasher probe -p serprog:dev=/dev/ttyUSB0:115200
-
-# Serprog via TCP (e.g., ESP8266-based programmer)
-rflasher probe -p serprog:ip=192.168.1.100:5000
-
-# Dediprog SF600 with 12MHz SPI speed
-rflasher probe -p dediprog:spispeed=12M
-
-# Raiden Debug SPI (Chrome OS debug hardware)
-rflasher probe -p raiden
-
-# Internal chipset programmer (Intel/AMD; Linux userspace only)
-rflasher probe -p internal
-
-# FTDI with specific device type
-rflasher probe -p ftdi:type=2232h
-
-# FTDI on channel B with slower clock
-rflasher probe -p ftdi:type=2232h,port=B,divisor=10
-
-# FT4222H with custom speed and chip select
-rflasher probe -p ft4222:spispeed=20000,cs=0
-
-# Linux SPI with custom speed
-rflasher probe -p linux_spi:dev=/dev/spidev0.0,spispeed=4000
-
-# Linux GPIO bitbang SPI (e.g., Raspberry Pi)
-rflasher probe -p linux_gpio_spi:gpiochip=0,cs=25,sck=11,mosi=10,miso=9
-
-# Linux GPIO with custom speed
-rflasher read -p linux_gpio_spi:dev=/dev/gpiochip0,cs=25,sck=11,mosi=10,miso=9,spispeed=500 flash.bin
-
-# Linux MTD device
-rflasher probe -p linux_mtd:dev=0
-
-# Linux MTD - read from device 0
-rflasher read -p linux_mtd:dev=0 flash_backup.bin
-```
-
-### Internal Programmer and Embedded Reuse
-
-The `internal` programmer uses chipset-integrated SPI controllers. The CLI path is available on Linux userspace and uses Linux PCI sysfs plus `/dev/mem`, so it usually requires root or equivalent hardware access permissions.
-
-The low-level Intel ICH/PCH and AMD SPI100 controller code is also structured for firmware reuse without duplicating controller logic. Embedded callers provide the platform-specific access layer by implementing `rflasher_internal::HostAccess`:
-
-- `PciConfigAccess` methods for PCI configuration reads/writes.
-- `map_mmio` for controller register and optional flash memory windows.
-- `delay_us` for short controller polling delays.
-
-For a `no_std` firmware integration, depend on the crates without default features:
-
-```toml
-rflasher-core = { version = "0.1", default-features = false }
-rflasher-internal = { version = "0.1", default-features = false }
-```
-
-All I/O trait methods are `async fn`; a firmware without an executor can
-drive them to completion with its own minimal `block_on` — a poll loop with a
-no-op waker is enough, since the controllers never actually suspend. (Std
-executors like `futures_lite::future::block_on` are not available in `no_std`
-builds; embedded executors such as Embassy also work.)
-
-Firmware code can pass its own PCI scan results to `find_intel_chipset_in_devices` / `find_amd_chipset_in_devices`, then construct controllers with `IchSpiController::new_with_host(...)` or `AmdSpi100Info::create_controller_with_host(...)`.
-
-### Layout Operations
-
-Flash layouts allow you to work with specific regions of the flash chip (e.g., BIOS, ME, GbE regions on Intel systems).
-
-`--region`/`--include` accept `NAME[:FILE]`. With a `FILE`, each region reads to / writes from its own file instead of a full chip image; the positional file can then be omitted. Per-region files must not exceed their region's size, and a smaller file covers only the start of the region. When a positional file is combined with per-region files, it must be a full chip image and supplies the data for regions without their own file.
-
-```bash
-# Extract Intel Flash Descriptor from a flash image
+# Extract a layout from an image
 rflasher layout ifd flash.bin -o layout.toml
-
-# Extract FMAP from a Chromebook flash image
 rflasher layout fmap chromebook.bin -o layout.toml
-
-# Show layout from a file
 rflasher layout show layout.toml
-
-# Create a new layout template
 rflasher layout create custom.toml --size "16 MiB"
 
-# Read only the BIOS region into its own file (using IFD from chip)
+# Read the BIOS region into its own file (IFD parsed from the chip)
 rflasher read -p ch341a --ifd -r bios:bios.bin
 
 # Read several regions, each to its own file
 rflasher read -p ch341a --ifd --include bios:bios.bin,me:me.bin
 
-# Write a region from its own file (per-region NAME:FILE)
+# Write a region from its own file
 rflasher write -p ch341a --layout layout.toml -r bios:bios_update.bin
 
-# Read/write a region out of a full chip image instead
+# Or write a region out of a full chip image
 rflasher write -p ch341a --ifd -r bios full_image.bin
-
-# Erase multiple regions
-rflasher erase -p ch341a --ifd --include bios,descriptor
 ```
 
-### Write Protection Operations
-
-rflasher supports reading and modifying flash chip write protection settings:
+### Write protection
 
 ```bash
-# Show current write protection status
-rflasher wp status -p ch341a
-
-# List all available protection ranges for the chip
-rflasher wp list -p ch341a
-
-# Enable hardware write protection (WP# pin controlled)
-rflasher wp enable -p ch341a
-
-# Disable write protection
+rflasher wp status -p ch341a                       # current protection status
+rflasher wp list -p ch341a                         # available protection ranges
+rflasher wp enable -p ch341a                       # hardware protection (WP# pin)
 rflasher wp disable -p ch341a
-
-# Set protection for a specific address range (start,length)
-rflasher wp range -p ch341a 0,0x100000
-
-# Set protection for a named region (requires layout)
-rflasher wp region -p ch341a --ifd bios
-
+rflasher wp range -p ch341a 0,0x100000             # protect start,length
+rflasher wp region -p ch341a --ifd bios            # protect a named region
 ```
 
-### Verbosity and Debugging
+## Web interface
+
+A browser-based UI (egui) can drive a programmer straight from the browser: serprog over WebSerial, and CH341A, CH347, FTDI, FT4222H, Dediprog, and Raiden over WebUSB. Both APIs require Chrome/Edge (or Opera); Firefox and Safari support neither, and a secure context (HTTPS or localhost) is mandatory.
+
+![rflasher Web Interface](docs/images/webui-screenshot.png)
 
 ```bash
-# Increase verbosity (shows debug messages)
-rflasher -v probe -p ch341a
-
-# Maximum verbosity (shows trace-level messages)
-rflasher -vv read -p ch341a -o flash.bin
+cargo install trunk
+rustup target add wasm32-unknown-unknown
+cd crates/rflasher-wasm
+trunk serve          # dev server with auto-reload on http://localhost:8080
+trunk build --release
 ```
 
-### Experimental: Scheme REPL
+See [crates/rflasher-wasm/README.md](crates/rflasher-wasm/README.md) for details.
 
-> **Note**: The REPL is an experimental feature and requires building with `--features repl`.
+## REPL (experimental)
 
-rflasher includes a Steel Scheme-based REPL for scripting raw SPI commands. This is useful for advanced users who need to execute custom SPI sequences, experiment with flash commands, or automate testing.
+An experimental Steel Scheme REPL can script raw SPI commands (build with `--features repl`):
 
 ```bash
-# Build with REPL support
 cargo build --release --features repl
-
-# Start REPL with serprog programmer
 rflasher repl -p serprog:dev=/dev/ttyACM0
-
-# Start REPL with CH341A
-rflasher repl -p ch341a
 ```
-
-Example REPL session:
 
 ```scheme
-        __ _           _
-   _ _ / _| |__ _ _____| |_  ___ _ _
-  | '_|  _| / _` (_-< ' \/ -_) '_|    Version 0.1.0
-  |_| |_| |_\__,_/__/_||_\___|_|      :? for help
-
-Type (rflasher-help) for available commands, (quit) or (exit) to exit.
-
 λ > (read-jedec-id)
 => (239 16389)
 
-λ > (read-status1)
-=> 0
-
-λ > (spi-read READ 0 16)
-=> (255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255)
-
-λ > (bytes->hex (spi-read READ 0 32))
-=> "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff"
+λ > (bytes->hex (spi-read READ 0 16))
+=> "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff"
 
 λ > (define data (make-bytes 256 #xAA))
 λ > (write-enable)
@@ -394,222 +176,34 @@ Type (rflasher-help) for available commands, (quit) or (exit) to exit.
 => #t
 λ > (wait-ready)
 => #t
-
-λ > (quit)
-Goodbye!
 ```
 
-Available functions include:
-
-- **SPI operations**: `spi-transfer`, `spi-read`, `spi-write`, `read-jedec-id`, `read-status1/2/3`, `write-enable`, `write-disable`, `is-busy?`, `wait-ready`
-- **Erase operations**: `chip-erase`, `sector-erase`, `block-erase-32k`, `block-erase-64k`
-- **Byte utilities**: `make-bytes`, `bytes-length`, `bytes-ref`, `bytes-set!`, `bytes->list`, `list->bytes`, `bytes->hex`, `hex->bytes`, `bytes-slice`
-- **SPI25 constants**: `WREN`, `WRDI`, `RDSR`, `WRSR`, `READ`, `FAST_READ`, `PP`, `SE`, `BE_32K`, `BE_64K`, `CE`, `RDID`, etc.
-
-Type `(rflasher-help)` in the REPL for the full list of commands.
-
-## Web Interface (WASM)
-
-rflasher includes a browser-based web interface that allows you to program flash chips directly from your web browser using the WebSerial API. This is useful for scenarios where installing native software is difficult or when you need a portable, cross-platform solution.
-
-![rflasher Web Interface](docs/images/webui-screenshot.png)
-
-### Features
-
-- **Browser-based UI**: Modern egui-based interface running entirely in the browser
-- **WebSerial Support**: Connect to serprog programmers via USB serial ports
-- **Full Flash Operations**: Read, write, erase, verify, and probe flash chips
-- **Progress Reporting**: Real-time progress updates for all operations
-- **File Handling**: Load firmware files and save flash dumps directly in the browser
-- **No Installation Required**: Run directly in a compatible web browser
-
-### Browser Requirements
-
-The web interface requires a browser with WebSerial API support:
-
-- **Chrome/Edge**: Version 89+ (full support)
-- **Opera**: Version 75+ (full support)
-- **Firefox**: Not yet supported (WebSerial behind flag)
-- **Safari**: Not yet supported
-
-**Note**: WebSerial is still an experimental API. Ensure your browser has the necessary permissions to access serial ports.
-
-### Building the Web Interface
-
-The web interface is built using [Trunk](https://trunkrs.dev/), a WASM web application bundler.
-
-```bash
-# Install trunk (if not already installed)
-cargo install trunk
-
-# Add the wasm32 target
-rustup target add wasm32-unknown-unknown
-
-# Build the web interface
-cd crates/rflasher-wasm
-trunk build --release
-
-# The output will be in the dist/ directory
-```
-
-For development with auto-reload:
-
-```bash
-cd crates/rflasher-wasm
-trunk serve
-# Open http://localhost:8080 in your browser
-```
-
-### Running Locally
-
-After building, you can serve the web interface locally:
-
-```bash
-# Using Python's built-in HTTP server
-cd crates/rflasher-wasm/dist
-python3 -m http.server 8080
-
-# Using any other static file server
-# cd crates/rflasher-wasm/dist
-# npx serve
-```
-
-Then open `http://localhost:8080` in a compatible browser.
-
-### Deploying to Production
-
-To deploy the web interface to a web server:
-
-1. Build the release version:
-
-   ```bash
-   cd crates/rflasher-wasm
-   trunk build --release
-   ```
-
-2. Copy the contents of `crates/rflasher-wasm/dist/` to your web server:
-
-   ```bash
-   rsync -av dist/ user@yourserver:/var/www/html/rflasher/
-   ```
-
-3. Ensure your web server is configured to:
-   - Serve the `index.html` file as the default page
-   - Set appropriate MIME types for `.wasm` files
-   - Use HTTPS (required for WebSerial API)
-
-**Important**: The WebSerial API requires a secure context (HTTPS). Local development on `localhost` works, but production deployments must use HTTPS.
-
-### Using the Web Interface
-
-1. Open the web interface in your browser
-2. Click **"Connect"** to select your serprog programmer from the serial port list
-3. Once connected, use the **Probe** button to detect the flash chip
-4. Choose an operation:
-   - **Read**: Download the current flash contents
-   - **Write**: Upload and write a firmware file to flash
-   - **Erase**: Erase the entire flash chip
-   - **Verify**: Verify flash contents against a file
-5. Monitor progress in the status panel
-
-### Nix Development Environment
-
-If you're using the provided Nix flake, the development environment includes all necessary tools:
-
-```bash
-# Enter the Nix development shell
-nix develop
-
-# The wasm32 target and trunk are already available
-cd crates/rflasher-wasm
-trunk serve
-```
-
-### Troubleshooting
-
-**"Serial port not found" or "WebSerial not supported"**
-
-- Ensure you're using a compatible browser (Chrome/Edge 89+)
-- Check that WebSerial is enabled in your browser settings
-- Try accessing via `chrome://flags` and enable "Experimental Web Platform features"
-
-**"Failed to open port"**
-
-- Ensure no other application is using the serial port
-- Check USB cable and connections
-- Verify the serprog device is properly configured
-
-**Reads hang or timeout**
-
-- This is a known issue being investigated (see transport.rs TODO)
-- Try using a different USB cable or port
-- Reduce the amount of data being read at once
+Type `(rflasher-help)` in the REPL for the full command list.
 
 ## Architecture
 
-rflasher uses a workspace structure with clear separation of concerns:
+| Crate | Purpose |
+|---|---|
+| `rflasher-chip-types` | `no_std` SPI NOR chip data model and provider trait |
+| `rflasher-core` | `no_std` SPI protocol, probing, and flash operations (async, runtime-neutral) |
+| `rflasher-chips` | RON loading and compiled chip database provider |
+| `rflasher-chips-codegen` | build-time generator for the compiled chip database |
+| `rflasher-programmers` | feature-gated programmer backends and registry |
+| `rflasher-internal` | internal chipset SPI controllers, `no_std`-capable |
+| `rflasher-pci` | `no_std` PCI configuration-space abstraction |
+| `rflasher-repl` | Steel Scheme scripting |
+| `rflasher-wasm` | browser UI (egui, WebSerial, WebUSB) |
 
-- **`rflasher-chip-types`** - Shared `no_std` SPI NOR chip data model and provider trait
-- **`rflasher-core`** - `no_std` SPI protocol, probing, and flash operations (async, runtime-neutral)
-- **`rflasher-chips`** - Runtime RON loading and optional compiled chip database provider, with chip type re-exports
-- **`rflasher-chips-codegen`** - Build-time code generator for the compiled chip database
-- **`rflasher-programmers`** - Feature-gated external programmer backends plus the native high-level registry and `FlashHandle`
-- **`rflasher-internal`** - Internal chipset SPI controller support. It remains separate so firmware such as CrabEFI can use it with `default-features = false`, without `std`
-- **`rflasher-pci`** - Small `no_std` PCI configuration-space abstraction used by the internal programmer
-- **`rflasher-repl`** - Steel Scheme scripting support for native applications
-- **`rflasher-wasm`** - Browser-based web interface using egui, WebSerial, and WebUSB
-
-The `rflasher-programmers` crate contains modules for CH341A, CH347, Dediprog, serprog, FTDI, FT4222H, Raiden, sunxi FEL, Linux SPI/GPIO/MTD, and the dummy backend. Cargo features select which modules and optional dependencies are compiled.
-
-### Async Architecture
-
-All operational APIs (`SpiMaster`, `OpaqueMaster`, `FlashDevice`, probing,
-flash operations) are async on every target, and the core stays
-executor-independent — no Tokio or other runtime is required:
-
-- **Native CLI**: blocks exactly once, in `main`, with
-  `futures_lite::future::block_on` around the async command handlers.
-  Genuinely blocking backends (Linux spidev/MTD/GPIO, serial serprog)
-  simply perform their blocking calls inside async methods.
-- **WASM**: the browser event loop drives the same async operations over
-  WebUSB/WebSerial.
-
-Because `async fn` traits are not usable as trait objects, runtime
-programmer selection goes through object-erasure adapters
-(`ErasedFlashDevice`, `ErasedSpiMaster`) in `rflasher-programmers`; the one
-boxed future per operation is negligible next to USB and flash latency.
-This design allows the same flash operations, chip database, and programmer
-traits to work in both native CLI applications and browser-based WASM
-environments without code duplication.
-
-## Safety Warnings
-
-⚠️ **IMPORTANT SAFETY INFORMATION**
-
-Flash chip programming can permanently damage your hardware if done incorrectly:
-
-- **Voltage Mismatches**: Ensure your programmer voltage matches the flash chip (typically 3.3V for modern SPI flash)
-- **Wrong Chip**: Writing to the wrong chip can brick your device
-- **Intel ME Region**: On Intel systems, corrupting the Management Engine region can brick the motherboard
-- **Write Protection**: Always check write protection status before writing
-- **Backup First**: Always read and backup your flash chip before making any changes
-
-**This software comes with NO WARRANTY. Use at your own risk.**
+All operational APIs are async and executor-independent on every target: the CLI blocks once in `main`, the browser event loop drives the same code over WebUSB/WebSerial. See [docs/architecture.md](docs/architecture.md) for the design details.
 
 ## Contributing
 
-Contributions are welcome! Here are some ways you can help:
+### Adding a flash chip
 
-### Adding New Flash Chips
-
-Flash chips are defined in RON files under `crates/rflasher-chips/data/vendors/`. To add a new chip:
-
-1. Find the datasheet for your chip
-2. Create or update the vendor file (for example, `crates/rflasher-chips/data/vendors/winbond.ron`)
-3. Add chip definition with JEDEC ID, size, erase blocks, and features
-4. Submit a pull request
-
-Example chip definition:
+1. Find the datasheet for your chip.
+2. Create or update the vendor file under `crates/rflasher-chips/data/vendors/`.
+3. Add the chip definition with JEDEC ID, size, erase blocks, and features.
+4. Submit a pull request.
 
 ```ron
 (
@@ -631,42 +225,20 @@ Example chip definition:
 )
 ```
 
-### Adding New Programmers
+### Adding a programmer
 
-To add a new SPI programmer:
+1. Add a module under `crates/rflasher-programmers/src/backends/`.
+2. Implement the `SpiMaster` or `OpaqueMaster` trait from `rflasher-core`.
+3. Add a feature and optional dependencies in `crates/rflasher-programmers/Cargo.toml`.
+4. Register the programmer in `rflasher-programmers/src/registry.rs`.
+5. Update the CLI/WASM feature forwarding.
 
-1. Add a module under `crates/rflasher-programmers/src/backends/`
-2. Implement the `SpiMaster` or `OpaqueMaster` trait from `rflasher-core`
-3. Add a feature and optional dependencies in `crates/rflasher-programmers/Cargo.toml`
-4. Register native synchronous programmers in `rflasher-programmers/src/registry.rs`
-5. Update the CLI/WASM feature forwarding and documentation as appropriate
-
-Keep firmware-oriented `no_std` chipset controller code in `rflasher-internal` rather than adding host or browser dependencies there.
-
-## TODO
-
-The following features are planned for future development:
-
-- [x] **Port more flash chips** - Ported 482 out of ~495 SPI flash chips from flashprog (97% coverage)
-- [ ] **Add more SPI programmers** - Port remaining SPI programmers from flashprog
-- [x] **Intel/AMD Internal Programmer** - Support for reading/writing via chipset SPI controllers
-- [x] **Optimal erase algorithm** - Minimize erase operations by using largest possible erase blocks
+The largest remaining gap is the SPI programmers not yet ported from flashprog.
 
 ## License
 
-This project is licensed under the **GNU General Public License v2.0 or later** (GPL-2.0-or-later), the same license as flashprog.
-
-See [LICENSE](LICENSE) for the full license text.
+GPL-2.0-or-later, the same license as flashprog. See [LICENSE](LICENSE).
 
 ## Acknowledgments
 
-This project is a loose port of [flashprog](https://github.com/SourceArcade/flashprog), which itself is a fork of flashrom. Thanks to all the contributors of those projects for their extensive work on flash chip support and programmer implementations.
-
-## Related Projects
-
-- **flashprog** - <https://github.com/SourceArcade/flashprog> - The upstream C implementation
-- **flashrom** - <https://www.flashrom.org/> - The original flash chip programmer
-
----
-
-**Note**: rflasher is currently focused on **SPI flash chips only**. Parallel flash and other protocols are not currently in scope, though the architecture supports future OpaqueMaster implementations for such devices.
+rflasher is heavily inspired by [flashprog](https://github.com/SourceArcade/flashprog), itself a fork of [flashrom](https://www.flashrom.org/), and much of its chip database and programmer support derives from them. Thanks to all contributors of those projects.
