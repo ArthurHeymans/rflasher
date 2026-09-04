@@ -82,6 +82,8 @@ pub struct FlashHandle {
     device: ErasedFlashDevice,
     /// Chip information (only available for SPI programmers where we probed)
     chip_info: Option<ChipInfo>,
+    /// Whether session teardown has already run.
+    finished: bool,
 }
 
 impl FlashHandle {
@@ -90,6 +92,7 @@ impl FlashHandle {
         Self {
             device,
             chip_info: Some(chip_info),
+            finished: false,
         }
     }
 
@@ -99,6 +102,7 @@ impl FlashHandle {
         Self {
             device,
             chip_info: None,
+            finished: false,
         }
     }
 
@@ -151,6 +155,18 @@ impl FlashHandle {
     /// * `len` - Length to erase in bytes
     pub async fn erase(&mut self, addr: u32, len: u32) -> Result<(), Box<dyn std::error::Error>> {
         self.device.erase(addr, len).await.map_err(Into::into)
+    }
+
+    /// Finish the current programmer access session.
+    pub async fn finish(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.finished {
+            self.device
+                .finish()
+                .await
+                .map_err(Box::<dyn std::error::Error>::from)?;
+            self.finished = true;
+        }
+        Ok(())
     }
 
     /// Get mutable reference to the underlying flash device

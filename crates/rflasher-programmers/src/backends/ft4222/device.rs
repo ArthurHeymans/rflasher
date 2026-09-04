@@ -12,7 +12,7 @@ use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Out, 
 use nusb::{Endpoint, Interface};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::SpiCommand;
+use rflasher_core::spi::{IoMode as CoreIoMode, SpiCommand};
 
 use super::error::{Ft4222Error, Result};
 use super::protocol::*;
@@ -694,6 +694,74 @@ impl Ft4222 {
         }
     }
 
+    /// Execute a command using dual, quad, or QPI framing.
+    async fn execute_multi_io(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        let io_width = match cmd.io_mode {
+            CoreIoMode::Single => 1,
+            CoreIoMode::DualOut | CoreIoMode::DualIo => 2,
+            CoreIoMode::QuadOut | CoreIoMode::QuadIo | CoreIoMode::Qpi => 4,
+        };
+
+        let opcode = [cmd.opcode];
+        let addr_width = cmd.address_width.bytes() as usize;
+        let mut addr_bytes = [0u8; 4];
+        if let Some(addr) = cmd.address {
+            cmd.address_width.encode(addr, &mut addr_bytes);
+        }
+        let addr = &addr_bytes[..addr_width];
+        let dummy_bytes = (cmd.dummy_cycles as usize * io_width).div_ceil(8);
+        let uses_mode_byte = matches!(
+            cmd.io_mode,
+            CoreIoMode::DualIo | CoreIoMode::QuadIo | CoreIoMode::Qpi
+        );
+        let mode_byte_len = usize::from(uses_mode_byte && dummy_bytes > 0);
+        let high_z_bytes = dummy_bytes.saturating_sub(mode_byte_len);
+
+        let (single, multi) = match cmd.io_mode {
+            CoreIoMode::Single => (opcode.to_vec(), Vec::new()),
+            CoreIoMode::DualOut | CoreIoMode::QuadOut => {
+                let mut single = Vec::with_capacity(1 + addr_width + cmd.write_data.len());
+                single.extend_from_slice(&opcode);
+                single.extend_from_slice(addr);
+                single.extend_from_slice(cmd.write_data);
+                (single, Vec::new())
+            }
+            CoreIoMode::DualIo | CoreIoMode::QuadIo => {
+                let mut multi =
+                    Vec::with_capacity(addr_width + mode_byte_len + cmd.write_data.len());
+                multi.extend_from_slice(addr);
+                if mode_byte_len != 0 {
+                    multi.push(0xff);
+                }
+                multi.extend_from_slice(cmd.write_data);
+                (opcode.to_vec(), multi)
+            }
+            CoreIoMode::Qpi => {
+                let mut multi =
+                    Vec::with_capacity(1 + addr_width + mode_byte_len + cmd.write_data.len());
+                multi.extend_from_slice(&opcode);
+                multi.extend_from_slice(addr);
+                if mode_byte_len != 0 {
+                    multi.push(0xff);
+                }
+                multi.extend_from_slice(cmd.write_data);
+                (Vec::new(), multi)
+            }
+        };
+
+        let read_total = high_z_bytes + cmd.read_buf.len();
+        let data = self
+            .spi_transfer_multi(&single, &multi, read_total, io_width as u8)
+            .await
+            .map_err(|_| CoreError::ProgrammerError)?;
+        if data.len() < read_total {
+            return Err(CoreError::ProgrammerError);
+        }
+        cmd.read_buf
+            .copy_from_slice(&data[high_z_bytes..high_z_bytes + cmd.read_buf.len()]);
+        Ok(())
+    }
+
     /// Perform a multi-I/O SPI transfer (half duplex).
     #[allow(dead_code)]
     async fn spi_transfer_multi(
@@ -728,10 +796,10 @@ impl Ft4222 {
 
         let mut header = [0u8; MULTI_IO_HEADER_SIZE];
         header[0] = MULTI_IO_MAGIC | (single_data.len() as u8 & 0x0F);
-        header[1] = (multi_write_data.len() & 0xFF) as u8;
-        header[2] = ((multi_write_data.len() >> 8) & 0xFF) as u8;
-        header[3] = (multi_read_len & 0xFF) as u8;
-        header[4] = ((multi_read_len >> 8) & 0xFF) as u8;
+        header[1] = ((multi_write_data.len() >> 8) & 0xFF) as u8;
+        header[2] = (multi_write_data.len() & 0xFF) as u8;
+        header[3] = ((multi_read_len >> 8) & 0xFF) as u8;
+        header[4] = (multi_read_len & 0xFF) as u8;
 
         let mut out_buf =
             Vec::with_capacity(MULTI_IO_HEADER_SIZE + single_data.len() + multi_write_data.len());
@@ -762,18 +830,36 @@ impl Ft4222 {
 
 impl SpiMaster for Ft4222 {
     fn features(&self) -> SpiFeatures {
-        SpiFeatures::FOUR_BYTE_ADDR
+        let mut features = SpiFeatures::FOUR_BYTE_ADDR;
+        match self.config.io_mode {
+            IoMode::Single => {}
+            IoMode::Dual => features |= SpiFeatures::DUAL_IN | SpiFeatures::DUAL_IO,
+            IoMode::Quad => {
+                features |= SpiFeatures::DUAL_IN
+                    | SpiFeatures::DUAL_IO
+                    | SpiFeatures::QUAD_IN
+                    | SpiFeatures::QUAD_IO
+                    | SpiFeatures::QPI;
+            }
+        }
+        features
     }
 
     fn max_read_len(&self) -> usize {
-        65535
+        // The 16-bit FT4222 length includes high-Z dummy bytes.
+        65530
     }
 
     fn max_write_len(&self) -> usize {
-        65535
+        // Reserve space for protocol framing, matching flashprog.
+        65530
     }
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        if cmd.io_mode != CoreIoMode::Single {
+            return self.execute_multi_io(cmd).await;
+        }
+
         let header_len = cmd.header_len();
         let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
         cmd.encode_header(&mut write_data);

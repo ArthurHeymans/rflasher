@@ -120,6 +120,11 @@ pub trait FlashDevice {
     /// * `EraseError` - If the erase operation fails
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
 
+    /// Finish an access session and undo transient protocol state.
+    async fn finish(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Check if a range is valid for this device
     ///
     /// Uses u64 arithmetic to avoid truncation when `len > u32::MAX`.

@@ -76,8 +76,14 @@ struct FeaturesDef {
     wrsr_ewsr: bool,
     wrsr_ext: bool,
     fast_read: bool,
-    dual_io: bool,
-    quad_io: bool,
+    fast_read_dout: bool,
+    fast_read_dio: bool,
+    fast_read_qout: bool,
+    fast_read_qio: bool,
+    fast_read_qpi4b: bool,
+    qpi_35_f5: bool,
+    qpi_38_ff: bool,
+    set_read_params: bool,
     four_byte_addr: bool,
     four_byte_enter: bool,
     four_byte_native: bool,
@@ -94,7 +100,7 @@ struct FeaturesDef {
     four_byte_quad_out_read: bool,
     four_byte_quad_io_read: bool,
     otp: bool,
-    qpi: bool,
+
     security_reg: bool,
     sfdp: bool,
     write_byte: bool,
@@ -102,7 +108,7 @@ struct FeaturesDef {
     sst26_bpr: bool,
     status_reg_2: bool,
     status_reg_3: bool,
-    qe_sr2: bool,
+
     deep_power_down: bool,
     wp_tb: bool,
     wp_sec: bool,
@@ -116,8 +122,14 @@ impl From<FeaturesDef> for Features {
             (def.wrsr_ewsr, Features::WRSR_EWSR),
             (def.wrsr_ext, Features::WRSR_EXT),
             (def.fast_read, Features::FAST_READ),
-            (def.dual_io, Features::DUAL_IO),
-            (def.quad_io, Features::QUAD_IO),
+            (def.fast_read_dout, Features::FAST_READ_DOUT),
+            (def.fast_read_dio, Features::FAST_READ_DIO),
+            (def.fast_read_qout, Features::FAST_READ_QOUT),
+            (def.fast_read_qio, Features::FAST_READ_QIO),
+            (def.fast_read_qpi4b, Features::FAST_READ_QPI4B),
+            (def.qpi_35_f5, Features::QPI_35_F5),
+            (def.qpi_38_ff, Features::QPI_38_FF),
+            (def.set_read_params, Features::SET_READ_PARAMS),
             (def.four_byte_addr, Features::FOUR_BYTE_ADDR),
             (def.four_byte_enter, Features::FOUR_BYTE_ENTER),
             (def.four_byte_native, Features::FOUR_BYTE_NATIVE),
@@ -143,7 +155,6 @@ impl From<FeaturesDef> for Features {
             ),
             (def.four_byte_quad_io_read, Features::FOUR_BYTE_QUAD_IO_READ),
             (def.otp, Features::OTP),
-            (def.qpi, Features::QPI),
             (def.security_reg, Features::SECURITY_REG),
             (def.sfdp, Features::SFDP),
             (def.write_byte, Features::WRITE_BYTE),
@@ -151,7 +162,6 @@ impl From<FeaturesDef> for Features {
             (def.sst26_bpr, Features::SST26_BPR),
             (def.status_reg_2, Features::STATUS_REG_2),
             (def.status_reg_3, Features::STATUS_REG_3),
-            (def.qe_sr2, Features::QE_SR2),
             (def.deep_power_down, Features::DEEP_POWER_DOWN),
             (def.wp_tb, Features::WP_TB),
             (def.wp_sec, Features::WP_SEC),
@@ -164,6 +174,28 @@ impl From<FeaturesDef> for Features {
                 if enabled { acc | flag } else { acc }
             },
         )
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+enum QeMethodDef {
+    #[default]
+    None,
+    Sr2Bit1WriteSr,
+    Sr2Bit1WriteSr2,
+    Sr1Bit6,
+    Sr2Bit7,
+}
+
+impl From<QeMethodDef> for QeMethod {
+    fn from(value: QeMethodDef) -> Self {
+        match value {
+            QeMethodDef::None => QeMethod::None,
+            QeMethodDef::Sr2Bit1WriteSr => QeMethod::Sr2Bit1WriteSr,
+            QeMethodDef::Sr2Bit1WriteSr2 => QeMethod::Sr2Bit1WriteSr2,
+            QeMethodDef::Sr1Bit6 => QeMethod::Sr1Bit6,
+            QeMethodDef::Sr2Bit7 => QeMethod::Sr2Bit7,
+        }
     }
 }
 
@@ -278,6 +310,18 @@ struct ChipDef {
     erase_blocks: Vec<EraseBlockDef>,
     #[serde(default)]
     tested: TestStatusesDef,
+    #[serde(default)]
+    qe_method: QeMethodDef,
+    #[serde(default)]
+    dummy_cycles_112: u8,
+    #[serde(default)]
+    dummy_cycles_122: u8,
+    #[serde(default)]
+    dummy_cycles_114: u8,
+    #[serde(default)]
+    dummy_cycles_144: u8,
+    #[serde(default)]
+    dummy_cycles_qpi: u8,
 }
 
 fn default_page_size() -> u16 {
@@ -385,6 +429,12 @@ impl ChipDatabase {
                     })
                     .collect(),
                 tested: chip_def.tested.into(),
+                qe_method: chip_def.qe_method.into(),
+                dummy_cycles_112: chip_def.dummy_cycles_112,
+                dummy_cycles_122: chip_def.dummy_cycles_122,
+                dummy_cycles_114: chip_def.dummy_cycles_114,
+                dummy_cycles_144: chip_def.dummy_cycles_144,
+                dummy_cycles_qpi: chip_def.dummy_cycles_qpi,
             };
             self.chips.push(chip);
         }
@@ -477,8 +527,10 @@ mod tests {
                     features: (
                         wrsr_wren: true,
                         fast_read: true,
-                        dual_io: true,
-                        quad_io: true,
+                        fast_read_dout: true,
+                        fast_read_dio: true,
+                        fast_read_qout: true,
+                        fast_read_qio: true,
                     ),
                     voltage: (min: 2700, max: 3600),
                     erase_blocks: [

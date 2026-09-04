@@ -89,10 +89,14 @@ pub struct FeaturesDef {
     // Read capabilities
     /// Supports Fast Read (0x0B)
     pub fast_read: bool,
-    /// Supports Dual I/O read commands
-    pub dual_io: bool,
-    /// Supports Quad I/O read commands
-    pub quad_io: bool,
+    pub fast_read_dout: bool,
+    pub fast_read_dio: bool,
+    pub fast_read_qout: bool,
+    pub fast_read_qio: bool,
+    pub fast_read_qpi4b: bool,
+    pub qpi_35_f5: bool,
+    pub qpi_38_ff: bool,
+    pub set_read_params: bool,
 
     // 4-byte addressing
     /// Supports 4-byte address mode
@@ -129,8 +133,7 @@ pub struct FeaturesDef {
     // Special features
     /// Has OTP (One-Time Programmable) area
     pub otp: bool,
-    /// Supports QPI mode (4-4-4)
-    pub qpi: bool,
+
     /// Has security registers
     pub security_reg: bool,
     /// Supports SFDP (Serial Flash Discoverable Parameters)
@@ -149,8 +152,6 @@ pub struct FeaturesDef {
     pub status_reg_2: bool,
     /// Has status register 3
     pub status_reg_3: bool,
-    /// Quad Enable bit is in SR2
-    pub qe_sr2: bool,
 
     // Power management
     /// Supports deep power down
@@ -182,11 +183,29 @@ impl FeaturesDef {
         if self.fast_read {
             flags.push(quote!(Features::FAST_READ));
         }
-        if self.dual_io {
-            flags.push(quote!(Features::DUAL_IO));
+        if self.fast_read_dout {
+            flags.push(quote!(Features::FAST_READ_DOUT));
         }
-        if self.quad_io {
-            flags.push(quote!(Features::QUAD_IO));
+        if self.fast_read_dio {
+            flags.push(quote!(Features::FAST_READ_DIO));
+        }
+        if self.fast_read_qout {
+            flags.push(quote!(Features::FAST_READ_QOUT));
+        }
+        if self.fast_read_qio {
+            flags.push(quote!(Features::FAST_READ_QIO));
+        }
+        if self.fast_read_qpi4b {
+            flags.push(quote!(Features::FAST_READ_QPI4B));
+        }
+        if self.qpi_35_f5 {
+            flags.push(quote!(Features::QPI_35_F5));
+        }
+        if self.qpi_38_ff {
+            flags.push(quote!(Features::QPI_38_FF));
+        }
+        if self.set_read_params {
+            flags.push(quote!(Features::SET_READ_PARAMS));
         }
         if self.four_byte_addr {
             flags.push(quote!(Features::FOUR_BYTE_ADDR));
@@ -236,9 +255,7 @@ impl FeaturesDef {
         if self.otp {
             flags.push(quote!(Features::OTP));
         }
-        if self.qpi {
-            flags.push(quote!(Features::QPI));
-        }
+
         if self.security_reg {
             flags.push(quote!(Features::SECURITY_REG));
         }
@@ -260,9 +277,7 @@ impl FeaturesDef {
         if self.status_reg_3 {
             flags.push(quote!(Features::STATUS_REG_3));
         }
-        if self.qe_sr2 {
-            flags.push(quote!(Features::QE_SR2));
-        }
+
         if self.deep_power_down {
             flags.push(quote!(Features::DEEP_POWER_DOWN));
         }
@@ -282,6 +297,28 @@ impl FeaturesDef {
             let first = &flags[0];
             let rest = &flags[1..];
             quote!(#first #(.union(#rest))*)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub enum QeMethodDef {
+    #[default]
+    None,
+    Sr2Bit1WriteSr,
+    Sr2Bit1WriteSr2,
+    Sr1Bit6,
+    Sr2Bit7,
+}
+
+impl QeMethodDef {
+    fn to_tokens(self) -> TokenStream {
+        match self {
+            Self::None => quote!(QeMethod::None),
+            Self::Sr2Bit1WriteSr => quote!(QeMethod::Sr2Bit1WriteSr),
+            Self::Sr2Bit1WriteSr2 => quote!(QeMethod::Sr2Bit1WriteSr2),
+            Self::Sr1Bit6 => quote!(QeMethod::Sr1Bit6),
+            Self::Sr2Bit7 => quote!(QeMethod::Sr2Bit7),
         }
     }
 }
@@ -429,6 +466,18 @@ pub struct ChipDef {
     /// Test status
     #[serde(default)]
     pub tested: TestStatusDef,
+    #[serde(default)]
+    pub qe_method: QeMethodDef,
+    #[serde(default)]
+    pub dummy_cycles_112: u8,
+    #[serde(default)]
+    pub dummy_cycles_122: u8,
+    #[serde(default)]
+    pub dummy_cycles_114: u8,
+    #[serde(default)]
+    pub dummy_cycles_144: u8,
+    #[serde(default)]
+    pub dummy_cycles_qpi: u8,
 }
 
 fn default_page_size() -> u16 {
@@ -582,6 +631,12 @@ impl ChipDatabase {
                 let voltage_max = Literal::u16_unsuffixed(chip.voltage.max);
                 let write_gran = chip.write_granularity.to_tokens();
                 let tested = chip.tested.to_tokens();
+                let qe_method = chip.qe_method.to_tokens();
+                let dummy_cycles_112 = Literal::u8_unsuffixed(chip.dummy_cycles_112);
+                let dummy_cycles_122 = Literal::u8_unsuffixed(chip.dummy_cycles_122);
+                let dummy_cycles_114 = Literal::u8_unsuffixed(chip.dummy_cycles_114);
+                let dummy_cycles_144 = Literal::u8_unsuffixed(chip.dummy_cycles_144);
+                let dummy_cycles_qpi = Literal::u8_unsuffixed(chip.dummy_cycles_qpi);
 
                 chip_defs.push(quote! {
                     FlashChip {
@@ -597,6 +652,12 @@ impl ChipDatabase {
                         write_granularity: #write_gran,
                         erase_blocks: vec![#(#erase_blocks),*],
                         tested: #tested,
+                        qe_method: #qe_method,
+                        dummy_cycles_112: #dummy_cycles_112,
+                        dummy_cycles_122: #dummy_cycles_122,
+                        dummy_cycles_114: #dummy_cycles_114,
+                        dummy_cycles_144: #dummy_cycles_144,
+                        dummy_cycles_qpi: #dummy_cycles_qpi,
                     }
                 });
             }
@@ -658,8 +719,10 @@ mod tests {
                     features: (
                         wrsr_wren: true,
                         fast_read: true,
-                        dual_io: true,
-                        quad_io: true,
+                        fast_read_dout: true,
+                        fast_read_dio: true,
+                        fast_read_qout: true,
+                        fast_read_qio: true,
                     ),
                     voltage: (min: 2700, max: 3600),
                     erase_blocks: [
