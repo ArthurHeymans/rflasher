@@ -4,7 +4,7 @@
   <img src="docs/images/rflasher.png" alt="rflasher logo" width="160">
 </p>
 
-rflasher reads, writes, and erases SPI flash chips from Rust. It is heavily inspired by [flashprog](https://github.com/SourceArcade/flashprog) and supports 480+ chips (`rflasher list-chips`) and most common programmers: CH341A/CH347, Dediprog, FTDI (MPSSE and FT4222H), serprog, Raiden debug hardware, internal Intel/AMD chipset controllers, Allwinner FEL, and Linux spidev/MTD/GPIO. The same codebase also runs in the browser via WebSerial, and the core crates are `no_std` for reuse in firmware.
+rflasher reads, writes, and erases SPI flash chips from Rust. It is heavily inspired by [flashprog](https://github.com/SourceArcade/flashprog) and supports 480+ chips (`rflasher list-chips`) and most common programmers: CH341A/CH347, Dediprog, FTDI (MPSSE and FT4222H), serprog, Raiden debug hardware, internal Intel/AMD chipset controllers, Allwinner FEL, and Linux spidev/MTD/GPIO. The same codebase also runs in the browser via WebSerial/WebUSB, and the core crates are `no_std` for reuse in firmware.
 
 Only SPI NOR flash is in scope.
 
@@ -31,15 +31,17 @@ cargo install --path .
 
 USB programmers (CH341A, CH347, FTDI, Dediprog, Raiden) need udev rules for non-root access, e.g.:
 
-```
+```text
 # CH341A
-SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5512", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5512", MODE="0660", GROUP="plugdev"
 
-# Raiden Debug SPI / Cr50 (Google debug hardware; product ID varies)
-SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", MODE="0666"
+# Raiden Debug SPI / Cr50 (Google debug hardware)
+# The backend matches on vendor ID alone, so this rule covers all Google
+# devices; add ATTR{idProduct} matches if you want it narrower.
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", MODE="0660", GROUP="plugdev"
 ```
 
-Install to `/etc/udev/rules.d/`, then run `udevadm control --reload-rules && udevadm trigger`.
+Install to `/etc/udev/rules.d/`, run `udevadm control --reload-rules && udevadm trigger`, and add your user to the `plugdev` group (create the group first if your distro doesn't have it).
 
 ### Man page
 
@@ -137,7 +139,7 @@ rflasher wp region -p ch341a --ifd bios            # protect a named region
 
 ## Web interface
 
-A browser-based UI (egui + WebSerial) can drive a serprog programmer from Chrome/Edge 89+ or Opera 75+. Firefox and Safari do not support WebSerial.
+A browser-based UI (egui) can drive a programmer straight from the browser: serprog over WebSerial, and CH341A, CH347, FTDI, FT4222H, Dediprog, and Raiden over WebUSB. Both APIs require Chrome/Edge (or Opera); Firefox and Safari support neither, and a secure context (HTTPS or localhost) is mandatory.
 
 ![rflasher Web Interface](docs/images/webui-screenshot.png)
 

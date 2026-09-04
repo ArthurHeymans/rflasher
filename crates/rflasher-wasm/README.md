@@ -1,19 +1,20 @@
 # rflasher-wasm
 
 Browser-based web interface for rflasher. It runs an egui UI in WASM and
-talks to serprog programmers over the WebSerial API, supporting probe, read,
-write, erase, and verify with progress reporting. Firmware files are loaded
-and flash dumps saved directly in the browser.
+talks to serprog programmers over WebSerial and to CH341A, CH347, FTDI,
+FT4222H, Dediprog, and Raiden programmers over WebUSB, supporting probe,
+read, write, erase, and verify with progress reporting. Firmware files are
+loaded and flash dumps saved directly in the browser.
 
 ## Browser requirements
 
-WebSerial API support is required:
+WebSerial or WebUSB support is required, depending on the programmer:
 
-- Chrome/Edge 89+, Opera 75+
-- Firefox and Safari: not supported (no WebSerial)
+- Chrome/Edge or Opera (WebSerial 89+, WebUSB 61+)
+- Firefox and Safari: not supported (neither API available)
 
-WebSerial also requires a secure context: `localhost` works for development,
-but any deployment must be served over HTTPS.
+Both APIs require a secure context: `localhost` works for development, but
+any deployment must be served over HTTPS.
 
 ## Building
 
@@ -52,7 +53,7 @@ trunk serve
 
 ## Troubleshooting
 
-**"Serial port not found" or "WebSerial not supported"**
+**"Serial port not found", "device not found", or "WebSerial/WebUSB not supported"**
 
 - Use a compatible browser (Chrome/Edge 89+).
 - If needed, enable "Experimental Web Platform features" in `chrome://flags`.
