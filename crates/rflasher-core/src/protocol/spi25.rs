@@ -628,6 +628,10 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
 
     let max_len = master.max_read_len();
     let mut offset = 0;
+    // The extended-address register is sticky: only rewrite it (WREN +
+    // WREAR) when the high address byte actually changes, mirroring
+    // flashprog's caching of the high byte across chunks in one bank.
+    let mut last_ear: Option<u8> = None;
 
     while offset < buf.len() {
         let current_addr = addr + offset as u32;
@@ -636,7 +640,11 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
         let chunk = &mut buf[offset..offset + chunk_len];
 
         if let CommandAddressing::ExtendedAddressRegister(features) = addressing {
-            set_extended_address(master, features, (current_addr >> 24) as u8).await?;
+            let ear = (current_addr >> 24) as u8;
+            if last_ear != Some(ear) {
+                set_extended_address(master, features, ear).await?;
+                last_ear = Some(ear);
+            }
         }
 
         let mut cmd = SpiCommand {
@@ -863,13 +871,23 @@ pub enum QuadEnableMethod {
     Sr2Bit1WriteSr,
     /// QE is bit 6 of SR1
     Sr1Bit6,
-    /// QE is bit 7 of SR2 (use special sequence)
+    /// QE is bit 7 of SR2, written with the dedicated 0x31 command.
+    ///
+    /// This covers SFDP JESD216 requirement 0b011. Despite the historical
+    /// "special sequence" label, the wire format is a plain WREN + WRSR2
+    /// (0x31) write like [`QuadEnableMethod::Sr2Bit1WriteSr2`], only the bit
+    /// position differs.
     Sr2Bit7,
     /// QE is bit 1 of SR2, use dedicated 0x31 command
     Sr2Bit1WriteSr2,
 }
 
-/// Enable quad mode using the appropriate method for the chip
+/// Enable quad mode using the appropriate method for the chip.
+///
+/// This programs the QE bit **non-volatile** (WREN-prefixed write). Prefer
+/// `enable_quad_mode_volatile` for session QE establishment — the
+/// non-volatile form persists across power cycles and is kept only for
+/// callers that explicitly manage sticky QE state.
 pub async fn enable_quad_mode<M: SpiMaster + ?Sized>(
     master: &mut M,
     method: QuadEnableMethod,
@@ -912,7 +930,10 @@ pub async fn enable_quad_mode<M: SpiMaster + ?Sized>(
     }
 }
 
-/// Disable quad mode using the appropriate method for the chip
+/// Disable quad mode using the appropriate method for the chip.
+///
+/// Non-volatile counterpart of [`enable_quad_mode`]; see its docs on when
+/// (not) to use it. Session teardown uses `disable_quad_mode_volatile`.
 pub async fn disable_quad_mode<M: SpiMaster + ?Sized>(
     master: &mut M,
     method: QuadEnableMethod,
@@ -951,6 +972,131 @@ pub async fn disable_quad_mode<M: SpiMaster + ?Sized>(
     }
 }
 
+/// Write SR2 directly using opcode 0x31 with a volatile write enable.
+///
+/// Sends EWSR (0x50) instead of WREN (0x06) so the QE bit is set volatile
+/// and does not survive power cycles — mirrors flashprog's
+/// `spi_write_register(..., WRSR_VOLATILE_BITS)` used by `spi_prepare_quad_io`.
+async fn write_status2_direct_volatile<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    value: u8,
+) -> Result<()> {
+    write_enable_ewsr(master).await?;
+    let data = [value];
+    let mut cmd = SpiCommand::write_reg(opcodes::WRSR2, &data);
+    master.execute(&mut cmd).await?;
+    wait_ready(master, WRSR_POLL_US, WRSR_TIMEOUT_US).await
+}
+
+/// Write status registers 1 and 2 together with a volatile write enable.
+///
+/// EWSR-prefixed variant of [`write_status12`]; the written bits do not
+/// persist across power cycles.
+async fn write_status12_volatile<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    sr1: u8,
+    sr2: u8,
+) -> Result<()> {
+    write_status12_ewsr(master, sr1, sr2).await
+}
+
+/// Write status register 1 with a volatile write enable.
+///
+/// EWSR-prefixed variant of [`write_status1`]; the written bits do not
+/// persist across power cycles.
+async fn write_status1_volatile<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> Result<()> {
+    write_status1_ewsr(master, value).await
+}
+
+/// Enable quad mode with a volatile (non-persistent) status-register write.
+///
+/// Mirrors flashprog's `spi_prepare_quad_io`: the QE bit is set with an
+/// EWSR-prefixed write so it is lost on power cycle, and the caller is
+/// expected to confirm the bit afterwards and restore (clear) it in
+/// `finish` — see `disable_quad_mode_volatile`.
+///
+/// Returns `Ok` after issuing the write; like [`enable_quad_mode`] this does
+/// not itself confirm the bit — use [`is_quad_enabled`] afterwards.
+pub(crate) async fn enable_quad_mode_volatile<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    method: QuadEnableMethod,
+) -> Result<()> {
+    match method {
+        QuadEnableMethod::None => Ok(()),
+        QuadEnableMethod::Sr2Bit1WriteSr => {
+            let sr1 = read_status1(master).await?;
+            let sr2 = read_status2(master).await?;
+            if sr2 & opcodes::SR2_QE != 0 {
+                return Ok(()); // Already enabled
+            }
+            write_status12_volatile(master, sr1, sr2 | opcodes::SR2_QE).await
+        }
+        QuadEnableMethod::Sr1Bit6 => {
+            let sr1 = read_status1(master).await?;
+            if sr1 & 0x40 != 0 {
+                return Ok(()); // Already enabled
+            }
+            write_status1_volatile(master, sr1 | 0x40).await
+        }
+        QuadEnableMethod::Sr2Bit7 => {
+            let sr2 = read_status2(master).await?;
+            if sr2 & 0x80 != 0 {
+                return Ok(()); // Already enabled
+            }
+            write_status2_direct_volatile(master, sr2 | 0x80).await
+        }
+        QuadEnableMethod::Sr2Bit1WriteSr2 => {
+            let sr2 = read_status2(master).await?;
+            if sr2 & opcodes::SR2_QE != 0 {
+                return Ok(()); // Already enabled
+            }
+            write_status2_direct_volatile(master, sr2 | opcodes::SR2_QE).await
+        }
+    }
+}
+
+/// Clear the QE bit with a volatile (non-persistent) status-register write.
+///
+/// Counterpart of `enable_quad_mode_volatile`, used to restore the
+/// pre-session QE state. Like flashprog's `spi_finish_io`, the caller tracks
+/// whether this session set the bit and only then calls this.
+pub(crate) async fn disable_quad_mode_volatile<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    method: QuadEnableMethod,
+) -> Result<()> {
+    match method {
+        QuadEnableMethod::None => Ok(()),
+        QuadEnableMethod::Sr2Bit1WriteSr => {
+            let sr1 = read_status1(master).await?;
+            let sr2 = read_status2(master).await?;
+            if sr2 & opcodes::SR2_QE == 0 {
+                return Ok(()); // Already disabled
+            }
+            write_status12_volatile(master, sr1, sr2 & !opcodes::SR2_QE).await
+        }
+        QuadEnableMethod::Sr1Bit6 => {
+            let sr1 = read_status1(master).await?;
+            if sr1 & 0x40 == 0 {
+                return Ok(()); // Already disabled
+            }
+            write_status1_volatile(master, sr1 & !0x40).await
+        }
+        QuadEnableMethod::Sr2Bit7 => {
+            let sr2 = read_status2(master).await?;
+            if sr2 & 0x80 == 0 {
+                return Ok(()); // Already disabled
+            }
+            write_status2_direct_volatile(master, sr2 & !0x80).await
+        }
+        QuadEnableMethod::Sr2Bit1WriteSr2 => {
+            let sr2 = read_status2(master).await?;
+            if sr2 & opcodes::SR2_QE == 0 {
+                return Ok(()); // Already disabled
+            }
+            write_status2_direct_volatile(master, sr2 & !opcodes::SR2_QE).await
+        }
+    }
+}
 /// Write SR2 directly using opcode 0x31
 async fn write_status2_direct<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> Result<()> {
     write_enable(master).await?;
@@ -987,29 +1133,19 @@ pub async fn is_quad_enabled<M: SpiMaster + ?Sized>(
 // QPI Mode Functions
 // ============================================================================
 
-/// Enter QPI mode (4-4-4)
+/// Enter QPI mode (4-4-4). Delegates to [`enter_qpi_with`].
 ///
 /// Different chips use different opcodes - common ones are 0x35 and 0x38.
 pub async fn enter_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) -> Result<()> {
-    let mut cmd = SpiCommand::simple(opcode);
-    master.execute(&mut cmd).await
+    enter_qpi_with(master, opcode).await
 }
 
-/// Exit QPI mode
+/// Exit QPI mode. Delegates to [`exit_qpi_with`].
 ///
 /// Common exit opcodes are 0xF5 and 0xFF.
 /// Note: This command must be sent in QPI mode (4-4-4).
 pub async fn exit_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) -> Result<()> {
-    let mut cmd = SpiCommand {
-        opcode,
-        address: None,
-        address_width: AddressWidth::None,
-        io_mode: IoMode::Qpi,
-        dummy_cycles: 0,
-        write_data: &[],
-        read_buf: &mut [],
-    };
-    master.execute(&mut cmd).await
+    exit_qpi_with(master, opcode).await
 }
 
 // ============================================================================
@@ -1123,7 +1259,10 @@ pub struct DummyCycleOverrides {
     pub dc_114: u8,
     /// 1-4-4 dummy cycles (default 6)
     pub dc_144: u8,
-    /// QPI fast read dummy cycles (default 8 for 0x0B, 4 for 0xEB)
+    /// QPI fast-read dummy cycles, in total clocks (mode + dummy).
+    ///
+    /// Default 8 for QPI-framed 0x0B, 6 for QPI-framed 0xEB (the JEDEC 0xEB
+    /// default: 2 mode clocks + 4 dummy clocks).
     pub dc_qpi: u8,
 }
 
@@ -1207,6 +1346,14 @@ pub fn select_read_op(
                 native_4ba: false,
             });
         }
+    }
+
+    // A chip in QPI mode cannot execute single- or SPI-framed commands at
+    // all; unlike the SPI-mode fallbacks below, there is no degraded op to
+    // offer. flashprog instead exits QPI and retries (`spi_prepare_io`).
+    // Return None so the caller can do the same rather than bless a bogus op.
+    if chip.in_qpi_mode {
+        return None;
     }
 
     struct Candidate {
@@ -1622,19 +1769,21 @@ mod tests {
         let mut caps = all_mio_caps();
         caps.in_qpi_mode = true;
         caps.fast_read = false;
-        let op = select_read_op(
-            master,
-            caps,
-            DummyCycleOverrides::default(),
-            false,
-            true,
-            |_| true,
-        )
-        .expect("read operation should be selectable");
-        // FAST_READ (0x0B) must not be issued in QPI framing to a chip that
-        // does not advertise it; fall back to the plain READ opcode.
-        assert_eq!(op.opcode, opcodes::READ);
-        assert_eq!(op.io_mode, IoMode::Single);
+        // No QPI-suitable op exists for this chip (no qpi_fast_read, no
+        // fast_read to reframe): selection must fail rather than hand back
+        // a single-IO 0x03 the QPI-mode chip could not execute. Callers
+        // (mirroring flashprog's spi_prepare_io) exit QPI and retry.
+        assert!(
+            select_read_op(
+                master,
+                caps,
+                DummyCycleOverrides::default(),
+                false,
+                true,
+                |_| true,
+            )
+            .is_none()
+        );
     }
 
     #[test]

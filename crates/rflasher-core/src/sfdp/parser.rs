@@ -614,6 +614,19 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         WriteGranularity::Byte
     };
 
+    // Per-mode dummy-cycle overrides from the BFPT instruction tables.
+    // SpiReadOp::dummy_cycles counts total clocks (mode + dummy), matching
+    // how backends split them into a mode byte plus high-Z clocks — the
+    // same convention as flashprog's spi_dummy_cycles(). A zero field keeps
+    // the JEDEC default via effective_dc().
+    let total_clocks = |p: FastReadParams| {
+        if p.is_supported() {
+            p.mode_clocks.saturating_add(p.dummy_clocks)
+        } else {
+            0
+        }
+    };
+
     FlashChip {
         vendor: String::from("SFDP"),
         name: String::from("Unknown"),
@@ -628,10 +641,12 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         erase_blocks,
         tested: Default::default(),
         qe_method,
-        dummy_cycles_112: 0,
-        dummy_cycles_122: 0,
-        dummy_cycles_114: 0,
-        dummy_cycles_144: 0,
+        dummy_cycles_112: total_clocks(params.fast_read_112_params),
+        dummy_cycles_122: total_clocks(params.fast_read_122_params),
+        dummy_cycles_114: total_clocks(params.fast_read_114_params),
+        dummy_cycles_144: total_clocks(params.fast_read_144_params),
+        // No parsed source for QPI (4-4-4) dummy clocks yet; the JEDEC
+        // default applies via effective_dc().
         dummy_cycles_qpi: 0,
     }
 }

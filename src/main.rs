@@ -41,6 +41,19 @@ fn main() {
 ///
 /// The library stack below the CLI is async on every target; the native
 /// binary blocks exactly once, in `main`, around this function.
+
+/// Run a flash command to completion, then restore session state.
+///
+/// Mirrors flashprog's `finish_access`: `finish()` clears a volatile QE bit
+/// set by `prepare()` and exits QPI/4BA modes entered for the session. It
+/// runs on both success and failure paths and never masks the command
+/// result — teardown is best-effort.
+async fn finish_session(handle: &mut FlashHandle) {
+    if let Err(e) = handle.finish().await {
+        log::warn!("session teardown (finish) failed: {e}");
+    }
+}
+
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // Set log level based on verbosity
     match cli.verbose {
@@ -60,25 +73,31 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Probe => {
             // Probe doesn't use the device, just shows info
-            let _handle = open_flash(require_programmer(&programmer)?, &db).await?;
+            let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
+            finish_session(&mut handle).await;
             Ok(())
         }
         Commands::Read { file, layout } => {
             let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
-            if layout.has_layout_source() || layout.has_region_filter() {
-                let mut layout_obj = load_layout(&mut handle, &layout).await?;
-                let region_files = apply_region_filters(&mut layout_obj, &layout)?;
-                commands::unified::run_read_with_layout(
-                    handle.as_device_mut(),
-                    file.as_deref(),
-                    &layout_obj,
-                    &region_files,
-                )
-                .await
-            } else {
-                let file = file.ok_or("Output file required")?;
-                commands::unified::run_read(handle.as_device_mut(), &file).await
+            let result = async {
+                if layout.has_layout_source() || layout.has_region_filter() {
+                    let mut layout_obj = load_layout(&mut handle, &layout).await?;
+                    let region_files = apply_region_filters(&mut layout_obj, &layout)?;
+                    commands::unified::run_read_with_layout(
+                        handle.as_device_mut(),
+                        file.as_deref(),
+                        &layout_obj,
+                        &region_files,
+                    )
+                    .await
+                } else {
+                    let file = file.ok_or("Output file required")?;
+                    commands::unified::run_read(handle.as_device_mut(), &file).await
+                }
             }
+            .await;
+            finish_session(&mut handle).await;
+            result
         }
         Commands::Write {
             file,
@@ -86,55 +105,76 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             layout,
         } => {
             let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
-            if layout.has_layout_source() || layout.has_region_filter() {
-                let mut layout_obj = load_layout(&mut handle, &layout).await?;
-                let region_files = apply_region_filters(&mut layout_obj, &layout)?;
-                commands::unified::run_write_with_layout(
-                    handle.as_device_mut(),
-                    file.as_deref(),
-                    &mut layout_obj,
-                    &region_files,
-                    !no_verify,
-                )
-                .await
-            } else {
-                let file = file.ok_or("Input file required")?;
-                commands::unified::run_write(handle.as_device_mut(), &file, !no_verify).await
+            let result = async {
+                if layout.has_layout_source() || layout.has_region_filter() {
+                    let mut layout_obj = load_layout(&mut handle, &layout).await?;
+                    let region_files = apply_region_filters(&mut layout_obj, &layout)?;
+                    commands::unified::run_write_with_layout(
+                        handle.as_device_mut(),
+                        file.as_deref(),
+                        &mut layout_obj,
+                        &region_files,
+                        !no_verify,
+                    )
+                    .await
+                } else {
+                    let file = file.ok_or("Input file required")?;
+                    commands::unified::run_write(handle.as_device_mut(), &file, !no_verify).await
+                }
             }
+            .await;
+            finish_session(&mut handle).await;
+            result
         }
         Commands::Erase { layout } => {
             let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
-            if layout.has_layout_source() || layout.has_region_filter() {
-                let mut layout_obj = load_layout(&mut handle, &layout).await?;
-                let region_files = apply_region_filters(&mut layout_obj, &layout)?;
-                if !region_files.is_empty() {
-                    return Err("Per-region files (NAME:FILE) make no sense for erase".into());
+            let result = async {
+                if layout.has_layout_source() || layout.has_region_filter() {
+                    let mut layout_obj = load_layout(&mut handle, &layout).await?;
+                    let region_files = apply_region_filters(&mut layout_obj, &layout)?;
+                    if !region_files.is_empty() {
+                        Err("Per-region files (NAME:FILE) make no sense for erase".into())
+                    } else {
+                        commands::unified::run_erase_with_layout(
+                            handle.as_device_mut(),
+                            &layout_obj,
+                        )
+                        .await
+                    }
+                } else {
+                    commands::unified::run_erase(handle.as_device_mut()).await
                 }
-                commands::unified::run_erase_with_layout(handle.as_device_mut(), &layout_obj).await
-            } else {
-                commands::unified::run_erase(handle.as_device_mut()).await
             }
+            .await;
+            finish_session(&mut handle).await;
+            result
         }
         Commands::Verify { file, layout } => {
             let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
-            if layout.has_layout_source() || layout.has_region_filter() {
-                let mut layout_obj = load_layout(&mut handle, &layout).await?;
-                let region_files = apply_region_filters(&mut layout_obj, &layout)?;
-                commands::unified::run_verify_with_layout(
-                    handle.as_device_mut(),
-                    file.as_deref(),
-                    &layout_obj,
-                    &region_files,
-                )
-                .await
-            } else {
-                let file = file.ok_or("Input file required")?;
-                commands::unified::run_verify(handle.as_device_mut(), &file).await
+            let result = async {
+                if layout.has_layout_source() || layout.has_region_filter() {
+                    let mut layout_obj = load_layout(&mut handle, &layout).await?;
+                    let region_files = apply_region_filters(&mut layout_obj, &layout)?;
+                    commands::unified::run_verify_with_layout(
+                        handle.as_device_mut(),
+                        file.as_deref(),
+                        &layout_obj,
+                        &region_files,
+                    )
+                    .await
+                } else {
+                    let file = file.ok_or("Input file required")?;
+                    commands::unified::run_verify(handle.as_device_mut(), &file).await
+                }
             }
+            .await;
+            finish_session(&mut handle).await;
+            result
         }
         Commands::Info => {
             let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
             print_chip_info(&mut handle).await;
+            finish_session(&mut handle).await;
             Ok(())
         }
         Commands::ListProgrammers => {
@@ -160,20 +200,27 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         },
         Commands::Wp(subcmd) => {
             let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
-            match subcmd {
-                WpCommands::Status => commands::wp::cmd_status(&mut handle).await,
-                WpCommands::List => commands::wp::cmd_list(&mut handle).await,
-                WpCommands::Enable => commands::wp::cmd_enable(&mut handle).await,
-                WpCommands::Disable => commands::wp::cmd_disable(&mut handle).await,
-                WpCommands::Range { range } => commands::wp::cmd_range(&mut handle, &range).await,
-                WpCommands::Region {
-                    layout,
-                    region_name,
-                } => {
-                    let layout_obj = load_layout(&mut handle, &layout).await?;
-                    commands::wp::cmd_region(&mut handle, &layout_obj, &region_name).await
+            let result = async {
+                match subcmd {
+                    WpCommands::Status => commands::wp::cmd_status(&mut handle).await,
+                    WpCommands::List => commands::wp::cmd_list(&mut handle).await,
+                    WpCommands::Enable => commands::wp::cmd_enable(&mut handle).await,
+                    WpCommands::Disable => commands::wp::cmd_disable(&mut handle).await,
+                    WpCommands::Range { range } => {
+                        commands::wp::cmd_range(&mut handle, &range).await
+                    }
+                    WpCommands::Region {
+                        layout,
+                        region_name,
+                    } => {
+                        let layout_obj = load_layout(&mut handle, &layout).await?;
+                        commands::wp::cmd_region(&mut handle, &layout_obj, &region_name).await
+                    }
                 }
             }
+            .await;
+            finish_session(&mut handle).await;
+            result
         }
         #[cfg(feature = "repl")]
         Commands::Repl { script } => {

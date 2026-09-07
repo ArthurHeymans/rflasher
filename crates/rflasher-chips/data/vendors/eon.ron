@@ -82,8 +82,7 @@
             name: "EN25QH16",
             device_id: 0x7015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, qpi_38_ff: true, fast_read_qio: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true),
-            qe_method: Sr2Bit1WriteSr,
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, qpi_38_ff: true, fast_read_qio: true, fast_read_dio: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -98,8 +97,7 @@
             name: "EN25QH128",
             device_id: 0x7018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, qpi_38_ff: true, fast_read_qio: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true),
-            qe_method: Sr2Bit1WriteSr,
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, qpi_38_ff: true, fast_read_qio: true, fast_read_dio: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -625,7 +623,6 @@
             device_id: 0x7016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, qpi_38_ff: true, fast_read_dio: true),
-            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -641,7 +638,6 @@
             device_id: 0x7017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, fast_read_dout: true, fast_read: true, set_read_params: true, fast_read_qio: true, fast_read_qout: true, qpi_38_ff: true, fast_read_dio: true),
-            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -656,8 +652,7 @@
             name: "EN25QH32",
             device_id: 0x7016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, qpi_38_ff: true, fast_read_dio: true, fast_read_qout: true),
-            qe_method: Sr2Bit1WriteSr,
+            features: (wrsr_wren: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, qpi_38_ff: true, fast_read_dio: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -670,8 +665,7 @@
             name: "EN25QH64",
             device_id: 0x7017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, qpi_38_ff: true, fast_read_dio: true, fast_read_qout: true),
-            qe_method: Sr2Bit1WriteSr,
+            features: (wrsr_wren: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, qpi_38_ff: true, fast_read_dio: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -697,8 +691,7 @@
             name: "EN25S16",
             device_id: 0x3815,
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, qpi_38_ff: true, fast_read_dio: true, fast_read_qout: true),
-            qe_method: Sr2Bit1WriteSr,
+            features: (wrsr_wren: true, otp: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, qpi_38_ff: true, fast_read_dio: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -725,8 +718,7 @@
             name: "EN25S32",
             device_id: 0x3816,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, qpi_38_ff: true, fast_read_dio: true, fast_read_qout: true),
-            qe_method: Sr2Bit1WriteSr,
+            features: (wrsr_wren: true, otp: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, qpi_38_ff: true, fast_read_dio: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -754,8 +746,7 @@
             name: "EN25S64",
             device_id: 0x3817,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, qpi_38_ff: true, fast_read_dio: true, fast_read_qout: true),
-            qe_method: Sr2Bit1WriteSr,
+            features: (wrsr_wren: true, otp: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, qpi_38_ff: true, fast_read_dio: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),

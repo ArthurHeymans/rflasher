@@ -24,9 +24,15 @@ bitflags! {
         // Read capabilities
         /// Supports Fast Read (0x0B)
         const FAST_READ       = 1 << 3;
-        /// Supports Dual I/O read commands
+        /// Legacy coarse dual-IO flag (vestige: selection uses FAST_READ_DOUT/DIO now).
+        ///
+        /// Still parsed from the database for backwards compatibility but
+        /// nothing in the read-op pipeline consumes it.
         const DUAL_IO         = 1 << 4;
-        /// Supports Quad I/O read commands
+        /// Legacy coarse quad-IO flag (vestige: selection uses FAST_READ_QOUT/QIO now).
+        ///
+        /// Still parsed from the database for backwards compatibility but
+        /// nothing in the read-op pipeline consumes it.
         const QUAD_IO         = 1 << 5;
 
         // 4-byte addressing
@@ -42,7 +48,11 @@ bitflags! {
         // Special features
         /// Has OTP (One-Time Programmable) area
         const OTP             = 1 << 10;
-        /// Supports QPI mode (4-4-4)
+        /// Legacy coarse QPI flag (vestige: selection uses QPI_35_F5/QPI_38_FF now).
+        ///
+        /// Still parsed from the database and set by the SFDP parser for
+        /// 4-4-4-capable chips, but nothing in the read-op pipeline consumes
+        /// it. Kept deliberately to avoid database churn.
         const QPI             = 1 << 11;
         /// Has security registers
         const SECURITY_REG    = 1 << 12;
@@ -66,7 +76,10 @@ bitflags! {
         const STATUS_REG_2    = 1 << 19;
         /// Has status register 3
         const STATUS_REG_3    = 1 << 20;
-        /// Quad Enable bit is in SR2
+        /// Legacy coarse QE-location flag (vestige: QE handling uses `QeMethod` now).
+        ///
+        /// Still parsed from the database for backwards compatibility but
+        /// nothing consumes it.
         const QE_SR2          = 1 << 21;
 
         // Power management

@@ -808,7 +808,12 @@ impl Ft4222 {
         out_buf.extend_from_slice(multi_write_data);
 
         self.bulk_write(&out_buf).await?;
-        self.bulk_write(&[]).await?;
+        // NOTE: no empty-packet write here. In flashprog's single-I/O path
+        // an empty packet deasserts CS *after* the read clocks, but
+        // `ft4222_spi_send_multi_io` sends write-then-read with no empty
+        // packet — the multi-IO header already defines the whole
+        // transaction, and an intervening empty packet could deassert CS
+        // between the address/mode phase and the data phase.
 
         if multi_read_len > 0 {
             self.bulk_read(multi_read_len).await

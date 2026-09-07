@@ -765,16 +765,18 @@ where
     })
 }
 
-/// Read flash contents
+/// Read flash contents using plain single-I/O commands.
 ///
-/// Automatically selects the best I/O mode based on programmer and chip capabilities.
-/// Uses dual or quad I/O when both the programmer and chip support it.
+/// This is the low-level standalone entry point: the SPI equivalent of
+/// flashprog's `default_spi_read`. It deliberately never selects multi-IO
+/// opcodes, so it is safe to use wherever the programmer's generic command
+/// path is single-IO-only (notably the Dediprog `CMD_TRANSCEIVE` path,
+/// whose bulk `CMD_READ` path is multi-IO-capable but whose transceive path
+/// rejects non-single framing) and wherever no QE bit has been established
+/// (erase verification, layout probing). Single-IO reads need no QE bit.
 ///
-/// This is the low-level standalone entry point; it builds a one-shot
-/// `SpiReadOp` from chip features and calls
-/// `protocol::read_io_with_addressing`. For repeated reads, prefer the
-/// `SpiFlashDevice` / `HybridFlashDevice` path, which caches the read op
-/// across calls and enters QPI once.
+/// For repeated reads, prefer the `SpiFlashDevice` / `HybridFlashDevice`
+/// path, which caches the prepared multi-IO read op across calls.
 pub async fn read<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -790,13 +792,15 @@ pub async fn read<M: SpiMaster + ?Sized>(
     let features = ctx.chip.features;
     let master_features = master.features();
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
+    // Single-IO only (see docstring): never advertise dual/quad output or
+    // dual/quad IO, even if the chip supports them.
     let caps = ChipReadCapabilities {
         fast_read: features.contains(Features::FAST_READ),
-        dout: features.contains(Features::FAST_READ_DOUT),
-        dio: features.contains(Features::FAST_READ_DIO),
-        // This standalone path never establishes the QE bit, so IO2/IO3
-        // remain WP#/HOLD#: cap it at dual I/O. The prepared path
-        // (`prepare_io`) is responsible for quad reads.
+        dout: false,
+        dio: false,
+        // This standalone path never establishes the QE bit and must also
+        // work on programmers whose generic command path is single-IO-only
+        // (e.g. Dediprog transceive), so it stays at single I/O.
         qout: false,
         qio: false,
         qpi_fast_read: false,
@@ -963,7 +967,9 @@ pub async fn write<M: SpiMaster + ?Sized>(
 
 /// Check that a range of flash has been erased (all bytes are 0xFF)
 ///
-/// Reads through the full read path (I/O mode selection, 4-byte addressing)
+/// Reads back through the single-IO slow path (never multi-IO: the QE bit
+/// may not be established and some programmers restrict their generic
+/// command path to single-I/O framing) with full 4-byte addressing support,
 /// and returns [`Error::EraseError`] with the exact address of the first
 /// non-erased byte on failure.
 pub async fn check_erased_range<M: SpiMaster + ?Sized>(

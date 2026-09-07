@@ -500,10 +500,20 @@ impl Dediprog {
             self.leave_standalone_mode().await?;
         }
 
-        // Determine multi-I/O support
+        // Determine multi-I/O support. Mirror flashprog's default: multi-I/O
+        // is only enabled by default on SF600Plus-G2 (dual); every other
+        // model defaults to single-I/O and opts in explicitly via
+        // iomode=dual/quad ("Multi i/o is only tested with SF600Plus-G2,
+        // not enabling by default").
         if self.device_type.is_sf600_class() && self.protocol >= Protocol::V2 {
             self.max_io_mode = match self.io_mode_policy {
-                IoModePolicy::Auto => DpIoMode::QuadIo,
+                IoModePolicy::Auto => {
+                    if self.device_type == DeviceType::SF600PG2 {
+                        DpIoMode::DualIo
+                    } else {
+                        DpIoMode::Single
+                    }
+                }
                 IoModePolicy::Force(m) => m,
             };
         } else {
@@ -1009,13 +1019,13 @@ impl Dediprog {
 
                 if is_read {
                     // The V2 read packet has no dummy-cycle field: the
-                    // firmware only supports the single-IO opcodes it knows
-                    // internally — READ (0x03) under ReadMode::Read and
-                    // FAST_READ (0x0B) under ReadMode::Fast, plus their
-                    // 4-byte variants. Multi-output opcodes (0x3B/0x6B/...)
-                    // cannot be described, which is why features() only
-                    // advertises dual/quad output on V3+. Reject anything
-                    // else defensively.
+                    // firmware only knows single-IO 0x03 under ReadMode::Read
+                    // and applies fast-read timing under ReadMode::Fast.
+                    // Other opcodes (e.g. dual-output 0x3B, which works on
+                    // V2) are passed through under ReadMode::Fast with
+                    // firmware-side timing; only dual-I/O 0xBB is defective
+                    // on V2 and is therefore never advertised (see
+                    // features()).
                     let op = self.selected_read_op.unwrap_or(SpiReadOp {
                         opcode: opcodes::FAST_READ,
                         io_mode: CoreIoMode::Single,
@@ -1027,10 +1037,6 @@ impl Dediprog {
                         opcodes::READ => {
                             cmd_buf[4] = op.opcode;
                         }
-                        opcodes::FAST_READ => {
-                            cmd_buf[3] = ReadMode::Fast as u8;
-                            cmd_buf[4] = op.opcode;
-                        }
                         opcodes::READ_4B | opcodes::FAST_READ_4B => {
                             // V2 has no 4-byte plain-read mode; translate to
                             // the 4-byte fast read (0x0C).
@@ -1038,10 +1044,8 @@ impl Dediprog {
                             cmd_buf[4] = opcodes::FAST_READ_4B;
                         }
                         _ => {
-                            return Err(DediprogError::Unsupported(format!(
-                                "read opcode 0x{:02X} is not supported by the V2 protocol",
-                                op.opcode
-                            )));
+                            cmd_buf[3] = ReadMode::Fast as u8;
+                            cmd_buf[4] = op.opcode;
                         }
                     }
                 } else if mode == WriteMode::PagePgm as u8
@@ -1515,16 +1519,20 @@ impl SpiMaster for Dediprog {
         }
 
         // Multi-I/O support for SF600 class with protocol V2+.
-        // Cap by `max_io_mode` (from IoModePolicy::Auto defaults to Quad, or
-        // IoModePolicy::Force(X) caps at X).
+        // Cap by `max_io_mode` (from IoModePolicy::Auto, which mirrors
+        // flashprog: single everywhere except dual on SF600Plus-G2 — or
+        // IoModePolicy::Force(X) which caps at X).
         if self.device_type.is_sf600_class() && self.protocol >= Protocol::V2 {
-            // Dual output (1-1-2) is V3+ only: the V2 read packet has no
-            // dummy-cycle field and maps every non-READ opcode onto
-            // ReadMode::Fast, so it cannot describe 0x3B correctly.
-            if self.max_io_mode >= DpIoMode::DualOut && self.protocol >= Protocol::V3 {
+            // Dual output (1-1-2, 0x3B) works on V2+: the V2 read packet
+            // passes the opcode through under ReadMode::Fast with
+            // firmware-side timing.
+            if self.max_io_mode >= DpIoMode::DualOut && self.protocol >= Protocol::V2 {
                 features |= SpiFeatures::DUAL_IN;
             }
-            // Dual I/O (1-2-2) is V3+ only (V2 has dummy-cycle bugs per flashprog).
+            // Dual I/O (1-2-2, 0xBB) is V3+ only: the V2 fixed-op form uses
+            // the wrong number of dummy cycles (flashprog
+            // dediprog_init: "The v2, fixed-op JEDEC_FAST_READ_DUAL_DIO
+            // command seems to use the wrong number of dummy cycles").
             if self.max_io_mode >= DpIoMode::DualIo && self.protocol >= Protocol::V3 {
                 features |= SpiFeatures::DUAL_IO;
             }

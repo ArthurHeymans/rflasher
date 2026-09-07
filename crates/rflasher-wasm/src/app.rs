@@ -176,7 +176,9 @@ macro_rules! with_programmer {
 ///
 /// The body receives `$device` as `&mut impl FlashDevice`. The macro handles
 /// extracting the master back via `into_parts()` and putting the Programmer
-/// wrapper back into shared state.
+/// wrapper back into shared state. `finish()` runs before teardown so a
+/// volatile QE bit set by `prepare()` is restored after every op (the next
+/// op re-prepares from scratch).
 macro_rules! with_flash_device {
     ($shared:expr, $programmer:expr, $ctx_flash:expr, $device:ident, $body:expr) => {
         match $programmer {
@@ -189,6 +191,13 @@ macro_rules! with_flash_device {
                     return;
                 }
                 let result = { $body };
+                // The device is discarded after this op (master is handed
+                // back), so session teardown happens here: restores a
+                // volatile QE bit set by prepare() and exits QPI/4BA modes
+                // entered for the op. Best-effort: the op result stands.
+                if let Err(error) = $device.finish().await {
+                    log::warn!("flash session teardown (finish) failed: {error}");
+                }
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Serprog(master));
                 result
@@ -202,6 +211,13 @@ macro_rules! with_flash_device {
                     return;
                 }
                 let result = { $body };
+                // The device is discarded after this op (master is handed
+                // back), so session teardown happens here: restores a
+                // volatile QE bit set by prepare() and exits QPI/4BA modes
+                // entered for the op. Best-effort: the op result stands.
+                if let Err(error) = $device.finish().await {
+                    log::warn!("flash session teardown (finish) failed: {error}");
+                }
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Ch341a(master));
                 result
@@ -215,6 +231,13 @@ macro_rules! with_flash_device {
                     return;
                 }
                 let result = { $body };
+                // The device is discarded after this op (master is handed
+                // back), so session teardown happens here: restores a
+                // volatile QE bit set by prepare() and exits QPI/4BA modes
+                // entered for the op. Best-effort: the op result stands.
+                if let Err(error) = $device.finish().await {
+                    log::warn!("flash session teardown (finish) failed: {error}");
+                }
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Ch347(master));
                 result
@@ -228,6 +251,13 @@ macro_rules! with_flash_device {
                     return;
                 }
                 let result = { $body };
+                // The device is discarded after this op (master is handed
+                // back), so session teardown happens here: restores a
+                // volatile QE bit set by prepare() and exits QPI/4BA modes
+                // entered for the op. Best-effort: the op result stands.
+                if let Err(error) = $device.finish().await {
+                    log::warn!("flash session teardown (finish) failed: {error}");
+                }
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Ftdi(master));
                 result
@@ -241,6 +271,13 @@ macro_rules! with_flash_device {
                     return;
                 }
                 let result = { $body };
+                // The device is discarded after this op (master is handed
+                // back), so session teardown happens here: restores a
+                // volatile QE bit set by prepare() and exits QPI/4BA modes
+                // entered for the op. Best-effort: the op result stands.
+                if let Err(error) = $device.finish().await {
+                    log::warn!("flash session teardown (finish) failed: {error}");
+                }
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Ft4222(master));
                 result
@@ -255,6 +292,13 @@ macro_rules! with_flash_device {
                     return;
                 }
                 let result = { $body };
+                // The device is discarded after this op (master is handed
+                // back), so session teardown happens here: restores a
+                // volatile QE bit set by prepare() and exits QPI/4BA modes
+                // entered for the op. Best-effort: the op result stands.
+                if let Err(error) = $device.finish().await {
+                    log::warn!("flash session teardown (finish) failed: {error}");
+                }
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Dediprog(master));
                 result
@@ -268,6 +312,13 @@ macro_rules! with_flash_device {
                     return;
                 }
                 let result = { $body };
+                // The device is discarded after this op (master is handed
+                // back), so session teardown happens here: restores a
+                // volatile QE bit set by prepare() and exits QPI/4BA modes
+                // entered for the op. Best-effort: the op result stands.
+                if let Err(error) = $device.finish().await {
+                    log::warn!("flash session teardown (finish) failed: {error}");
+                }
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Raiden(master));
                 result

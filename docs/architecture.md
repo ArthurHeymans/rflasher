@@ -46,3 +46,48 @@ platform-specific access layer by implementing `rflasher_internal::HostAccess`:
 
 See [crates/rflasher-internal/README.md](../crates/rflasher-internal/README.md)
 for details.
+
+## Prepare / read-op pipeline (multi-IO sessions)
+
+Multi-IO reads are a per-session negotiation, modeled on flashprog's
+`spi_prepare_io` / `spi_finish_io` (`spi25_prepare.c`). The flow is:
+
+1. **Probe** yields a `FlashContext` (chip + address mode).
+2. **`prepare_io`** (`rflasher-core/src/flash/prepare.rs`) assembles a
+   `PreparedState` and establishes it on the chip:
+   - *Quad Enable*: set **volatile** (EWSR-prefixed write, lost on power
+     cycle) and only on chips advertising volatile status-register writes
+     (`WRSR_EWSR`); the bit is re-read to confirm, otherwise quad is
+     disabled for the session. Chips with no QE register keep their flags
+     (factory-set assumption), matching flashprog.
+   - *QPI entry* is deliberately skipped: QPI rewires every command to
+     4-4-4 framing and the non-read paths are still single-IO.
+   - *Read-op selection* (`select_read_op`, mirroring
+     `select_multi_io_fast_read` with 4BA-native preference) picks the
+     fastest op both chip and programmer support; if nothing is selectable
+     it degrades to single-I/O 0x03. Only genuinely unaddressable
+     combinations (4-byte addressing required but unsupported) fail the
+     open — everything else degrades, never corrupts.
+3. **Devices** carry the `PreparedState`: `SpiFlashDevice` issues the cached
+   op through `SpiMaster::execute`; `HybridFlashDevice` (Dediprog, sunxi
+   FEL) pushes it to `OpaqueMaster::set_read_op` for the bulk path while
+   erase/status stay on `SpiMaster`.
+4. **Erase verification** (`check_erased_range`) always reads back through
+   the single-IO slow path (`operations::read`), mirroring flashprog's
+   `dediprog_slow_read` pinning `spi_fast_read` to NULL: the verify path
+   must work where no QE is established and where the generic command path
+   is single-IO-only.
+5. **`finish_io`** undoes session side-effects: exit QPI if entered, and
+   clear a volatile QE bit *this session set* (pre-existing sticky QE is
+   left untouched). Compatibility 4BA mode is left active, like flashprog.
+   Teardown is wired in, not just available: the CLI runs `finish()` after
+   every flash command (including error paths), the WASM app runs it after
+   every op (devices are discarded per-op there), and `prepare_io` itself
+   restores QE if address setup fails after the bit was set — mirroring
+   flashprog's `finish_access` coverage.
+
+The chip database (`crates/rflasher-chips/data/vendors/*.ron`) is derived
+from flashprog's `flashchips.c` by `util/multiio_audit.py`, which owns nine
+multi-IO flags plus `qe_method` (two-way sync: over-claimed modes are
+removed) and `wrsr_ewsr` (add-only). A clean tree must report zero updates;
+entries the reference does not know are left alone and reported.

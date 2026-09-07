@@ -1124,7 +1124,7 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "dediprog",
         aliases: &["dediprog_spi"],
         description:
-            "Dediprog SF100/SF200/SF600/SF700 USB SPI (voltage=<V>,spispeed=<speed>,target=<1|2>)",
+            "Dediprog SF100/SF200/SF600/SF700 USB SPI (voltage=<V>,spispeed=<speed>,target=<1|2>,iomode=<auto|single|dual|quad>)",
     });
 
     #[cfg(feature = "serprog-native")]

@@ -27,7 +27,7 @@
             device_id: 0x4016,
             total_size: MiB(4),
             features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true),
-            qe_method: Sr2Bit1WriteSr2,
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -43,7 +43,7 @@
             device_id: 0x4017,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true),
-            qe_method: Sr2Bit1WriteSr2,
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -58,7 +58,7 @@
             name: "W25Q128.V",
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, wp_tb: true, wp_sec: true, wp_cmp: true, fast_read_dio: true, fast_read_qio: true, fast_read_qout: true, fast_read_dout: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, wp_tb: true, wp_sec: true, wp_cmp: true, fast_read_dio: true, fast_read_qio: true, fast_read_qout: true, fast_read_dout: true, wrsr_ewsr: true),
             qe_method: Sr2Bit1WriteSr2,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -115,7 +115,7 @@
             name: "W25Q16.W",
             device_id: 0x6015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_qio: true, fast_read_qout: true, fast_read_dout: true, qpi_38_ff: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_qio: true, fast_read_qout: true, fast_read_dout: true),
             qe_method: Sr2Bit1WriteSr2,
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
@@ -131,8 +131,8 @@
             name: "W25Q32.W",
             device_id: 0x6016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true, qpi_38_ff: true),
-            qe_method: Sr2Bit1WriteSr2,
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -147,7 +147,7 @@
             name: "W25Q64.W",
             device_id: 0x6017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true, qpi_38_ff: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true),
             qe_method: Sr2Bit1WriteSr2,
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
@@ -163,7 +163,7 @@
             name: "W25Q128.W",
             device_id: 0x6018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_qio: true, fast_read_qout: true, fast_read_dout: true, qpi_38_ff: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_qio: true, fast_read_qout: true, fast_read_dout: true),
             qe_method: Sr2Bit1WriteSr2,
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
@@ -197,7 +197,7 @@
             name: "W25Q32JV_M",
             device_id: 0x7016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true, qpi_38_ff: true, set_read_params: true),
             qe_method: Sr2Bit1WriteSr2,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -213,7 +213,7 @@
             name: "W25Q64JV_M",
             device_id: 0x7017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true, qpi_38_ff: true, set_read_params: true),
             qe_method: Sr2Bit1WriteSr2,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -229,7 +229,7 @@
             name: "W25Q128JV_M",
             device_id: 0x7018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, status_reg_3: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true, qpi_38_ff: true, set_read_params: true),
             qe_method: Sr2Bit1WriteSr2,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -263,7 +263,7 @@
             name: "W25X10",
             device_id: 0x3011,
             total_size: KiB(128),
-            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
+            features: (wrsr_wren: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
@@ -276,7 +276,7 @@
             name: "W25X20",
             device_id: 0x3012,
             total_size: KiB(256),
-            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
+            features: (wrsr_wren: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -289,7 +289,7 @@
             name: "W25X40",
             device_id: 0x3013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
+            features: (wrsr_wren: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -302,7 +302,7 @@
             name: "W25X80",
             device_id: 0x3014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
+            features: (wrsr_wren: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -315,7 +315,7 @@
             name: "W25X16",
             device_id: 0x3015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
+            features: (wrsr_wren: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -328,7 +328,7 @@
             name: "W25X32",
             device_id: 0x3016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
+            features: (wrsr_wren: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -341,7 +341,7 @@
             name: "W25X64",
             device_id: 0x3017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, fast_read_dout: true),
+            features: (wrsr_wren: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -419,7 +419,7 @@
             name: "W25Q16JV_M",
             device_id: 0x7015,
             total_size: MiB(2),
-            features: (otp: true, status_reg_2: true, fast_read_dout: true, fast_read: true, set_read_params: true, fast_read_qio: true, fast_read_qout: true, qpi_38_ff: true, fast_read_dio: true),
+            features: (otp: true, status_reg_2: true, fast_read_dout: true, fast_read: true, set_read_params: true, fast_read_qio: true, fast_read_qout: true, qpi_38_ff: true, fast_read_dio: true, wrsr_ewsr: true),
             qe_method: Sr2Bit1WriteSr2,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -435,7 +435,7 @@
             device_id: 0x5012,
             total_size: KiB(256),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
-            qe_method: Sr2Bit1WriteSr2,
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -480,7 +480,7 @@
             device_id: 0x4016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
-            qe_method: Sr2Bit1WriteSr2,
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -544,7 +544,7 @@
             device_id: 0x6016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
-            qe_method: Sr2Bit1WriteSr2,
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -608,7 +608,7 @@
             device_id: 0x4013,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
-            qe_method: Sr2Bit1WriteSr2,
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -624,7 +624,7 @@
             device_id: 0x5013,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
-            qe_method: Sr2Bit1WriteSr2,
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -685,7 +685,7 @@
             device_id: 0x4017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
-            qe_method: Sr2Bit1WriteSr2,
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -733,7 +733,7 @@
             device_id: 0x6017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_dout: true, fast_read: true, set_read_params: true, fast_read_qio: true, fast_read_qout: true, qpi_38_ff: true, fast_read_dio: true),
-            qe_method: Sr2Bit1WriteSr2,
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -748,7 +748,7 @@
             name: "W25Q64FW/W25Q64JW...Q",
             device_id: 0x6017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true, qpi_38_ff: true),
+            features: (wrsr_wren: true, otp: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
             qe_method: Sr2Bit1WriteSr2,
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
@@ -781,7 +781,7 @@
             device_id: 0x4014,
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
-            qe_method: Sr2Bit1WriteSr2,
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -797,7 +797,7 @@
             device_id: 0x5014,
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
-            qe_method: Sr2Bit1WriteSr2,
+            qe_method: Sr2Bit1WriteSr,
             voltage: (min: 1700, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
