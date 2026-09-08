@@ -16,9 +16,9 @@ default = []
 [dependencies]
 # Internal crates
 # We override the workspace dependency to ensure async mode for WASM
-rflasher-core = { version = "0.1.0", path = "../rflasher-core", default-features = false, features = ["std", "alloc"] }
-rflasher-chips = { version = "0.1.0", path = "../rflasher-chips", features = ["static-chips"] }
-rflasher-programmers = { version = "0.1.0", path = "../rflasher-programmers", default-features = false, features = [
+rflasher-core = { version = "0.2.0", path = "../rflasher-core", default-features = false, features = ["std", "alloc"] }
+rflasher-chips = { version = "0.2.0", path = "../rflasher-chips", features = ["static-chips"] }
+rflasher-programmers = { version = "0.2.0", path = "../rflasher-programmers", default-features = false, features = [
     "wasm",
     "serprog",
     "ch341a",

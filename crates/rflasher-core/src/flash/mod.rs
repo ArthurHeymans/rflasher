@@ -39,6 +39,7 @@
 mod context;
 mod device;
 mod hybrid_device;
+pub mod io;
 mod opaque_device;
 mod operations;
 mod spi_device;
@@ -60,3 +61,6 @@ pub use operations::{read, select_erase_block, write};
 // Re-export detailed probe result
 #[cfg(feature = "std")]
 pub use operations::{ProbeResult, probe_detailed};
+
+#[cfg(all(test, feature = "alloc"))]
+mod io_tests;

@@ -40,3 +40,5 @@ mod types;
 pub use ops::*;
 pub use ranges::*;
 pub use types::*;
+
+pub(crate) use ops::chip_write_options;

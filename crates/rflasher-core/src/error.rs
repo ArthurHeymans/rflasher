@@ -76,6 +76,8 @@ pub enum Error {
     // Programmer errors
     /// Programmer is not ready (not initialized or busy)
     ProgrammerNotReady,
+    /// Uncertain flash state: explicit hardware recovery and reprobe required.
+    RecoveryRequired,
     /// General programmer error
     ProgrammerError,
     /// Requested I/O mode is not supported by the programmer
@@ -135,6 +137,7 @@ impl fmt::Display for Error {
             Self::BufferTooSmall => write!(f, "buffer too small"),
             Self::WriteProtected => write!(f, "flash chip is write protected"),
             Self::RegionProtected => write!(f, "region is protected"),
+            Self::RecoveryRequired => write!(f, "hardware recovery and reprobe required"),
             Self::ProgrammerNotReady => write!(f, "programmer not ready"),
             Self::ProgrammerError => write!(f, "programmer error"),
             Self::IoModeNotSupported => write!(f, "I/O mode not supported by programmer"),

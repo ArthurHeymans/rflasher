@@ -9,59 +9,14 @@ use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
 use crate::chip::ChipProvider;
-use crate::chip::{EraseBlock, Features, WriteGranularity};
-use crate::error::{EraseFailure, Error, Result};
-use crate::programmer::{SpiFeatures, SpiMaster};
-use crate::protocol::{self, CommandAddressing};
+use crate::chip::EraseBlock;
+#[cfg(feature = "alloc")]
+use crate::chip::WriteGranularity;
+use crate::error::{Error, Result};
+use crate::programmer::SpiMaster;
+use crate::protocol;
 
-use super::context::{AddressMode, FlashContext};
-
-pub(crate) fn compatible_4byte_addressing(
-    chip_features: Features,
-    master_features: SpiFeatures,
-) -> Result<(CommandAddressing, bool)> {
-    if master_features.contains(SpiFeatures::NO_4BA_MODES) {
-        return Err(Error::ChipNotSupported);
-    }
-
-    if master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
-        && chip_features.supports_4ba_mode_switch()
-    {
-        return Ok((CommandAddressing::FourByte, true));
-    }
-
-    if chip_features.supports_extended_address_register() {
-        return Ok((
-            CommandAddressing::ExtendedAddressRegister(chip_features),
-            false,
-        ));
-    }
-
-    Err(Error::ChipNotSupported)
-}
-
-pub(crate) fn addressing_for_4byte_operation(
-    native_4byte: bool,
-    chip_features: Features,
-    master_features: SpiFeatures,
-) -> Result<(CommandAddressing, bool)> {
-    if native_4byte {
-        Ok((CommandAddressing::FourByte, false))
-    } else {
-        compatible_4byte_addressing(chip_features, master_features)
-    }
-}
-
-pub(crate) fn read_dummy_cycles(io_mode: crate::spi::IoMode) -> u8 {
-    match io_mode {
-        crate::spi::IoMode::Single => 0,
-        crate::spi::IoMode::DualOut => 8,
-        crate::spi::IoMode::DualIo => 4,
-        crate::spi::IoMode::QuadOut => 8,
-        crate::spi::IoMode::QuadIo => 6,
-        crate::spi::IoMode::Qpi => 0,
-    }
-}
+use super::context::FlashContext;
 
 // =============================================================================
 // Smart erase/write support
@@ -776,198 +731,61 @@ where
     })
 }
 
-/// Read flash contents
+/// Read flash contents using plain single-I/O commands.
 ///
-/// Automatically selects the best I/O mode based on programmer and chip capabilities.
-/// Uses dual or quad I/O when both the programmer and chip support it.
+/// This is the low-level standalone entry point: the SPI equivalent of
+/// flashprog's `default_spi_read`. It deliberately never selects multi-IO
+/// opcodes, so it is safe to use wherever the programmer's generic command
+/// path is single-IO-only (notably the Dediprog `CMD_TRANSCEIVE` path,
+/// whose bulk `CMD_READ` path is multi-IO-capable but whose transceive path
+/// rejects non-single framing) and wherever no QE bit has been established
+/// (erase verification, layout probing). Single-IO reads need no QE bit.
+///
+/// Prefer `SpiFlashDevice` / `HybridFlashDevice` for scoped multi-I/O reads and
+/// a retained cancellation latch. This low-level caller owns hardware recovery
+/// after cancellation.
 pub async fn read<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
     buf: &mut [u8],
 ) -> Result<()> {
+    use super::io;
     if !ctx.is_valid_range(addr, buf.len()) {
         return Err(Error::AddressOutOfBounds);
     }
-    let features = ctx.chip.features;
-    let master_features = master.features();
-    let try_native_4byte =
-        ctx.address_mode == AddressMode::FourByte && features.supports_4ba_read();
-
-    let (io_mode, opcode, native_4byte) =
-        protocol::select_read_mode(master_features, features, try_native_4byte, |opcode| {
-            master.probe_opcode(opcode)
-        });
-
-    let (addressing, enter_exit_4byte) = if ctx.address_mode == AddressMode::FourByte {
-        addressing_for_4byte_operation(native_4byte, features, master_features)?
-    } else {
-        (CommandAddressing::ThreeByte, false)
-    };
-
-    if enter_exit_4byte {
-        protocol::enter_4byte_mode_with_features(master, features).await?;
-    }
-
-    let result = protocol::read_io_with_addressing(
-        master,
-        opcode,
-        addr,
-        buf,
-        addressing,
-        io_mode,
-        read_dummy_cycles(io_mode),
-    )
-    .await;
-
-    if enter_exit_4byte
-        && let Err(e) = protocol::exit_4byte_mode_with_features(master, features).await
-    {
-        log::warn!("Failed to exit 4-byte address mode: {}", e);
-    }
-
-    result
+    let plan = io::select_read_plan(master, ctx, true, |_| true)?;
+    io::IoLifecycle::default()
+        .run(
+            master,
+            plan.address,
+            protocol::QuadEnableMethod::None,
+            async |master| io::read_spi(master, &plan, addr, buf).await,
+        )
+        .await
 }
 
-/// Write data to flash
-///
-/// This function handles page alignment and splitting large writes
-/// into page-sized chunks. The target region must be erased first.
-///
-/// Respects the programmer's `max_write_len()` to avoid sending chunks
-/// larger than the hardware can handle (e.g., Intel swseq is limited to
-/// 64 bytes).
+/// Low-level write. The caller must recover hardware after cancellation; use a
+/// flash adapter when a persistent recovery-required latch is needed.
 pub async fn write<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
     data: &[u8],
 ) -> Result<()> {
+    use super::io;
     if !ctx.is_valid_range(addr, data.len()) {
         return Err(Error::AddressOutOfBounds);
     }
-
-    let features = ctx.chip.features;
-    let write_granularity = ctx.chip.write_granularity;
-    let page_size = ctx.page_size();
-
-    // SST25 AAI word program: chip database sets AAI_WORD for SST25VFxxxB/SST25WFxxx.
-    // These chips require a streaming protocol (0xAD) rather than page program (0x02).
-    // AAI uses 3-byte addressing only — 4-byte mode is irrelevant for SST25 chips.
-    // Note: SFDP-probed chips may report WriteGranularity::Byte (BFPT DWORD1 bit[2]=0)
-    // without AAI_WORD being set; those fall through to single-byte page program below.
-    // Masters that cannot transfer two data bytes in one command skip AAI and use
-    // single-byte page program, which SST25 chips also support.
-    if features.contains(crate::chip::Features::AAI_WORD) && master.max_write_len() >= 2 {
-        return protocol::aai_word_program(master, addr, data).await;
-    }
-
-    let use_4byte = ctx.address_mode == AddressMode::FourByte;
-    let master_features = master.features();
-    let use_native = use_4byte
-        && features.supports_4ba_program()
-        && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
-        && master.probe_opcode(crate::spi::opcodes::PP_4B);
-    let (addressing, enter_exit_4byte) = if use_4byte {
-        addressing_for_4byte_operation(use_native, features, master_features)?
-    } else {
-        (CommandAddressing::ThreeByte, false)
-    };
-    let opcode = if use_native {
-        crate::spi::opcodes::PP_4B
-    } else {
-        crate::spi::opcodes::PP
-    };
-
-    // Get the master's maximum write length - some controllers have limits
-    // smaller than a full page (e.g., Intel swseq is limited to 64 bytes)
-    let max_write = master.max_write_len();
-    if max_write == 0 {
-        // A zero limit would produce zero-sized chunks and never make progress
-        return Err(Error::ProgrammerError);
-    }
-
-    if enter_exit_4byte {
-        protocol::enter_4byte_mode_with_features(master, features).await?;
-    }
-
-    let mut offset = 0usize;
-    let mut current_addr = addr;
-
-    while offset < data.len() {
-        let remaining = data.len() - offset;
-
-        let chunk_size = if write_granularity == WriteGranularity::Byte {
-            // Single-byte page program: one byte per WREN+PP+WIP cycle.
-            // Used for SFDP-detected chips reporting byte granularity (BFPT DWORD1
-            // bit[2]=0) that don't have AAI_WORD — matches flashprog spi_chip_write_1.
-            1
-        } else {
-            // Page-granularity program: up to a full page per command, respecting
-            // page boundaries and the master's maximum write length.
-            let page_offset = (current_addr as usize) % page_size;
-            let bytes_to_page_end = page_size - page_offset;
-            core::cmp::min(core::cmp::min(bytes_to_page_end, remaining), max_write)
-        };
-
-        let chunk = &data[offset..offset + chunk_size];
-
-        let result =
-            protocol::program_page_with_addressing(master, opcode, current_addr, chunk, addressing)
-                .await;
-
-        if result.is_err() {
-            if enter_exit_4byte
-                && let Err(e) = protocol::exit_4byte_mode_with_features(master, features).await
-            {
-                log::warn!("Failed to exit 4-byte address mode: {}", e);
-            }
-            return result;
-        }
-
-        offset += chunk_size;
-        current_addr += chunk_size as u32;
-    }
-
-    if enter_exit_4byte {
-        protocol::exit_4byte_mode_with_features(master, features).await?;
-    }
-
-    Ok(())
-}
-
-/// Check that a range of flash has been erased (all bytes are 0xFF)
-///
-/// Reads through the full read path (I/O mode selection, 4-byte addressing)
-/// and returns [`Error::EraseError`] with the exact address of the first
-/// non-erased byte on failure.
-pub async fn check_erased_range<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    ctx: &FlashContext,
-    addr: u32,
-    len: u32,
-) -> Result<()> {
-    const CHUNK_SIZE: usize = 4096;
-    let mut buf = [0u8; CHUNK_SIZE];
-
-    let mut offset = 0u32;
-    while offset < len {
-        let chunk_len = core::cmp::min(CHUNK_SIZE as u32, len - offset) as usize;
-        let chunk_buf = &mut buf[..chunk_len];
-
-        read(master, ctx, addr + offset, chunk_buf).await?;
-
-        if let Some((idx, &found)) = chunk_buf.iter().enumerate().find(|&(_, &b)| b != 0xFF) {
-            return Err(Error::EraseError(EraseFailure::VerifyFailed {
-                addr: addr + offset + idx as u32,
-                found,
-            }));
-        }
-
-        offset += chunk_len as u32;
-    }
-
-    Ok(())
+    let plan = io::select_write_plan(master, ctx, |_| true)?;
+    io::IoLifecycle::default()
+        .run(
+            master,
+            plan.address,
+            protocol::QuadEnableMethod::None,
+            async |master| io::write_spi(master, &plan, addr, data).await,
+        )
+        .await
 }
 
 /// Select the best erase block size for the given operation

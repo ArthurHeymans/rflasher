@@ -491,13 +491,17 @@ pub async fn exit_4byte_mode<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()
     master.execute(&mut cmd).await
 }
 
-fn extended_address_write_opcode(features: crate::chip::Features) -> Result<u8> {
+/// EAR read/write opcodes. Codegen also sets the generic capability for explicit
+/// variants, so the legacy C8/C5 fallback must not override an explicit 16/17 pair.
+pub(crate) fn extended_address_opcodes(features: crate::chip::Features) -> Result<(u8, u8)> {
     use crate::chip::Features;
 
-    if features.contains(Features::EXT_ADDR_REG_C5C8) || features.contains(Features::EXT_ADDR_REG) {
-        Ok(opcodes::WREAR)
+    if features.contains(Features::EXT_ADDR_REG_C5C8) {
+        Ok((opcodes::RDEAR, opcodes::WREAR))
     } else if features.contains(Features::EXT_ADDR_REG_1716) {
-        Ok(opcodes::WREAR_ALT)
+        Ok((opcodes::RDEAR_ALT, opcodes::WREAR_ALT))
+    } else if features.contains(Features::EXT_ADDR_REG) {
+        Ok((opcodes::RDEAR, opcodes::WREAR))
     } else {
         Err(Error::ChipNotSupported)
     }
@@ -509,7 +513,7 @@ pub async fn set_extended_address<M: SpiMaster + ?Sized>(
     features: crate::chip::Features,
     addr_high: u8,
 ) -> Result<()> {
-    let opcode = extended_address_write_opcode(features)?;
+    let (_, opcode) = extended_address_opcodes(features)?;
     write_enable(master).await?;
     let data = [addr_high];
     let mut cmd = SpiCommand::write_reg(opcode, &data);
@@ -619,8 +623,25 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
     io_mode: IoMode,
     dummy_cycles: u8,
 ) -> Result<()> {
+    if !master.supports_read_dummy_cycles(io_mode, dummy_cycles) {
+        return Err(Error::ProgrammerError);
+    }
+    if addressing == CommandAddressing::ThreeByte && addr as u64 + buf.len() as u64 > 0x01_00_00_00
+    {
+        // A 24-bit address cannot reach beyond 16 MiB: the transfer would
+        // silently alias into the low 16 MiB. Fail closed instead.
+        return Err(Error::AddressOutOfBounds);
+    }
+
     let max_len = master.max_read_len();
+    if max_len == 0 {
+        return Err(Error::ProgrammerError);
+    }
     let mut offset = 0;
+    // The extended-address register is sticky: only rewrite it (WREN +
+    // WREAR) when the high address byte actually changes, mirroring
+    // flashprog's caching of the high byte across chunks in one bank.
+    let mut last_ear: Option<u8> = None;
 
     while offset < buf.len() {
         let current_addr = addr + offset as u32;
@@ -629,7 +650,11 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
         let chunk = &mut buf[offset..offset + chunk_len];
 
         if let CommandAddressing::ExtendedAddressRegister(features) = addressing {
-            set_extended_address(master, features, (current_addr >> 24) as u8).await?;
+            let ear = (current_addr >> 24) as u8;
+            if last_ear != Some(ear) {
+                set_extended_address(master, features, ear).await?;
+                last_ear = Some(ear);
+            }
         }
 
         let mut cmd = SpiCommand {
@@ -803,6 +828,44 @@ pub async fn read_quad_io_4b<M: SpiMaster + ?Sized>(
 }
 
 // ============================================================================
+// QPI Mode Entry / Exit
+// ============================================================================
+
+/// Enter QPI mode by sending the specified enter opcode.
+///
+/// Common values:
+/// - `0x35` (Macronix, AMIC, ISSI) — exit with `0xF5`
+/// - `0x38` (Winbond, GigaDevice, Eon, Fudan, Puya and others) — exit with `0xFF`
+pub async fn enter_qpi_with<M: SpiMaster + ?Sized>(master: &mut M, enter_opcode: u8) -> Result<()> {
+    let mut cmd = SpiCommand::simple(enter_opcode);
+    master.execute(&mut cmd).await
+}
+
+/// Exit QPI mode by sending the specified exit opcode in QPI framing.
+pub async fn exit_qpi_with<M: SpiMaster + ?Sized>(master: &mut M, exit_opcode: u8) -> Result<()> {
+    let mut cmd = SpiCommand::simple(exit_opcode).with_io_mode(IoMode::Qpi);
+    master.execute(&mut cmd).await
+}
+
+/// Set Read Parameters (SRP, 0xC0) to configure QPI dummy cycles.
+///
+/// Parameter byte encodes burst length and dummy cycles (chip-specific).
+/// Chips supporting this command: Macronix MX25L, ISSI IS25WP, some Spansion.
+pub async fn set_read_params<M: SpiMaster + ?Sized>(master: &mut M, params: u8) -> Result<()> {
+    let data = [params];
+    let mut cmd = SpiCommand {
+        opcode: 0xC0,
+        address: None,
+        address_width: AddressWidth::None,
+        io_mode: IoMode::Qpi,
+        dummy_cycles: 0,
+        write_data: &data,
+        read_buf: &mut [],
+    };
+    master.execute(&mut cmd).await
+}
+
+// ============================================================================
 // Quad Enable (QE) Functions
 // ============================================================================
 
@@ -818,13 +881,23 @@ pub enum QuadEnableMethod {
     Sr2Bit1WriteSr,
     /// QE is bit 6 of SR1
     Sr1Bit6,
-    /// QE is bit 7 of SR2 (use special sequence)
+    /// QE is bit 7 of SR2, written with the dedicated 0x31 command.
+    ///
+    /// This covers SFDP JESD216 requirement 0b011. Despite the historical
+    /// "special sequence" label, the wire format is a plain WREN + WRSR2
+    /// (0x31) write like [`QuadEnableMethod::Sr2Bit1WriteSr2`], only the bit
+    /// position differs.
     Sr2Bit7,
     /// QE is bit 1 of SR2, use dedicated 0x31 command
     Sr2Bit1WriteSr2,
 }
 
-/// Enable quad mode using the appropriate method for the chip
+/// Enable quad mode using the appropriate method for the chip.
+///
+/// This programs the QE bit **non-volatile** (WREN-prefixed write). Prefer
+/// `enable_quad_mode_volatile` for session QE establishment — the
+/// non-volatile form persists across power cycles and is kept only for
+/// callers that explicitly manage sticky QE state.
 pub async fn enable_quad_mode<M: SpiMaster + ?Sized>(
     master: &mut M,
     method: QuadEnableMethod,
@@ -867,7 +940,10 @@ pub async fn enable_quad_mode<M: SpiMaster + ?Sized>(
     }
 }
 
-/// Disable quad mode using the appropriate method for the chip
+/// Disable quad mode using the appropriate method for the chip.
+///
+/// Non-volatile counterpart of [`enable_quad_mode`]; see its docs on when
+/// (not) to use it. Session teardown uses `disable_quad_mode_volatile`.
 pub async fn disable_quad_mode<M: SpiMaster + ?Sized>(
     master: &mut M,
     method: QuadEnableMethod,
@@ -906,6 +982,131 @@ pub async fn disable_quad_mode<M: SpiMaster + ?Sized>(
     }
 }
 
+/// Write SR2 directly using opcode 0x31 with a volatile write enable.
+///
+/// Sends EWSR (0x50) instead of WREN (0x06) so the QE bit is set volatile
+/// and does not survive power cycles — mirrors flashprog's
+/// `spi_write_register(..., WRSR_VOLATILE_BITS)` used by `spi_prepare_quad_io`.
+async fn write_status2_direct_volatile<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    value: u8,
+) -> Result<()> {
+    write_enable_ewsr(master).await?;
+    let data = [value];
+    let mut cmd = SpiCommand::write_reg(opcodes::WRSR2, &data);
+    master.execute(&mut cmd).await?;
+    wait_ready(master, WRSR_POLL_US, WRSR_TIMEOUT_US).await
+}
+
+/// Write status registers 1 and 2 together with a volatile write enable.
+///
+/// EWSR-prefixed variant of [`write_status12`]; the written bits do not
+/// persist across power cycles.
+async fn write_status12_volatile<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    sr1: u8,
+    sr2: u8,
+) -> Result<()> {
+    write_status12_ewsr(master, sr1, sr2).await
+}
+
+/// Write status register 1 with a volatile write enable.
+///
+/// EWSR-prefixed variant of [`write_status1`]; the written bits do not
+/// persist across power cycles.
+async fn write_status1_volatile<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> Result<()> {
+    write_status1_ewsr(master, value).await
+}
+
+/// Enable quad mode with a volatile (non-persistent) status-register write.
+///
+/// Mirrors flashprog's `spi_prepare_quad_io`: the QE bit is set with an
+/// EWSR-prefixed write so it is lost on power cycle, and the caller is
+/// expected to confirm the bit afterwards and restore (clear) it in
+/// `finish` — see `disable_quad_mode_volatile`.
+///
+/// Returns `Ok` after issuing the write; like [`enable_quad_mode`] this does
+/// not itself confirm the bit — use [`is_quad_enabled`] afterwards.
+pub(crate) async fn enable_quad_mode_volatile<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    method: QuadEnableMethod,
+) -> Result<()> {
+    match method {
+        QuadEnableMethod::None => Ok(()),
+        QuadEnableMethod::Sr2Bit1WriteSr => {
+            let sr1 = read_status1(master).await?;
+            let sr2 = read_status2(master).await?;
+            if sr2 & opcodes::SR2_QE != 0 {
+                return Ok(()); // Already enabled
+            }
+            write_status12_volatile(master, sr1, sr2 | opcodes::SR2_QE).await
+        }
+        QuadEnableMethod::Sr1Bit6 => {
+            let sr1 = read_status1(master).await?;
+            if sr1 & 0x40 != 0 {
+                return Ok(()); // Already enabled
+            }
+            write_status1_volatile(master, sr1 | 0x40).await
+        }
+        QuadEnableMethod::Sr2Bit7 => {
+            let sr2 = read_status2(master).await?;
+            if sr2 & 0x80 != 0 {
+                return Ok(()); // Already enabled
+            }
+            write_status2_direct_volatile(master, sr2 | 0x80).await
+        }
+        QuadEnableMethod::Sr2Bit1WriteSr2 => {
+            let sr2 = read_status2(master).await?;
+            if sr2 & opcodes::SR2_QE != 0 {
+                return Ok(()); // Already enabled
+            }
+            write_status2_direct_volatile(master, sr2 | opcodes::SR2_QE).await
+        }
+    }
+}
+
+/// Clear the QE bit with a volatile (non-persistent) status-register write.
+///
+/// Counterpart of `enable_quad_mode_volatile`, used to restore the
+/// pre-session QE state. Like flashprog's `spi_finish_io`, the caller tracks
+/// whether this session set the bit and only then calls this.
+pub(crate) async fn disable_quad_mode_volatile<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    method: QuadEnableMethod,
+) -> Result<()> {
+    match method {
+        QuadEnableMethod::None => Ok(()),
+        QuadEnableMethod::Sr2Bit1WriteSr => {
+            let sr1 = read_status1(master).await?;
+            let sr2 = read_status2(master).await?;
+            if sr2 & opcodes::SR2_QE == 0 {
+                return Ok(()); // Already disabled
+            }
+            write_status12_volatile(master, sr1, sr2 & !opcodes::SR2_QE).await
+        }
+        QuadEnableMethod::Sr1Bit6 => {
+            let sr1 = read_status1(master).await?;
+            if sr1 & 0x40 == 0 {
+                return Ok(()); // Already disabled
+            }
+            write_status1_volatile(master, sr1 & !0x40).await
+        }
+        QuadEnableMethod::Sr2Bit7 => {
+            let sr2 = read_status2(master).await?;
+            if sr2 & 0x80 == 0 {
+                return Ok(()); // Already disabled
+            }
+            write_status2_direct_volatile(master, sr2 & !0x80).await
+        }
+        QuadEnableMethod::Sr2Bit1WriteSr2 => {
+            let sr2 = read_status2(master).await?;
+            if sr2 & opcodes::SR2_QE == 0 {
+                return Ok(()); // Already disabled
+            }
+            write_status2_direct_volatile(master, sr2 & !opcodes::SR2_QE).await
+        }
+    }
+}
 /// Write SR2 directly using opcode 0x31
 async fn write_status2_direct<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> Result<()> {
     write_enable(master).await?;
@@ -942,122 +1143,670 @@ pub async fn is_quad_enabled<M: SpiMaster + ?Sized>(
 // QPI Mode Functions
 // ============================================================================
 
-/// Enter QPI mode (4-4-4)
+/// Enter QPI mode (4-4-4). Delegates to [`enter_qpi_with`].
 ///
 /// Different chips use different opcodes - common ones are 0x35 and 0x38.
 pub async fn enter_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) -> Result<()> {
-    let mut cmd = SpiCommand::simple(opcode);
-    master.execute(&mut cmd).await
+    enter_qpi_with(master, opcode).await
 }
 
-/// Exit QPI mode
+/// Exit QPI mode. Delegates to [`exit_qpi_with`].
 ///
 /// Common exit opcodes are 0xF5 and 0xFF.
 /// Note: This command must be sent in QPI mode (4-4-4).
 pub async fn exit_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) -> Result<()> {
-    let mut cmd = SpiCommand {
-        opcode,
-        address: None,
-        address_width: AddressWidth::None,
-        io_mode: IoMode::Qpi,
-        dummy_cycles: 0,
-        write_data: &[],
-        read_buf: &mut [],
-    };
-    master.execute(&mut cmd).await
+    exit_qpi_with(master, opcode).await
 }
 
 // ============================================================================
 // Read Mode Selection Helper
 // ============================================================================
 
-/// Select the best available read mode based on programmer and chip capabilities.
+/// A chosen read operation.
 ///
-/// Returns the I/O mode, opcode, and whether the selected opcode is a native
-/// 4-byte-address opcode. Prefers higher bandwidth modes:
-/// Quad I/O > Quad Out > Dual I/O > Dual Out > Single.
-pub fn select_read_mode(
-    master_features: SpiFeatures,
-    chip_features: crate::chip::Features,
-    try_native_4byte: bool,
-    mut opcode_supported: impl FnMut(u8) -> bool,
-) -> (IoMode, u8, bool) {
-    let chip_has_dual = chip_features.contains(crate::chip::Features::DUAL_IO);
-    let chip_has_quad = chip_features.contains(crate::chip::Features::QUAD_IO);
+/// Carries everything a programmer needs to issue a flash read:
+/// - `opcode`: the SPI command byte
+/// - `io_mode`: the wire format (Single / DualOut / DualIo / QuadOut / QuadIo / Qpi)
+/// - `dummy_cycles`: total number of clock cycles (at the I/O mode's lane
+///   count) between end-of-address and start-of-data. For 1-2-2 / 1-4-4 /
+///   4-4-4 reads this includes the mode-byte (M7-M0) time. Programmers
+///   emit these clocks as 0xFF on the wire, which is safe as an M byte
+///   (top nibble ≠ 0xA, so continuous-read mode is not enabled on
+///   Winbond-family chips).
+/// - `native_4ba`: true if the opcode is the native 4-byte-address variant
+///   (chip already expects a 4-byte address, no EN4B needed)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpiReadOp {
+    /// SPI opcode byte
+    pub opcode: u8,
+    /// IO mode for the transaction
+    pub io_mode: IoMode,
+    /// Dummy clock cycles between address and data (includes M byte time)
+    pub dummy_cycles: u8,
+    /// Number of address bytes emitted for the command.
+    ///
+    /// This is independent of `native_4ba`: regular opcodes use four address
+    /// bytes while the chip is in EN4B compatibility mode.
+    pub address_width: AddressWidth,
+    /// True if `opcode` is a native 4-byte-address variant
+    pub native_4ba: bool,
+}
 
-    if try_native_4byte && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR) {
-        let native_candidates: [(bool, SpiFeatures, IoMode, u8); 4] = [
-            (
-                chip_features.supports_4ba_quad_io_read(),
-                SpiFeatures::QUAD_IO,
-                IoMode::QuadIo,
-                opcodes::QIOR_4B,
-            ),
-            (
-                chip_features.supports_4ba_quad_out_read(),
-                SpiFeatures::QUAD_IN,
-                IoMode::QuadOut,
-                opcodes::QOR_4B,
-            ),
-            (
-                chip_features.supports_4ba_dual_io_read(),
-                SpiFeatures::DUAL_IO,
-                IoMode::DualIo,
-                opcodes::DIOR_4B,
-            ),
-            (
-                chip_features.supports_4ba_dual_out_read(),
-                SpiFeatures::DUAL_IN,
-                IoMode::DualOut,
-                opcodes::DOR_4B,
-            ),
-        ];
-
-        for (chip_capable, feature, mode, opcode) in native_candidates {
-            if chip_capable && master_features.contains(feature) && opcode_supported(opcode) {
-                return (mode, opcode, true);
-            }
-        }
-
-        if chip_features.supports_4ba_read() && opcode_supported(opcodes::READ_4B) {
-            return (IoMode::Single, opcodes::READ_4B, true);
+impl SpiReadOp {
+    /// Default `READ` (0x03), single I/O, 3-byte address, no dummy.
+    pub const fn sio_read() -> Self {
+        Self {
+            opcode: opcodes::READ,
+            io_mode: IoMode::Single,
+            dummy_cycles: 0,
+            address_width: AddressWidth::ThreeByte,
+            native_4ba: false,
         }
     }
 
-    // Compatibility-mode candidates. These opcodes may still be sent with a
-    // 32-bit address when the chip has been switched into 4BA mode.
-    let candidates: [(bool, SpiFeatures, IoMode, u8); 4] = [
-        (
-            chip_has_quad,
-            SpiFeatures::QUAD_IO,
-            IoMode::QuadIo,
-            opcodes::QIOR,
-        ),
-        (
-            chip_has_quad,
-            SpiFeatures::QUAD_IN,
-            IoMode::QuadOut,
-            opcodes::QOR,
-        ),
-        (
-            chip_has_dual,
-            SpiFeatures::DUAL_IO,
-            IoMode::DualIo,
-            opcodes::DIOR,
-        ),
-        (
-            chip_has_dual,
-            SpiFeatures::DUAL_IN,
-            IoMode::DualOut,
-            opcodes::DOR,
-        ),
+    /// Default `READ_4B` (0x13), single I/O, 4-byte address, no dummy.
+    pub const fn sio_read_4b() -> Self {
+        Self {
+            opcode: opcodes::READ_4B,
+            io_mode: IoMode::Single,
+            dummy_cycles: 0,
+            address_width: AddressWidth::FourByte,
+            native_4ba: true,
+        }
+    }
+
+    /// Address width implied by this read op.
+    pub const fn address_width(&self) -> AddressWidth {
+        self.address_width
+    }
+}
+
+/// Fine-grained chip capabilities for read-op selection.
+///
+/// This struct mirrors the relevant subset of `chip::Features` plus QPI mode
+/// state. It lets `select_read_op` stay free of direct chip-struct coupling
+/// (keeping `protocol` usable without the chip module).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChipReadCapabilities {
+    /// Chip supports `FAST_READ` (0x0B / 0x0C)
+    pub fast_read: bool,
+    /// Chip supports 1-1-2 fast read (0x3B / 0x3C)
+    pub dout: bool,
+    /// Chip supports 1-2-2 fast read (0xBB / 0xBC)
+    pub dio: bool,
+    /// Chip supports 1-1-4 fast read (0x6B / 0x6C)
+    pub qout: bool,
+    /// Chip supports 1-4-4 fast read (0xEB / 0xEC)
+    pub qio: bool,
+    /// Chip supports 4-4-4 QPI fast read
+    pub qpi_fast_read: bool,
+    /// Chip supports native 4BA QPI read (0xEC)
+    pub qpi4b: bool,
+    /// Chip has a native 4-byte-addr single-IO read (0x0C / 0x13)
+    pub native_4ba_read: bool,
+    /// Chip has native 4BA fast read (0x0C).
+    pub native_4ba_fast_read: bool,
+    /// Chip has native 4BA dual-output read (0x3C).
+    pub native_4ba_dout: bool,
+    /// Chip has native 4BA dual-I/O read (0xBC).
+    pub native_4ba_dio: bool,
+    /// Chip has native 4BA quad-output read (0x6C).
+    pub native_4ba_qout: bool,
+    /// Chip has native 4BA quad-I/O read (0xEC).
+    pub native_4ba_qio: bool,
+    /// Chip currently in QPI mode (4-4-4)
+    pub in_qpi_mode: bool,
+}
+
+/// Dummy-cycle overrides: `None` uses the JEDEC default; `Some(n)` is exact, including zero.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DummyCycleOverrides {
+    /// 1-1-2 dummy cycles (default 8)
+    pub dc_112: Option<u8>,
+    /// 1-2-2 dummy cycles (default 4)
+    pub dc_122: Option<u8>,
+    /// 1-1-4 dummy cycles (default 8)
+    pub dc_114: Option<u8>,
+    /// 1-4-4 dummy cycles (default 6)
+    pub dc_144: Option<u8>,
+    /// QPI fast-read dummy cycles, in total clocks (mode + dummy).
+    ///
+    /// Default 8 for QPI-framed 0x0B, 6 for QPI-framed 0xEB (the JEDEC 0xEB
+    /// default: 2 mode clocks + 4 dummy clocks).
+    pub dc_qpi: Option<u8>,
+}
+
+/// JEDEC-default dummy cycle counts for each multi-IO read mode.
+///
+/// These mirror the values used in `read_dual_out_*`, `read_dual_io_*`,
+/// `read_quad_out_*`, `read_quad_io_*` helpers below.
+pub const DEFAULT_DUMMY_CYCLES_112: u8 = 8;
+/// JEDEC default dummy cycles for 1-2-2 dual-I/O read (0xBB)
+pub const DEFAULT_DUMMY_CYCLES_122: u8 = 4;
+/// JEDEC default dummy cycles for 1-1-4 quad-output read (0x6B)
+pub const DEFAULT_DUMMY_CYCLES_114: u8 = 8;
+/// JEDEC default dummy cycles for 1-4-4 quad-I/O read (0xEB)
+pub const DEFAULT_DUMMY_CYCLES_144: u8 = 6;
+/// Default dummy cycles for QPI (4-4-4) FAST_READ (0x0B).
+pub const DEFAULT_DUMMY_CYCLES_QPI_FAST_READ: u8 = 8;
+
+fn effective_dc(override_val: Option<u8>, default: u8) -> u8 {
+    override_val.unwrap_or(default)
+}
+
+/// Select the best available read operation based on programmer and chip capabilities.
+///
+/// Mirrors flashprog's `select_qpi_fast_read` and `select_multi_io_fast_read`
+/// in `spi25_prepare.c`. Prefers QPI > quad > dual > single with 4BA-native
+/// variants preferred when the address needs 4 bytes.
+pub fn select_read_op(
+    master_features: SpiFeatures,
+    chip: ChipReadCapabilities,
+    dc: DummyCycleOverrides,
+    use_4byte: bool,
+    allow_compatibility_4ba: bool,
+    mut opcode_supported: impl FnMut(u8) -> bool,
+) -> Option<SpiReadOp> {
+    let address_width = if use_4byte {
+        AddressWidth::FourByte
+    } else {
+        AddressWidth::ThreeByte
+    };
+
+    // QPI mode: all phases use four data lines.
+    if chip.in_qpi_mode && master_features.contains(SpiFeatures::QPI) {
+        if use_4byte
+            && chip.qpi4b
+            && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
+            && opcode_supported(opcodes::QIOR_4B)
+        {
+            return Some(SpiReadOp {
+                opcode: opcodes::QIOR_4B,
+                io_mode: IoMode::Qpi,
+                dummy_cycles: effective_dc(dc.dc_qpi, DEFAULT_DUMMY_CYCLES_144),
+                address_width,
+                native_4ba: true,
+            });
+        }
+        if chip.qpi_fast_read
+            && (!use_4byte || allow_compatibility_4ba)
+            && opcode_supported(opcodes::QIOR)
+        {
+            return Some(SpiReadOp {
+                opcode: opcodes::QIOR,
+                io_mode: IoMode::Qpi,
+                dummy_cycles: effective_dc(dc.dc_qpi, DEFAULT_DUMMY_CYCLES_144),
+                address_width,
+                native_4ba: false,
+            });
+        }
+        if chip.fast_read
+            && (!use_4byte || allow_compatibility_4ba)
+            && opcode_supported(opcodes::FAST_READ)
+        {
+            return Some(SpiReadOp {
+                opcode: opcodes::FAST_READ,
+                io_mode: IoMode::Qpi,
+                dummy_cycles: effective_dc(dc.dc_qpi, DEFAULT_DUMMY_CYCLES_QPI_FAST_READ),
+                address_width,
+                native_4ba: false,
+            });
+        }
+    }
+
+    // A chip in QPI mode cannot execute single- or SPI-framed commands at
+    // all; unlike the SPI-mode fallbacks below, there is no degraded op to
+    // offer. flashprog instead exits QPI and retries (`spi_prepare_io`).
+    // Return None so the caller can do the same rather than bless a bogus op.
+    if chip.in_qpi_mode {
+        return None;
+    }
+
+    struct Candidate {
+        chip_capable: bool,
+        native_4ba_capable: bool,
+        master_feature: SpiFeatures,
+        io_mode: IoMode,
+        opcode: u8,
+        opcode_4ba: u8,
+        default_dummy_cycles: u8,
+        dummy_cycles_override: Option<u8>,
+    }
+
+    let candidates = [
+        Candidate {
+            chip_capable: chip.qio,
+            native_4ba_capable: chip.native_4ba_qio,
+            master_feature: SpiFeatures::QUAD_IO,
+            io_mode: IoMode::QuadIo,
+            opcode: opcodes::QIOR,
+            opcode_4ba: opcodes::QIOR_4B,
+            default_dummy_cycles: DEFAULT_DUMMY_CYCLES_144,
+            dummy_cycles_override: dc.dc_144,
+        },
+        Candidate {
+            chip_capable: chip.qout,
+            native_4ba_capable: chip.native_4ba_qout,
+            master_feature: SpiFeatures::QUAD_IN,
+            io_mode: IoMode::QuadOut,
+            opcode: opcodes::QOR,
+            opcode_4ba: opcodes::QOR_4B,
+            default_dummy_cycles: DEFAULT_DUMMY_CYCLES_114,
+            dummy_cycles_override: dc.dc_114,
+        },
+        Candidate {
+            chip_capable: chip.dio,
+            native_4ba_capable: chip.native_4ba_dio,
+            master_feature: SpiFeatures::DUAL_IO,
+            io_mode: IoMode::DualIo,
+            opcode: opcodes::DIOR,
+            opcode_4ba: opcodes::DIOR_4B,
+            default_dummy_cycles: DEFAULT_DUMMY_CYCLES_122,
+            dummy_cycles_override: dc.dc_122,
+        },
+        Candidate {
+            chip_capable: chip.dout,
+            native_4ba_capable: chip.native_4ba_dout,
+            master_feature: SpiFeatures::DUAL_IN,
+            io_mode: IoMode::DualOut,
+            opcode: opcodes::DOR,
+            opcode_4ba: opcodes::DOR_4B,
+            default_dummy_cycles: DEFAULT_DUMMY_CYCLES_112,
+            dummy_cycles_override: dc.dc_112,
+        },
     ];
 
-    for (chip_capable, feature, mode, opcode) in candidates {
-        if chip_capable && master_features.contains(feature) && opcode_supported(opcode) {
-            return (mode, opcode, false);
+    for candidate in candidates {
+        if !candidate.chip_capable || !master_features.contains(candidate.master_feature) {
+            continue;
+        }
+
+        if use_4byte
+            && candidate.native_4ba_capable
+            && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
+            && opcode_supported(candidate.opcode_4ba)
+        {
+            return Some(SpiReadOp {
+                opcode: candidate.opcode_4ba,
+                io_mode: candidate.io_mode,
+                dummy_cycles: effective_dc(
+                    candidate.dummy_cycles_override,
+                    candidate.default_dummy_cycles,
+                ),
+                address_width,
+                native_4ba: true,
+            });
+        }
+
+        if (!use_4byte || allow_compatibility_4ba) && opcode_supported(candidate.opcode) {
+            return Some(SpiReadOp {
+                opcode: candidate.opcode,
+                io_mode: candidate.io_mode,
+                dummy_cycles: effective_dc(
+                    candidate.dummy_cycles_override,
+                    candidate.default_dummy_cycles,
+                ),
+                address_width,
+                native_4ba: false,
+            });
         }
     }
 
-    (IoMode::Single, opcodes::READ, false)
+    if use_4byte && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR) {
+        if chip.native_4ba_read && opcode_supported(opcodes::READ_4B) {
+            return Some(SpiReadOp::sio_read_4b());
+        }
+        if chip.fast_read && chip.native_4ba_fast_read && opcode_supported(opcodes::FAST_READ_4B) {
+            return Some(SpiReadOp {
+                opcode: opcodes::FAST_READ_4B,
+                io_mode: IoMode::Single,
+                dummy_cycles: 8,
+                address_width,
+                native_4ba: true,
+            });
+        }
+    }
+
+    if chip.fast_read
+        && (!use_4byte || allow_compatibility_4ba)
+        && opcode_supported(opcodes::FAST_READ)
+    {
+        return Some(SpiReadOp {
+            opcode: opcodes::FAST_READ,
+            io_mode: IoMode::Single,
+            dummy_cycles: 8,
+            address_width,
+            native_4ba: false,
+        });
+    }
+
+    if (use_4byte && !allow_compatibility_4ba) || !opcode_supported(opcodes::READ) {
+        return None;
+    }
+
+    Some(SpiReadOp {
+        opcode: opcodes::READ,
+        io_mode: IoMode::Single,
+        dummy_cycles: 0,
+        address_width,
+        native_4ba: false,
+    })
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn all_mio_caps() -> ChipReadCapabilities {
+        ChipReadCapabilities {
+            fast_read: true,
+            dout: true,
+            dio: true,
+            qout: true,
+            qio: true,
+            qpi_fast_read: false,
+            qpi4b: false,
+            native_4ba_read: true,
+            native_4ba_fast_read: true,
+            native_4ba_dout: true,
+            native_4ba_dio: true,
+            native_4ba_qout: true,
+            native_4ba_qio: true,
+            in_qpi_mode: false,
+        }
+    }
+
+    #[test]
+    fn select_quad_io_when_both_sides_support() {
+        let master = SpiFeatures::FOUR_BYTE_ADDR
+            | SpiFeatures::DUAL_IN
+            | SpiFeatures::DUAL_IO
+            | SpiFeatures::QUAD_IN
+            | SpiFeatures::QUAD_IO;
+        let op = select_read_op(
+            master,
+            all_mio_caps(),
+            DummyCycleOverrides::default(),
+            false,
+            true,
+            |_| true,
+        )
+        .expect("read operation should be selectable");
+        assert_eq!(op.io_mode, IoMode::QuadIo);
+        assert_eq!(op.opcode, opcodes::QIOR);
+        assert_eq!(op.dummy_cycles, DEFAULT_DUMMY_CYCLES_144);
+        assert!(!op.native_4ba);
+    }
+
+    #[test]
+    fn select_quad_io_4b_when_4byte_addressing() {
+        let master = SpiFeatures::FOUR_BYTE_ADDR | SpiFeatures::QUAD_IN | SpiFeatures::QUAD_IO;
+        let op = select_read_op(
+            master,
+            all_mio_caps(),
+            DummyCycleOverrides::default(),
+            true,
+            true,
+            |_| true,
+        )
+        .expect("read operation should be selectable");
+        assert_eq!(op.io_mode, IoMode::QuadIo);
+        assert_eq!(op.opcode, opcodes::QIOR_4B);
+        assert_eq!(op.address_width, AddressWidth::FourByte);
+        assert!(op.native_4ba);
+    }
+
+    #[test]
+    fn four_byte_quad_io_falls_back_to_regular_opcode_in_en4b_mode() {
+        let master = SpiFeatures::FOUR_BYTE_ADDR | SpiFeatures::QUAD_IO;
+        let mut caps = all_mio_caps();
+        caps.native_4ba_qio = false;
+        let op = select_read_op(
+            master,
+            caps,
+            DummyCycleOverrides::default(),
+            true,
+            true,
+            |_| true,
+        )
+        .expect("read operation should be selectable");
+        assert_eq!(op.opcode, opcodes::QIOR);
+        assert_eq!(op.address_width, AddressWidth::FourByte);
+        assert!(!op.native_4ba);
+    }
+
+    #[test]
+    fn rejected_native_opcode_falls_back_to_regular_opcode() {
+        let master = SpiFeatures::FOUR_BYTE_ADDR | SpiFeatures::QUAD_IO;
+        let op = select_read_op(
+            master,
+            all_mio_caps(),
+            DummyCycleOverrides::default(),
+            true,
+            true,
+            |opcode| opcode != opcodes::QIOR_4B,
+        )
+        .expect("read operation should be selectable");
+        assert_eq!(op.opcode, opcodes::QIOR);
+        assert_eq!(op.address_width, AddressWidth::FourByte);
+        assert!(!op.native_4ba);
+    }
+
+    #[test]
+    fn four_byte_selection_fails_without_native_or_compatibility_addressing() {
+        let caps = ChipReadCapabilities {
+            fast_read: true,
+            ..Default::default()
+        };
+        let op = select_read_op(
+            SpiFeatures::empty(),
+            caps,
+            DummyCycleOverrides::default(),
+            true,
+            false,
+            |_| true,
+        );
+        assert!(op.is_none());
+    }
+
+    #[test]
+    fn fallback_to_dual_io_when_master_lacks_quad() {
+        let master = SpiFeatures::DUAL_IN | SpiFeatures::DUAL_IO;
+        let op = select_read_op(
+            master,
+            all_mio_caps(),
+            DummyCycleOverrides::default(),
+            false,
+            true,
+            |_| true,
+        )
+        .expect("read operation should be selectable");
+        assert_eq!(op.io_mode, IoMode::DualIo);
+        assert_eq!(op.opcode, opcodes::DIOR);
+        assert_eq!(op.dummy_cycles, DEFAULT_DUMMY_CYCLES_122);
+    }
+
+    #[test]
+    fn fallback_to_dual_out_when_chip_lacks_dio() {
+        let master = SpiFeatures::DUAL_IN | SpiFeatures::DUAL_IO;
+        let mut caps = all_mio_caps();
+        caps.dio = false;
+        caps.qio = false;
+        caps.qout = false;
+        let op = select_read_op(
+            master,
+            caps,
+            DummyCycleOverrides::default(),
+            false,
+            true,
+            |_| true,
+        )
+        .expect("read operation should be selectable");
+        assert_eq!(op.io_mode, IoMode::DualOut);
+        assert_eq!(op.opcode, opcodes::DOR);
+    }
+
+    #[test]
+    fn fallback_to_single_when_no_multiio() {
+        let master = SpiFeatures::empty();
+        let caps = ChipReadCapabilities {
+            fast_read: true,
+            ..Default::default()
+        };
+        let op = select_read_op(
+            master,
+            caps,
+            DummyCycleOverrides::default(),
+            false,
+            true,
+            |_| true,
+        )
+        .expect("read operation should be selectable");
+        assert_eq!(op.io_mode, IoMode::Single);
+        assert_eq!(op.opcode, opcodes::FAST_READ);
+    }
+
+    #[test]
+    fn dummy_cycle_overrides_apply() {
+        let master = SpiFeatures::QUAD_IN | SpiFeatures::QUAD_IO;
+        let dc = DummyCycleOverrides {
+            dc_144: Some(10),
+            ..Default::default()
+        };
+        let op = select_read_op(master, all_mio_caps(), dc, false, true, |_| true)
+            .expect("read operation should be selectable");
+        assert_eq!(op.io_mode, IoMode::QuadIo);
+        assert_eq!(op.dummy_cycles, 10);
+    }
+
+    #[test]
+    fn qpi_mode_uses_qpi_framing() {
+        let master = SpiFeatures::QPI | SpiFeatures::QUAD_IN | SpiFeatures::QUAD_IO;
+        let mut caps = all_mio_caps();
+        caps.in_qpi_mode = true;
+        caps.qpi_fast_read = true;
+        let op = select_read_op(
+            master,
+            caps,
+            DummyCycleOverrides::default(),
+            false,
+            true,
+            |_| true,
+        )
+        .expect("read operation should be selectable");
+        assert_eq!(op.io_mode, IoMode::Qpi);
+        assert_eq!(op.opcode, opcodes::QIOR);
+    }
+
+    #[test]
+    fn qpi_mode_uses_4b_opcode_when_supported_and_addr_4byte() {
+        let master = SpiFeatures::QPI | SpiFeatures::FOUR_BYTE_ADDR;
+        let mut caps = all_mio_caps();
+        caps.in_qpi_mode = true;
+        caps.qpi_fast_read = true;
+        caps.qpi4b = true;
+        let op = select_read_op(
+            master,
+            caps,
+            DummyCycleOverrides::default(),
+            true,
+            true,
+            |_| true,
+        )
+        .expect("read operation should be selectable");
+        assert_eq!(op.io_mode, IoMode::Qpi);
+        assert_eq!(op.opcode, opcodes::QIOR_4B);
+        assert!(op.native_4ba);
+    }
+
+    #[test]
+    fn qpi_dummy_cycles_default_per_opcode() {
+        let master = SpiFeatures::QPI | SpiFeatures::FOUR_BYTE_ADDR;
+        let mut caps = all_mio_caps();
+        caps.in_qpi_mode = true;
+        caps.qpi_fast_read = true;
+        caps.qpi4b = true;
+
+        // QIOR_4B falls back to the 1-4-4 default.
+        let op = select_read_op(
+            master,
+            caps,
+            DummyCycleOverrides::default(),
+            true,
+            true,
+            |_| true,
+        )
+        .expect("read operation should be selectable");
+        assert_eq!(op.opcode, opcodes::QIOR_4B);
+        assert_eq!(op.dummy_cycles, DEFAULT_DUMMY_CYCLES_144);
+
+        // QPI FAST_READ (no QIOR support) falls back to its own 8-cycle default.
+        let op = select_read_op(
+            master,
+            caps,
+            DummyCycleOverrides::default(),
+            false,
+            true,
+            |opcode| opcode != opcodes::QIOR,
+        )
+        .expect("read operation should be selectable");
+        assert_eq!(op.opcode, opcodes::FAST_READ);
+        assert_eq!(op.io_mode, IoMode::Qpi);
+        assert_eq!(op.dummy_cycles, DEFAULT_DUMMY_CYCLES_QPI_FAST_READ);
+
+        // A dc_qpi override wins over both opcode-specific defaults.
+        let dc = DummyCycleOverrides {
+            dc_qpi: Some(10),
+            ..Default::default()
+        };
+        let op = select_read_op(master, caps, dc, true, true, |_| true)
+            .expect("read operation should be selectable");
+        assert_eq!(op.opcode, opcodes::QIOR_4B);
+        assert_eq!(op.dummy_cycles, 10);
+    }
+
+    #[test]
+    fn qpi_fast_read_requires_chip_fast_read() {
+        let master = SpiFeatures::QPI;
+        let mut caps = all_mio_caps();
+        caps.in_qpi_mode = true;
+        caps.fast_read = false;
+        // No QPI-suitable op exists for this chip (no qpi_fast_read, no
+        // fast_read to reframe): selection must fail rather than hand back
+        // a single-IO 0x03 the QPI-mode chip could not execute. Callers
+        // (mirroring flashprog's spi_prepare_io) exit QPI and retry.
+        assert!(
+            select_read_op(
+                master,
+                caps,
+                DummyCycleOverrides::default(),
+                false,
+                true,
+                |_| true,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn sio_read_defaults() {
+        let op = SpiReadOp::sio_read();
+        assert_eq!(op.opcode, opcodes::READ);
+        assert_eq!(op.io_mode, IoMode::Single);
+        assert_eq!(op.dummy_cycles, 0);
+        assert!(!op.native_4ba);
+        assert_eq!(op.address_width(), AddressWidth::ThreeByte);
+    }
+
+    #[test]
+    fn sio_read_4b_defaults() {
+        let op = SpiReadOp::sio_read_4b();
+        assert_eq!(op.opcode, opcodes::READ_4B);
+        assert!(op.native_4ba);
+        assert_eq!(op.address_width(), AddressWidth::FourByte);
+    }
 }

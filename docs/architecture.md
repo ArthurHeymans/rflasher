@@ -46,3 +46,76 @@ platform-specific access layer by implementing `rflasher_internal::HostAccess`:
 
 See [crates/rflasher-internal/README.md](../crates/rflasher-internal/README.md)
 for details.
+
+## Operation-scoped SPI I/O
+
+`flash/io.rs` selects small immutable `ReadPlan`, `WritePlan`, and `ErasePlan`
+values using chip capabilities and pure backend representability checks. Program
+addressing is independent of read addressing. Native four-byte opcodes,
+compatibility EN4B, and EAR are explicit alternatives; residual commands share
+the selected address strategy. Selection rejects unrepresentable dummy timing
+and unsupported/unknown QE sequences without speculative register writes. Per-chip
+`dummy_cycles_*` overrides and `DummyCycleOverrides` use `Option<u8>`: `None`
+selects the JEDEC default, while `Some(0)` means exactly zero clocks. RON may
+omit these fields or supply `Some(n)`; SFDP stores supported descriptor totals
+as `Some(mode + wait)`. Resolved command timing remains a plain `u8`. QPI
+entry remains disabled.
+
+`SpiFlashDevice` and `HybridFlashDevice` retain only a binary recovery-required
+latch. One shared async bracket owns temporary addressing and (reads only) QE
+around the **entire requested operation**, including every bulk chunk and
+unaligned head/tail. Undo obligations are recorded before mutation submission.
+Normal errors still reach cleanup: wait for idle, disable writes, restore owned
+QE, restore EAR or exit owned EN4B. Independent cleanup is attempted even when
+one restoration fails. Pre-existing QE and unrelated status bits are preserved.
+A cleanup failure takes precedence over the operation error (both are logged).
+Uncertain firmware failures bypass all ordinary SPI cleanup, including RDSR:
+without a firmware quiescence barrier, even an idle flash may receive further
+firmware commands. The latch stays armed and explicit recovery owns restoration.
+Persistent WP uses the same lifecycle but never enters a read-QE scope. Modern
+persistent status writes use WREN; mandatory legacy EWSR remains distinct from
+optional volatile writes.
+
+Hybrid paths use explicit `OpaqueMaster::*_planned` calls. Defaults report no
+support and fail before I/O, never silently discard a plan. Dediprog retains
+aligned firmware READ/bulk IN and WRITE/padded bulk OUT, with explicitly planned
+single-I/O residuals and bank-boundary splitting. V2 uses native four-byte packet
+framing, not an inferred address width; compatibility-four-byte program is V3
+only. V2 bulk `0x13` is not silently substituted with `0x0c`: selection must
+explicitly authorize a native fast-read command. When no bulk read plan is
+representable, Hybrid selects a separate single-I/O SPI plan before setup;
+failed bulk reads are never retried through SPI. Writes require backend plan
+support, including V2's native-PP/EAR restriction. Sunxi retains firmware bulk
+read, batched program, and erase with on-SoC busy polling. Firmware erase versus
+SPI fallback is chosen **before** hardware I/O; a firmware failure never triggers
+a SPI retry. Erase completes and cleans up before a fresh single-I/O verification
+scope. Raw opaque APIs remain available on genuinely opaque programmers; the
+SPI-backed Dediprog/Sunxi paths require chip plans instead of guessed metadata.
+
+### Baseline and cancellation
+
+Adapter construction and probing assume the caller has established an idle,
+ordinary-SPI, three-byte command baseline. JEDEC identification does **not**
+establish that baseline; there is no universally safe generic chip reset.
+EAR is read and restored for operations that use it. Callers must ensure bank
+zero for ordinary three-byte operations. Connection to a previously used flash
+must not be mistaken for a reset.
+
+The adapter's latch is armed before the first hardware await. Dropping a polled
+future performs no async cleanup and leaves the latch armed. Every adapter I/O
+and WP entry point rejects subsequent access until explicit **hardware recovery
+and reprobe**; there is no transparent latch-reset/reprepare method. Opaque
+firmware failures also require recovery because a status read alone cannot prove
+the firmware command engine has stopped. `master()` and `into_parts()` are
+low-level escapes whose callers inherit this responsibility. The low-level free
+SPI functions likewise leave cancellation recovery to their caller.
+
+The CLI and registry need no preparation or temporary-state teardown plumbing.
+The browser discards an adapter's master after failed cleanup rather than
+reconstructing a healthy adapter on uncertain hardware. Disconnect/reconnect
+alone is **not** a promise of chip recovery. Unrelated programmer resource
+shutdown remains backend-owned.
+
+Chip capabilities and QE metadata live in `rflasher-chip-types` and the vendor
+RON database, with conservative SFDP conversion. Erased SPI dispatch forwards
+exact dummy-clock representability as well as opcode and I/O-mode capabilities.

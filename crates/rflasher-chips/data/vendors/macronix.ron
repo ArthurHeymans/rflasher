@@ -114,7 +114,7 @@
             name: "MX25L1605D",
             device_id: 0x2015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true),
+            features: (wrsr_wren: true, fast_read: true, fast_read_dio: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -128,7 +128,8 @@
             name: "MX25L1635D",
             device_id: 0x2415,
             total_size: MiB(2),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_qio: true, fast_read_dio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -142,7 +143,8 @@
             name: "MX25L1635E",
             device_id: 0x2515,
             total_size: MiB(2),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_qio: true, fast_read_dio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -184,7 +186,7 @@
             name: "MX25L3205D",
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, otp: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, fast_read_dio: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -198,7 +200,7 @@
             name: "MX25L3206E",
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, otp: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -213,7 +215,8 @@
             name: "MX25L3233F",
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_dio: true, fast_read_dout: true, fast_read_qout: true, fast_read_qio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -228,7 +231,8 @@
             name: "MX25L3235D",
             device_id: 0x5E16,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_qio: true, fast_read_dio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -242,7 +246,7 @@
             name: "MX25L6405",
             device_id: 0x2017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 128)]),
@@ -255,7 +259,7 @@
             name: "MX25L6405D",
             device_id: 0x2017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true),
+            features: (wrsr_wren: true, fast_read: true, fast_read_dio: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -269,7 +273,7 @@
             name: "MX25L6406E",
             device_id: 0x2017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, otp: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -283,7 +287,8 @@
             name: "MX25L6436E",
             device_id: 0x2017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -298,7 +303,7 @@
             name: "MX25L6495F",
             device_id: 0x9517,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -327,7 +332,8 @@
             name: "MX25L12833F",
             device_id: 0x2018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_dio: true, fast_read_qio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -342,7 +348,8 @@
             name: "MX25L25635F",
             device_id: 0x2019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true, fast_read_dout: true, fast_read_dio: true, fast_read_qout: true, fast_read_qio: true, fast_read_qpi4b: true, qpi_35_f5: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 8192)]),
@@ -357,7 +364,7 @@
             name: "MX66L51235F",
             device_id: 0x201A,
             total_size: MiB(64),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, ext_addr_reg_c5c8: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, ext_addr_reg_c5c8: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 16384)]),
@@ -372,7 +379,7 @@
             name: "MX66L1G45G",
             device_id: 0x201B,
             total_size: MiB(128),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, ext_addr_reg_c5c8: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, ext_addr_reg_c5c8: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 32768)]),
@@ -388,7 +395,8 @@
             name: "MX25U8032E",
             device_id: 0x2534,
             total_size: MiB(1),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_qio: true, fast_read_dio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -403,7 +411,8 @@
             name: "MX25U1635E",
             device_id: 0x2535,
             total_size: MiB(2),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_qio: true, qpi_35_f5: true, fast_read_dio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -418,7 +427,8 @@
             name: "MX25U3235E",
             device_id: 0x2536,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_dio: true, fast_read_qio: true, qpi_35_f5: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -433,7 +443,8 @@
             name: "MX25U6435E",
             device_id: 0x2537,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_dio: true, fast_read_qio: true, qpi_35_f5: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -448,7 +459,8 @@
             name: "MX25U12835F",
             device_id: 0x2538,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, qpi_35_f5: true, fast_read_dout: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -463,7 +475,8 @@
             name: "MX25U25635F",
             device_id: 0x2539,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true, fast_read_dout: true, fast_read_qpi4b: true, fast_read_qout: true, qpi_35_f5: true, fast_read_dio: true, fast_read_qio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 8192)]),
@@ -478,7 +491,8 @@
             name: "MX25U51245G",
             device_id: 0x253A,
             total_size: MiB(64),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true, fast_read_dout: true, fast_read_qpi4b: true, fast_read_qout: true, qpi_35_f5: true, fast_read_dio: true, fast_read_qio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 16384)]),
@@ -495,7 +509,8 @@
             name: "MX25R3235F",
             device_id: 0x2816,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_dio: true, fast_read_qio: true, fast_read_qout: true, fast_read_dout: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -510,7 +525,8 @@
             name: "MX25R6435F",
             device_id: 0x2817,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wrsr_wren: true, fast_read: true, otp: true, status_reg_2: true, fast_read_dio: true, fast_read_qio: true, fast_read_qout: true, fast_read_dout: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -525,7 +541,7 @@
             name: "MX25L1005(C)/MX25L1006E",
             device_id: 0x2011,
             total_size: KiB(128),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
@@ -539,7 +555,8 @@
             name: "MX25L12833F/MX25L12835F/MX25L12845E/MX25L12865E/MX25L12873F",
             device_id: 0x2018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, qpi: true),
+            features: (wrsr_wren: true, otp: true, fast_read: true, fast_read_qio: true, fast_read_dio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -554,7 +571,7 @@
             name: "MX25L1605A/MX25L1606E/MX25L1608E",
             device_id: 0x2015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true),
+            features: (wrsr_wren: true, otp: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -569,7 +586,7 @@
             name: "MX25L1605D/MX25L1608D/MX25L1673E",
             device_id: 0x2015,
             total_size: MiB(2),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true, fast_read_dio: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -583,7 +600,7 @@
             name: "MX25L2005(C)/MX25L2006E",
             device_id: 0x2012,
             total_size: KiB(256),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -598,7 +615,8 @@
             name: "MX25L25635F/MX25L25645G",
             device_id: 0x2019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, dual_io: true, quad_io: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, fast_read_dout: true, fast_read_qpi4b: true, fast_read: true, fast_read_qout: true, qpi_35_f5: true, fast_read_dio: true, fast_read_qio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 8192)]),
@@ -613,7 +631,7 @@
             name: "MX25L3205(A)",
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(64), count: 64)]),
@@ -627,7 +645,7 @@
             name: "MX25L3205D/MX25L3208D",
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true),
+            features: (wrsr_wren: true, otp: true, fast_read: true, fast_read_dio: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -641,7 +659,7 @@
             name: "MX25L3206E/MX25L3208E",
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true),
+            features: (wrsr_wren: true, otp: true, fast_read: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -656,7 +674,8 @@
             name: "MX25L3233F/MX25L3273E",
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true),
+            features: (wrsr_wren: true, otp: true, fast_read_dout: true, fast_read: true, fast_read_qio: true, fast_read_qout: true, fast_read_dio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -671,7 +690,7 @@
             name: "MX25L4005(A/C)/MX25L4006E",
             device_id: 0x2013,
             total_size: KiB(512),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -686,7 +705,7 @@
             name: "MX25L512(E)/MX25V512(C)",
             device_id: 0x2010,
             total_size: KiB(64),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
@@ -701,7 +720,7 @@
             name: "MX25L6406E/MX25L6408E",
             device_id: 0x2017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true),
+            features: (wrsr_wren: true, otp: true, fast_read: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -716,7 +735,8 @@
             name: "MX25L6436E/MX25L6445E/MX25L6465E/MX25L6473E/MX25L6473F",
             device_id: 0x2017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true),
+            features: (wrsr_wren: true, otp: true, fast_read: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -731,7 +751,7 @@
             name: "MX25L8005/MX25L8006E/MX25L8008E/MX25V8005",
             device_id: 0x2014,
             total_size: MiB(1),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -746,7 +766,8 @@
             name: "MX25U3235E/F",
             device_id: 0x2536,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, qpi: true),
+            features: (wrsr_wren: true, otp: true, fast_read: true, fast_read_qio: true, qpi_35_f5: true, fast_read_dio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -761,7 +782,8 @@
             name: "MX25U6435E/F",
             device_id: 0x2537,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, qpi: true),
+            features: (wrsr_wren: true, otp: true, fast_read: true, fast_read_qio: true, qpi_35_f5: true, fast_read_dio: true),
+            qe_method: Sr1Bit6,
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
