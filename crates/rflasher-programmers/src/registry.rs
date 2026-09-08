@@ -1065,10 +1065,6 @@ async fn open_sunxi_fel(
     let chip_info = ChipInfo::from(result);
     let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
 
-    // Configure OpaqueMaster with chip info discovered during probe
-    master.set_use_4byte_addr(ctx.total_size() > 16 * 1024 * 1024);
-    master.set_erase_blocks(ctx.chip.erase_blocks().to_vec());
-
     // Use HybridFlashDevice: OpaqueMaster for fast bulk read/write/erase
     // (batched SPI commands with on-SoC busy-wait), SpiMaster for WP and
     // status register access
@@ -1121,7 +1117,7 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         name: "dediprog",
         aliases: &["dediprog_spi"],
         description:
-            "Dediprog SF100/SF200/SF600/SF700 USB SPI (voltage=<V>,spispeed=<speed>,target=<1|2>)",
+            "Dediprog SF100/SF200/SF600/SF700 USB SPI (voltage=<V>,spispeed=<speed>,target=<1|2>,iomode=<auto|single|dual|quad>)",
     });
 
     #[cfg(feature = "serprog-native")]

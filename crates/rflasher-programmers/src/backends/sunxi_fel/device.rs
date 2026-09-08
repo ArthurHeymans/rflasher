@@ -23,9 +23,8 @@
 //! - WP/status regs   → SpiMaster (generic SPI commands)
 
 use nusb::transfer::{Bulk, In, Out};
-use rflasher_core::chip::EraseBlock;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
-use rflasher_core::flash::select_erase_block;
+use rflasher_core::flash::io::{AddressPlan, ErasePlan, ReadPlan, WritePlan};
 use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
 use rflasher_core::spi::SpiCommand;
 
@@ -40,13 +39,6 @@ pub struct SunxiFel {
     chip: ChipFamily,
     spi_info: SpiPayloadInfo,
     _interface: nusb::Interface,
-    /// Whether to use 4-byte addressing for OpaqueMaster read/write.
-    /// Set after probing via `set_use_4byte_addr()` when the flash is >16MB.
-    use_4byte_addr: bool,
-    /// Chip erase block table, set after probing via `set_erase_blocks()`.
-    /// Used by `OpaqueMaster::erase()` to select the correct opcode and
-    /// block size from the chip's actual capabilities (from RON database or SFDP).
-    erase_blocks: Vec<EraseBlock>,
 }
 
 impl SunxiFel {
@@ -140,27 +132,7 @@ impl SunxiFel {
             chip,
             spi_info,
             _interface: interface,
-            use_4byte_addr: false,
-            erase_blocks: Vec::new(),
         })
-    }
-
-    /// Set the chip's erase block table for `OpaqueMaster::erase()`.
-    ///
-    /// Call this after probing with the chip's erase blocks from the RON
-    /// database or SFDP. Without this, `OpaqueMaster::erase()` will return
-    /// an error and the hybrid adapter falls back to SPI-based erase.
-    pub fn set_erase_blocks(&mut self, blocks: Vec<EraseBlock>) {
-        self.erase_blocks = blocks;
-    }
-
-    /// Set whether to use 4-byte addressing for bulk read/write operations.
-    ///
-    /// Call this after probing if the flash chip requires 4-byte addressing
-    /// (i.e., capacity >16 MiB). This affects `OpaqueMaster::read()` and
-    /// `OpaqueMaster::write()`.
-    pub fn set_use_4byte_addr(&mut self, use_4byte: bool) {
-        self.use_4byte_addr = use_4byte;
     }
 
     /// Get the detected SoC name
@@ -287,37 +259,7 @@ impl SunxiFel {
     /// `spinor_sector_erase_*` functions. The SoC firmware handles busy-wait
     /// locally, so there are no USB round-trips for status polling.
     fn erase_block_bytecode(&mut self, opcode: u8, addr: u32, use_4byte: bool) -> Result<()> {
-        let fast_len: u8 = if use_4byte { 5 } else { 4 }; // opcode + addr bytes
-
-        let mut cbuf = Vec::with_capacity(32);
-
-        // WREN
-        cbuf.push(spi_cmd::SELECT);
-        cbuf.push(spi_cmd::FAST);
-        cbuf.push(1);
-        cbuf.push(0x06); // WREN opcode
-        cbuf.push(spi_cmd::DESELECT);
-
-        // Erase command (opcode + address)
-        cbuf.push(spi_cmd::SELECT);
-        cbuf.push(spi_cmd::FAST);
-        cbuf.push(fast_len);
-        cbuf.push(opcode);
-        if use_4byte {
-            cbuf.push((addr >> 24) as u8);
-        }
-        cbuf.push((addr >> 16) as u8);
-        cbuf.push((addr >> 8) as u8);
-        cbuf.push(addr as u8);
-        cbuf.push(spi_cmd::DESELECT);
-
-        // Wait for erase to complete (on-SoC RDSR polling)
-        cbuf.push(spi_cmd::SELECT);
-        cbuf.push(spi_cmd::SPINOR_WAIT);
-        cbuf.push(spi_cmd::DESELECT);
-
-        cbuf.push(spi_cmd::END);
-
+        let cbuf = erase_bytecode(opcode, addr, use_4byte);
         chips::spi_run(&mut self.transport, &self.spi_info, &cbuf)
     }
 
@@ -337,10 +279,10 @@ impl SunxiFel {
         addr: u32,
         data: &[u8],
         page_size: usize,
+        pp_opcode: u8,
         use_4byte: bool,
     ) -> Result<()> {
         let addr_len: usize = if use_4byte { 4 } else { 3 };
-        let pp_opcode: u8 = 0x02; // Page Program
         let wren_opcode: u8 = 0x06;
 
         // Per-page overhead:
@@ -426,10 +368,15 @@ impl SunxiFel {
     /// the command buffer via SPI_CMD_FAST, then receives data via RXBUF.
     /// This eliminates the separate FEL write for TX data that `spi_xfer`
     /// would do, saving ~9 USB transfers per chunk.
-    fn fast_read(&mut self, addr: u32, buf: &mut [u8], use_4byte: bool) -> Result<()> {
+    fn fast_read(
+        &mut self,
+        addr: u32,
+        buf: &mut [u8],
+        read_opcode: u8,
+        use_4byte: bool,
+    ) -> Result<()> {
         let swapbuf = self.spi_info.swapbuf;
         let swaplen = self.spi_info.swaplen as usize;
-        let read_opcode: u8 = 0x03; // READ
         let addr_len: usize = if use_4byte { 4 } else { 3 };
 
         let mut offset = 0usize;
@@ -490,6 +437,10 @@ impl SpiMaster for SunxiFel {
     }
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        rflasher_core::spi::check_io_mode_supported(cmd.io_mode, self.features())?;
+        if !rflasher_core::spi::dummy_cycles_representable(cmd.io_mode, cmd.dummy_cycles) {
+            return Err(CoreError::ProgrammerError);
+        }
         let header_len = cmd.header_len();
         let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
         cmd.encode_header(&mut write_data);
@@ -515,46 +466,188 @@ impl OpaqueMaster for SunxiFel {
         0
     }
 
-    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
-        self.fast_read(addr, buf, self.use_4byte_addr)
-            .map_err(|_| CoreError::ReadError { addr })
+    fn supports_read_plan(&self, plan: &ReadPlan) -> bool {
+        plan.op.io_mode == rflasher_core::spi::IoMode::Single
+            && plan.op.dummy_cycles == 0
+            && plan.op.address_width == plan.address.width()
+            && plan.op.opcode
+                == if plan.address == AddressPlan::NativeFourByte {
+                    0x13
+                } else {
+                    0x03
+                }
+            && self.spi_info.swaplen > 0
+    }
+    fn supports_write_plan(&self, plan: &WritePlan) -> bool {
+        plan.page_size > 0
+            && plan.page_size + 5 <= self.spi_info.swaplen as usize
+            && self.spi_info.cmdlen > 20
+            && plan.granularity == rflasher_core::chip::WriteGranularity::Page
+            && plan.opcode
+                == if plan.address == AddressPlan::NativeFourByte {
+                    0x12
+                } else {
+                    0x02
+                }
+    }
+    fn supports_erase_plan(&self, plan: &ErasePlan) -> bool {
+        plan.block.max_block_size() > 0
+    }
+    // SPI metadata is mandatory for this hybrid programmer too.
+    async fn read(&mut self, _addr: u32, _buf: &mut [u8]) -> CoreResult<()> {
+        Err(CoreError::ChipNotSupported)
+    }
+    async fn write(&mut self, _addr: u32, _data: &[u8]) -> CoreResult<()> {
+        Err(CoreError::ChipNotSupported)
+    }
+    async fn erase(&mut self, _addr: u32, _len: u32) -> CoreResult<()> {
+        Err(CoreError::ChipNotSupported)
     }
 
-    async fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
-        // Batched page program with on-SoC busy-wait.
-        // Page size is always 256 for standard SPI NOR.
-        self.batched_write(addr, data, 256, self.use_4byte_addr)
-            .map_err(|_| CoreError::WriteError { addr })
-    }
-
-    async fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
-        // Use the chip's actual erase block table (from RON/SFDP) to select
-        // the right opcode and block size. If no erase blocks are configured,
-        // return Err so the hybrid adapter falls back to SPI-based erase.
-        if self.erase_blocks.is_empty() {
-            return Err(CoreError::ProgrammerError);
+    async fn read_planned(&mut self, plan: &ReadPlan, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
+        if !self.supports_read_plan(plan) {
+            return Err(CoreError::ChipNotSupported);
         }
-
-        let erase_block =
-            select_erase_block(&self.erase_blocks, addr, len).ok_or(CoreError::ProgrammerError)?;
-
-        let use_4byte = self.use_4byte_addr;
-        let max_block_size = erase_block.max_block_size();
-        let mut current = addr;
-        let end = addr + len;
-
-        while current < end {
-            let offset_in_layout = current - addr;
-            let block_size = erase_block
-                .block_size_at_offset(offset_in_layout)
-                .unwrap_or(max_block_size);
-
-            self.erase_block_bytecode(erase_block.opcode, current, use_4byte)
-                .map_err(|_| CoreError::ProgrammerError)?;
-
-            current += block_size;
+        plan.address.validate_range(addr, buf.len())?;
+        let mut offset = 0;
+        while offset < buf.len() {
+            let address = addr + offset as u32;
+            let count = (buf.len() - offset).min(0x0100_0000 - (address as usize & 0xffffff));
+            if let AddressPlan::Ear(f) = plan.address {
+                rflasher_core::protocol::set_extended_address(self, f, (address >> 24) as u8)
+                    .await?;
+            }
+            self.fast_read(
+                address,
+                &mut buf[offset..offset + count],
+                plan.op.opcode,
+                plan.address.width().bytes() == 4,
+            )
+            .map_err(|_| CoreError::ReadError { addr: address })?;
+            offset += count;
         }
-
         Ok(())
+    }
+    async fn write_planned(&mut self, plan: &WritePlan, addr: u32, data: &[u8]) -> CoreResult<()> {
+        if !self.supports_write_plan(plan) {
+            return Err(CoreError::ChipNotSupported);
+        }
+        plan.address.validate_range(addr, data.len())?;
+        let mut offset = 0;
+        while offset < data.len() {
+            let address = addr + offset as u32;
+            let count = (data.len() - offset).min(0x0100_0000 - (address as usize & 0xffffff));
+            if let AddressPlan::Ear(f) = plan.address {
+                rflasher_core::protocol::set_extended_address(self, f, (address >> 24) as u8)
+                    .await?;
+            }
+            self.batched_write(
+                address,
+                &data[offset..offset + count],
+                plan.page_size,
+                plan.opcode,
+                plan.address.width().bytes() == 4,
+            )
+            .map_err(|_| CoreError::WriteError { addr: address })?;
+            offset += count;
+        }
+        Ok(())
+    }
+    async fn erase_planned(&mut self, plan: &ErasePlan, addr: u32, len: u32) -> CoreResult<()> {
+        if !self.supports_erase_plan(plan) {
+            return Err(CoreError::ChipNotSupported);
+        }
+        plan.address.validate_range(addr, len as usize)?;
+        let mut offset = 0;
+        while offset < len {
+            let address = addr + offset;
+            if let AddressPlan::Ear(f) = plan.address {
+                rflasher_core::protocol::set_extended_address(self, f, (address >> 24) as u8)
+                    .await?;
+            }
+            self.erase_block_bytecode(plan.opcode, address, plan.address.width().bytes() == 4)
+                .map_err(|_| CoreError::ProgrammerError)?;
+            offset += plan
+                .block
+                .block_size_at_offset(offset)
+                .unwrap_or(plan.block.max_block_size());
+        }
+        Ok(())
+    }
+}
+
+fn erase_bytecode(opcode: u8, addr: u32, use_4byte: bool) -> Vec<u8> {
+    let fast_len: u8 = if use_4byte { 5 } else { 4 }; // opcode + addr bytes
+
+    let mut cbuf = Vec::with_capacity(32);
+
+    // WREN
+    cbuf.push(spi_cmd::SELECT);
+    cbuf.push(spi_cmd::FAST);
+    cbuf.push(1);
+    cbuf.push(0x06); // WREN opcode
+    cbuf.push(spi_cmd::DESELECT);
+
+    // Erase command (opcode + address)
+    cbuf.push(spi_cmd::SELECT);
+    cbuf.push(spi_cmd::FAST);
+    cbuf.push(fast_len);
+    cbuf.push(opcode);
+    if use_4byte {
+        cbuf.push((addr >> 24) as u8);
+    }
+    cbuf.push((addr >> 16) as u8);
+    cbuf.push((addr >> 8) as u8);
+    cbuf.push(addr as u8);
+    cbuf.push(spi_cmd::DESELECT);
+
+    // Wait for erase to complete (on-SoC RDSR polling)
+    cbuf.push(spi_cmd::SELECT);
+    cbuf.push(spi_cmd::SPINOR_WAIT);
+    cbuf.push(spi_cmd::DESELECT);
+
+    cbuf.push(spi_cmd::END);
+
+    cbuf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn firmware_erase_bytecode_preserves_native_and_compatibility_addressing_and_wait() {
+        for (opcode, address, four) in [
+            (0x21, 0x0123_4000u32, true),
+            (0x20, 0x0123_4000, true),
+            (0x20, 0x0023_4000, false),
+        ] {
+            let code = erase_bytecode(opcode, address, four);
+            assert_eq!(
+                &code[..5],
+                &[spi_cmd::SELECT, spi_cmd::FAST, 1, 0x06, spi_cmd::DESELECT]
+            );
+            assert_eq!(
+                &code[5..9],
+                &[
+                    spi_cmd::SELECT,
+                    spi_cmd::FAST,
+                    if four { 5 } else { 4 },
+                    opcode
+                ]
+            );
+            let bytes = address.to_be_bytes();
+            let addr_bytes = if four { &bytes[..] } else { &bytes[1..] };
+            assert_eq!(&code[9..9 + addr_bytes.len()], addr_bytes);
+            assert_eq!(
+                &code[9 + addr_bytes.len()..],
+                &[
+                    spi_cmd::DESELECT,
+                    spi_cmd::SELECT,
+                    spi_cmd::SPINOR_WAIT,
+                    spi_cmd::DESELECT,
+                    spi_cmd::END
+                ]
+            );
+        }
     }
 }

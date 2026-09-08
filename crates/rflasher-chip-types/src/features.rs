@@ -6,6 +6,9 @@ bitflags! {
     /// Feature flags for flash chips
     ///
     /// These flags describe what capabilities and behaviors a flash chip has.
+    ///
+    /// Multi-IO read flags are split by JEDEC bus mode so programmers can
+    /// select the fastest operation supported by both the chip and controller.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "serde", serde(transparent))]
@@ -13,7 +16,7 @@ bitflags! {
         // Write enable behavior
         /// Use WREN (0x06) before WRSR
         const WRSR_WREN       = 1 << 0;
-        /// Use EWSR (0x50) before WRSR (legacy SST)
+        /// EWSR (0x50): required on legacy SST; optional volatile writes with WREN.
         const WRSR_EWSR       = 1 << 1;
         /// WRSR writes both SR1 and SR2 with one command
         const WRSR_EXT        = 1 << 2;
@@ -21,9 +24,15 @@ bitflags! {
         // Read capabilities
         /// Supports Fast Read (0x0B)
         const FAST_READ       = 1 << 3;
-        /// Supports Dual I/O read commands
+        /// Legacy coarse dual-IO flag (vestige: selection uses FAST_READ_DOUT/DIO now).
+        ///
+        /// Retained as an API bit; no longer parsed from the database or used
+        /// by read selection.
         const DUAL_IO         = 1 << 4;
-        /// Supports Quad I/O read commands
+        /// Legacy coarse quad-IO flag (vestige: selection uses FAST_READ_QOUT/QIO now).
+        ///
+        /// Retained as an API bit; no longer parsed from the database or used
+        /// by read selection.
         const QUAD_IO         = 1 << 5;
 
         // 4-byte addressing
@@ -39,7 +48,10 @@ bitflags! {
         // Special features
         /// Has OTP (One-Time Programmable) area
         const OTP             = 1 << 10;
-        /// Supports QPI mode (4-4-4)
+        /// Legacy coarse QPI flag (vestige: selection uses QPI_35_F5/QPI_38_FF now).
+        ///
+        /// Retained as an API bit and set by SFDP for 4-4-4-capable chips;
+        /// no longer parsed from the database or used by read selection.
         const QPI             = 1 << 11;
         /// Has security registers
         const SECURITY_REG    = 1 << 12;
@@ -63,7 +75,10 @@ bitflags! {
         const STATUS_REG_2    = 1 << 19;
         /// Has status register 3
         const STATUS_REG_3    = 1 << 20;
-        /// Quad Enable bit is in SR2
+        /// Legacy coarse QE-location flag (vestige: QE handling uses `QeMethod` now).
+        ///
+        /// Retained as an API bit; no longer parsed from the database or used
+        /// by QE preparation.
         const QE_SR2          = 1 << 21;
 
         // Power management
@@ -109,6 +124,42 @@ bitflags! {
         const FOUR_BYTE_QUAD_OUT_READ = 1 << 39;
         /// Native 4BA quad-I/O read instruction 0xEC
         const FOUR_BYTE_QUAD_IO_READ  = 1 << 40;
+
+        // Fine-grained multi-IO read support
+        /// Supports Dual Output Fast Read (1-1-2, opcode 0x3B / 0x3C)
+        const FAST_READ_DOUT  = 1 << 41;
+        /// Supports Dual I/O Fast Read (1-2-2, opcode 0xBB / 0xBC)
+        const FAST_READ_DIO   = 1 << 42;
+        /// Supports Quad Output Fast Read (1-1-4, opcode 0x6B / 0x6C)
+        const FAST_READ_QOUT  = 1 << 43;
+        /// Supports Quad I/O Fast Read (1-4-4, opcode 0xEB / 0xEC)
+        const FAST_READ_QIO   = 1 << 44;
+        /// Supports 4-byte QPI Fast Read (4-4-4, opcode 0xEC)
+        const FAST_READ_QPI4B = 1 << 45;
+        /// QPI entry/exit via 0x35/0xF5
+        const QPI_35_F5       = 1 << 46;
+        /// QPI entry/exit via 0x38/0xFF
+        const QPI_38_FF       = 1 << 47;
+        /// Supports Set Read Parameters (0xC0)
+        const SET_READ_PARAMS = 1 << 48;
+
+        /// Fast-read and dual-read capabilities.
+        const DIO_BUNDLE = Self::FAST_READ.bits()
+                         | Self::FAST_READ_DOUT.bits()
+                         | Self::FAST_READ_DIO.bits();
+        /// Fast-read, dual-read, and quad-read capabilities.
+        const QIO_BUNDLE = Self::DIO_BUNDLE.bits()
+                         | Self::FAST_READ_QOUT.bits()
+                         | Self::FAST_READ_QIO.bits();
+        /// All capabilities that require quad data lines.
+        const ANY_QUAD = Self::FAST_READ_QOUT.bits()
+                       | Self::FAST_READ_QIO.bits()
+                       | Self::FAST_READ_QPI4B.bits()
+                       | Self::QPI_35_F5.bits()
+                       | Self::QPI_38_FF.bits()
+                       | Self::SET_READ_PARAMS.bits();
+        /// All QPI entry/exit mechanisms.
+        const ANY_QPI = Self::QPI_35_F5.bits() | Self::QPI_38_FF.bits();
     }
 }
 
@@ -168,4 +219,21 @@ impl Default for Features {
     fn default() -> Self {
         Features::empty()
     }
+}
+
+/// Method used to enable quad I/O on a flash chip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum QeMethod {
+    /// The chip has no QE bit.
+    #[default]
+    None,
+    /// QE is SR2 bit 1, written with command 0x01 and two status bytes.
+    Sr2Bit1WriteSr,
+    /// QE is SR2 bit 1, written with the dedicated 0x31 command.
+    Sr2Bit1WriteSr2,
+    /// QE is SR1 bit 6, written with command 0x01.
+    Sr1Bit6,
+    /// QE is SR2 bit 7 and requires the chip-specific unlocked sequence.
+    Sr2Bit7,
 }

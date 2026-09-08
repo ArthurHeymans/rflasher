@@ -1,302 +1,194 @@
-//! Hybrid flash device adapter
-//!
-//! This module provides `HybridFlashDevice`, an adapter for programmers that
-//! implement both `SpiMaster` (for probe, erase, status, write protection) and
-//! `OpaqueMaster` (for fast bulk read/write via hardware-accelerated paths).
-//!
-//! This is the natural fit for programmers like the Dediprog SF-series, which
-//! support generic SPI command pass-through (`CMD_TRANSCEIVE`) for arbitrary
-//! opcodes, but also have dedicated firmware commands (`CMD_READ`/`CMD_WRITE`)
-//! that handle SPI flash protocols internally with USB bulk transfers for
-//! dramatically higher throughput.
-//!
-//! # Architecture
-//!
-//! ```text
-//!   FlashDevice::read()  ──► OpaqueMaster::read()   (CMD_READ + bulk IN)
-//!   FlashDevice::write() ──► OpaqueMaster::write()   (CMD_WRITE + bulk OUT)
-//!   FlashDevice::erase() ──► SpiMaster (WREN + SE/BE + RDSR polling)
-//!   FlashDevice::wp_*()  ──► SpiMaster (status register access)
-//! ```
-
+//! HybridFlashDevice: operation-scoped SPI flash access.
 use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{Error, Result};
-use crate::flash::context::{AddressMode, FlashContext};
-use crate::flash::device::FlashDevice;
-use crate::flash::operations::{
-    addressing_for_4byte_operation, check_erased_range, select_erase_block,
-};
-use crate::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
-use crate::protocol::{self, CommandAddressing};
-#[cfg(feature = "alloc")]
+use crate::flash::io::{self, IoLifecycle};
+use crate::flash::{FlashContext, FlashDevice};
+use crate::programmer::{OpaqueMaster, SpiMaster};
+use crate::protocol;
 use crate::wp::{
     self, RangeDecoder, WpBits, WpConfig, WpMode, WpRange, WpRegBitMap, WpResult, WriteOptions,
 };
 
-/// Flash device adapter for hybrid programmers (SpiMaster + OpaqueMaster)
-///
-/// Uses `OpaqueMaster` for bulk read/write (fast path) and `SpiMaster` for
-/// everything else (probe, erase, status registers, write protection).
-///
-/// # Example
-///
-/// ```ignore
-/// use rflasher_core::flash::{HybridFlashDevice, probe};
-/// use rflasher_core::chip::ChipProvider;
-/// use rflasher_programmers::dediprog::Dediprog;
-///
-/// let mut master = Dediprog::open().unwrap();
-/// let ctx = probe(&mut master, &db).unwrap();
-/// master.set_flash_size(ctx.total_size() as u32);
-/// let mut device = HybridFlashDevice::new(master, ctx);
-/// ```
+/// Adapter assuming an externally established ordinary-SPI, three-byte baseline.
+/// Probe does not reset the chip. After cancellation/failed cleanup, explicitly
+/// recover the hardware and reprobe; USB disconnect alone is not recovery.
 pub struct HybridFlashDevice<M: SpiMaster + OpaqueMaster> {
-    /// Owned master (implements both SpiMaster and OpaqueMaster)
     master: M,
-    /// Flash chip context (from probing via SpiMaster)
     ctx: FlashContext,
+    lifecycle: IoLifecycle,
 }
-
 impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
-    /// Create a new hybrid flash device adapter
-    ///
-    /// # Arguments
-    /// * `master` - The programmer (must implement both SpiMaster and OpaqueMaster)
-    /// * `ctx` - Flash context with chip metadata (from probing via SpiMaster)
+    /// Construct on a known idle ordinary-SPI, three-byte baseline.
     pub fn new(master: M, ctx: FlashContext) -> Self {
-        HybridFlashDevice { master, ctx }
+        Self {
+            master,
+            ctx,
+            lifecycle: IoLifecycle::default(),
+        }
     }
-
-    /// Get a mutable reference to the underlying master
+    /// Low-level escape: caller owns hardware recovery if the adapter is latched.
     pub fn master(&mut self) -> &mut M {
         &mut self.master
     }
-
-    /// Get a reference to the flash context
+    /// Chip metadata; this does not describe temporary hardware state.
     pub fn context(&self) -> &FlashContext {
         &self.ctx
     }
-
-    /// Get a mutable reference to the flash context
+    /// Mutable chip metadata, not a hardware recovery mechanism.
     pub fn context_mut(&mut self) -> &mut FlashContext {
         &mut self.ctx
     }
-
-    /// Consume the adapter and return the flash context
+    /// Whether explicit hardware recovery and reprobe are required.
+    pub fn recovery_required(&self) -> bool {
+        self.lifecycle.recovery_required()
+    }
+    /// Consume the adapter, discarding its master.
     pub fn into_context(self) -> FlashContext {
         self.ctx
     }
-
-    /// Consume the adapter and return both the master and flash context
+    /// Low-level escape, not recovery. Do not reconstruct an adapter on uncertain hardware.
     pub fn into_parts(self) -> (M, FlashContext) {
         (self.master, self.ctx)
     }
 }
-
 impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
     fn size(&self) -> u32 {
         self.ctx.total_size() as u32
     }
-
     fn erase_granularity(&self) -> u32 {
         self.ctx.chip.min_erase_size().unwrap_or(4096)
     }
-
     fn write_granularity(&self) -> WriteGranularity {
         self.ctx.chip.write_granularity
     }
-
     fn erase_blocks(&self) -> &[EraseBlock] {
         self.ctx.chip.erase_blocks()
     }
-
     fn page_size(&self) -> u32 {
         self.ctx.page_size() as u32
     }
-
-    // Write protection support (delegates to SpiMaster, same as SpiFlashDevice)
     #[cfg(feature = "alloc")]
     fn wp_supported(&self) -> bool {
         true
     }
-
     #[cfg(feature = "alloc")]
     async fn read_wp_config(&mut self) -> WpResult<WpConfig> {
         HybridFlashDevice::read_wp_config(self).await
     }
-
     #[cfg(feature = "alloc")]
     async fn write_wp_config(&mut self, config: &WpConfig, options: WriteOptions) -> WpResult<()> {
         HybridFlashDevice::write_wp_config(self, config, options).await
     }
-
     #[cfg(feature = "alloc")]
     async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
         HybridFlashDevice::set_wp_mode(self, mode, options).await
     }
-
     #[cfg(feature = "alloc")]
     async fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
         HybridFlashDevice::set_wp_range(self, range, options).await
     }
-
     #[cfg(feature = "alloc")]
     async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
         HybridFlashDevice::disable_wp(self, options).await
     }
-
     #[cfg(feature = "alloc")]
     fn get_available_wp_ranges(&self) -> alloc::vec::Vec<WpRange> {
         HybridFlashDevice::get_available_wp_ranges(self)
     }
 
-    // =========================================================================
-    // Read/Write: use OpaqueMaster (fast bulk path)
-    // =========================================================================
-
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
-        let ctx = self.context();
-        if !ctx.is_valid_range(addr, buf.len()) {
+        self.lifecycle.check()?;
+        if !self.ctx.is_valid_range(addr, buf.len()) {
             return Err(Error::AddressOutOfBounds);
         }
-
-        // OpaqueMaster::read handles alignment splitting internally
-        OpaqueMaster::read(&mut self.master, addr, buf).await
-    }
-
-    async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
-        let ctx = self.context();
-        if !ctx.is_valid_range(addr, data.len()) {
-            return Err(Error::AddressOutOfBounds);
-        }
-
-        // OpaqueMaster::write handles alignment splitting internally
-        OpaqueMaster::write(&mut self.master, addr, data).await
-    }
-
-    // =========================================================================
-    // Erase: try OpaqueMaster first, fall back to SpiMaster
-    //
-    // Following flashprog's architecture: erase is a first-class operation
-    // on the opaque interface. Programmers with firmware-accelerated erase
-    // (e.g., SPI_CMD_SPINOR_WAIT) implement OpaqueMaster::erase(). Those
-    // without (e.g., Dediprog) return Err, triggering the SPI fallback.
-    // =========================================================================
-
-    async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
-        // Bounds check (borrow ctx briefly, then drop before mutable borrow)
-        if !self.context().is_valid_range(addr, len as usize) {
-            return Err(Error::AddressOutOfBounds);
-        }
-
-        // Try opaque erase first — the programmer handles everything internally
-        // (block selection, busy-wait, etc.). If it returns Ok, we're done.
-        // Programmers without firmware erase (e.g., Dediprog) return Err,
-        // triggering the SPI fallback below.
-        if OpaqueMaster::erase(&mut self.master, addr, len)
+        let (plan, accelerated) = match io::select_read_plan(&self.master, &self.ctx, false, |p| {
+            self.master.supports_read_plan(p)
+        }) {
+            Ok(plan) => (plan, true),
+            Err(Error::ChipNotSupported) => {
+                log::debug!(
+                    "No representable bulk read plan; selecting single-I/O SPI before setup"
+                );
+                (
+                    io::select_read_plan(&self.master, &self.ctx, true, |_| true)?,
+                    false,
+                )
+            }
+            Err(error) => return Err(error),
+        };
+        self.lifecycle
+            .run(&mut self.master, plan.address, plan.qe, async |master| {
+                if !accelerated {
+                    return io::read_spi(master, &plan, addr, buf).await;
+                }
+                master
+                    .read_planned(&plan, addr, buf)
+                    .await
+                    .map_err(|error| {
+                        log::error!(
+                            "firmware transfer failed: {error:?}; hardware recovery required"
+                        );
+                        Error::RecoveryRequired
+                    })
+            })
             .await
-            .is_ok()
-        {
-            return Ok(());
+    }
+    async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+        self.lifecycle.check()?;
+        if !self.ctx.is_valid_range(addr, data.len()) {
+            return Err(Error::AddressOutOfBounds);
         }
-
-        // Opaque erase not supported — fall back to SPI-based erase.
-        // NOTE: OpaqueMaster::erase cannot distinguish "unsupported" from a
-        // genuine mid-erase failure; the SPI fallback retries the whole range
-        // either way, which is safe for flash (erase is idempotent) but means
-        // opaque hardware errors are not surfaced here.
-        // SST26 chips use a per-block protection register (not SR BP bits).
-        // A global unlock (WREN + ULBPR 0x98) is required before any erase
-        // succeeds — same as SpiFlashDevice::erase.
-        let needs_sst26_unprotect = self
-            .context()
+        let plan = io::select_write_plan(&self.master, &self.ctx, |p| {
+            self.master.supports_write_plan(p)
+        })?;
+        self.lifecycle
+            .run(
+                &mut self.master,
+                plan.address,
+                protocol::QuadEnableMethod::None,
+                async |master| {
+                    master
+                        .write_planned(&plan, addr, data)
+                        .await
+                        .map_err(|error| {
+                            log::error!(
+                                "firmware transfer failed: {error:?}; hardware recovery required"
+                            );
+                            Error::RecoveryRequired
+                        })
+                },
+            )
+            .await
+    }
+    async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
+        self.lifecycle.check()?;
+        if !self.ctx.is_valid_range(addr, len as usize) {
+            return Err(Error::AddressOutOfBounds);
+        }
+        let plan = io::select_erase_plan(&self.master, &self.ctx, addr, len)?;
+        let verify_plan = io::select_read_plan(&self.master, &self.ctx, true, |_| true)?;
+        let unprotect = self
+            .ctx
             .chip
             .features
             .contains(crate::chip::Features::SST26_BPR);
-        if needs_sst26_unprotect {
-            protocol::sst26_global_unprotect(&mut self.master).await?;
-        }
-
-        let ctx = self.context();
-        let erase_block = select_erase_block(ctx.chip.erase_blocks(), addr, len)
-            .ok_or(Error::InvalidAlignment)?;
-
-        let chip_features = ctx.chip.features;
-        let use_4byte = ctx.address_mode == AddressMode::FourByte;
-        let master_features = self.master.features();
-        let use_native = use_4byte
-            && erase_block.opcode_4b.is_some_and(|opcode| {
-                master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
-                    && self.master.probe_opcode(opcode)
-            });
-        let opcode = erase_block.opcode_for_address_width(use_native);
-        let (addressing, enter_exit_4byte) = if use_4byte {
-            addressing_for_4byte_operation(use_native, chip_features, master_features)?
-        } else {
-            (CommandAddressing::ThreeByte, false)
-        };
-
-        if enter_exit_4byte {
-            protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
-        }
-
-        let mut current_addr = addr;
-        let end_addr = addr + len;
-        let max_block_size = erase_block.max_block_size();
-
-        let (poll_delay_us, timeout_us) = match max_block_size {
-            s if s <= 4096 => (10_000, 1_000_000),
-            s if s <= 32768 => (100_000, 4_000_000),
-            s if s <= 65536 => (100_000, 4_000_000),
-            _ => (500_000, 60_000_000),
-        };
-
-        while current_addr < end_addr {
-            let offset_in_layout = current_addr - addr;
-            let block_size = erase_block
-                .block_size_at_offset(offset_in_layout)
-                .unwrap_or(max_block_size);
-
-            let result = protocol::erase_block(
-                self.master(),
-                opcode,
-                current_addr,
-                addressing,
-                poll_delay_us,
-                timeout_us,
-            )
-            .await;
-
-            if result.is_err() {
-                if enter_exit_4byte
-                    && let Err(e) =
-                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
-                {
-                    log::warn!("Failed to exit 4-byte address mode: {}", e);
-                }
-                return result;
-            }
-
-            current_addr += block_size;
-        }
-
-        if enter_exit_4byte {
-            protocol::exit_4byte_mode_with_features(self.master(), chip_features).await?;
-        }
-
-        // Verify only after the erase loop has left its persistent 4-byte
-        // mode. The read helper manages 4-byte mode itself; calling it inside
-        // the loop would exit that mode and make the next legacy erase opcode
-        // target the wrong address.
-        check_erased_range(&mut self.master, &self.ctx, addr, len).await
+        let accelerated = self.master.supports_erase_plan(&plan);
+        self.lifecycle.run(&mut self.master, plan.address, protocol::QuadEnableMethod::None, async |master| {
+            if unprotect { protocol::sst26_global_unprotect(master).await?; }
+            if accelerated { master.erase_planned(&plan, addr, len).await.map_err(|error| { log::error!("firmware transfer failed: {error:?}; hardware recovery required"); Error::RecoveryRequired }) } else { io::erase_spi(master, &plan, addr, len).await }
+        }).await?;
+        // Verification owns a fresh, single-I/O scope after erase addressing is restored.
+        io::verify_erased(
+            &mut self.lifecycle,
+            &mut self.master,
+            &verify_plan,
+            addr,
+            len,
+        )
+        .await
     }
 }
 
-// =============================================================================
-// Write Protection Support (delegates to SpiMaster, identical to SpiFlashDevice)
-// =============================================================================
-
-#[cfg(feature = "alloc")]
 impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     fn wp_bit_map(&self) -> WpRegBitMap {
         let features = self.ctx.chip.features;
@@ -313,22 +205,47 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
 
     /// Read current write protection bits
     pub async fn read_wp_bits(&mut self) -> WpResult<WpBits> {
+        self.lifecycle.check()?;
         let bit_map = self.wp_bit_map();
-        wp::read_wp_bits(&mut self.master, &bit_map).await
+        self.lifecycle
+            .run(
+                &mut self.master,
+                io::AddressPlan::ThreeByte,
+                protocol::QuadEnableMethod::None,
+                async |master| wp::read_wp_bits(master, &bit_map).await,
+            )
+            .await
     }
 
     /// Read current write protection configuration
     pub async fn read_wp_config(&mut self) -> WpResult<WpConfig> {
+        self.lifecycle.check()?;
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
-        wp::read_wp_config(&mut self.master, &bit_map, total_size, decoder).await
+        self.lifecycle
+            .run(
+                &mut self.master,
+                io::AddressPlan::ThreeByte,
+                protocol::QuadEnableMethod::None,
+                async |master| wp::read_wp_config(master, &bit_map, total_size, decoder).await,
+            )
+            .await
     }
 
     /// Write write protection bits
     pub async fn write_wp_bits(&mut self, bits: &WpBits, options: WriteOptions) -> WpResult<()> {
+        self.lifecycle.check()?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
-        wp::write_wp_bits(&mut self.master, bits, &bit_map, options).await
+        self.lifecycle
+            .run(
+                &mut self.master,
+                io::AddressPlan::ThreeByte,
+                protocol::QuadEnableMethod::None,
+                async |master| wp::write_wp_bits(master, bits, &bit_map, options).await,
+            )
+            .await
     }
 
     /// Write write protection configuration
@@ -337,46 +254,71 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
         config: &WpConfig,
         options: WriteOptions,
     ) -> WpResult<()> {
+        self.lifecycle.check()?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
-        wp::write_wp_config(
-            &mut self.master,
-            config,
-            &bit_map,
-            total_size,
-            decoder,
-            options,
-        )
-        .await
+        self.lifecycle
+            .run(
+                &mut self.master,
+                io::AddressPlan::ThreeByte,
+                protocol::QuadEnableMethod::None,
+                async |master| {
+                    wp::write_wp_config(master, config, &bit_map, total_size, decoder, options)
+                        .await
+                },
+            )
+            .await
     }
 
     /// Set write protection mode
     pub async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
+        self.lifecycle.check()?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
-        wp::set_wp_mode(&mut self.master, mode, &bit_map, options).await
+        self.lifecycle
+            .run(
+                &mut self.master,
+                io::AddressPlan::ThreeByte,
+                protocol::QuadEnableMethod::None,
+                async |master| wp::set_wp_mode(master, mode, &bit_map, options).await,
+            )
+            .await
     }
 
     /// Set protected range
     pub async fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
+        self.lifecycle.check()?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
-        wp::set_wp_range(
-            &mut self.master,
-            range,
-            &bit_map,
-            total_size,
-            decoder,
-            options,
-        )
-        .await
+        self.lifecycle
+            .run(
+                &mut self.master,
+                io::AddressPlan::ThreeByte,
+                protocol::QuadEnableMethod::None,
+                async |master| {
+                    wp::set_wp_range(master, range, &bit_map, total_size, decoder, options).await
+                },
+            )
+            .await
     }
 
     /// Disable all write protection
     pub async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
+        self.lifecycle.check()?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
-        wp::disable_wp(&mut self.master, &bit_map, options).await
+        self.lifecycle
+            .run(
+                &mut self.master,
+                io::AddressPlan::ThreeByte,
+                protocol::QuadEnableMethod::None,
+                async |master| wp::disable_wp(master, &bit_map, options).await,
+            )
+            .await
     }
 
     /// Get all available protection ranges

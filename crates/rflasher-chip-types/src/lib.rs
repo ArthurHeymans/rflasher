@@ -14,6 +14,6 @@ mod features;
 mod provider;
 mod types;
 
-pub use features::Features;
+pub use features::{Features, QeMethod};
 pub use provider::ChipProvider;
 pub use types::*;

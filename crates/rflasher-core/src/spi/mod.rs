@@ -9,6 +9,6 @@ mod io_mode;
 pub mod opcodes;
 
 pub use address::AddressWidth;
-pub use command::SpiCommand;
+pub use command::{SpiCommand, dummy_cycles_representable};
 pub use io_mode::{IoMode, check_io_mode_supported};
 pub use opcodes::*;

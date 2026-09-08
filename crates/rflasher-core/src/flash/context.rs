@@ -2,7 +2,7 @@
 
 use crate::chip::FlashChip;
 
-/// Address mode currently in use
+/// Address capacity required by the chip, not its current hardware mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AddressMode {
     /// 3-byte addressing (up to 16 MiB)
@@ -21,7 +21,7 @@ pub enum AddressMode {
 pub struct FlashContext {
     /// The identified flash chip (owned)
     pub chip: FlashChip,
-    /// Current address mode
+    /// Required address capacity (temporary modes belong to an operation)
     pub address_mode: AddressMode,
 }
 
@@ -31,7 +31,7 @@ pub struct FlashContext {
 pub struct FlashContext {
     /// The identified flash chip (static reference)
     pub chip: &'static FlashChip,
-    /// Current address mode
+    /// Required address capacity (temporary modes belong to an operation)
     pub address_mode: AddressMode,
 }
 

@@ -461,6 +461,19 @@ pub fn get_available_ranges(
     super::ranges::get_all_ranges(&template, total_size, decoder)
 }
 
+/// Prefer persistent WREN when available; EWSR is mandatory only on legacy parts.
+pub(crate) fn chip_write_options(
+    features: crate::chip::Features,
+    options: WriteOptions,
+) -> WriteOptions {
+    use crate::chip::Features;
+    WriteOptions {
+        use_ewsr: options.use_ewsr
+            || (features.contains(Features::WRSR_EWSR) && !features.contains(Features::WRSR_WREN)),
+        ..options
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -47,7 +47,7 @@
             name: "SST25VF512A",
             device_id: 0x4800,
             total_size: KiB(64),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, wrsr_ewsr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
@@ -72,7 +72,7 @@
             name: "SST25VF010A",
             device_id: 0x4900,
             total_size: KiB(128),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, wrsr_ewsr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
@@ -486,7 +486,7 @@
             name: "SST26VF064B",
             device_id: 0x2603,
             total_size: MiB(8),
-            features: (wrsr_wren: true, quad_io: true, otp: true, sst26_bpr: true),
+            features: (wrsr_wren: true, otp: true, sst26_bpr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),

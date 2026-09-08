@@ -176,58 +176,66 @@ macro_rules! with_programmer {
 ///
 /// The body receives `$device` as `&mut impl FlashDevice`. The macro handles
 /// extracting the master back via `into_parts()` and putting the Programmer
-/// wrapper back into shared state.
+/// wrapper back into shared state only after confirmed cleanup. A failed device
+/// is discarded; reconnecting still requires actual hardware recovery and reprobe.
 macro_rules! with_flash_device {
     ($shared:expr, $programmer:expr, $ctx_flash:expr, $device:ident, $body:expr) => {
         match $programmer {
             Programmer::Serprog(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
                 let result = { $body };
+                let healthy = !$device.recovery_required();
                 let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Serprog(master));
+                $shared.borrow_mut().programmer = healthy.then_some(Programmer::Serprog(master));
                 result
             }
             Programmer::Ch341a(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
                 let result = { $body };
+                let healthy = !$device.recovery_required();
                 let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ch341a(master));
+                $shared.borrow_mut().programmer = healthy.then_some(Programmer::Ch341a(master));
                 result
             }
             Programmer::Ch347(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
                 let result = { $body };
+                let healthy = !$device.recovery_required();
                 let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ch347(master));
+                $shared.borrow_mut().programmer = healthy.then_some(Programmer::Ch347(master));
                 result
             }
             Programmer::Ftdi(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
                 let result = { $body };
+                let healthy = !$device.recovery_required();
                 let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ftdi(master));
+                $shared.borrow_mut().programmer = healthy.then_some(Programmer::Ftdi(master));
                 result
             }
             Programmer::Ft4222(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
                 let result = { $body };
+                let healthy = !$device.recovery_required();
                 let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ft4222(master));
+                $shared.borrow_mut().programmer = healthy.then_some(Programmer::Ft4222(master));
                 result
             }
             Programmer::Dediprog(mut master) => {
                 master.set_flash_size($ctx_flash.total_size() as u32);
                 let mut $device = HybridFlashDevice::new(master, $ctx_flash);
                 let result = { $body };
+                let healthy = !$device.recovery_required();
                 let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Dediprog(master));
+                $shared.borrow_mut().programmer = healthy.then_some(Programmer::Dediprog(master));
                 result
             }
             Programmer::Raiden(master) => {
                 let mut $device = SpiFlashDevice::new(master, $ctx_flash);
                 let result = { $body };
+                let healthy = !$device.recovery_required();
                 let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Raiden(master));
+                $shared.borrow_mut().programmer = healthy.then_some(Programmer::Raiden(master));
                 result
             }
         }

@@ -64,7 +64,7 @@
             name: "F25D08QA",
             device_id: 0x3214,
             total_size: MiB(1),
-            features: (wrsr_wren: true, dual_io: true),
+            features: (wrsr_wren: true, fast_read_dio: true, fast_read_dout: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -74,11 +74,14 @@
             ],
         ),
         // F49 series - Quad SPI
+        // NOTE: the SST49LF004 family is a parallel Firmware-Hub (BUS_FWH)
+        // part in flashprog, not SPI: SPI multi-IO flags and qe_method are
+        // not applicable and are left unset deliberately.
         (
             name: "F49L004UA",
             device_id: 0x4013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),

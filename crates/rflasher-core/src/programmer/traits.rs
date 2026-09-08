@@ -111,8 +111,7 @@ pub trait SpiMaster {
     /// - `QuadIo` (1-4-4): Opcode single, address and data quad
     /// - `Qpi` (4-4-4): All phases use quad I/O
     ///
-    /// If the requested mode isn't supported, implementations should fall back
-    /// to single I/O mode and optionally log a warning.
+    /// Unsupported framing must be rejected, never silently downgraded.
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()>;
 
     /// Check if an opcode is supported by this programmer
@@ -121,6 +120,12 @@ pub trait SpiMaster {
     /// opcodes can be executed. Returns true if the opcode is allowed.
     fn probe_opcode(&self, _opcode: u8) -> bool {
         true
+    }
+
+    /// Whether the read path can emit this dummy phase without extra clocks.
+    /// Byte-oriented masters use the command header's lane width by default.
+    fn supports_read_dummy_cycles(&self, mode: crate::spi::IoMode, cycles: u8) -> bool {
+        crate::spi::dummy_cycles_representable(mode, cycles)
     }
 
     /// Delay for the specified number of microseconds
@@ -156,6 +161,47 @@ pub trait OpaqueMaster {
     /// * `addr` - Starting address to erase
     /// * `len` - Number of bytes to erase
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
+
+    /// Pure whole-path capability checks; defaults never claim plan support.
+    fn supports_read_plan(&self, _plan: &crate::flash::io::ReadPlan) -> bool {
+        false
+    }
+    /// Whether the complete program path represents this plan, without I/O.
+    fn supports_write_plan(&self, _plan: &crate::flash::io::WritePlan) -> bool {
+        false
+    }
+    /// Whether firmware erase represents this plan, without I/O.
+    fn supports_erase_plan(&self, _plan: &crate::flash::io::ErasePlan) -> bool {
+        false
+    }
+    /// Execute exactly this plan, or fail before I/O. Raw opaque methods do not
+    /// substitute for planned transfers: opaque devices may lack SPI metadata.
+    async fn read_planned(
+        &mut self,
+        _plan: &crate::flash::io::ReadPlan,
+        _addr: u32,
+        _buf: &mut [u8],
+    ) -> Result<()> {
+        Err(crate::error::Error::ChipNotSupported)
+    }
+    /// Execute the explicit program plan, or fail before I/O.
+    async fn write_planned(
+        &mut self,
+        _plan: &crate::flash::io::WritePlan,
+        _addr: u32,
+        _data: &[u8],
+    ) -> Result<()> {
+        Err(crate::error::Error::ChipNotSupported)
+    }
+    /// Execute the explicit erase plan, or fail before I/O; never retry on failure.
+    async fn erase_planned(
+        &mut self,
+        _plan: &crate::flash::io::ErasePlan,
+        _addr: u32,
+        _len: u32,
+    ) -> Result<()> {
+        Err(crate::error::Error::ChipNotSupported)
+    }
 }
 
 // Note: `SpiMaster` uses `async fn` and is therefore not directly usable as
@@ -196,6 +242,9 @@ where
     use crate::spi::check_io_mode_supported;
 
     check_io_mode_supported(cmd.io_mode, features)?;
+    if !crate::spi::dummy_cycles_representable(cmd.io_mode, cmd.dummy_cycles) {
+        return Err(crate::error::Error::ProgrammerError);
+    }
 
     let header_len = cmd.header_len();
     let mut write_data = alloc::vec![0u8; header_len + cmd.write_data.len()];
@@ -231,6 +280,9 @@ where
     use crate::spi::check_io_mode_supported;
 
     check_io_mode_supported(cmd.io_mode, features)?;
+    if !crate::spi::dummy_cycles_representable(cmd.io_mode, cmd.dummy_cycles) {
+        return Err(crate::error::Error::ProgrammerError);
+    }
 
     let header_len = cmd.header_len();
     let mut write_data = alloc::vec![0u8; header_len + cmd.write_data.len()];

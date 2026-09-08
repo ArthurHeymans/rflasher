@@ -318,8 +318,10 @@ async fn parse_bfpt<M: SpiMaster + ?Sized>(
     }
 
     // Parse JESD216B+ additions (DWORDs 15-16)
-    if len >= 64 {
+    if len >= 60 {
         parse_bfpt_dword15(get_dword(56), &mut params); // DWORD 15
+    }
+    if len >= 64 {
         parse_bfpt_dword16(get_dword(60), &mut params); // DWORD 16
     }
 
@@ -469,7 +471,7 @@ pub async fn is_supported<M: SpiMaster + ?Sized>(master: &mut M) -> bool {
 use alloc::{string::String, vec::Vec};
 
 #[cfg(feature = "alloc")]
-use crate::chip::{EraseBlock, EraseRegion, Features, FlashChip, WriteGranularity};
+use crate::chip::{EraseBlock, EraseRegion, Features, FlashChip, QeMethod, WriteGranularity};
 
 /// Convert SFDP info to a FlashChip structure
 ///
@@ -483,11 +485,23 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     // Build feature flags from SFDP data
     let mut features = Features::SFDP;
 
-    if params.fast_read_112 || params.fast_read_122 {
-        features |= Features::DUAL_IO;
+    if params.fast_read_112 {
+        features |= Features::FAST_READ_DOUT;
     }
-    if params.fast_read_114 || params.fast_read_144 || params.fast_read_444 {
-        features |= Features::QUAD_IO;
+    if params.fast_read_122 {
+        features |= Features::FAST_READ_DIO;
+    }
+    if params.fast_read_114 {
+        features |= Features::FAST_READ_QOUT;
+    }
+    if params.fast_read_144 {
+        features |= Features::FAST_READ_QIO;
+    }
+    if params.fast_read_444 {
+        // 4-4-4 read capability only — it does not imply support for a
+        // specific QPI entry/exit mechanism (0x38/0xFF, 0x35/0xF5), so do
+        // not set QPI_38_FF here.
+        features |= Features::QPI;
     }
     if params.address_mode.supports_4byte() {
         features |= Features::FOUR_BYTE_ADDR;
@@ -550,14 +564,25 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     if params.soft_reset.supports_66_99() {
         // Mark that soft reset is supported (could add a feature flag)
     }
-    if params.volatile_sr_write_enable == WriteEnableForVolatileSr::Wren {
-        features |= Features::WRSR_WREN;
-    } else {
+    // Volatile-write support supplements, not replaces, persistent WREN.
+    features |= Features::WRSR_WREN;
+    if params.volatile_sr_write_enable == WriteEnableForVolatileSr::Ewsr {
         features |= Features::WRSR_EWSR;
     }
-    if params.quad_enable.is_needed() {
-        features |= Features::QE_SR2;
-    }
+    let qe_method = match params.quad_enable {
+        QuadEnableRequirement::None => QeMethod::None,
+        QuadEnableRequirement::Sr2Bit1_WriteCmd01
+        | QuadEnableRequirement::Sr2Bit1_WriteCmd01_StatusSplit => QeMethod::Sr2Bit1WriteSr,
+        QuadEnableRequirement::Sr1Bit6_WriteCmd01 => QeMethod::Sr1Bit6,
+        QuadEnableRequirement::Unknown
+        | QuadEnableRequirement::Sr2Bit7_WriteCmdSpecial
+        | QuadEnableRequirement::Sr2Bit1_NoRead => {
+            // No speculative register sequence: 011 needs 0x3F/0x3E,
+            // and 100 does not specify a usable SR2 read instruction.
+            features &= !Features::ANY_QUAD;
+            QeMethod::None
+        }
+    };
 
     // Build erase blocks from SFDP data.
     // Each BFPT erase type covers the entire chip uniformly; the optional 4BA
@@ -597,6 +622,16 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         WriteGranularity::Byte
     };
 
+    // Per-mode dummy-cycle overrides from the BFPT instruction tables.
+    // SpiReadOp::dummy_cycles counts total clocks (mode + dummy), matching
+    // how backends split them into a mode byte plus high-Z clocks — the
+    // same convention as flashprog's spi_dummy_cycles(). A supported descriptor
+    // supplies an exact count, including zero; an absent descriptor keeps defaults.
+    let total_clocks = |p: FastReadParams| {
+        p.is_supported()
+            .then_some(p.mode_clocks.saturating_add(p.dummy_clocks))
+    };
+
     FlashChip {
         vendor: String::from("SFDP"),
         name: String::from("Unknown"),
@@ -610,6 +645,14 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         write_granularity,
         erase_blocks,
         tested: Default::default(),
+        qe_method,
+        dummy_cycles_112: total_clocks(params.fast_read_112_params),
+        dummy_cycles_122: total_clocks(params.fast_read_122_params),
+        dummy_cycles_114: total_clocks(params.fast_read_114_params),
+        dummy_cycles_144: total_clocks(params.fast_read_144_params),
+        // No parsed source for QPI (4-4-4) dummy clocks yet; the JEDEC
+        // default applies via effective_dc().
+        dummy_cycles_qpi: None,
     }
 }
 
@@ -908,6 +951,158 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn explicit_zero_latency_survives_bfpt_selection_and_differs_from_absent_default() {
+        use crate::flash::{FlashContext, io::select_read_plan};
+        use crate::programmer::SpiFeatures;
+        use crate::spi::{IoMode, SpiCommand};
+        struct Master;
+        impl SpiMaster for Master {
+            fn features(&self) -> SpiFeatures {
+                SpiFeatures::DUAL_IO
+            }
+            fn max_read_len(&self) -> usize {
+                256
+            }
+            fn max_write_len(&self) -> usize {
+                256
+            }
+            async fn execute(&mut self, _: &mut SpiCommand<'_>) -> Result<()> {
+                panic!("selection must be pure")
+            }
+            async fn delay_us(&mut self, _: u32) {}
+        }
+        for (descriptor, stored, clocks) in [
+            (Some(0xbb00_0000), Some(0), 0),
+            (Some(0xbb04_0000), Some(4), 4),
+            (None, None, 4),
+        ] {
+            let mut params = BasicFlashParams::default();
+            parse_bfpt_dword1(1 << 20, &mut params);
+            parse_bfpt_dword2(0x007f_ffff, &mut params);
+            if let Some(dword) = descriptor {
+                parse_bfpt_dword4(dword, &mut params);
+            }
+            let info = SfdpInfo {
+                header: SfdpHeader::parse(&[0x53, 0x46, 0x44, 0x50, 6, 1, 0, 0xff]),
+                basic_params: params,
+                num_param_headers: 1,
+                four_byte_addr_table: None,
+            };
+            let ctx = FlashContext::new(to_flash_chip(&info, 0, 0));
+            assert_eq!(ctx.chip.dummy_cycles_122, stored);
+            assert_eq!(ctx.chip.dummy_cycles_112, None);
+            let plan = select_read_plan(&Master, &ctx, false, |_| true).unwrap();
+            assert_eq!(
+                (plan.op.opcode, plan.op.io_mode, plan.op.dummy_cycles),
+                (0xbb, IoMode::DualIo, clocks)
+            );
+            let mut buf = [0; 1];
+            let cmd = SpiCommand::read_3b(plan.op.opcode, 0, &mut buf)
+                .with_io_mode(plan.op.io_mode)
+                .with_dummy_cycles(plan.op.dummy_cycles);
+            assert_eq!(cmd.header_len(), if clocks == 0 { 4 } else { 5 });
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn qer_encodings_and_missing_dword15_gate_scoped_reads() {
+        use crate::{
+            flash::{FlashContext, FlashDevice, SpiFlashDevice, io::select_read_plan},
+            programmer::SpiFeatures,
+            spi::{SpiCommand, opcodes},
+        };
+        struct Master {
+            table: [u8; 64],
+            commands: alloc::vec::Vec<u8>,
+        }
+        impl SpiMaster for Master {
+            fn features(&self) -> SpiFeatures {
+                SpiFeatures::QUAD_IO | SpiFeatures::QUAD_IN
+            }
+            fn max_read_len(&self) -> usize {
+                256
+            }
+            fn max_write_len(&self) -> usize {
+                256
+            }
+            async fn delay_us(&mut self, _: u32) {}
+            async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+                self.commands.push(cmd.opcode);
+                if cmd.opcode == opcodes::RDSFDP {
+                    let start = cmd.address.unwrap() as usize;
+                    cmd.read_buf
+                        .copy_from_slice(&self.table[start..start + cmd.read_buf.len()]);
+                } else {
+                    // Known methods can confirm pre-existing QE, no writes needed.
+                    cmd.read_buf
+                        .fill(if cmd.opcode == opcodes::RDSR { 0x40 } else { 2 });
+                }
+                Ok(())
+            }
+        }
+        futures_lite::future::block_on(async {
+            for length in [9, 15, 16] {
+                for qer in 0..8 {
+                    let mut master = Master {
+                        table: [0; 64],
+                        commands: alloc::vec::Vec::new(),
+                    };
+                    master.table[0..4].copy_from_slice(&(1u32 << 21).to_le_bytes());
+                    master.table[4..8].copy_from_slice(&0x007f_ffffu32.to_le_bytes());
+                    master.table[8..12].copy_from_slice(&0x0000_eb44u32.to_le_bytes());
+                    master.table[56..60].copy_from_slice(&((qer as u32) << 20).to_le_bytes());
+                    let header = ParameterHeader::parse(&[0, 6, 1, length, 0, 0, 0, 0xff]);
+                    let basic_params = parse_bfpt(&mut master, &header).await.unwrap();
+                    if length == 9 {
+                        assert_eq!(basic_params.quad_enable, QuadEnableRequirement::Unknown);
+                    } else {
+                        assert_eq!(
+                            basic_params.quad_enable,
+                            QuadEnableRequirement::from_bfpt(qer)
+                        );
+                    }
+                    let info = SfdpInfo {
+                        header: SfdpHeader::parse(&[0x53, 0x46, 0x44, 0x50, 6, 1, 0, 0xff]),
+                        basic_params,
+                        num_param_headers: 1,
+                        four_byte_addr_table: None,
+                    };
+                    let mut ctx = FlashContext::new(to_flash_chip(&info, 0, 0));
+                    // Test register sequence ownership separately from whether the
+                    // SFDP descriptor supplies volatile-write capability.
+                    ctx.chip.features |= crate::chip::Features::WRSR_EWSR;
+                    master.commands.clear();
+                    let plan = select_read_plan(&master, &ctx, false, |_| true).unwrap();
+                    let safe = length >= 15 && matches!(qer, 0 | 1 | 2 | 5);
+                    assert_eq!(
+                        plan.op.io_mode.requires_quad(),
+                        safe,
+                        "length={length}, QER={qer}"
+                    );
+                    let mut device = SpiFlashDevice::new(master, ctx);
+                    device.read(0, &mut [0; 8]).await.unwrap();
+                    let (master, _) = device.into_parts();
+                    assert!(!master.commands.contains(&opcodes::WRSR));
+                    assert!(!master.commands.contains(&opcodes::WRSR2));
+                    if !safe || qer == 0 {
+                        assert!(!master.commands.contains(&opcodes::RDSR2));
+                    }
+                }
+            }
+            assert_eq!(
+                QuadEnableRequirement::from_bfpt(4),
+                QuadEnableRequirement::Sr2Bit1_NoRead
+            );
+            assert_eq!(
+                QuadEnableRequirement::from_bfpt(3),
+                QuadEnableRequirement::Sr2Bit7_WriteCmdSpecial
+            );
+        });
+    }
 
     #[test]
     fn test_sfdp_header_parse() {
