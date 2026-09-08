@@ -37,11 +37,6 @@ fn main() {
     }
 }
 
-/// Top-level async entry point.
-///
-/// The library stack below the CLI is async on every target; the native
-/// binary blocks exactly once, in `main`, around this function.
-
 /// Run a flash command to completion, then restore session state.
 ///
 /// Mirrors flashprog's `finish_access`: `finish()` clears a volatile QE bit
@@ -54,6 +49,10 @@ async fn finish_session(handle: &mut FlashHandle) {
     }
 }
 
+/// Top-level async entry point.
+///
+/// The library stack below the CLI is async on every target; the native
+/// binary blocks exactly once, in `main`, around this function.
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // Set log level based on verbosity
     match cli.verbose {

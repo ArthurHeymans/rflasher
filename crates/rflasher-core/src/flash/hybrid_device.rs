@@ -58,6 +58,8 @@ pub struct HybridFlashDevice<M: SpiMaster + OpaqueMaster> {
     ctx: FlashContext,
     /// Prepared session state (read op + QPI mode + 4BA state)
     prepared: PreparedState,
+    /// True once `prepare()`/`set_prepared()` established session state.
+    prepared_established: bool,
 }
 
 impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
@@ -66,12 +68,17 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     /// # Arguments
     /// * `master` - The programmer (must implement both SpiMaster and OpaqueMaster)
     /// * `ctx` - Flash context with chip metadata (from probing via SpiMaster)
+    ///
+    /// The device starts unprepared. The first read/write/erase lazily runs
+    /// `prepare()` so the opaque bulk path always sees a consistent read op
+    /// and 4-byte addressing state.
     pub fn new(master: M, ctx: FlashContext) -> Self {
         let prepared = PreparedState::default_for(&ctx);
         HybridFlashDevice {
             master,
             ctx,
             prepared,
+            prepared_established: false,
         }
     }
 
@@ -102,13 +109,31 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     /// bulk-read path uses multi-IO framing.
     pub async fn prepare(&mut self) -> Result<()> {
         self.prepared = crate::flash::prepare::prepare_io(&mut self.ctx, &mut self.master).await?;
-        // Push read op down to OpaqueMaster so bulk reads can use multi-IO.
+        self.push_read_op();
+        self.prepared_established = true;
+        Ok(())
+    }
+
+    /// Push the prepared read op into the `OpaqueMaster` so bulk transfers
+    /// use the same opcode, I/O mode, and addressing as the SPI layer.
+    fn push_read_op(&mut self) {
         OpaqueMaster::set_read_op(
             &mut self.master,
             self.prepared.read_op,
             self.ctx.chip.features,
             self.prepared.read_addressing,
         );
+    }
+
+    /// Run `prepare()` once, before the first opaque (bulk) operation.
+    ///
+    /// The opaque path does not bracket 4-byte addressing itself, so an
+    /// unprepared read/write on a >16 MiB chip would use a 3-byte address
+    /// and return data from the wrong address.
+    async fn ensure_prepared(&mut self) -> Result<()> {
+        if !self.prepared_established {
+            self.prepare().await?;
+        }
         Ok(())
     }
 
@@ -118,12 +143,8 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     /// the programmer stay in agreement.
     pub fn set_prepared(&mut self, state: PreparedState) {
         self.prepared = state;
-        OpaqueMaster::set_read_op(
-            &mut self.master,
-            self.prepared.read_op,
-            self.ctx.chip.features,
-            self.prepared.read_addressing,
-        );
+        self.push_read_op();
+        self.prepared_established = true;
     }
 
     /// Undo side-effects from `prepare()`.
@@ -209,6 +230,8 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
             return Err(Error::AddressOutOfBounds);
         }
 
+        self.ensure_prepared().await?;
+
         // OpaqueMaster::read handles alignment splitting internally
         OpaqueMaster::read(&mut self.master, addr, buf).await
     }
@@ -218,6 +241,8 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         if !ctx.is_valid_range(addr, data.len()) {
             return Err(Error::AddressOutOfBounds);
         }
+
+        self.ensure_prepared().await?;
 
         // OpaqueMaster::write handles alignment splitting internally
         OpaqueMaster::write(&mut self.master, addr, data).await
@@ -237,6 +262,8 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         if !self.context().is_valid_range(addr, len as usize) {
             return Err(Error::AddressOutOfBounds);
         }
+
+        self.ensure_prepared().await?;
 
         // Try opaque erase first — the programmer handles everything internally
         // (block selection, busy-wait, etc.). If it returns Ok, we're done.
@@ -440,5 +467,114 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
         wp::get_available_ranges(&bit_map, total_size, decoder)
+    }
+}
+
+#[cfg(all(test, feature = "alloc"))]
+mod tests {
+    use super::*;
+    use crate::chip::{EraseBlock, Features, FlashChip, QeMethod, WriteGranularity};
+    use crate::protocol::SpiReadOp;
+    use crate::spi::SpiCommand;
+    use alloc::vec;
+
+    /// Records whether the read op was pushed before a bulk read happened.
+    #[derive(Default)]
+    struct MockHybrid {
+        pushed_op: Option<SpiReadOp>,
+        pushes: usize,
+        reads: usize,
+    }
+
+    impl SpiMaster for MockHybrid {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::FOUR_BYTE_ADDR
+        }
+        fn max_read_len(&self) -> usize {
+            4096
+        }
+        fn max_write_len(&self) -> usize {
+            4096
+        }
+        async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+            cmd.read_buf.fill(0xff);
+            Ok(())
+        }
+        async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    impl OpaqueMaster for MockHybrid {
+        fn size(&self) -> usize {
+            2 * 1024 * 1024
+        }
+        fn set_read_op(&mut self, op: SpiReadOp, _f: Features, _a: CommandAddressing) {
+            self.pushed_op = Some(op);
+            self.pushes += 1;
+        }
+        async fn read(&mut self, _addr: u32, buf: &mut [u8]) -> Result<()> {
+            assert!(
+                self.pushed_op.is_some(),
+                "bulk read ran before the read op was pushed"
+            );
+            self.reads += 1;
+            buf.fill(0xff);
+            Ok(())
+        }
+        async fn write(&mut self, _addr: u32, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        async fn erase(&mut self, _addr: u32, _len: u32) -> Result<()> {
+            Err(Error::ProgrammerError)
+        }
+    }
+
+    fn simple_chip() -> FlashChip {
+        FlashChip {
+            vendor: "Test".into(),
+            name: "TestChip".into(),
+            jedec_manufacturer: 0xEF,
+            jedec_device: 0x4014,
+            total_size: 2 * 1024 * 1024,
+            page_size: 256,
+            features: Features::FAST_READ,
+            voltage_min_mv: 2700,
+            voltage_max_mv: 3600,
+            write_granularity: WriteGranularity::Page,
+            erase_blocks: vec![EraseBlock::new(0x20, 4096)],
+            tested: Default::default(),
+            qe_method: QeMethod::None,
+            dummy_cycles_112: 0,
+            dummy_cycles_122: 0,
+            dummy_cycles_114: 0,
+            dummy_cycles_144: 0,
+            dummy_cycles_qpi: 0,
+        }
+    }
+
+    #[test]
+    fn unprepared_read_runs_prepare_first() {
+        futures_lite::future::block_on(async {
+            let mut dev =
+                HybridFlashDevice::new(MockHybrid::default(), FlashContext::new(simple_chip()));
+            assert!(!dev.prepared_established);
+            let mut buf = [0u8; 4];
+            FlashDevice::read(&mut dev, 0, &mut buf).await.unwrap();
+            assert!(dev.prepared_established);
+            assert_eq!(dev.master.reads, 1);
+            assert!(dev.master.pushed_op.is_some());
+        })
+    }
+
+    #[test]
+    fn prepare_is_not_repeated_for_second_read() {
+        futures_lite::future::block_on(async {
+            let mut dev =
+                HybridFlashDevice::new(MockHybrid::default(), FlashContext::new(simple_chip()));
+            let mut buf = [0u8; 4];
+            FlashDevice::read(&mut dev, 0, &mut buf).await.unwrap();
+            FlashDevice::read(&mut dev, 0, &mut buf).await.unwrap();
+            assert_eq!(dev.master.reads, 2);
+            assert_eq!(dev.master.pushes, 1, "prepare must run only once");
+        })
     }
 }

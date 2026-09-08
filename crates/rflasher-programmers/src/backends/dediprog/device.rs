@@ -1048,11 +1048,15 @@ impl Dediprog {
                             cmd_buf[4] = op.opcode;
                         }
                     }
-                } else if mode == WriteMode::PagePgm as u8
-                    && self.chip_features.contains(Features::FOUR_BYTE_PROGRAM)
-                {
-                    cmd_buf[3] = WriteMode::FourByteAddr256BPagePgm0x12 as u8;
-                    cmd_buf[4] = opcodes::PP_4B;
+                } else if mode == WriteMode::PagePgm as u8 {
+                    if self.chip_features.contains(Features::FOUR_BYTE_PROGRAM) {
+                        cmd_buf[3] = WriteMode::FourByteAddr256BPagePgm0x12 as u8;
+                        cmd_buf[4] = opcodes::PP_4B;
+                    } else {
+                        // V2 page-program mode is 3-byte; anything above
+                        // 16 MiB needs native 4-byte program or an EAR.
+                        self.ensure_page_program_addressable()?;
+                    }
                 }
 
                 cmd_buf[5] = 0; // RFU
@@ -1086,8 +1090,10 @@ impl Dediprog {
                     cmd_buf[3] = ReadMode::Configurable as u8;
                     cmd_buf[4] = op.opcode;
                     cmd_buf[10] = op.address_width.bytes();
-                    // Round up: the firmware field counts half-cycles, so an
-                    // odd dummy count must not be truncated.
+                    // The firmware field is in units of two SPI clock cycles
+                    // (flashprog's spi_dummy_cycles() / 2). Round up so an
+                    // odd dummy count is not silently shortened; odd counts
+                    // cannot be represented exactly.
                     cmd_buf[11] = op.dummy_cycles.div_ceil(2);
                     Ok(12)
                 } else {
@@ -1098,10 +1104,11 @@ impl Dediprog {
                         } else if self.in_4ba_mode {
                             cmd_buf[3] = WriteMode::FourByteAddr256BPagePgm as u8;
                             cmd_buf[4] = opcodes::PP;
-                        } else if self.flash_size.is_some_and(|size| size > 16 * 1024 * 1024) {
-                            return Err(DediprogError::Unsupported(
-                                "4-byte page program is not supported for this chip".into(),
-                            ));
+                        } else {
+                            // No native 4-byte program and no EN4B: only an
+                            // EAR (handled via select_extended_address) can
+                            // address above 16 MiB.
+                            self.ensure_page_program_addressable()?;
                         }
                     }
                     // Page size (256 bytes) as 32-bit LE
@@ -1294,8 +1301,28 @@ impl Dediprog {
         Ok(())
     }
 
+    /// Reject a page program that cannot reach the chip's whole address
+    /// space. Native 4-byte program, EN4B mode, and an extended address
+    /// register all provide a way to address above 16 MiB; without one a
+    /// 3-byte address silently wraps.
+    fn ensure_page_program_addressable(&self) -> Result<()> {
+        if self.chip_features.contains(Features::FOUR_BYTE_PROGRAM)
+            || self.in_4ba_mode
+            || self.extended_address_features.is_some()
+        {
+            return Ok(());
+        }
+        if self.flash_size.is_some_and(|size| size > 16 * 1024 * 1024) {
+            return Err(DediprogError::Unsupported(
+                "4-byte page program is not supported for this chip".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Slow write via SPI transceive for unaligned head/tail residuals.
     async fn slow_write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+        self.ensure_page_program_addressable()?;
         let (opcode, address_width) = if self.chip_features.contains(Features::FOUR_BYTE_PROGRAM) {
             (opcodes::PP_4B, 4usize)
         } else if self.in_4ba_mode {

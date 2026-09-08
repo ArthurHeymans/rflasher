@@ -824,8 +824,8 @@ pub async fn read_quad_io_4b<M: SpiMaster + ?Sized>(
 /// Enter QPI mode by sending the specified enter opcode.
 ///
 /// Common values:
-/// - `0x35` (Winbond, GigaDevice) — exit with `0xF5`
-/// - `0x38` (Macronix, ISSI, Spansion) — exit with `0xFF`
+/// - `0x35` (Macronix, AMIC, ISSI) — exit with `0xF5`
+/// - `0x38` (Winbond, GigaDevice, Eon, Fudan, Puya and others) — exit with `0xFF`
 pub async fn enter_qpi_with<M: SpiMaster + ?Sized>(master: &mut M, enter_opcode: u8) -> Result<()> {
     let mut cmd = SpiCommand::simple(enter_opcode);
     master.execute(&mut cmd).await

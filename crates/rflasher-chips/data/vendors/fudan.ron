@@ -185,7 +185,7 @@
             name: "FM25W128",
             device_id: 0x2818,
             total_size: MiB(16),
-            features: (wrsr_wren: true, wrsr_ext: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, fast_read: true, fast_read_dio: true, fast_read_dout: true, fast_read_qio: true, fast_read_qout: true, qpi_38_ff: true, set_read_params: true, wrsr_ewsr: true),
+            features: (wrsr_wren: true, wrsr_ext: true, otp: true, status_reg_2: true, fast_read: true, fast_read_dio: true, fast_read_dout: true, fast_read_qio: true, fast_read_qout: true, qpi_38_ff: true, set_read_params: true, wrsr_ewsr: true),
             qe_method: Sr2Bit1WriteSr2,
             voltage: (min: 1650, max: 3600),
             erase_blocks: [

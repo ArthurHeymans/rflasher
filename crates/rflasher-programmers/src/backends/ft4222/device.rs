@@ -75,6 +75,8 @@ pub struct Ft4222 {
     in_endpoint: Option<Endpoint<Bulk, In>>,
     /// Cached `max_packet_size` for the bulk IN endpoint.
     in_max_packet_size: usize,
+    /// Silicon revision (1 = A, 4 = D, ...; -1 = unrecognized/pre-D).
+    silicon_rev: i32,
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +274,7 @@ impl Ft4222 {
             out_endpoint: None,
             in_endpoint: None,
             in_max_packet_size: 0,
+            silicon_rev: -1,
         };
 
         let out_endpoint = ft4222
@@ -299,6 +302,19 @@ impl Ft4222 {
             version2,
             version3
         );
+
+        self.silicon_rev = ft4222_silicon_rev(chip_version);
+        // TN_161 errata §3.3.3: revisions A-C hang on the single-write +
+        // multi-read shape our multi-IO header emits for 1-1-2 and 1-1-4.
+        // Cap pre-D (and unrecognized) silicon at dual I/O (1-2-2), which
+        // carries the address in a multi-write phase.
+        if self.silicon_rev < 4 && self.config.io_mode != IoMode::Single {
+            log::warn!(
+                "FT4222H silicon revision {} is pre-D; disabling 1-1-2/1-1-4 reads and \
+                 QPI (TN_161 errata 3.3.3). Dual I/O (1-2-2) remains available.",
+                self.silicon_rev
+            );
+        }
 
         let channels = self.get_num_channels().await?;
         log::debug!("FT4222H channels: {}", channels);
@@ -833,18 +849,43 @@ impl Ft4222 {
     }
 }
 
+/// Decode the silicon revision from `FT4222_GetVersion`'s `chip_version`.
+///
+/// Mirrors flashprog's `ft4222_silicon_rev`: 1..=26 for revisions A..Z and
+/// `-1` for an unrecognized value, which callers must treat as pre-D.
+fn ft4222_silicon_rev(chip_version: u32) -> i32 {
+    if (chip_version & 0xffff_00ff) != 0x4222_0000 {
+        return -1;
+    }
+    ((chip_version >> 8) & 0xff) as i32
+}
+
 impl SpiMaster for Ft4222 {
     fn features(&self) -> SpiFeatures {
         let mut features = SpiFeatures::FOUR_BYTE_ADDR;
+        // TN_161 errata §3.3.3: pre-D (and unrecognized) silicon hangs on
+        // 1-1-2 and 1-1-4 reads, whose header is a single-write + multi-read
+        // transfer with no multi-write phase. Only dual I/O (1-2-2) and
+        // single I/O are safe there.
+        let pre_d = self.silicon_rev < 4;
         match self.config.io_mode {
             IoMode::Single => {}
-            IoMode::Dual => features |= SpiFeatures::DUAL_IN | SpiFeatures::DUAL_IO,
+            IoMode::Dual => {
+                features |= SpiFeatures::DUAL_IO;
+                if !pre_d {
+                    features |= SpiFeatures::DUAL_IN;
+                }
+            }
             IoMode::Quad => {
-                features |= SpiFeatures::DUAL_IN
-                    | SpiFeatures::DUAL_IO
-                    | SpiFeatures::QUAD_IN
-                    | SpiFeatures::QUAD_IO
-                    | SpiFeatures::QPI;
+                if pre_d {
+                    features |= SpiFeatures::DUAL_IO;
+                } else {
+                    features |= SpiFeatures::DUAL_IN
+                        | SpiFeatures::DUAL_IO
+                        | SpiFeatures::QUAD_IN
+                        | SpiFeatures::QUAD_IO
+                        | SpiFeatures::QPI;
+                }
             }
         }
         features
@@ -986,4 +1027,21 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<SpiConfig> {
     }
 
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ft4222_silicon_rev;
+
+    #[test]
+    fn silicon_rev_matches_flashprog_encoding() {
+        assert_eq!(ft4222_silicon_rev(0x4222_0100), 1); // revision A
+        assert_eq!(ft4222_silicon_rev(0x4222_0400), 4); // revision D
+    }
+
+    #[test]
+    fn unrecognized_chip_version_is_treated_as_pre_d() {
+        assert_eq!(ft4222_silicon_rev(0x0000_0000), -1);
+        assert_eq!(ft4222_silicon_rev(0x4223_0100), -1);
+    }
 }

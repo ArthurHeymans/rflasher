@@ -429,10 +429,8 @@ mod tests {
                     }
                 }
                 // WRSR2
-                opcodes::WRSR2 if !cmd.write_data.is_empty() => {
-                    if !self.ignore_sr_writes {
-                        self.sr2 = cmd.write_data[0];
-                    }
+                opcodes::WRSR2 if !cmd.write_data.is_empty() && !self.ignore_sr_writes => {
+                    self.sr2 = cmd.write_data[0];
                 }
                 _ => {}
             }

@@ -71,7 +71,9 @@ Multi-IO reads are a per-session negotiation, modeled on flashprog's
 3. **Devices** carry the `PreparedState`: `SpiFlashDevice` issues the cached
    op through `SpiMaster::execute`; `HybridFlashDevice` (Dediprog, sunxi
    FEL) pushes it to `OpaqueMaster::set_read_op` for the bulk path while
-   erase/status stay on `SpiMaster`.
+   erase/status stay on `SpiMaster`. If `prepare()` was never called, the
+   first bulk read/write/erase runs it lazily, so the opaque path never
+   sees a stale read op or 3-byte address on a >16 MiB chip.
 4. **Erase verification** (`check_erased_range`) always reads back through
    the single-IO slow path (`operations::read`), mirroring flashprog's
    `dediprog_slow_read` pinning `spi_fast_read` to NULL: the verify path
@@ -87,7 +89,6 @@ Multi-IO reads are a per-session negotiation, modeled on flashprog's
    flashprog's `finish_access` coverage.
 
 The chip database (`crates/rflasher-chips/data/vendors/*.ron`) is derived
-from flashprog's `flashchips.c` by `util/multiio_audit.py`, which owns nine
-multi-IO flags plus `qe_method` (two-way sync: over-claimed modes are
-removed) and `wrsr_ewsr` (add-only). A clean tree must report zero updates;
-entries the reference does not know are left alone and reported.
+from flashprog's `flashchips.c`. Multi-IO capability is stored as
+fine-grained per-JEDEC-mode flags plus `qe_method` and `wrsr_ewsr`; entries
+the reference does not know are left alone.
