@@ -318,8 +318,10 @@ async fn parse_bfpt<M: SpiMaster + ?Sized>(
     }
 
     // Parse JESD216B+ additions (DWORDs 15-16)
-    if len >= 64 {
+    if len >= 60 {
         parse_bfpt_dword15(get_dword(56), &mut params); // DWORD 15
+    }
+    if len >= 64 {
         parse_bfpt_dword16(get_dword(60), &mut params); // DWORD 16
     }
 
@@ -562,9 +564,9 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     if params.soft_reset.supports_66_99() {
         // Mark that soft reset is supported (could add a feature flag)
     }
-    if params.volatile_sr_write_enable == WriteEnableForVolatileSr::Wren {
-        features |= Features::WRSR_WREN;
-    } else {
+    // Volatile-write support supplements, not replaces, persistent WREN.
+    features |= Features::WRSR_WREN;
+    if params.volatile_sr_write_enable == WriteEnableForVolatileSr::Ewsr {
         features |= Features::WRSR_EWSR;
     }
     let qe_method = match params.quad_enable {
@@ -572,8 +574,14 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         QuadEnableRequirement::Sr2Bit1_WriteCmd01
         | QuadEnableRequirement::Sr2Bit1_WriteCmd01_StatusSplit => QeMethod::Sr2Bit1WriteSr,
         QuadEnableRequirement::Sr1Bit6_WriteCmd01 => QeMethod::Sr1Bit6,
-        QuadEnableRequirement::Sr2Bit7_WriteCmdSpecial => QeMethod::Sr2Bit7,
-        QuadEnableRequirement::Sr2Bit1_WriteCmd31 => QeMethod::Sr2Bit1WriteSr2,
+        QuadEnableRequirement::Unknown
+        | QuadEnableRequirement::Sr2Bit7_WriteCmdSpecial
+        | QuadEnableRequirement::Sr2Bit1_NoRead => {
+            // No speculative register sequence: 011 needs 0x3F/0x3E,
+            // and 100 does not specify a usable SR2 read instruction.
+            features &= !Features::ANY_QUAD;
+            QeMethod::None
+        }
     };
 
     // Build erase blocks from SFDP data.
@@ -946,6 +954,97 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn qer_encodings_and_missing_dword15_gate_actual_preparation() {
+        use crate::{
+            flash::{FlashContext, prepare_io},
+            programmer::SpiFeatures,
+            spi::{SpiCommand, opcodes},
+        };
+        struct Master {
+            table: [u8; 64],
+            commands: alloc::vec::Vec<u8>,
+        }
+        impl SpiMaster for Master {
+            fn features(&self) -> SpiFeatures {
+                SpiFeatures::QUAD_IO | SpiFeatures::QUAD_IN
+            }
+            fn max_read_len(&self) -> usize {
+                256
+            }
+            fn max_write_len(&self) -> usize {
+                256
+            }
+            async fn delay_us(&mut self, _: u32) {}
+            async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+                self.commands.push(cmd.opcode);
+                if cmd.opcode == opcodes::RDSFDP {
+                    let start = cmd.address.unwrap() as usize;
+                    cmd.read_buf
+                        .copy_from_slice(&self.table[start..start + cmd.read_buf.len()]);
+                } else {
+                    // Known methods can confirm pre-existing QE, no writes needed.
+                    cmd.read_buf
+                        .fill(if cmd.opcode == opcodes::RDSR { 0x40 } else { 2 });
+                }
+                Ok(())
+            }
+        }
+        futures_lite::future::block_on(async {
+            for length in [9, 15, 16] {
+                for qer in 0..8 {
+                    let mut master = Master {
+                        table: [0; 64],
+                        commands: alloc::vec::Vec::new(),
+                    };
+                    master.table[0..4].copy_from_slice(&(1u32 << 21).to_le_bytes());
+                    master.table[4..8].copy_from_slice(&0x007f_ffffu32.to_le_bytes());
+                    master.table[8..12].copy_from_slice(&0x0000_eb44u32.to_le_bytes());
+                    master.table[56..60].copy_from_slice(&((qer as u32) << 20).to_le_bytes());
+                    let header = ParameterHeader::parse(&[0, 6, 1, length, 0, 0, 0, 0xff]);
+                    let basic_params = parse_bfpt(&mut master, &header).await.unwrap();
+                    if length == 9 {
+                        assert_eq!(basic_params.quad_enable, QuadEnableRequirement::Unknown);
+                    } else {
+                        assert_eq!(
+                            basic_params.quad_enable,
+                            QuadEnableRequirement::from_bfpt(qer)
+                        );
+                    }
+                    let info = SfdpInfo {
+                        header: SfdpHeader::parse(&[0x53, 0x46, 0x44, 0x50, 6, 1, 0, 0xff]),
+                        basic_params,
+                        num_param_headers: 1,
+                        four_byte_addr_table: None,
+                    };
+                    let mut ctx = FlashContext::new(to_flash_chip(&info, 0, 0));
+                    master.commands.clear();
+                    let state = prepare_io(&mut ctx, &mut master).await.unwrap();
+                    let safe = length >= 15 && matches!(qer, 0 | 1 | 2 | 5);
+                    assert_eq!(
+                        state.read_op.io_mode.requires_quad(),
+                        safe,
+                        "length={length}, QER={qer}"
+                    );
+                    assert!(!master.commands.contains(&opcodes::WRSR));
+                    assert!(!master.commands.contains(&opcodes::WRSR2));
+                    if !safe || qer == 0 {
+                        assert!(master.commands.is_empty());
+                    }
+                }
+            }
+            assert_eq!(
+                QuadEnableRequirement::from_bfpt(4),
+                QuadEnableRequirement::Sr2Bit1_NoRead
+            );
+            assert_eq!(
+                QuadEnableRequirement::from_bfpt(3),
+                QuadEnableRequirement::Sr2Bit7_WriteCmdSpecial
+            );
+        });
+    }
 
     #[test]
     fn test_sfdp_header_parse() {

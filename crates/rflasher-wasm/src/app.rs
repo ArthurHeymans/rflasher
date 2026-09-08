@@ -167,165 +167,7 @@ macro_rules! with_programmer {
     };
 }
 
-/// Like [`with_programmer!`], but wraps the programmer in a [`FlashDevice`]
-/// for operations that need chip-level read/write/erase.
-///
-/// For Dediprog: creates [`HybridFlashDevice`] (fast bulk read/write via
-/// `OpaqueMaster`) and calls `set_flash_size()` first.
-/// For all others: creates [`SpiFlashDevice`].
-///
-/// The body receives `$device` as `&mut impl FlashDevice`. The macro handles
-/// extracting the master back via `into_parts()` and putting the Programmer
-/// wrapper back into shared state. `finish()` runs before teardown so a
-/// volatile QE bit set by `prepare()` is restored after every op (the next
-/// op re-prepares from scratch).
-macro_rules! with_flash_device {
-    ($shared:expr, $programmer:expr, $ctx_flash:expr, $device:ident, $body:expr) => {
-        match $programmer {
-            Programmer::Serprog(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                if let Err(error) = $device.prepare().await {
-                    log::error!("flash prepare failed: {error}");
-                    let (master, _) = $device.into_parts();
-                    $shared.borrow_mut().programmer = Some(Programmer::Serprog(master));
-                    return;
-                }
-                let result = { $body };
-                // The device is discarded after this op (master is handed
-                // back), so session teardown happens here: restores a
-                // volatile QE bit set by prepare() and exits QPI/4BA modes
-                // entered for the op. Best-effort: the op result stands.
-                if let Err(error) = $device.finish().await {
-                    log::warn!("flash session teardown (finish) failed: {error}");
-                }
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Serprog(master));
-                result
-            }
-            Programmer::Ch341a(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                if let Err(error) = $device.prepare().await {
-                    log::error!("flash prepare failed: {error}");
-                    let (master, _) = $device.into_parts();
-                    $shared.borrow_mut().programmer = Some(Programmer::Ch341a(master));
-                    return;
-                }
-                let result = { $body };
-                // The device is discarded after this op (master is handed
-                // back), so session teardown happens here: restores a
-                // volatile QE bit set by prepare() and exits QPI/4BA modes
-                // entered for the op. Best-effort: the op result stands.
-                if let Err(error) = $device.finish().await {
-                    log::warn!("flash session teardown (finish) failed: {error}");
-                }
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ch341a(master));
-                result
-            }
-            Programmer::Ch347(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                if let Err(error) = $device.prepare().await {
-                    log::error!("flash prepare failed: {error}");
-                    let (master, _) = $device.into_parts();
-                    $shared.borrow_mut().programmer = Some(Programmer::Ch347(master));
-                    return;
-                }
-                let result = { $body };
-                // The device is discarded after this op (master is handed
-                // back), so session teardown happens here: restores a
-                // volatile QE bit set by prepare() and exits QPI/4BA modes
-                // entered for the op. Best-effort: the op result stands.
-                if let Err(error) = $device.finish().await {
-                    log::warn!("flash session teardown (finish) failed: {error}");
-                }
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ch347(master));
-                result
-            }
-            Programmer::Ftdi(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                if let Err(error) = $device.prepare().await {
-                    log::error!("flash prepare failed: {error}");
-                    let (master, _) = $device.into_parts();
-                    $shared.borrow_mut().programmer = Some(Programmer::Ftdi(master));
-                    return;
-                }
-                let result = { $body };
-                // The device is discarded after this op (master is handed
-                // back), so session teardown happens here: restores a
-                // volatile QE bit set by prepare() and exits QPI/4BA modes
-                // entered for the op. Best-effort: the op result stands.
-                if let Err(error) = $device.finish().await {
-                    log::warn!("flash session teardown (finish) failed: {error}");
-                }
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ftdi(master));
-                result
-            }
-            Programmer::Ft4222(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                if let Err(error) = $device.prepare().await {
-                    log::error!("flash prepare failed: {error}");
-                    let (master, _) = $device.into_parts();
-                    $shared.borrow_mut().programmer = Some(Programmer::Ft4222(master));
-                    return;
-                }
-                let result = { $body };
-                // The device is discarded after this op (master is handed
-                // back), so session teardown happens here: restores a
-                // volatile QE bit set by prepare() and exits QPI/4BA modes
-                // entered for the op. Best-effort: the op result stands.
-                if let Err(error) = $device.finish().await {
-                    log::warn!("flash session teardown (finish) failed: {error}");
-                }
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ft4222(master));
-                result
-            }
-            Programmer::Dediprog(mut master) => {
-                master.set_flash_size($ctx_flash.total_size() as u32);
-                let mut $device = HybridFlashDevice::new(master, $ctx_flash);
-                if let Err(error) = $device.prepare().await {
-                    log::error!("flash prepare failed: {error}");
-                    let (master, _) = $device.into_parts();
-                    $shared.borrow_mut().programmer = Some(Programmer::Dediprog(master));
-                    return;
-                }
-                let result = { $body };
-                // The device is discarded after this op (master is handed
-                // back), so session teardown happens here: restores a
-                // volatile QE bit set by prepare() and exits QPI/4BA modes
-                // entered for the op. Best-effort: the op result stands.
-                if let Err(error) = $device.finish().await {
-                    log::warn!("flash session teardown (finish) failed: {error}");
-                }
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Dediprog(master));
-                result
-            }
-            Programmer::Raiden(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                if let Err(error) = $device.prepare().await {
-                    log::error!("flash prepare failed: {error}");
-                    let (master, _) = $device.into_parts();
-                    $shared.borrow_mut().programmer = Some(Programmer::Raiden(master));
-                    return;
-                }
-                let result = { $body };
-                // The device is discarded after this op (master is handed
-                // back), so session teardown happens here: restores a
-                // volatile QE bit set by prepare() and exits QPI/4BA modes
-                // entered for the op. Best-effort: the op result stands.
-                if let Err(error) = $device.finish().await {
-                    log::warn!("flash session teardown (finish) failed: {error}");
-                }
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Raiden(master));
-                result
-            }
-        }
-    };
-}
+use crate::flash_device::with_flash_device;
 
 // =============================================================================
 // Shared State for async task communication
@@ -1326,58 +1168,65 @@ impl RflasherApp {
                 /// visible promptly during long WebUSB reads.
                 const YIELD_INTERVAL: usize = READ_CHUNK_SIZE;
 
-                with_flash_device!(shared, programmer, ctx_flash, device, {
-                    let total = buf.len();
-                    let mut offset = 0usize;
-                    let mut last_yield = 0usize;
-                    let mut read_error: Option<rflasher_core::error::Error> = None;
+                with_flash_device!(
+                    shared,
+                    programmer,
+                    ctx_flash,
+                    device,
+                    ReadFailed,
+                    {
+                        let total = buf.len();
+                        let mut offset = 0usize;
+                        let mut last_yield = 0usize;
+                        let mut read_error: Option<rflasher_core::error::Error> = None;
 
-                    while offset < total {
-                        let chunk_size = core::cmp::min(READ_CHUNK_SIZE, total - offset);
-                        match device
-                            .read(offset as u32, &mut buf[offset..offset + chunk_size])
-                            .await
-                        {
-                            Ok(()) => {}
-                            Err(e) => {
-                                read_error = Some(e);
-                                break;
+                        while offset < total {
+                            let chunk_size = core::cmp::min(READ_CHUNK_SIZE, total - offset);
+                            match device
+                                .read(offset as u32, &mut buf[offset..offset + chunk_size])
+                                .await
+                            {
+                                Ok(()) => {}
+                                Err(e) => {
+                                    read_error = Some(e);
+                                    break;
+                                }
+                            }
+                            offset += chunk_size;
+
+                            shared.borrow_mut().messages.push(AsyncMessage::Progress(
+                                ProgressUpdate::Reading {
+                                    done: offset,
+                                    total,
+                                },
+                            ));
+
+                            if let Some(ref ctx) = ctx {
+                                ctx.request_repaint();
+                            }
+
+                            if offset >= last_yield + YIELD_INTERVAL {
+                                last_yield = offset;
+                                yield_to_browser().await;
                             }
                         }
-                        offset += chunk_size;
 
-                        shared.borrow_mut().messages.push(AsyncMessage::Progress(
-                            ProgressUpdate::Reading {
-                                done: offset,
-                                total,
-                            },
-                        ));
-
-                        if let Some(ref ctx) = ctx {
-                            ctx.request_repaint();
-                        }
-
-                        if offset >= last_yield + YIELD_INTERVAL {
-                            last_yield = offset;
-                            yield_to_browser().await;
+                        match read_error {
+                            None => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::ReadComplete(buf));
+                            }
+                            Some(e) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::ReadFailed(format!("{:?}", e)));
+                            }
                         }
                     }
-
-                    match read_error {
-                        None => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::ReadComplete(buf));
-                        }
-                        Some(e) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::ReadFailed(format!("{:?}", e)));
-                        }
-                    }
-                });
+                );
             } else {
                 shared
                     .borrow_mut()
@@ -1434,24 +1283,31 @@ impl RflasherApp {
                 let ctx_flash = FlashContext::new(chip);
                 let mut progress = SharedProgress::new(shared.clone(), ctx.clone());
 
-                with_flash_device!(shared, programmer, ctx_flash, device, {
-                    let result = smart_write(&mut device, &data, &mut progress).await;
+                with_flash_device!(
+                    shared,
+                    programmer,
+                    ctx_flash,
+                    device,
+                    WriteFailed,
+                    {
+                        let result = smart_write(&mut device, &data, &mut progress).await;
 
-                    match result {
-                        Ok(stats) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::WriteComplete(stats));
-                        }
-                        Err(e) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::WriteFailed(format!("{:?}", e)));
+                        match result {
+                            Ok(stats) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::WriteComplete(stats));
+                            }
+                            Err(e) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::WriteFailed(format!("{:?}", e)));
+                            }
                         }
                     }
-                });
+                );
             } else {
                 shared
                     .borrow_mut()
@@ -1491,24 +1347,31 @@ impl RflasherApp {
             if let Some(programmer) = programmer {
                 let ctx_flash = FlashContext::new(chip);
 
-                with_flash_device!(shared, programmer, ctx_flash, device, {
-                    let result = device.erase(0, size).await;
+                with_flash_device!(
+                    shared,
+                    programmer,
+                    ctx_flash,
+                    device,
+                    EraseFailed,
+                    {
+                        let result = device.erase(0, size).await;
 
-                    match result {
-                        Ok(()) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::EraseComplete);
-                        }
-                        Err(e) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::EraseFailed(format!("{:?}", e)));
+                        match result {
+                            Ok(()) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::EraseComplete);
+                            }
+                            Err(e) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::EraseFailed(format!("{:?}", e)));
+                            }
                         }
                     }
-                });
+                );
             } else {
                 shared
                     .borrow_mut()
@@ -1566,78 +1429,87 @@ impl RflasherApp {
                 const CHUNK_SIZE: usize = 4096;
                 const YIELD_INTERVAL: usize = 65536;
 
-                with_flash_device!(shared, programmer, ctx_flash, device, {
-                    let total = data.len();
-                    let mut offset = 0usize;
-                    let mut last_repaint = 0usize;
-                    let mut last_yield = 0usize;
-                    let mut verify_error: Option<String> = None;
+                with_flash_device!(
+                    shared,
+                    programmer,
+                    ctx_flash,
+                    device,
+                    VerifyFailed,
+                    {
+                        let total = data.len();
+                        let mut offset = 0usize;
+                        let mut last_repaint = 0usize;
+                        let mut last_yield = 0usize;
+                        let mut verify_error: Option<String> = None;
 
-                    while offset < total {
-                        let chunk_size = core::cmp::min(CHUNK_SIZE, total - offset);
-                        let mut buf = vec![0u8; chunk_size];
+                        while offset < total {
+                            let chunk_size = core::cmp::min(CHUNK_SIZE, total - offset);
+                            let mut buf = vec![0u8; chunk_size];
 
-                        match device.read(offset as u32, &mut buf).await {
-                            Ok(()) => {
-                                let expected = &data[offset..offset + chunk_size];
-                                if buf != expected {
-                                    for (i, (a, b)) in buf.iter().zip(expected.iter()).enumerate() {
-                                        if a != b {
-                                            verify_error = Some(format!(
-                                                "Mismatch at 0x{:X}: read 0x{:02X}, expected 0x{:02X}",
-                                                offset + i,
-                                                a,
-                                                b
-                                            ));
-                                            break;
+                            match device.read(offset as u32, &mut buf).await {
+                                Ok(()) => {
+                                    let expected = &data[offset..offset + chunk_size];
+                                    if buf != expected {
+                                        for (i, (a, b)) in
+                                            buf.iter().zip(expected.iter()).enumerate()
+                                        {
+                                            if a != b {
+                                                verify_error = Some(format!(
+                                                    "Mismatch at 0x{:X}: read 0x{:02X}, expected 0x{:02X}",
+                                                    offset + i,
+                                                    a,
+                                                    b
+                                                ));
+                                                break;
+                                            }
                                         }
+                                        break;
                                     }
+                                }
+                                Err(e) => {
+                                    verify_error = Some(format!("Read error: {:?}", e));
                                     break;
                                 }
                             }
-                            Err(e) => {
-                                verify_error = Some(format!("Read error: {:?}", e));
-                                break;
+
+                            offset += chunk_size;
+
+                            shared.borrow_mut().messages.push(AsyncMessage::Progress(
+                                ProgressUpdate::Verifying {
+                                    done: offset,
+                                    total,
+                                },
+                            ));
+
+                            if offset >= last_repaint + YIELD_INTERVAL {
+                                last_repaint = offset;
+                                if let Some(ref ctx) = ctx {
+                                    ctx.request_repaint();
+                                }
+                            }
+
+                            if offset >= last_yield + YIELD_INTERVAL {
+                                last_yield = offset;
+                                yield_to_browser().await;
                             }
                         }
 
-                        offset += chunk_size;
-
-                        shared.borrow_mut().messages.push(AsyncMessage::Progress(
-                            ProgressUpdate::Verifying {
-                                done: offset,
-                                total,
-                            },
-                        ));
-
-                        if offset >= last_repaint + YIELD_INTERVAL {
-                            last_repaint = offset;
-                            if let Some(ref ctx) = ctx {
-                                ctx.request_repaint();
+                        match verify_error {
+                            None => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::VerifyComplete);
+                            }
+                            Some(err) => {
+                                shared
+                                    .borrow_mut()
+                                    .messages
+                                    .push(AsyncMessage::VerifyFailed(err));
                             }
                         }
-
-                        if offset >= last_yield + YIELD_INTERVAL {
-                            last_yield = offset;
-                            yield_to_browser().await;
-                        }
                     }
-
-                    match verify_error {
-                        None => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::VerifyComplete);
-                        }
-                        Some(err) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::VerifyFailed(err));
-                        }
-                    }
-                });
+                );
             } else {
                 shared
                     .borrow_mut()

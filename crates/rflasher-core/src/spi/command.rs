@@ -190,6 +190,8 @@ impl<'a> SpiCommand<'a> {
     /// byte (M7-M0) for 1-2-2 / 1-4-4 / 4-4-4 commands; the bytes are
     /// filled with 0xFF which both acts as a safe "no continuous mode"
     /// M-byte on typical chips and as harmless dummy clocks.
+    /// This is a storage size, not permission to round clock counts. Execution
+    /// must first validate exact representability for the controller.
     pub fn dummy_bytes(&self) -> usize {
         let clocks = self.dummy_cycles as usize;
         match self.io_mode {
@@ -257,4 +259,14 @@ impl<'a> SpiCommand<'a> {
 
         offset
     }
+}
+
+/// Exact dummy phase representability for byte-oriented command headers.
+pub fn dummy_cycles_representable(mode: IoMode, cycles: u8) -> bool {
+    let clocks_per_byte = match mode {
+        IoMode::Single | IoMode::DualOut | IoMode::QuadOut => 8,
+        IoMode::DualIo => 4,
+        IoMode::QuadIo | IoMode::Qpi => 2,
+    };
+    cycles.is_multiple_of(clocks_per_byte)
 }

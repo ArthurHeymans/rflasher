@@ -24,7 +24,7 @@ use crate::protocol::{
 ///
 /// Stored alongside the `FlashContext` (not mutated at read-time) so the
 /// flash device can dispatch to the right read op and can undo side-effects
-/// in `finish_io` (exit QPI, restore the QE bit, exit 4-byte addressing).
+/// in `finish_io` (exit QPI, restore the QE bit; retain 4-byte addressing).
 #[derive(Debug, Clone, Copy)]
 pub struct PreparedState {
     /// Chosen read operation (opcode + mode + dummy cycles + address width)
@@ -40,11 +40,11 @@ pub struct PreparedState {
     /// Operations use this to skip redundant EN4B/EX4B bracketing. `finish_io`
     /// deliberately leaves the mode active, matching flashprog.
     pub entered_4ba: bool,
-    /// True if `prepare_io` set the QE bit volatile for this session.
+    /// True if a volatile QE write may have taken effect for this session.
     ///
     /// `finish_io` clears it again, mirroring flashprog's
     /// `volatile_qe_enabled` restore. False when QE was already set on entry
-    /// (pre-existing state is left untouched) or when quad was disabled.
+    /// (pre-existing state is left untouched) or no write was attempted.
     pub volatile_qe_enabled: bool,
     /// QE method used for the volatile set/clear above (`None` if unused).
     pub qe_method: QuadEnableMethod,
@@ -133,6 +133,23 @@ pub async fn prepare_io<M: SpiMaster + ?Sized>(
     ctx: &mut FlashContext,
     master: &mut M,
 ) -> Result<PreparedState> {
+    let mut state = PreparedState::default_for(ctx);
+    match prepare_io_in_place(ctx, master, &mut state).await {
+        Ok(()) => Ok(state),
+        Err(error) => {
+            finish_io(&state, master).await?;
+            Err(error)
+        }
+    }
+}
+
+// Adapters retain this state even on failure, so teardown can retry restoration.
+pub(crate) async fn prepare_io_in_place<M: SpiMaster + ?Sized>(
+    ctx: &mut FlashContext,
+    master: &mut M,
+    state: &mut PreparedState,
+) -> Result<()> {
+    restore_temporary_qe(state, master).await?;
     let master_features = master.features();
     let chip_features = ctx.chip.features;
 
@@ -174,15 +191,18 @@ pub async fn prepare_io<M: SpiMaster + ?Sized>(
                         effective_chip_features &= !Features::ANY_QUAD;
                     } else {
                         log::info!("Setting volatile QE bit for {}", ctx.chip.name);
+                        // Own restoration before submission: transport/poll errors do not
+                        // prove the register write failed to reach the chip.
+                        volatile_qe_enabled = true;
+                        state.volatile_qe_enabled = true;
+                        state.qe_method = qe_method;
                         let enabled = protocol::enable_quad_mode_volatile(master, qe_method)
                             .await
                             .is_ok()
                             && protocol::is_quad_enabled(master, qe_method)
                                 .await
                                 .unwrap_or(false);
-                        if enabled {
-                            volatile_qe_enabled = true;
-                        } else {
+                        if !enabled {
                             log::warn!(
                                 "QE bit did not confirm after volatile write; disabling quad read modes for this session"
                             );
@@ -227,7 +247,7 @@ pub async fn prepare_io<M: SpiMaster + ?Sized>(
     }
 
     // ------ 3. Pick read op ------
-    let caps = chip_to_caps(effective_chip_features, in_qpi_mode);
+    let mut caps = chip_to_caps(effective_chip_features, in_qpi_mode);
     let dc = DummyCycleOverrides {
         dc_112: ctx.chip.dummy_cycles_112,
         dc_122: ctx.chip.dummy_cycles_122,
@@ -235,6 +255,15 @@ pub async fn prepare_io<M: SpiMaster + ?Sized>(
         dc_144: ctx.chip.dummy_cycles_144,
         dc_qpi: ctx.chip.dummy_cycles_qpi,
     };
+    use crate::spi::IoMode;
+    caps.dout &= master
+        .supports_read_dummy_cycles(IoMode::DualOut, if dc.dc_112 == 0 { 8 } else { dc.dc_112 });
+    caps.dio &= master
+        .supports_read_dummy_cycles(IoMode::DualIo, if dc.dc_122 == 0 { 4 } else { dc.dc_122 });
+    caps.qout &= master
+        .supports_read_dummy_cycles(IoMode::QuadOut, if dc.dc_114 == 0 { 8 } else { dc.dc_114 });
+    caps.qio &= master
+        .supports_read_dummy_cycles(IoMode::QuadIo, if dc.dc_144 == 0 { 6 } else { dc.dc_144 });
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
     let allow_compatibility_4ba = !use_4byte
         || super::operations::compatible_4byte_addressing(chip_features, master_features).is_ok();
@@ -260,9 +289,6 @@ pub async fn prepare_io<M: SpiMaster + ?Sized>(
             // retry) is currently unreachable — QPI entry stays disabled and
             // in_qpi_mode is always false here. Implement the exit-retry
             // when QPI entry lands instead of extending this fallback.
-            if volatile_qe_enabled {
-                let _ = protocol::disable_quad_mode_volatile(master, qe_method).await;
-            }
             return Err(crate::error::Error::ChipNotSupported);
         }
         None => {
@@ -275,9 +301,8 @@ pub async fn prepare_io<M: SpiMaster + ?Sized>(
     };
 
     // ------ 4. Select and establish the address strategy ------
-    // If address setup fails after QE was set volatile, restore the bit
-    // before reporting the error so a failed open leaves no session state
-    // behind (the caller has no PreparedState to finish with).
+    // The caller rolls back owned QE on failure and adapters retain any
+    // unconfirmed restoration obligation for a subsequent teardown retry.
     let address_result = if use_4byte {
         super::operations::addressing_for_4byte_operation(
             read_op.native_4ba,
@@ -287,15 +312,7 @@ pub async fn prepare_io<M: SpiMaster + ?Sized>(
     } else {
         Ok((CommandAddressing::ThreeByte, false))
     };
-    let (read_addressing, entered_4ba) = match address_result {
-        Ok(v) => v,
-        Err(e) => {
-            if volatile_qe_enabled {
-                let _ = protocol::disable_quad_mode_volatile(master, qe_method).await;
-            }
-            return Err(e);
-        }
-    };
+    let (read_addressing, entered_4ba) = address_result?;
     read_op.address_width = match read_addressing {
         CommandAddressing::FourByte => crate::spi::AddressWidth::FourByte,
         CommandAddressing::ThreeByte | CommandAddressing::ExtendedAddressRegister(_) => {
@@ -303,11 +320,9 @@ pub async fn prepare_io<M: SpiMaster + ?Sized>(
         }
     };
     if entered_4ba
+        && !state.entered_4ba
         && let Err(e) = protocol::enter_4byte_mode_with_features(master, chip_features).await
     {
-        if volatile_qe_enabled {
-            let _ = protocol::disable_quad_mode_volatile(master, qe_method).await;
-        }
         return Err(e);
     }
 
@@ -320,15 +335,16 @@ pub async fn prepare_io<M: SpiMaster + ?Sized>(
         read_op.native_4ba,
     );
 
-    Ok(PreparedState {
+    *state = PreparedState {
         read_op,
         read_addressing,
         in_qpi_mode,
         qpi_exit_opcode,
-        entered_4ba,
+        entered_4ba: entered_4ba || state.entered_4ba,
         volatile_qe_enabled,
         qe_method,
-    })
+    };
+    Ok(())
 }
 
 /// Undo side-effects from `prepare_io`.
@@ -346,12 +362,25 @@ pub async fn finish_io<M: SpiMaster + ?Sized>(state: &PreparedState, master: &mu
     {
         log::warn!("exit_qpi_with failed: {e:?}");
     }
-    if state.volatile_qe_enabled
-        && let Err(e) = protocol::disable_quad_mode_volatile(master, state.qe_method).await
-    {
-        log::warn!("failed to restore volatile QE bit: {e:?}");
-    }
+    let mut remaining = *state;
+    restore_temporary_qe(&mut remaining, master).await?;
     // Match flashprog: leave compatibility 4BA mode active on release.
+    Ok(())
+}
+
+/// Clear only session-owned QE and require readback before a persistent WP RMW.
+/// Keep ownership on every error so later teardown/preparation can retry.
+pub(crate) async fn restore_temporary_qe<M: SpiMaster + ?Sized>(
+    state: &mut PreparedState,
+    master: &mut M,
+) -> Result<()> {
+    if state.volatile_qe_enabled {
+        protocol::disable_quad_mode_volatile(master, state.qe_method).await?;
+        if protocol::is_quad_enabled(master, state.qe_method).await? {
+            return Err(crate::error::Error::ProgrammerError);
+        }
+        state.volatile_qe_enabled = false;
+    }
     Ok(())
 }
 
@@ -525,9 +554,8 @@ mod tests {
             // The chip ignores the QE write (e.g. write-protected SR).
             master.ignore_sr_writes = true;
             let state = prepare_io(&mut ctx, &mut master).await.unwrap();
-            // No confirmation -> degrade to non-quad instead of Ok-with-garbage.
-            // (Single: the mock master has no dual capabilities either.)
-            assert!(!state.volatile_qe_enabled);
+            // No confirmation -> degrade, but retain the restoration obligation.
+            assert!(state.volatile_qe_enabled);
             assert_eq!(state.read_op.io_mode, crate::spi::IoMode::Single);
         })
     }

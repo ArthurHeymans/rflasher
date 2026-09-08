@@ -42,6 +42,8 @@ pub struct SpiFlashDevice<M: SpiMaster> {
     /// Prepared state (read op, QPI mode, etc.); defaults to single-I/O until
     /// `prepare()` is called.
     prepared: PreparedState,
+    prepared_established: bool,
+    needs_reprepare: bool,
 }
 
 impl<M: SpiMaster> SpiFlashDevice<M> {
@@ -51,15 +53,16 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// * `master` - The SPI master to take ownership of
     /// * `ctx` - Flash context with chip metadata (from probing)
     ///
-    /// The device will start in slow single-I/O mode until `prepare()` is
-    /// called; it's safe to immediately read/erase/write without preparing
-    /// (correctness is preserved, only throughput is lost).
+    /// Starts with single-I/O reads until `prepare()` is called. After a WP
+    /// mutation, subsequent I/O lazily re-establishes the session.
     pub fn new(master: M, ctx: FlashContext) -> Self {
         let prepared = PreparedState::default_for(&ctx);
         SpiFlashDevice {
             master,
             ctx,
             prepared,
+            prepared_established: false,
+            needs_reprepare: false,
         }
     }
 
@@ -89,7 +92,21 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// and caches the fastest available read op. Call this immediately after
     /// construction to enable multi-IO reads.
     pub async fn prepare(&mut self) -> Result<()> {
-        self.prepared = crate::flash::prepare::prepare_io(&mut self.ctx, &mut self.master).await?;
+        if self.prepared_established {
+            return Ok(());
+        }
+        if let Err(error) = crate::flash::prepare::prepare_io_in_place(
+            &mut self.ctx,
+            &mut self.master,
+            &mut self.prepared,
+        )
+        .await
+        {
+            self.suspend_prepared_io().await?;
+            return Err(error);
+        }
+        self.prepared_established = true;
+        self.needs_reprepare = false;
         Ok(())
     }
 
@@ -98,11 +115,30 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// Mostly useful for tests; `prepare()` is the normal entry point.
     pub fn set_prepared(&mut self, state: PreparedState) {
         self.prepared = state;
+        self.prepared_established = true;
+        self.needs_reprepare = false;
     }
 
     /// Undo side-effects from `prepare()`.
     pub async fn finish(&mut self) -> Result<()> {
-        crate::flash::prepare::finish_io(&self.prepared, &mut self.master).await
+        self.suspend_prepared_io().await
+    }
+
+    // Invalidate first, even if restoration fails. Never reuse quad after a
+    // status write with uncertain completion. EN4B ownership is independent.
+    async fn suspend_prepared_io(&mut self) -> Result<()> {
+        self.prepared_established = false;
+        self.needs_reprepare = true;
+        let entered_4ba = self.prepared.entered_4ba;
+        let mut fallback = PreparedState::default_for(&self.ctx);
+        fallback.entered_4ba = entered_4ba;
+        self.prepared.read_op = fallback.read_op;
+        self.prepared.read_addressing = fallback.read_addressing;
+        if self.prepared.in_qpi_mode {
+            protocol::exit_qpi_with(&mut self.master, self.prepared.qpi_exit_opcode).await?;
+            self.prepared.in_qpi_mode = false;
+        }
+        crate::flash::prepare::restore_temporary_qe(&mut self.prepared, &mut self.master).await
     }
 
     /// Consume the adapter and return the flash context
@@ -174,6 +210,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
+        if self.needs_reprepare {
+            self.prepare().await?;
+        }
         if !self.context().is_valid_range(addr, buf.len()) {
             return Err(Error::AddressOutOfBounds);
         }
@@ -208,6 +247,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+        if self.needs_reprepare {
+            self.prepare().await?;
+        }
         use crate::chip::{Features, WriteGranularity};
 
         let ctx = self.context();
@@ -308,6 +350,9 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
+        if self.needs_reprepare {
+            self.prepare().await?;
+        }
         use crate::chip::Features;
 
         let ctx = self.context();
@@ -506,25 +551,11 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
         wp::read_wp_config(&mut self.master, &bit_map, total_size, decoder).await
     }
 
-    /// Augment `WriteOptions` with chip-specific settings derived from feature flags.
-    ///
-    /// Injects `use_ewsr = true` when the chip has `WRSR_EWSR` (legacy SST25 chips
-    /// that require EWSR (0x50) instead of WREN (0x06) before status register writes).
-    fn chip_write_options(&self, options: WriteOptions) -> WriteOptions {
-        WriteOptions {
-            use_ewsr: self
-                .ctx
-                .chip
-                .features
-                .contains(crate::chip::Features::WRSR_EWSR),
-            ..options
-        }
-    }
-
     /// Write write protection bits
     pub async fn write_wp_bits(&mut self, bits: &WpBits, options: WriteOptions) -> WpResult<()> {
+        self.suspend_prepared_io().await?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
-        let options = self.chip_write_options(options);
         wp::write_wp_bits(&mut self.master, bits, &bit_map, options).await
     }
 
@@ -534,10 +565,11 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
         config: &WpConfig,
         options: WriteOptions,
     ) -> WpResult<()> {
+        self.suspend_prepared_io().await?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
-        let options = self.chip_write_options(options);
         wp::write_wp_config(
             &mut self.master,
             config,
@@ -551,17 +583,19 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
 
     /// Set write protection mode
     pub async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
+        self.suspend_prepared_io().await?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
-        let options = self.chip_write_options(options);
         wp::set_wp_mode(&mut self.master, mode, &bit_map, options).await
     }
 
     /// Set protected range
     pub async fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
+        self.suspend_prepared_io().await?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
-        let options = self.chip_write_options(options);
         wp::set_wp_range(
             &mut self.master,
             range,
@@ -575,8 +609,9 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
 
     /// Disable write protection
     pub async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
+        self.suspend_prepared_io().await?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
-        let options = self.chip_write_options(options);
         wp::disable_wp(&mut self.master, &bit_map, options).await
     }
 

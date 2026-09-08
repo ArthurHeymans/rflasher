@@ -6,6 +6,7 @@
 #![warn(missing_docs)]
 
 mod app;
+mod flash_device;
 mod transport;
 
 pub use app::RflasherApp;

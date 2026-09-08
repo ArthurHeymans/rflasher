@@ -62,3 +62,6 @@ pub use operations::{read, select_erase_block, write};
 // Re-export detailed probe result
 #[cfg(feature = "std")]
 pub use operations::{ProbeResult, probe_detailed};
+
+#[cfg(all(test, feature = "alloc"))]
+mod session_tests;

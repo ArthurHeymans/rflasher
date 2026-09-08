@@ -1033,21 +1033,7 @@ impl Dediprog {
                         address_width: rflasher_core::spi::AddressWidth::ThreeByte,
                         native_4ba: false,
                     });
-                    match op.opcode {
-                        opcodes::READ => {
-                            cmd_buf[4] = op.opcode;
-                        }
-                        opcodes::READ_4B | opcodes::FAST_READ_4B => {
-                            // V2 has no 4-byte plain-read mode; translate to
-                            // the 4-byte fast read (0x0C).
-                            cmd_buf[3] = ReadMode::FourByteAddrFast0x0C as u8;
-                            cmd_buf[4] = opcodes::FAST_READ_4B;
-                        }
-                        _ => {
-                            cmd_buf[3] = ReadMode::Fast as u8;
-                            cmd_buf[4] = op.opcode;
-                        }
-                    }
+                    encode_read_op(self.protocol, op, cmd_buf)?;
                 } else if mode == WriteMode::PagePgm as u8 {
                     if self.chip_features.contains(Features::FOUR_BYTE_PROGRAM) {
                         cmd_buf[3] = WriteMode::FourByteAddr256BPagePgm0x12 as u8;
@@ -1087,14 +1073,7 @@ impl Dediprog {
                         address_width: rflasher_core::spi::AddressWidth::ThreeByte,
                         native_4ba: false,
                     });
-                    cmd_buf[3] = ReadMode::Configurable as u8;
-                    cmd_buf[4] = op.opcode;
-                    cmd_buf[10] = op.address_width.bytes();
-                    // The firmware field is in units of two SPI clock cycles
-                    // (flashprog's spi_dummy_cycles() / 2). Round up so an
-                    // odd dummy count is not silently shortened; odd counts
-                    // cannot be represented exactly.
-                    cmd_buf[11] = op.dummy_cycles.div_ceil(2);
+                    encode_read_op(self.protocol, op, cmd_buf)?;
                     Ok(12)
                 } else {
                     if mode == WriteMode::PagePgm as u8 {
@@ -1144,16 +1123,7 @@ impl Dediprog {
             return Ok(());
         }
 
-        self.select_extended_address(start).await?;
         let count = (len / BULK_CHUNK_SIZE) as u16;
-
-        // Pick the dediprog IO mode from the selected read op (if any).
-        // Fall back to Single if nothing was set.
-        let dp_mode = match self.selected_read_op {
-            Some(op) => DpIoMode::from(op.io_mode),
-            None => DpIoMode::Single,
-        };
-        self.set_io_mode(dp_mode).await?;
 
         // Build and send the CMD_READ command packet
         let mut cmd_buf = [0u8; MAX_CMD_SIZE];
@@ -1168,6 +1138,16 @@ impl Dediprog {
             start,
             count,
         )?;
+
+        self.select_extended_address(start).await?;
+
+        // Pick the dediprog IO mode from the selected read op (if any).
+        // Fall back to Single if nothing was set.
+        let dp_mode = match self.selected_read_op {
+            Some(op) => DpIoMode::from(op.io_mode),
+            None => DpIoMode::Single,
+        };
+        self.set_io_mode(dp_mode).await?;
 
         self.control_write_raw(Command::Read as u8, value, idx, &cmd_buf[..cmd_len])
             .await?;
@@ -1588,6 +1568,10 @@ impl SpiMaster for Dediprog {
         features
     }
 
+    fn supports_read_dummy_cycles(&self, _mode: CoreIoMode, cycles: u8) -> bool {
+        read_dummy_supported(self.protocol, cycles)
+    }
+
     fn max_read_len(&self) -> usize {
         // Maximum data read in a single transceive command
         16
@@ -1616,6 +1600,9 @@ impl SpiMaster for Dediprog {
             return Err(CoreError::ProgrammerError);
         }
 
+        if !rflasher_core::spi::dummy_cycles_representable(cmd.io_mode, cmd.dummy_cycles) {
+            return Err(CoreError::ProgrammerError);
+        }
         // For simple commands, use transceive
         let header_len = cmd.header_len();
         let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
@@ -1636,5 +1623,101 @@ impl SpiMaster for Dediprog {
 
     async fn delay_us(&mut self, us: u32) {
         platform_sleep!(Duration::from_micros(us as u64));
+    }
+}
+
+// V2 firmware has fixed fast-read latency. V3 expresses pairs of clocks.
+fn read_dummy_supported(protocol: Protocol, cycles: u8) -> bool {
+    match protocol {
+        Protocol::V3 => cycles.is_multiple_of(2),
+        _ => cycles == 0 || cycles == 8,
+    }
+}
+
+fn encode_read_op(
+    protocol: Protocol,
+    op: SpiReadOp,
+    packet: &mut [u8; MAX_CMD_SIZE],
+) -> Result<()> {
+    if !read_dummy_supported(protocol, op.dummy_cycles) {
+        return Err(DediprogError::Unsupported(
+            "Unrepresentable read dummy clocks".into(),
+        ));
+    }
+    if protocol == Protocol::V2 {
+        packet[3] = if op.native_4ba {
+            ReadMode::FourByteAddrFast0x0C as u8
+        } else if op.opcode != opcodes::READ {
+            ReadMode::Fast as u8
+        } else {
+            ReadMode::Std as u8
+        };
+        packet[4] = if op.opcode == opcodes::READ_4B {
+            opcodes::FAST_READ_4B
+        } else {
+            op.opcode
+        };
+    } else if protocol == Protocol::V3 {
+        packet[3] = ReadMode::Configurable as u8;
+        packet[4] = op.opcode;
+        packet[10] = op.address_width.bytes();
+        packet[11] = op.dummy_cycles / 2;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod framing_tests {
+    use super::*;
+    use rflasher_core::spi::AddressWidth;
+
+    #[test]
+    fn v2_native_address_mode_is_independent_of_opcode() {
+        for (opcode, native, mode, wire_opcode) in [
+            (0x3c, true, ReadMode::FourByteAddrFast0x0C, 0x3c),
+            (0x3b, false, ReadMode::Fast, 0x3b),
+            (0x13, true, ReadMode::FourByteAddrFast0x0C, 0x0c),
+        ] {
+            let mut packet = [0; MAX_CMD_SIZE];
+            let op = SpiReadOp {
+                opcode,
+                io_mode: CoreIoMode::DualOut,
+                dummy_cycles: 8,
+                address_width: if native {
+                    AddressWidth::FourByte
+                } else {
+                    AddressWidth::ThreeByte
+                },
+                native_4ba: native,
+            };
+            encode_read_op(Protocol::V2, op, &mut packet).unwrap();
+            assert_eq!(&packet[3..5], &[mode as u8, wire_opcode]);
+        }
+    }
+
+    #[test]
+    fn v3_dummy_pairs_are_exact_and_invalid_packet_is_untouched() {
+        for (mode, clocks, valid) in [
+            (CoreIoMode::DualIo, 5, false),
+            (CoreIoMode::QuadIo, 7, false),
+            (CoreIoMode::DualIo, 4, true),
+            (CoreIoMode::QuadIo, 6, true),
+        ] {
+            let mut packet = [0; MAX_CMD_SIZE];
+            let op = SpiReadOp {
+                opcode: 0xeb,
+                io_mode: mode,
+                dummy_cycles: clocks,
+                address_width: AddressWidth::FourByte,
+                native_4ba: false,
+            };
+            assert_eq!(encode_read_op(Protocol::V3, op, &mut packet).is_ok(), valid);
+            if valid {
+                assert_eq!(packet[10], 4);
+                assert_eq!(packet[11], clocks / 2);
+            } else {
+                assert_eq!(packet, [0; MAX_CMD_SIZE]);
+            }
+        }
     }
 }

@@ -619,6 +619,9 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
     io_mode: IoMode,
     dummy_cycles: u8,
 ) -> Result<()> {
+    if !master.supports_read_dummy_cycles(io_mode, dummy_cycles) {
+        return Err(Error::ProgrammerError);
+    }
     if addressing == CommandAddressing::ThreeByte && addr as u64 + buf.len() as u64 > 0x01_00_00_00
     {
         // A 24-bit address cannot reach beyond 16 MiB: the transfer would

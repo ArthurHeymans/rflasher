@@ -783,6 +783,16 @@ pub async fn read<M: SpiMaster + ?Sized>(
     addr: u32,
     buf: &mut [u8],
 ) -> Result<()> {
+    read_in_session(master, ctx, addr, buf, false).await
+}
+
+async fn read_in_session<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    buf: &mut [u8],
+    entered_4ba: bool,
+) -> Result<()> {
     use crate::chip::Features;
     use crate::protocol::{ChipReadCapabilities, DummyCycleOverrides};
 
@@ -837,6 +847,7 @@ pub async fn read<M: SpiMaster + ?Sized>(
         (CommandAddressing::ThreeByte, false)
     };
 
+    let enter_exit_4byte = enter_exit_4byte && !entered_4ba;
     if enter_exit_4byte {
         protocol::enter_4byte_mode_with_features(master, features).await?;
     }
@@ -972,11 +983,12 @@ pub async fn write<M: SpiMaster + ?Sized>(
 /// command path to single-I/O framing) with full 4-byte addressing support,
 /// and returns [`Error::EraseError`] with the exact address of the first
 /// non-erased byte on failure.
-pub async fn check_erased_range<M: SpiMaster + ?Sized>(
+pub(crate) async fn check_erased_range_in_session<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
     len: u32,
+    entered_4ba: bool,
 ) -> Result<()> {
     const CHUNK_SIZE: usize = 4096;
     let mut buf = [0u8; CHUNK_SIZE];
@@ -986,7 +998,7 @@ pub async fn check_erased_range<M: SpiMaster + ?Sized>(
         let chunk_len = core::cmp::min(CHUNK_SIZE as u32, len - offset) as usize;
         let chunk_buf = &mut buf[..chunk_len];
 
-        read(master, ctx, addr + offset, chunk_buf).await?;
+        read_in_session(master, ctx, addr + offset, chunk_buf, entered_4ba).await?;
 
         if let Some((idx, &found)) = chunk_buf.iter().enumerate().find(|&(_, &b)| b != 0xFF) {
             return Err(Error::EraseError(EraseFailure::VerifyFailed {

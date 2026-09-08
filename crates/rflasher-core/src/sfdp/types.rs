@@ -324,8 +324,10 @@ pub enum WriteEnableForVolatileSr {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[allow(non_camel_case_types)]
 pub enum QuadEnableRequirement {
-    /// No QE bit; device does not have a QE bit
+    /// Missing or reserved descriptor: quad cannot be assumed safe.
     #[default]
+    Unknown,
+    /// Explicit QER 000: device does not have a QE bit.
     None,
     /// QE is bit 1 of SR2; write SR1 and SR2 with 0x01 (2 bytes)
     Sr2Bit1_WriteCmd01,
@@ -333,8 +335,8 @@ pub enum QuadEnableRequirement {
     Sr1Bit6_WriteCmd01,
     /// QE is bit 7 of SR2; write SR2 with 0x3E, read with 0x3F
     Sr2Bit7_WriteCmdSpecial,
-    /// QE is bit 1 of SR2; write SR2 with 0x31
-    Sr2Bit1_WriteCmd31,
+    /// QER 100: two-byte 0x01 write, but no established SR2 read command.
+    Sr2Bit1_NoRead,
     /// QE is bit 1 of SR2; write SR1 and SR2 with 0x01; status read with 0x05/0x35
     Sr2Bit1_WriteCmd01_StatusSplit,
 }
@@ -347,9 +349,9 @@ impl QuadEnableRequirement {
             0b001 => Self::Sr2Bit1_WriteCmd01,
             0b010 => Self::Sr1Bit6_WriteCmd01,
             0b011 => Self::Sr2Bit7_WriteCmdSpecial,
-            0b100 => Self::Sr2Bit1_WriteCmd31,
+            0b100 => Self::Sr2Bit1_NoRead,
             0b101 => Self::Sr2Bit1_WriteCmd01_StatusSplit,
-            _ => Self::None,
+            _ => Self::Unknown,
         }
     }
 

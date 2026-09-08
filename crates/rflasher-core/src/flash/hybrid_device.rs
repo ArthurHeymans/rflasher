@@ -24,7 +24,7 @@ use crate::error::{Error, Result};
 use crate::flash::context::{AddressMode, FlashContext};
 use crate::flash::device::FlashDevice;
 use crate::flash::operations::{
-    addressing_for_4byte_operation, check_erased_range, select_erase_block,
+    addressing_for_4byte_operation, check_erased_range_in_session, select_erase_block,
 };
 use crate::flash::prepare::PreparedState;
 use crate::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
@@ -108,7 +108,19 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     /// read op into the programmer via `set_read_op` so that the opaque
     /// bulk-read path uses multi-IO framing.
     pub async fn prepare(&mut self) -> Result<()> {
-        self.prepared = crate::flash::prepare::prepare_io(&mut self.ctx, &mut self.master).await?;
+        if self.prepared_established {
+            return Ok(());
+        }
+        if let Err(error) = crate::flash::prepare::prepare_io_in_place(
+            &mut self.ctx,
+            &mut self.master,
+            &mut self.prepared,
+        )
+        .await
+        {
+            self.suspend_prepared_io().await?;
+            return Err(error);
+        }
         self.push_read_op();
         self.prepared_established = true;
         Ok(())
@@ -149,7 +161,24 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
 
     /// Undo side-effects from `prepare()`.
     pub async fn finish(&mut self) -> Result<()> {
-        crate::flash::prepare::finish_io(&self.prepared, &mut self.master).await
+        self.suspend_prepared_io().await
+    }
+
+    // Invalidate first, even if restoration fails. Never reuse quad after a
+    // status write with uncertain completion. EN4B ownership is independent.
+    async fn suspend_prepared_io(&mut self) -> Result<()> {
+        self.prepared_established = false;
+        let entered_4ba = self.prepared.entered_4ba;
+        let mut fallback = PreparedState::default_for(&self.ctx);
+        fallback.entered_4ba = entered_4ba;
+        self.prepared.read_op = fallback.read_op;
+        self.prepared.read_addressing = fallback.read_addressing;
+        self.push_read_op();
+        if self.prepared.in_qpi_mode {
+            protocol::exit_qpi_with(&mut self.master, self.prepared.qpi_exit_opcode).await?;
+            self.prepared.in_qpi_mode = false;
+        }
+        crate::flash::prepare::restore_temporary_qe(&mut self.prepared, &mut self.master).await
     }
 
     /// Consume the adapter and return the flash context
@@ -361,11 +390,16 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
             protocol::exit_4byte_mode_with_features(self.master(), chip_features).await?;
         }
 
-        // Verify only after the erase loop has left its persistent 4-byte
-        // mode. The read helper manages 4-byte mode itself; calling it inside
-        // the loop would exit that mode and make the next legacy erase opcode
-        // target the wrong address.
-        check_erased_range(&mut self.master, &self.ctx, addr, len).await
+        // Single-I/O verification borrows the retained EN4B session; it must
+        // not issue EX4B for an entry owned by preparation.
+        check_erased_range_in_session(
+            &mut self.master,
+            &self.ctx,
+            addr,
+            len,
+            self.prepared.entered_4ba,
+        )
+        .await
     }
 
     async fn finish(&mut self) -> Result<()> {
@@ -408,6 +442,8 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
 
     /// Write write protection bits
     pub async fn write_wp_bits(&mut self, bits: &WpBits, options: WriteOptions) -> WpResult<()> {
+        self.suspend_prepared_io().await?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
         wp::write_wp_bits(&mut self.master, bits, &bit_map, options).await
     }
@@ -418,6 +454,8 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
         config: &WpConfig,
         options: WriteOptions,
     ) -> WpResult<()> {
+        self.suspend_prepared_io().await?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
@@ -434,12 +472,16 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
 
     /// Set write protection mode
     pub async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
+        self.suspend_prepared_io().await?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
         wp::set_wp_mode(&mut self.master, mode, &bit_map, options).await
     }
 
     /// Set protected range
     pub async fn set_wp_range(&mut self, range: &WpRange, options: WriteOptions) -> WpResult<()> {
+        self.suspend_prepared_io().await?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
@@ -456,6 +498,8 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
 
     /// Disable all write protection
     pub async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
+        self.suspend_prepared_io().await?;
+        let options = wp::chip_write_options(self.ctx.chip.features, options);
         let bit_map = self.wp_bit_map();
         wp::disable_wp(&mut self.master, &bit_map, options).await
     }

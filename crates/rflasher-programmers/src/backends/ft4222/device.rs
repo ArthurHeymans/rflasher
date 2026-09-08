@@ -712,60 +712,13 @@ impl Ft4222 {
 
     /// Execute a command using dual, quad, or QPI framing.
     async fn execute_multi_io(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        let io_width = match cmd.io_mode {
-            CoreIoMode::Single => 1,
-            CoreIoMode::DualOut | CoreIoMode::DualIo => 2,
-            CoreIoMode::QuadOut | CoreIoMode::QuadIo | CoreIoMode::Qpi => 4,
-        };
-
-        let opcode = [cmd.opcode];
-        let addr_width = cmd.address_width.bytes() as usize;
-        let mut addr_bytes = [0u8; 4];
-        if let Some(addr) = cmd.address {
-            cmd.address_width.encode(addr, &mut addr_bytes);
-        }
-        let addr = &addr_bytes[..addr_width];
-        let dummy_bytes = (cmd.dummy_cycles as usize * io_width).div_ceil(8);
-        let uses_mode_byte = matches!(
-            cmd.io_mode,
-            CoreIoMode::DualIo | CoreIoMode::QuadIo | CoreIoMode::Qpi
-        );
-        let mode_byte_len = usize::from(uses_mode_byte && dummy_bytes > 0);
-        let high_z_bytes = dummy_bytes.saturating_sub(mode_byte_len);
-
-        let (single, multi) = match cmd.io_mode {
-            CoreIoMode::Single => (opcode.to_vec(), Vec::new()),
-            CoreIoMode::DualOut | CoreIoMode::QuadOut => {
-                let mut single = Vec::with_capacity(1 + addr_width + cmd.write_data.len());
-                single.extend_from_slice(&opcode);
-                single.extend_from_slice(addr);
-                single.extend_from_slice(cmd.write_data);
-                (single, Vec::new())
-            }
-            CoreIoMode::DualIo | CoreIoMode::QuadIo => {
-                let mut multi =
-                    Vec::with_capacity(addr_width + mode_byte_len + cmd.write_data.len());
-                multi.extend_from_slice(addr);
-                if mode_byte_len != 0 {
-                    multi.push(0xff);
-                }
-                multi.extend_from_slice(cmd.write_data);
-                (opcode.to_vec(), multi)
-            }
-            CoreIoMode::Qpi => {
-                let mut multi =
-                    Vec::with_capacity(1 + addr_width + mode_byte_len + cmd.write_data.len());
-                multi.extend_from_slice(&opcode);
-                multi.extend_from_slice(addr);
-                if mode_byte_len != 0 {
-                    multi.push(0xff);
-                }
-                multi.extend_from_slice(cmd.write_data);
-                (Vec::new(), multi)
-            }
-        };
-
-        let read_total = high_z_bytes + cmd.read_buf.len();
+        let MultiIoCommand {
+            single,
+            multi,
+            read_total,
+            high_z_bytes,
+            io_width,
+        } = build_multi_io_command(cmd)?;
         let data = self
             .spi_transfer_multi(&single, &multi, read_total, io_width as u8)
             .await
@@ -810,12 +763,7 @@ impl Ft4222 {
 
         self.set_io_lines(io_lines).await?;
 
-        let mut header = [0u8; MULTI_IO_HEADER_SIZE];
-        header[0] = MULTI_IO_MAGIC | (single_data.len() as u8 & 0x0F);
-        header[1] = ((multi_write_data.len() >> 8) & 0xFF) as u8;
-        header[2] = (multi_write_data.len() & 0xFF) as u8;
-        header[3] = ((multi_read_len >> 8) & 0xFF) as u8;
-        header[4] = (multi_read_len & 0xFF) as u8;
+        let header = multi_io_header(single_data.len(), multi_write_data.len(), multi_read_len);
 
         let mut out_buf =
             Vec::with_capacity(MULTI_IO_HEADER_SIZE + single_data.len() + multi_write_data.len());
@@ -849,6 +797,146 @@ impl Ft4222 {
     }
 }
 
+fn multi_io_header(
+    single_len: usize,
+    write_len: usize,
+    read_len: usize,
+) -> [u8; MULTI_IO_HEADER_SIZE] {
+    let mut header = [0u8; MULTI_IO_HEADER_SIZE];
+    header[0] = MULTI_IO_MAGIC | (single_len as u8 & 0x0F);
+    header[1] = ((write_len >> 8) & 0xFF) as u8;
+    header[2] = (write_len & 0xFF) as u8;
+    header[3] = ((read_len >> 8) & 0xFF) as u8;
+    header[4] = (read_len & 0xFF) as u8;
+    header
+}
+
+const FT4222_MAX_READ: usize = MULTI_IO_MAX_DATA - (u8::MAX as usize * 4 / 8);
+
+fn ft4222_features(silicon_rev: i32, io_mode: IoMode) -> SpiFeatures {
+    let mut features = SpiFeatures::FOUR_BYTE_ADDR;
+    // TN_161 errata §3.3.3: pre-D (and unrecognized) silicon hangs on
+    // 1-1-2 and 1-1-4 reads, whose header is a single-write + multi-read
+    // transfer with no multi-write phase. Only dual I/O (1-2-2) and
+    // single I/O are safe there.
+    let pre_d = silicon_rev < 4;
+    match io_mode {
+        IoMode::Single => {}
+        IoMode::Dual => {
+            features |= SpiFeatures::DUAL_IO;
+            if !pre_d {
+                features |= SpiFeatures::DUAL_IN;
+            }
+        }
+        IoMode::Quad => {
+            if pre_d {
+                features |= SpiFeatures::DUAL_IO;
+            } else {
+                features |= SpiFeatures::DUAL_IN
+                    | SpiFeatures::DUAL_IO
+                    | SpiFeatures::QUAD_IN
+                    | SpiFeatures::QUAD_IO
+                    | SpiFeatures::QPI;
+            }
+        }
+    }
+    features
+}
+
+fn ft4222_dummy_bytes(mode: CoreIoMode, cycles: u8) -> CoreResult<usize> {
+    // The high-Z phase clocks on the data lanes, including output-only reads.
+    let width = match mode {
+        CoreIoMode::Single => 1,
+        CoreIoMode::DualOut | CoreIoMode::DualIo => 2,
+        CoreIoMode::QuadOut | CoreIoMode::QuadIo | CoreIoMode::Qpi => 4,
+    };
+    let bits = cycles as usize * width;
+    if !bits.is_multiple_of(8) {
+        return Err(CoreError::ProgrammerError);
+    }
+    Ok(bits / 8)
+}
+
+fn validate_command(cmd: &SpiCommand<'_>, features: SpiFeatures) -> CoreResult<()> {
+    rflasher_core::spi::check_io_mode_supported(cmd.io_mode, features)?;
+    ft4222_dummy_bytes(cmd.io_mode, cmd.dummy_cycles)?;
+    Ok(())
+}
+
+struct MultiIoCommand {
+    single: Vec<u8>,
+    multi: Vec<u8>,
+    read_total: usize,
+    high_z_bytes: usize,
+    io_width: usize,
+}
+
+fn build_multi_io_command(cmd: &SpiCommand<'_>) -> CoreResult<MultiIoCommand> {
+    let io_width = match cmd.io_mode {
+        CoreIoMode::Single => 1,
+        CoreIoMode::DualOut | CoreIoMode::DualIo => 2,
+        CoreIoMode::QuadOut | CoreIoMode::QuadIo | CoreIoMode::Qpi => 4,
+    };
+
+    let opcode = [cmd.opcode];
+    let addr_width = cmd.address_width.bytes() as usize;
+    let mut addr_bytes = [0u8; 4];
+    if let Some(addr) = cmd.address {
+        cmd.address_width.encode(addr, &mut addr_bytes);
+    }
+    let addr = &addr_bytes[..addr_width];
+    let dummy_bytes = ft4222_dummy_bytes(cmd.io_mode, cmd.dummy_cycles)?;
+    let uses_mode_byte = matches!(
+        cmd.io_mode,
+        CoreIoMode::DualIo | CoreIoMode::QuadIo | CoreIoMode::Qpi
+    );
+    let mode_byte_len = usize::from(uses_mode_byte && dummy_bytes > 0);
+    let high_z_bytes = dummy_bytes.saturating_sub(mode_byte_len);
+
+    let (single, multi) = match cmd.io_mode {
+        CoreIoMode::Single => (opcode.to_vec(), Vec::new()),
+        CoreIoMode::DualOut | CoreIoMode::QuadOut => {
+            let mut single = Vec::with_capacity(1 + addr_width + cmd.write_data.len());
+            single.extend_from_slice(&opcode);
+            single.extend_from_slice(addr);
+            single.extend_from_slice(cmd.write_data);
+            (single, Vec::new())
+        }
+        CoreIoMode::DualIo | CoreIoMode::QuadIo => {
+            let mut multi = Vec::with_capacity(addr_width + mode_byte_len + cmd.write_data.len());
+            multi.extend_from_slice(addr);
+            if mode_byte_len != 0 {
+                multi.push(0xff);
+            }
+            multi.extend_from_slice(cmd.write_data);
+            (opcode.to_vec(), multi)
+        }
+        CoreIoMode::Qpi => {
+            let mut multi =
+                Vec::with_capacity(1 + addr_width + mode_byte_len + cmd.write_data.len());
+            multi.extend_from_slice(&opcode);
+            multi.extend_from_slice(addr);
+            if mode_byte_len != 0 {
+                multi.push(0xff);
+            }
+            multi.extend_from_slice(cmd.write_data);
+            (Vec::new(), multi)
+        }
+    };
+
+    let read_total = high_z_bytes + cmd.read_buf.len();
+    if read_total > MULTI_IO_MAX_DATA {
+        return Err(CoreError::ProgrammerError);
+    }
+    Ok(MultiIoCommand {
+        single,
+        multi,
+        read_total,
+        high_z_bytes,
+        io_width,
+    })
+}
+
 /// Decode the silicon revision from `FT4222_GetVersion`'s `chip_version`.
 ///
 /// Mirrors flashprog's `ft4222_silicon_rev`: 1..=26 for revisions A..Z and
@@ -862,38 +950,17 @@ fn ft4222_silicon_rev(chip_version: u32) -> i32 {
 
 impl SpiMaster for Ft4222 {
     fn features(&self) -> SpiFeatures {
-        let mut features = SpiFeatures::FOUR_BYTE_ADDR;
-        // TN_161 errata §3.3.3: pre-D (and unrecognized) silicon hangs on
-        // 1-1-2 and 1-1-4 reads, whose header is a single-write + multi-read
-        // transfer with no multi-write phase. Only dual I/O (1-2-2) and
-        // single I/O are safe there.
-        let pre_d = self.silicon_rev < 4;
-        match self.config.io_mode {
-            IoMode::Single => {}
-            IoMode::Dual => {
-                features |= SpiFeatures::DUAL_IO;
-                if !pre_d {
-                    features |= SpiFeatures::DUAL_IN;
-                }
-            }
-            IoMode::Quad => {
-                if pre_d {
-                    features |= SpiFeatures::DUAL_IO;
-                } else {
-                    features |= SpiFeatures::DUAL_IN
-                        | SpiFeatures::DUAL_IO
-                        | SpiFeatures::QUAD_IN
-                        | SpiFeatures::QUAD_IO
-                        | SpiFeatures::QPI;
-                }
-            }
-        }
-        features
+        ft4222_features(self.silicon_rev, self.config.io_mode)
+    }
+
+    fn supports_read_dummy_cycles(&self, mode: CoreIoMode, cycles: u8) -> bool {
+        ft4222_dummy_bytes(mode, cycles).is_ok()
     }
 
     fn max_read_len(&self) -> usize {
-        // The 16-bit FT4222 length includes high-Z dummy bytes.
-        65530
+        // A u8 dummy count can consume up to 127 quad bytes (output-only
+        // reads put all dummy clocks in high-Z). Reserve that worst case.
+        FT4222_MAX_READ
     }
 
     fn max_write_len(&self) -> usize {
@@ -902,6 +969,7 @@ impl SpiMaster for Ft4222 {
     }
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        validate_command(cmd, self.features())?;
         if cmd.io_mode != CoreIoMode::Single {
             return self.execute_multi_io(cmd).await;
         }
@@ -1031,7 +1099,123 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<SpiConfig> {
 
 #[cfg(test)]
 mod tests {
-    use super::ft4222_silicon_rev;
+    use super::*;
+
+    #[test]
+    fn multi_io_framing_is_exact_and_big_endian() {
+        let mut buf = [0; 0x1234];
+        let mut cmd = SpiCommand::read_3b(0xeb, 0x123456, &mut buf);
+        cmd.io_mode = CoreIoMode::QuadIo;
+        cmd.dummy_cycles = 6;
+        let frame = build_multi_io_command(&cmd).unwrap();
+        assert_eq!(frame.single, [0xeb]);
+        assert_eq!(frame.multi, [0x12, 0x34, 0x56, 0xff]);
+        assert_eq!(frame.high_z_bytes, 2);
+        assert_eq!(
+            multi_io_header(frame.single.len(), frame.multi.len(), frame.read_total),
+            [MULTI_IO_MAGIC | 1, 0, 4, 0x12, 0x36]
+        );
+        for (mode, clocks) in [(CoreIoMode::DualIo, 5), (CoreIoMode::QuadIo, 7)] {
+            cmd.io_mode = mode;
+            cmd.dummy_cycles = clocks;
+            assert!(build_multi_io_command(&cmd).is_err());
+        }
+        cmd.io_mode = CoreIoMode::DualIo;
+        cmd.dummy_cycles = 4;
+        assert_eq!(build_multi_io_command(&cmd).unwrap().high_z_bytes, 0);
+    }
+
+    #[test]
+    fn execution_guard_rejects_pre_d_output_and_configured_caps() {
+        let mut buf = [0; 1];
+        let mut cmd = SpiCommand::read_3b(0x3b, 0, &mut buf);
+        cmd.dummy_cycles = 8;
+        for revision in [-1, 1, 3] {
+            for mode in [CoreIoMode::DualOut, CoreIoMode::QuadOut] {
+                cmd.io_mode = mode;
+                assert!(validate_command(&cmd, ft4222_features(revision, IoMode::Quad)).is_err());
+            }
+        }
+        cmd.io_mode = CoreIoMode::QuadIo;
+        assert!(validate_command(&cmd, ft4222_features(4, IoMode::Dual)).is_err());
+        cmd.io_mode = CoreIoMode::DualIo;
+        assert!(validate_command(&cmd, ft4222_features(4, IoMode::Single)).is_err());
+        assert!(validate_command(&cmd, ft4222_features(1, IoMode::Dual)).is_ok());
+    }
+
+    // Exercises the same validation/builders as execute(), without a USB device.
+    #[derive(Default)]
+    struct FramingMaster {
+        lengths: Vec<usize>,
+    }
+    impl SpiMaster for FramingMaster {
+        fn features(&self) -> SpiFeatures {
+            ft4222_features(4, IoMode::Quad)
+        }
+        fn max_read_len(&self) -> usize {
+            FT4222_MAX_READ
+        }
+        fn max_write_len(&self) -> usize {
+            FT4222_MAX_READ
+        }
+        fn supports_read_dummy_cycles(&self, mode: CoreIoMode, cycles: u8) -> bool {
+            ft4222_dummy_bytes(mode, cycles).is_ok()
+        }
+        async fn delay_us(&mut self, _: u32) {}
+        async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+            validate_command(cmd, self.features())?;
+            if cmd.io_mode != CoreIoMode::Single {
+                let frame = build_multi_io_command(cmd)?;
+                self.lengths.push(frame.read_total);
+            }
+            cmd.read_buf.fill(0xff);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn sfdp_selection_falls_back_and_fourteen_clock_reads_chunk_safely() {
+        use rflasher_core::{
+            flash::{FlashContext, FlashDevice, SpiFlashDevice},
+            sfdp::*,
+        };
+        futures_lite::future::block_on(async {
+            for (dio, qio, expected) in [
+                (5, 7, CoreIoMode::Single),
+                (4, 7, CoreIoMode::DualIo),
+                (4, 6, CoreIoMode::QuadIo),
+                (4, 14, CoreIoMode::QuadIo),
+            ] {
+                let info = SfdpInfo {
+                    header: SfdpHeader::parse(&[0x53, 0x46, 0x44, 0x50, 6, 1, 0, 0xff]),
+                    basic_params: BasicFlashParams {
+                        density_bytes: 1024 * 1024,
+                        page_size: 256,
+                        fast_read_122: true,
+                        fast_read_144: true,
+                        fast_read_122_params: FastReadParams::new(0xbb, 4, dio - 4),
+                        fast_read_144_params: FastReadParams::new(0xeb, 2, qio - 2),
+                        quad_enable: QuadEnableRequirement::None,
+                        ..Default::default()
+                    },
+                    num_param_headers: 1,
+                    four_byte_addr_table: None,
+                };
+                let mut dev = SpiFlashDevice::new(
+                    FramingMaster::default(),
+                    FlashContext::new(to_flash_chip(&info, 0, 0)),
+                );
+                dev.prepare().await.unwrap();
+                assert_eq!(dev.prepared().read_op.io_mode, expected);
+                let mut buf = vec![0; FT4222_MAX_READ + 10];
+                dev.read(0, &mut buf).await.unwrap();
+                if qio == 14 {
+                    assert_eq!(dev.master().lengths, [FT4222_MAX_READ + 6, 16]);
+                    assert!(dev.master().lengths.iter().all(|&n| n <= MULTI_IO_MAX_DATA));
+                }
+            }
+        });
+    }
 
     #[test]
     fn silicon_rev_matches_flashprog_encoding() {

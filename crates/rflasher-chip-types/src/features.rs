@@ -16,7 +16,7 @@ bitflags! {
         // Write enable behavior
         /// Use WREN (0x06) before WRSR
         const WRSR_WREN       = 1 << 0;
-        /// Use EWSR (0x50) before WRSR (legacy SST)
+        /// EWSR (0x50): required on legacy SST; optional volatile writes with WREN.
         const WRSR_EWSR       = 1 << 1;
         /// WRSR writes both SR1 and SR2 with one command
         const WRSR_EXT        = 1 << 2;
@@ -26,13 +26,13 @@ bitflags! {
         const FAST_READ       = 1 << 3;
         /// Legacy coarse dual-IO flag (vestige: selection uses FAST_READ_DOUT/DIO now).
         ///
-        /// Still parsed from the database for backwards compatibility but
-        /// nothing in the read-op pipeline consumes it.
+        /// Retained as an API bit; no longer parsed from the database or used
+        /// by read selection.
         const DUAL_IO         = 1 << 4;
         /// Legacy coarse quad-IO flag (vestige: selection uses FAST_READ_QOUT/QIO now).
         ///
-        /// Still parsed from the database for backwards compatibility but
-        /// nothing in the read-op pipeline consumes it.
+        /// Retained as an API bit; no longer parsed from the database or used
+        /// by read selection.
         const QUAD_IO         = 1 << 5;
 
         // 4-byte addressing
@@ -50,9 +50,8 @@ bitflags! {
         const OTP             = 1 << 10;
         /// Legacy coarse QPI flag (vestige: selection uses QPI_35_F5/QPI_38_FF now).
         ///
-        /// Still parsed from the database and set by the SFDP parser for
-        /// 4-4-4-capable chips, but nothing in the read-op pipeline consumes
-        /// it. Kept deliberately to avoid database churn.
+        /// Retained as an API bit and set by SFDP for 4-4-4-capable chips;
+        /// no longer parsed from the database or used by read selection.
         const QPI             = 1 << 11;
         /// Has security registers
         const SECURITY_REG    = 1 << 12;
@@ -78,8 +77,8 @@ bitflags! {
         const STATUS_REG_3    = 1 << 20;
         /// Legacy coarse QE-location flag (vestige: QE handling uses `QeMethod` now).
         ///
-        /// Still parsed from the database for backwards compatibility but
-        /// nothing consumes it.
+        /// Retained as an API bit; no longer parsed from the database or used
+        /// by QE preparation.
         const QE_SR2          = 1 << 21;
 
         // Power management

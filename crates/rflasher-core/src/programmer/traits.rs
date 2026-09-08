@@ -111,8 +111,7 @@ pub trait SpiMaster {
     /// - `QuadIo` (1-4-4): Opcode single, address and data quad
     /// - `Qpi` (4-4-4): All phases use quad I/O
     ///
-    /// If the requested mode isn't supported, implementations should fall back
-    /// to single I/O mode and optionally log a warning.
+    /// Unsupported framing must be rejected, never silently downgraded.
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()>;
 
     /// Check if an opcode is supported by this programmer
@@ -121,6 +120,12 @@ pub trait SpiMaster {
     /// opcodes can be executed. Returns true if the opcode is allowed.
     fn probe_opcode(&self, _opcode: u8) -> bool {
         true
+    }
+
+    /// Whether the read path can emit this dummy phase without extra clocks.
+    /// Byte-oriented masters use the command header's lane width by default.
+    fn supports_read_dummy_cycles(&self, mode: crate::spi::IoMode, cycles: u8) -> bool {
+        crate::spi::dummy_cycles_representable(mode, cycles)
     }
 
     /// Delay for the specified number of microseconds
@@ -210,6 +215,9 @@ where
     use crate::spi::check_io_mode_supported;
 
     check_io_mode_supported(cmd.io_mode, features)?;
+    if !crate::spi::dummy_cycles_representable(cmd.io_mode, cmd.dummy_cycles) {
+        return Err(crate::error::Error::ProgrammerError);
+    }
 
     let header_len = cmd.header_len();
     let mut write_data = alloc::vec![0u8; header_len + cmd.write_data.len()];
@@ -245,6 +253,9 @@ where
     use crate::spi::check_io_mode_supported;
 
     check_io_mode_supported(cmd.io_mode, features)?;
+    if !crate::spi::dummy_cycles_representable(cmd.io_mode, cmd.dummy_cycles) {
+        return Err(crate::error::Error::ProgrammerError);
+    }
 
     let header_len = cmd.header_len();
     let mut write_data = alloc::vec![0u8; header_len + cmd.write_data.len()];
