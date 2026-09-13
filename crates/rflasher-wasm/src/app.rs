@@ -11,14 +11,16 @@ use rflasher_core::flash::unified::{WriteProgress, WriteStats, smart_write};
 use rflasher_core::flash::{
     FlashContext, FlashDevice, HybridFlashDevice, ProbeResult, SpiFlashDevice,
 };
+use rflasher_programmers::catalog::{OptionKind, ProgrammerInfo, Transport, available_programmers};
 use rflasher_programmers::ch341a::Ch341a;
-use rflasher_programmers::ch347::{Ch347, SpiSpeed};
-use rflasher_programmers::dediprog::{Dediprog, DediprogConfig};
-use rflasher_programmers::ft4222::{Ft4222, SpiConfig as Ft4222SpiConfig};
-use rflasher_programmers::ftdi::{Ftdi, FtdiConfig, FtdiDeviceType, FtdiInterface};
-use rflasher_programmers::raiden::{RaidenConfig, RaidenDebugSpi, Target as RaidenTarget};
+use rflasher_programmers::ch347::Ch347;
+use rflasher_programmers::dediprog::Dediprog;
+use rflasher_programmers::ft4222::Ft4222;
+use rflasher_programmers::ftdi::Ftdi;
+use rflasher_programmers::raiden::RaidenDebugSpi;
 use rflasher_programmers::serprog::Serprog;
 
+use crate::form::{Field, ProgrammerForm, borrow_pairs, int_error, is_web_transport, speed_label};
 use crate::transport::WebSerialTransport;
 
 // =============================================================================
@@ -40,63 +42,11 @@ async fn yield_to_browser() {
 }
 
 // =============================================================================
-// Programmer type abstraction
+// Programmer abstraction
 // =============================================================================
 
-/// The type of programmer to connect to
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProgrammerType {
-    /// serprog via WebSerial
-    Serprog,
-    /// CH341A via WebUSB
-    Ch341a,
-    /// CH347 via WebUSB
-    Ch347,
-    /// FTDI MPSSE via WebUSB (FT2232H, FT4232H, FT232H, etc.)
-    Ftdi,
-    /// FT4222H via WebUSB
-    Ft4222,
-    /// Dediprog SF100/SF200/SF600/SF700 via WebUSB
-    Dediprog,
-    /// Raiden Debug SPI via WebUSB
-    Raiden,
-}
-
-impl ProgrammerType {
-    fn label(&self) -> &'static str {
-        match self {
-            ProgrammerType::Serprog => "serprog (WebSerial)",
-            ProgrammerType::Ch341a => "CH341A (WebUSB)",
-            ProgrammerType::Ch347 => "CH347 (WebUSB)",
-            ProgrammerType::Ftdi => "FTDI MPSSE (WebUSB)",
-            ProgrammerType::Ft4222 => "FT4222H (WebUSB)",
-            ProgrammerType::Dediprog => "Dediprog (WebUSB)",
-            ProgrammerType::Raiden => "Raiden Debug SPI (WebUSB)",
-        }
-    }
-
-    /// Whether this programmer uses WebUSB (vs WebSerial)
-    fn is_webusb(&self) -> bool {
-        matches!(
-            self,
-            ProgrammerType::Ch341a
-                | ProgrammerType::Ch347
-                | ProgrammerType::Ftdi
-                | ProgrammerType::Ft4222
-                | ProgrammerType::Dediprog
-                | ProgrammerType::Raiden
-        )
-    }
-}
-
-fn raiden_target_label(target: RaidenTarget) -> &'static str {
-    match target {
-        RaidenTarget::Ap => "AP",
-        RaidenTarget::Ec => "EC",
-        RaidenTarget::H1 => "H1 / Cr50",
-        RaidenTarget::ApCustom => "AP custom",
-    }
-}
+/// Baud rate used for serprog when the form leaves `baud=` unset.
+const DEFAULT_SERPROG_BAUD: u32 = 115200;
 
 /// Connected programmer - wraps a serprog, CH341A, CH347, FTDI, FT4222H,
 /// Dediprog, or Raiden device
@@ -232,6 +182,111 @@ macro_rules! with_flash_device {
             }
         }
     };
+}
+
+// =============================================================================
+// Connecting
+// =============================================================================
+
+/// Ask the browser for a device and open programmer `name` with `options`.
+///
+/// `options` are the raw `key=value` pairs from the form; each backend's own
+/// `parse_options` turns them into its typed config, exactly as the CLI does.
+/// Returns the opened programmer and a display name for the status panel.
+async fn open_programmer(
+    name: &str,
+    options: &[(&str, &str)],
+) -> Result<(Programmer, String), String> {
+    match name {
+        "serprog" => {
+            let config = rflasher_programmers::serprog::parse_options(options)?;
+            let baud = config.baud.unwrap_or(DEFAULT_SERPROG_BAUD);
+            let transport = WebSerialTransport::request_and_open(baud)
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut serprog = Serprog::new(transport).await.map_err(|e| e.to_string())?;
+            if let Some(khz) = config.spispeed_khz
+                && let Err(e) = serprog.set_spi_speed(khz * 1000).await
+            {
+                log::warn!("Failed to set SPI speed: {e}");
+            }
+            if let Some(cs) = config.cs {
+                serprog
+                    .set_spi_cs(cs)
+                    .await
+                    .map_err(|e| format!("Failed to set chip select: {e}"))?;
+            }
+            let display = serprog.info().name_str().to_string();
+            Ok((Programmer::Serprog(serprog), display))
+        }
+        "ch341a" => {
+            let device_info = Ch341a::request_device().await.map_err(|e| e.to_string())?;
+            let ch341a = Ch341a::open(device_info).await.map_err(|e| e.to_string())?;
+            Ok((Programmer::Ch341a(ch341a), "CH341A".to_string()))
+        }
+        "ch347" => {
+            let config =
+                rflasher_programmers::ch347::parse_options(options).map_err(|e| e.to_string())?;
+            let device_info = Ch347::request_device().await.map_err(|e| e.to_string())?;
+            let ch347 = Ch347::open_with_config(device_info, config)
+                .await
+                .map_err(|e| e.to_string())?;
+            let display = match ch347.variant() {
+                rflasher_programmers::ch347::Ch347Variant::Ch347T => "CH347T",
+                rflasher_programmers::ch347::Ch347Variant::Ch347F => "CH347F",
+            };
+            Ok((Programmer::Ch347(ch347), display.to_string()))
+        }
+        "ftdi" => {
+            let config =
+                rflasher_programmers::ftdi::parse_options(options).map_err(|e| e.to_string())?;
+            let device = Ftdi::request_device().await.map_err(|e| e.to_string())?;
+            let ftdi = Ftdi::open(device, &config)
+                .await
+                .map_err(|e| e.to_string())?;
+            let display = format!(
+                "{} ch {}",
+                config.device_type.name(),
+                config.interface.letter()
+            );
+            Ok((Programmer::Ftdi(ftdi), display))
+        }
+        "ft4222" => {
+            let config =
+                rflasher_programmers::ft4222::parse_options(options).map_err(|e| e.to_string())?;
+            let device_info = Ft4222::request_device().await.map_err(|e| e.to_string())?;
+            let ft4222 = Ft4222::open(device_info, config)
+                .await
+                .map_err(|e| e.to_string())?;
+            let display = format!("FT4222H @ {} kHz", ft4222.actual_speed_khz());
+            Ok((Programmer::Ft4222(ft4222), display))
+        }
+        "dediprog" => {
+            let config = rflasher_programmers::dediprog::parse_options(options)
+                .map_err(|e| e.to_string())?;
+            let device_info = Dediprog::request_device()
+                .await
+                .map_err(|e| e.to_string())?;
+            let dediprog = Dediprog::open(device_info, config)
+                .await
+                .map_err(|e| e.to_string())?;
+            let display = format!("Dediprog {}", dediprog.device_string());
+            Ok((Programmer::Dediprog(dediprog), display))
+        }
+        "raiden_debug_spi" => {
+            let config =
+                rflasher_programmers::raiden::parse_options(options).map_err(|e| e.to_string())?;
+            let device_info = RaidenDebugSpi::request_device()
+                .await
+                .map_err(|e| e.to_string())?;
+            let raiden = RaidenDebugSpi::open(device_info, &config)
+                .await
+                .map_err(|e| e.to_string())?;
+            let display = format!("Raiden ({})", config.target);
+            Ok((Programmer::Raiden(raiden), display))
+        }
+        other => Err(format!("{other} cannot be opened from a browser")),
+    }
 }
 
 // =============================================================================
@@ -438,20 +493,10 @@ pub struct RflasherApp {
     status: StatusLog,
     /// File data for read/write operations
     file_buffer: Option<Vec<u8>>,
-    /// Baud rate for serial connection
-    baud_rate: u32,
-    /// Selected programmer type
-    programmer_type: ProgrammerType,
-    /// Selected SPI speed for CH347
-    spi_speed: SpiSpeed,
-    /// Selected FTDI device type
-    ftdi_device_type: FtdiDeviceType,
-    /// Selected FTDI interface/channel
-    ftdi_interface: FtdiInterface,
-    /// Selected FTDI clock divisor
-    ftdi_divisor: u16,
-    /// Selected Raiden target
-    raiden_target: RaidenTarget,
+    /// Programmers the browser can open, from the shared catalog
+    programmers: Vec<ProgrammerInfo>,
+    /// Option values for the selected programmer
+    form: ProgrammerForm,
     /// Chip database
     chip_db: ChipDatabase,
     /// Detected chip info
@@ -565,19 +610,22 @@ impl StatusLog {
 
 impl Default for RflasherApp {
     fn default() -> Self {
+        let programmers: Vec<ProgrammerInfo> = available_programmers()
+            .into_iter()
+            .filter(|p| is_web_transport(p.transport))
+            .collect();
+        let form = programmers
+            .first()
+            .map(ProgrammerForm::new)
+            .expect("wasm build must enable at least one browser-capable programmer");
         Self {
             shared: Rc::new(RefCell::new(SharedState::default())),
             connection: ConnectionState::Disconnected,
             operation: OperationState::Idle,
             status: StatusLog::default(),
             file_buffer: None,
-            baud_rate: 115200,
-            programmer_type: ProgrammerType::Serprog,
-            spi_speed: SpiSpeed::default(),
-            ftdi_device_type: FtdiDeviceType::default(),
-            ftdi_interface: FtdiInterface::default(),
-            ftdi_divisor: 2,
-            raiden_target: RaidenTarget::H1,
+            programmers,
+            form,
             chip_db: ChipDatabase::new(),
             chip_info: None,
             ctx: None,
@@ -604,6 +652,17 @@ impl RflasherApp {
         self.chip_info.is_some()
     }
 
+    /// Catalog entry for the programmer currently selected in the form.
+    fn selected_info(&self) -> Option<&ProgrammerInfo> {
+        self.programmers.iter().find(|p| p.name == self.form.name)
+    }
+
+    /// Whether the selected programmer is opened through WebUSB (vs WebSerial).
+    fn selected_is_webusb(&self) -> bool {
+        self.selected_info()
+            .is_some_and(|info| info.transport == Transport::Usb)
+    }
+
     /// Process messages from async tasks
     fn process_messages(&mut self) {
         let messages: Vec<AsyncMessage> = {
@@ -626,11 +685,10 @@ impl RflasherApp {
                 AsyncMessage::ConnectionFailed(err) => {
                     self.connection = ConnectionState::Disconnected;
                     self.status.error(format!("Connection failed: {}", err));
-                    if self.programmer_type.is_webusb() {
-                        self.status.warn(
-                            "On Linux, this may be a permissions issue. \
-                             Check Help > USB permissions for udev rules.",
-                        );
+                    if self.selected_is_webusb() {
+                        for hint in webusb_failure_hints(&err) {
+                            self.status.warn(*hint);
+                        }
                     }
                 }
                 AsyncMessage::ProbeComplete(result) => {
@@ -760,344 +818,39 @@ impl RflasherApp {
     // =========================================================================
 
     fn spawn_connect(&mut self) {
-        match self.programmer_type {
-            ProgrammerType::Serprog => self.spawn_connect_serprog(),
-            ProgrammerType::Ch341a => self.spawn_connect_ch341a(),
-            ProgrammerType::Ch347 => self.spawn_connect_ch347(),
-            ProgrammerType::Ftdi => self.spawn_connect_ftdi(),
-            ProgrammerType::Ft4222 => self.spawn_connect_ft4222(),
-            ProgrammerType::Dediprog => self.spawn_connect_dediprog(),
-            ProgrammerType::Raiden => self.spawn_connect_raiden(),
-        }
-    }
-
-    fn spawn_connect_serprog(&mut self) {
-        let baud_rate = self.baud_rate;
-        let shared = self.shared.clone();
-        let ctx = self.ctx.clone();
-
-        self.connection = ConnectionState::Connecting;
-        self.status.info("Requesting serial port...");
-
-        wasm_bindgen_futures::spawn_local(async move {
-            shared.borrow_mut().busy = true;
-
-            match WebSerialTransport::request_and_open(baud_rate).await {
-                Ok(transport) => {
-                    // Create serprog device
-                    match Serprog::new(transport).await {
-                        Ok(serprog) => {
-                            let name = serprog.info().name_str().to_string();
-                            {
-                                let mut state = shared.borrow_mut();
-                                state.programmer = Some(Programmer::Serprog(serprog));
-                                state.messages.push(AsyncMessage::Connected {
-                                    programmer_name: name,
-                                });
-                            }
-                        }
-                        Err(e) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::ConnectionFailed(format!("{:?}", e)));
-                        }
-                    }
-                }
-                Err(e) => {
-                    shared
-                        .borrow_mut()
-                        .messages
-                        .push(AsyncMessage::ConnectionFailed(format!("{:?}", e)));
-                }
-            }
-
-            shared.borrow_mut().busy = false;
-            if let Some(ctx) = ctx {
-                ctx.request_repaint();
-            }
-        });
-    }
-
-    fn spawn_connect_ch341a(&mut self) {
-        let shared = self.shared.clone();
-        let ctx = self.ctx.clone();
-
-        self.connection = ConnectionState::Connecting;
-        self.status.info("Requesting CH341A device via WebUSB...");
-
-        wasm_bindgen_futures::spawn_local(async move {
-            shared.borrow_mut().busy = true;
-
-            match Ch341a::request_device().await {
-                Ok(device_info) => match Ch341a::open(device_info).await {
-                    Ok(ch341a) => {
-                        let mut state = shared.borrow_mut();
-                        state.programmer = Some(Programmer::Ch341a(ch341a));
-                        state.messages.push(AsyncMessage::Connected {
-                            programmer_name: "CH341A".to_string(),
-                        });
-                    }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                    }
-                },
-                Err(e) => {
-                    shared
-                        .borrow_mut()
-                        .messages
-                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                }
-            }
-
-            shared.borrow_mut().busy = false;
-            if let Some(ctx) = ctx {
-                ctx.request_repaint();
-            }
-        });
-    }
-
-    fn spawn_connect_ch347(&mut self) {
-        let shared = self.shared.clone();
-        let ctx = self.ctx.clone();
-        let spi_speed = self.spi_speed;
-
-        self.connection = ConnectionState::Connecting;
-        self.status.info("Requesting CH347 device via WebUSB...");
-
-        wasm_bindgen_futures::spawn_local(async move {
-            shared.borrow_mut().busy = true;
-
-            let config = rflasher_programmers::ch347::SpiConfig::default().with_speed(spi_speed);
-
-            match Ch347::request_device().await {
-                Ok(device_info) => match Ch347::open_with_config(device_info, config).await {
-                    Ok(ch347) => {
-                        let variant_name = match ch347.variant() {
-                            rflasher_programmers::ch347::Ch347Variant::Ch347T => "CH347T",
-                            rflasher_programmers::ch347::Ch347Variant::Ch347F => "CH347F",
-                        };
-                        let mut state = shared.borrow_mut();
-                        state.programmer = Some(Programmer::Ch347(ch347));
-                        state.messages.push(AsyncMessage::Connected {
-                            programmer_name: variant_name.to_string(),
-                        });
-                    }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                    }
-                },
-                Err(e) => {
-                    shared
-                        .borrow_mut()
-                        .messages
-                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                }
-            }
-
-            shared.borrow_mut().busy = false;
-            if let Some(ctx) = ctx {
-                ctx.request_repaint();
-            }
-        });
-    }
-
-    fn spawn_connect_ftdi(&mut self) {
-        let shared = self.shared.clone();
-        let ctx = self.ctx.clone();
-        let config = FtdiConfig::for_device(self.ftdi_device_type);
-        // Apply user-selected interface and divisor
-        let config = match config.interface(self.ftdi_interface) {
-            Ok(c) => c,
-            Err(e) => {
-                self.status.error(format!("Invalid FTDI config: {}", e));
-                return;
-            }
+        let Some(info) = self.selected_info() else {
+            self.status.error("No programmer selected");
+            return;
         };
-        let config = match config.divisor(self.ftdi_divisor) {
-            Ok(c) => c,
-            Err(e) => {
-                self.status.error(format!("Invalid FTDI config: {}", e));
-                return;
-            }
+        let name = info.name;
+        let picker = if info.transport == Transport::Usb {
+            "WebUSB"
+        } else {
+            "WebSerial"
         };
-
-        self.connection = ConnectionState::Connecting;
-        self.status.info("Requesting FTDI device via WebUSB...");
-
-        wasm_bindgen_futures::spawn_local(async move {
-            shared.borrow_mut().busy = true;
-
-            match Ftdi::request_device().await {
-                Ok(device) => match Ftdi::open(device, &config).await {
-                    Ok(ftdi) => {
-                        let name = format!(
-                            "{} ch {}",
-                            config.device_type.name(),
-                            config.interface.letter()
-                        );
-                        let mut state = shared.borrow_mut();
-                        state.programmer = Some(Programmer::Ftdi(ftdi));
-                        state.messages.push(AsyncMessage::Connected {
-                            programmer_name: name,
-                        });
-                    }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                    }
-                },
-                Err(e) => {
-                    shared
-                        .borrow_mut()
-                        .messages
-                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                }
-            }
-
-            shared.borrow_mut().busy = false;
-            if let Some(ctx) = ctx {
-                ctx.request_repaint();
-            }
-        });
-    }
-
-    fn spawn_connect_ft4222(&mut self) {
+        let options = self.form.owned_pairs();
         let shared = self.shared.clone();
         let ctx = self.ctx.clone();
-        let config = Ft4222SpiConfig::default();
 
         self.connection = ConnectionState::Connecting;
-        self.status.info("Requesting FT4222H device via WebUSB...");
+        self.status
+            .info(format!("Requesting {name} device via {picker}..."));
 
         wasm_bindgen_futures::spawn_local(async move {
             shared.borrow_mut().busy = true;
 
-            match Ft4222::request_device().await {
-                Ok(device_info) => match Ft4222::open(device_info, config).await {
-                    Ok(ft4222) => {
-                        let name = format!("FT4222H @ {} kHz", ft4222.actual_speed_khz());
-                        let mut state = shared.borrow_mut();
-                        state.programmer = Some(Programmer::Ft4222(ft4222));
-                        state.messages.push(AsyncMessage::Connected {
-                            programmer_name: name,
-                        });
-                    }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                    }
-                },
-                Err(e) => {
-                    shared
-                        .borrow_mut()
-                        .messages
-                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
+            let message = match open_programmer(name, &borrow_pairs(&options)).await {
+                Ok((programmer, programmer_name)) => {
+                    shared.borrow_mut().programmer = Some(programmer);
+                    AsyncMessage::Connected { programmer_name }
                 }
-            }
+                Err(e) => AsyncMessage::ConnectionFailed(e),
+            };
 
-            shared.borrow_mut().busy = false;
-            if let Some(ctx) = ctx {
-                ctx.request_repaint();
-            }
-        });
-    }
-
-    fn spawn_connect_dediprog(&mut self) {
-        let shared = self.shared.clone();
-        let ctx = self.ctx.clone();
-        let config = DediprogConfig::default();
-
-        self.connection = ConnectionState::Connecting;
-        self.status.info("Requesting Dediprog device via WebUSB...");
-
-        wasm_bindgen_futures::spawn_local(async move {
-            shared.borrow_mut().busy = true;
-
-            match Dediprog::request_device().await {
-                Ok(device_info) => match Dediprog::open(device_info, config).await {
-                    Ok(dediprog) => {
-                        let name = format!("Dediprog {}", dediprog.device_string());
-                        let mut state = shared.borrow_mut();
-                        state.programmer = Some(Programmer::Dediprog(dediprog));
-                        state.messages.push(AsyncMessage::Connected {
-                            programmer_name: name,
-                        });
-                    }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                    }
-                },
-                Err(e) => {
-                    shared
-                        .borrow_mut()
-                        .messages
-                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                }
-            }
-
-            shared.borrow_mut().busy = false;
-            if let Some(ctx) = ctx {
-                ctx.request_repaint();
-            }
-        });
-    }
-
-    fn spawn_connect_raiden(&mut self) {
-        let shared = self.shared.clone();
-        let ctx = self.ctx.clone();
-        let config = RaidenConfig {
-            serial: None,
-            target: self.raiden_target,
-        };
-
-        self.connection = ConnectionState::Connecting;
-        self.status.info("Requesting Raiden device via WebUSB...");
-
-        wasm_bindgen_futures::spawn_local(async move {
-            shared.borrow_mut().busy = true;
-
-            match RaidenDebugSpi::request_device().await {
-                Ok(device_info) => match RaidenDebugSpi::open(device_info, &config).await {
-                    Ok(raiden) => {
-                        let mut state = shared.borrow_mut();
-                        state.programmer = Some(Programmer::Raiden(raiden));
-                        state.messages.push(AsyncMessage::Connected {
-                            programmer_name: format!(
-                                "Raiden ({})",
-                                raiden_target_label(config.target)
-                            ),
-                        });
-                    }
-                    Err(e) => {
-                        shared
-                            .borrow_mut()
-                            .messages
-                            .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                    }
-                },
-                Err(e) => {
-                    shared
-                        .borrow_mut()
-                        .messages
-                        .push(AsyncMessage::ConnectionFailed(format!("{}", e)));
-                }
-            }
-
-            shared.borrow_mut().busy = false;
+            let mut state = shared.borrow_mut();
+            state.messages.push(message);
+            state.busy = false;
+            drop(state);
             if let Some(ctx) = ctx {
                 ctx.request_repaint();
             }
@@ -1560,6 +1313,134 @@ impl RflasherApp {
     }
 }
 
+// =============================================================================
+// Schema-driven option widgets
+// =============================================================================
+
+/// Placeholder shown for an unset option that falls back to the backend default.
+const UNSET_LABEL: &str = "(default)";
+
+/// Render one form field as a `label | widget` grid row, choosing the widget
+/// from the option kind. The value stays a raw string so the backend parser
+/// remains the single source of truth.
+/// Actionable hints for a failed WebUSB open.
+///
+/// `ftdi-nusb` reports a bare "Unable to claim interface" when Chrome cannot
+/// take the interface. WebUSB has no API to detach a kernel driver (the native
+/// path uses `detach_and_claim_interface`; the browser cannot), so on Linux this
+/// usually means the OS driver still owns the device.
+fn webusb_failure_hints(error: &str) -> &'static [&'static str] {
+    const CLAIM_FAILED: &[&str] = &[
+        "The USB interface could not be claimed. WebUSB cannot detach a kernel \
+         driver, so on Linux the driver (usually ftdi_sio) likely holds it.",
+        "Unbind it and reconnect, replacing 1-4 with the bus-port from `lsusb -t`:",
+        "    echo -n \"1-4\" | sudo tee /sys/bus/usb/drivers/ftdi_sio/unbind",
+        "To make that permanent, blacklist the driver (e.g. `blacklist ftdi_sio` \
+         in /etc/modprobe.d/), or make sure no other tab or program is using the \
+         device.",
+        "See Help > USB permissions for details.",
+    ];
+    const OTHER: &[&str] = &[
+        "On Linux, this may be a permissions issue, or a kernel driver may hold \
+         the USB interface.",
+        "Check Help > USB permissions for udev rules, and unbind the kernel driver \
+         (e.g. ftdi_sio) if it is bound.",
+    ];
+
+    if error.to_ascii_lowercase().contains("claim") {
+        CLAIM_FAILED
+    } else {
+        OTHER
+    }
+}
+
+fn ui_option_field(ui: &mut egui::Ui, field: &mut Field) {
+    let spec = field.spec;
+    ui.label(spec.label).on_hover_text(spec.help);
+    match spec.kind {
+        OptionKind::Int { .. } => {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut field.value)
+                        .desired_width(80.0)
+                        .hint_text(UNSET_LABEL),
+                )
+                .on_hover_text(spec.help);
+                if let Some(err) = int_error(spec, &field.value) {
+                    ui.colored_label(egui::Color32::from_rgb(220, 60, 60), err);
+                }
+            });
+        }
+        OptionKind::Choice(choices) => {
+            let current = choices
+                .iter()
+                .find(|c| c.value == field.value)
+                .map(|c| c.label)
+                .unwrap_or(UNSET_LABEL);
+            egui::ComboBox::from_id_salt(spec.key)
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    if spec.default.is_none() {
+                        ui.selectable_value(&mut field.value, String::new(), UNSET_LABEL);
+                    }
+                    for c in choices {
+                        ui.selectable_value(&mut field.value, c.value.to_string(), c.label);
+                    }
+                })
+                .response
+                .on_hover_text(spec.help);
+        }
+        OptionKind::SpeedKhz { presets } => {
+            ui.horizontal(|ui| {
+                if !presets.is_empty() {
+                    let current = presets
+                        .iter()
+                        .find(|p| p.to_string() == field.value)
+                        .map(|&p| speed_label(p))
+                        .unwrap_or_else(|| {
+                            if field.value.is_empty() {
+                                UNSET_LABEL.to_string()
+                            } else {
+                                "custom".to_string()
+                            }
+                        });
+                    egui::ComboBox::from_id_salt(spec.key)
+                        .selected_text(current)
+                        .show_ui(ui, |ui| {
+                            if spec.default.is_none() {
+                                ui.selectable_value(&mut field.value, String::new(), UNSET_LABEL);
+                            }
+                            for &p in presets {
+                                ui.selectable_value(
+                                    &mut field.value,
+                                    p.to_string(),
+                                    speed_label(p),
+                                );
+                            }
+                        });
+                }
+                ui.add(
+                    egui::TextEdit::singleline(&mut field.value)
+                        .desired_width(70.0)
+                        .hint_text("kHz"),
+                )
+                .on_hover_text("Plain kHz or a k/m/g suffix, e.g. 30m");
+            });
+        }
+        OptionKind::Text => {
+            ui.add(
+                egui::TextEdit::singleline(&mut field.value)
+                    .desired_width(140.0)
+                    .hint_text(UNSET_LABEL),
+            )
+            .on_hover_text(spec.help);
+        }
+        // Filtered out by `ProgrammerForm::new`; nothing sensible to show.
+        OptionKind::Path => {}
+    }
+    ui.end_row();
+}
+
 impl eframe::App for RflasherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Store context for async tasks to request repaints
@@ -1617,223 +1498,61 @@ impl RflasherApp {
         ui.heading("Connection");
         ui.add_space(5.0);
 
-        // Programmer type selection
-        ui.horizontal(|ui| {
-            ui.label("Programmer:");
-            egui::ComboBox::from_id_salt("programmer_type")
-                .selected_text(self.programmer_type.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.programmer_type,
-                        ProgrammerType::Serprog,
-                        ProgrammerType::Serprog.label(),
-                    );
-                    ui.selectable_value(
-                        &mut self.programmer_type,
-                        ProgrammerType::Ch341a,
-                        ProgrammerType::Ch341a.label(),
-                    );
-                    ui.selectable_value(
-                        &mut self.programmer_type,
-                        ProgrammerType::Ch347,
-                        ProgrammerType::Ch347.label(),
-                    );
-                    ui.selectable_value(
-                        &mut self.programmer_type,
-                        ProgrammerType::Ftdi,
-                        ProgrammerType::Ftdi.label(),
-                    );
-                    ui.selectable_value(
-                        &mut self.programmer_type,
-                        ProgrammerType::Ft4222,
-                        ProgrammerType::Ft4222.label(),
-                    );
-                    ui.selectable_value(
-                        &mut self.programmer_type,
-                        ProgrammerType::Dediprog,
-                        ProgrammerType::Dediprog.label(),
-                    );
-                    ui.selectable_value(
-                        &mut self.programmer_type,
-                        ProgrammerType::Raiden,
-                        ProgrammerType::Raiden.label(),
-                    );
-                });
-        });
+        let connected = self.is_connected();
 
-        // Baud rate selection (only for serprog)
-        if self.programmer_type == ProgrammerType::Serprog {
+        // Programmer picker, driven by the shared catalog.
+        let mut picked: Option<usize> = None;
+        ui.add_enabled_ui(!connected, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Baud rate:");
-                egui::ComboBox::from_id_salt("baud_rate")
-                    .selected_text(format!("{}", self.baud_rate))
+                ui.label("Programmer:");
+                egui::ComboBox::from_id_salt("programmer")
+                    .selected_text(self.form.name)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.baud_rate, 9600, "9600");
-                        ui.selectable_value(&mut self.baud_rate, 19200, "19200");
-                        ui.selectable_value(&mut self.baud_rate, 38400, "38400");
-                        ui.selectable_value(&mut self.baud_rate, 57600, "57600");
-                        ui.selectable_value(&mut self.baud_rate, 115200, "115200");
-                        ui.selectable_value(&mut self.baud_rate, 230400, "230400");
-                        ui.selectable_value(&mut self.baud_rate, 460800, "460800");
-                        ui.selectable_value(&mut self.baud_rate, 921600, "921600");
-                        ui.selectable_value(&mut self.baud_rate, 1000000, "1000000");
-                        ui.selectable_value(&mut self.baud_rate, 2000000, "2000000");
+                        for (i, info) in self.programmers.iter().enumerate() {
+                            let selected = info.name == self.form.name;
+                            if ui
+                                .selectable_label(selected, info.name)
+                                .on_hover_text(info.description)
+                                .clicked()
+                                && !selected
+                            {
+                                picked = Some(i);
+                            }
+                        }
                     });
             });
+        });
+        if let Some(i) = picked {
+            self.form = ProgrammerForm::new(&self.programmers[i]);
         }
 
-        // SPI speed selection (only for CH347)
-        if self.programmer_type == ProgrammerType::Ch347 {
-            let connected = self.is_connected();
-            ui.add_enabled_ui(!connected, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("SPI speed:");
-                    egui::ComboBox::from_id_salt("spi_speed")
-                        .selected_text(self.spi_speed.label())
-                        .show_ui(ui, |ui| {
-                            for &speed in SpiSpeed::ALL {
-                                ui.selectable_value(&mut self.spi_speed, speed, speed.label());
-                            }
-                        });
-                });
-            });
-            if connected {
-                ui.label("Reconnect to change SPI speed");
-            }
-        }
-
-        // FTDI settings (only for FTDI)
-        if self.programmer_type == ProgrammerType::Ftdi {
-            let connected = self.is_connected();
-            ui.add_enabled_ui(!connected, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Device type:");
-                    egui::ComboBox::from_id_salt("ftdi_device_type")
-                        .selected_text(self.ftdi_device_type.name())
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.ftdi_device_type,
-                                FtdiDeviceType::Ft2232H,
-                                "FT2232H",
-                            );
-                            ui.selectable_value(
-                                &mut self.ftdi_device_type,
-                                FtdiDeviceType::Ft4232H,
-                                "FT4232H",
-                            );
-                            ui.selectable_value(
-                                &mut self.ftdi_device_type,
-                                FtdiDeviceType::Ft232H,
-                                "FT232H",
-                            );
-                            ui.selectable_value(
-                                &mut self.ftdi_device_type,
-                                FtdiDeviceType::Ft4233H,
-                                "FT4233H",
-                            );
-                            ui.selectable_value(
-                                &mut self.ftdi_device_type,
-                                FtdiDeviceType::Tumpa,
-                                "TUMPA",
-                            );
-                            ui.selectable_value(
-                                &mut self.ftdi_device_type,
-                                FtdiDeviceType::TumpaLite,
-                                "TUMPA Lite",
-                            );
-                            ui.selectable_value(
-                                &mut self.ftdi_device_type,
-                                FtdiDeviceType::JtagKey,
-                                "JTAGkey",
-                            );
-                            ui.selectable_value(
-                                &mut self.ftdi_device_type,
-                                FtdiDeviceType::GoogleServoV2,
-                                "Google Servo V2",
-                            );
-                        });
-                });
-                // Reset channel if it's no longer valid for the selected device type
-                let max_channels = self.ftdi_device_type.channel_count();
-                if self.ftdi_interface.index() >= max_channels {
-                    self.ftdi_interface = FtdiInterface::A;
+        // Option widgets generated from the schema. Borrow the catalog entry
+        // directly so the form fields can be edited alongside it.
+        let info = self.programmers.iter().find(|p| p.name == self.form.name);
+        let validation = match info {
+            Some(info) => {
+                if !info.description.is_empty() {
+                    ui.small(info.description);
                 }
-
-                ui.horizontal(|ui| {
-                    ui.label("Channel:");
-                    let all_interfaces = [
-                        (FtdiInterface::A, "A"),
-                        (FtdiInterface::B, "B"),
-                        (FtdiInterface::C, "C"),
-                        (FtdiInterface::D, "D"),
-                    ];
-                    egui::ComboBox::from_id_salt("ftdi_interface")
-                        .selected_text(format!("{}", self.ftdi_interface.letter()))
-                        .show_ui(ui, |ui| {
-                            for &(iface, label) in &all_interfaces {
-                                if iface.index() < max_channels {
-                                    ui.selectable_value(&mut self.ftdi_interface, iface, label);
-                                }
+                let has_fields = !self.form.fields.is_empty();
+                ui.add_enabled_ui(!connected, |ui| {
+                    egui::Grid::new("programmer_options")
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            for field in &mut self.form.fields {
+                                ui_option_field(ui, field);
                             }
                         });
                 });
-                ui.horizontal(|ui| {
-                    ui.label("SPI clock:");
-                    egui::ComboBox::from_id_salt("ftdi_divisor")
-                        .selected_text(format!(
-                            "{:.1} MHz (div {})",
-                            60.0 / self.ftdi_divisor as f64,
-                            self.ftdi_divisor
-                        ))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.ftdi_divisor, 2, "30 MHz (div 2)");
-                            ui.selectable_value(&mut self.ftdi_divisor, 4, "15 MHz (div 4)");
-                            ui.selectable_value(&mut self.ftdi_divisor, 6, "10 MHz (div 6)");
-                            ui.selectable_value(&mut self.ftdi_divisor, 10, "6 MHz (div 10)");
-                            ui.selectable_value(&mut self.ftdi_divisor, 20, "3 MHz (div 20)");
-                            ui.selectable_value(&mut self.ftdi_divisor, 60, "1 MHz (div 60)");
-                        });
-                });
-            });
-            if connected {
-                ui.label("Reconnect to change FTDI settings");
+                if connected && has_fields {
+                    ui.small("Reconnect to change options");
+                }
+                self.form.validate(info)
             }
-        }
-
-        if self.programmer_type == ProgrammerType::Raiden {
-            let connected = self.is_connected();
-            ui.add_enabled_ui(!connected, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Target:");
-                    egui::ComboBox::from_id_salt("raiden_target")
-                        .selected_text(raiden_target_label(self.raiden_target))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.raiden_target,
-                                RaidenTarget::Ap,
-                                raiden_target_label(RaidenTarget::Ap),
-                            );
-                            ui.selectable_value(
-                                &mut self.raiden_target,
-                                RaidenTarget::Ec,
-                                raiden_target_label(RaidenTarget::Ec),
-                            );
-                            ui.selectable_value(
-                                &mut self.raiden_target,
-                                RaidenTarget::H1,
-                                raiden_target_label(RaidenTarget::H1),
-                            );
-                            ui.selectable_value(
-                                &mut self.raiden_target,
-                                RaidenTarget::ApCustom,
-                                raiden_target_label(RaidenTarget::ApCustom),
-                            );
-                        });
-                });
-            });
-            if connected {
-                ui.label("Reconnect to change Raiden target");
-            }
+            None => Err("No programmer selected".to_string()),
+        };
+        if let Err(ref e) = validation {
+            ui.colored_label(egui::Color32::from_rgb(220, 60, 60), e);
         }
 
         ui.add_space(5.0);
@@ -1841,14 +1560,16 @@ impl RflasherApp {
         // Connection status and button
         match &self.connection {
             ConnectionState::Disconnected => {
-                let button_label = if self.programmer_type.is_webusb() {
+                let button_label = if self.selected_is_webusb() {
                     "Connect (WebUSB)"
                 } else {
                     "Connect (WebSerial)"
                 };
-                if ui.button(button_label).clicked() {
-                    self.spawn_connect();
-                }
+                ui.add_enabled_ui(validation.is_ok(), |ui| {
+                    if ui.button(button_label).clicked() {
+                        self.spawn_connect();
+                    }
+                });
             }
             ConnectionState::Connecting => {
                 ui.horizontal(|ui| {
@@ -2094,6 +1815,12 @@ impl RflasherApp {
                 ui.label(
                     "Raiden Debug SPI / Cr50 uses Google VID 18d1. Product IDs vary between SuzyQ, Servo, C2D2, uServo, and Servo Micro, so the example rule below matches Google debug hardware broadly.",
                 );
+                ui.label(
+                    "These rules only grant access. A kernel driver can still hold \
+                     the interface, and WebUSB cannot detach it: if connecting fails \
+                     with \"Unable to claim interface\", unbind the driver first \
+                     (for FTDI: `echo -n \"1-4\" | sudo tee /sys/bus/usb/drivers/ftdi_sio/unbind`).",
+                );
                 ui.add_space(5.0);
 
                 egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -2274,4 +2001,27 @@ async fn save_file_dialog(data: &[u8], filename: &str) -> Result<(), String> {
     web_sys::Url::revoke_object_url(&url).map_err(|_| "Failed to revoke URL")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod connection_hint_tests {
+    use super::webusb_failure_hints;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    fn claim_failures_get_the_kernel_driver_hint() {
+        let hints = webusb_failure_hints(
+            "Failed to execute 'claimInterface' on 'USBDevice': Unable to claim interface.",
+        );
+        assert!(hints.iter().any(|h| h.contains("ftdi_sio/unbind")));
+        assert!(hints.iter().any(|h| h.contains("blacklist")));
+    }
+
+    #[wasm_bindgen_test]
+    fn other_failures_get_the_generic_hint() {
+        let hints = webusb_failure_hints("Device not found");
+        assert!(hints.iter().any(|h| h.contains("udev")));
+        // The specific unbind-by-bus-port instructions are reserved for claim failures.
+        assert!(!hints.iter().any(|h| h.contains("lsusb")));
+    }
 }
