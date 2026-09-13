@@ -105,3 +105,62 @@ pub use device::{Ft4222, Ft4222DeviceInfo, parse_options};
 pub use error::{Ft4222Error, Result};
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use protocol::{ClockConfig, ClockDivisor, IoMode, SpiConfig, SystemClock};
+
+// ---------------------------------------------------------------------------
+// Option schema shared by the CLI and the web frontend.
+// The table sits next to the parser it describes; `crate::catalog` only
+// aggregates these modules for listing and validation.
+// ---------------------------------------------------------------------------
+
+pub mod schema {
+    #[allow(unused_imports)]
+    use crate::catalog::{Choice, OptionKind, OptionSpec, Scope, choice};
+
+    const FT4222_SPEEDS: &[u32] = &[40000, 30000, 20000, 15000, 10000, 5000, 1000];
+
+    const FT4222_CS: &[Choice] = &[
+        choice("0", "CS0"),
+        choice("1", "CS1"),
+        choice("2", "CS2"),
+        choice("3", "CS3"),
+    ];
+
+    pub const OPTIONS: &[OptionSpec] = &[
+        OptionSpec {
+            key: "spispeed",
+            label: "SPI speed",
+            help: "Target SPI clock in kHz",
+            kind: OptionKind::SpeedKhz {
+                presets: FT4222_SPEEDS,
+            },
+            default: Some("10000"),
+            scope: Scope::Any,
+        },
+        OptionSpec {
+            key: "cs",
+            label: "Chip select",
+            help: "Chip select line",
+            kind: OptionKind::Choice(FT4222_CS),
+            default: Some("0"),
+            scope: Scope::Any,
+        },
+        OptionSpec {
+            key: "iomode",
+            label: "I/O mode",
+            help: "SPI I/O mode",
+            kind: OptionKind::Choice(&[
+                choice("single", "Single"),
+                choice("dual", "Dual"),
+                choice("quad", "Quad"),
+            ]),
+            default: Some("single"),
+            scope: Scope::Any,
+        },
+    ];
+
+    pub fn validate_options(options: &[(&str, &str)]) -> std::result::Result<(), String> {
+        crate::ft4222::parse_options(options)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}

@@ -746,13 +746,12 @@ pub fn parse_options(options: &[(&str, &str)]) -> std::result::Result<LinuxGpioS
                 );
             }
             "spispeed" => {
-                let speed_khz: u32 = value
-                    .parse()
-                    .map_err(|_| format!("Invalid spispeed value: {}", value))?;
+                let speed_khz = crate::catalog::parse_speed_khz(value)
+                    .ok_or_else(|| format!("Invalid spispeed value: {value}"))?;
                 config = config.with_speed_hz(speed_khz * 1000);
             }
             _ => {
-                log::warn!("linux_gpio_spi: Unknown option: {}={}", key, value);
+                return Err(format!("unknown option: {key}"));
             }
         }
     }

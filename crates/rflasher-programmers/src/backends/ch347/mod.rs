@@ -71,8 +71,67 @@ mod protocol;
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use device::Ch347;
 #[cfg(all(feature = "std", not(feature = "wasm")))]
-pub use device::{Ch347DeviceInfo, parse_options};
+pub use device::Ch347DeviceInfo;
+#[cfg(feature = "std")]
+pub use device::parse_options;
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{Ch347Error, Result};
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use protocol::{Ch347Variant, ChipSelect, SpiConfig, SpiMode, SpiSpeed};
+
+// ---------------------------------------------------------------------------
+// Option schema shared by the CLI and the web frontend.
+// The table sits next to the parser it describes; `crate::catalog` only
+// aggregates these modules for listing and validation.
+// ---------------------------------------------------------------------------
+
+pub mod schema {
+    #[allow(unused_imports)]
+    use crate::catalog::{Choice, OptionKind, OptionSpec, Scope, choice};
+
+    const CH347_SPEEDS: &[u32] = &[60000, 30000, 15000, 7500, 3750, 1875, 937, 468];
+
+    const ON_OFF_CS: &[Choice] = &[choice("0", "CS0"), choice("1", "CS1")];
+
+    const SPI_MODES: &[Choice] = &[
+        choice("0", "Mode 0"),
+        choice("1", "Mode 1"),
+        choice("2", "Mode 2"),
+        choice("3", "Mode 3"),
+    ];
+
+    pub const OPTIONS: &[OptionSpec] = &[
+        OptionSpec {
+            key: "spispeed",
+            label: "SPI speed",
+            help: "SPI clock in kHz (selects a supported speed without exceeding it when possible)",
+            kind: OptionKind::SpeedKhz {
+                presets: CH347_SPEEDS,
+            },
+            default: Some("7500"),
+            scope: Scope::Any,
+        },
+        OptionSpec {
+            key: "spimode",
+            label: "SPI mode",
+            help: "SPI mode (clock polarity and phase)",
+            kind: OptionKind::Choice(SPI_MODES),
+            default: Some("0"),
+            scope: Scope::Any,
+        },
+        OptionSpec {
+            key: "cs",
+            label: "Chip select",
+            help: "Chip select line",
+            kind: OptionKind::Choice(ON_OFF_CS),
+            default: Some("0"),
+            scope: Scope::Any,
+        },
+    ];
+
+    pub fn validate_options(options: &[(&str, &str)]) -> std::result::Result<(), String> {
+        crate::ch347::parse_options(options)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}

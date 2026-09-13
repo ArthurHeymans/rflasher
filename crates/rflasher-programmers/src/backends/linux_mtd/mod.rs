@@ -80,3 +80,29 @@ pub mod error;
 // Re-exports
 pub use device::{LinuxMtd, LinuxMtdConfig, MtdInfo, parse_options};
 pub use error::{LinuxMtdError, Result};
+
+// ---------------------------------------------------------------------------
+// Option schema shared by the CLI and the web frontend.
+// The table sits next to the parser it describes; `crate::catalog` only
+// aggregates these modules for listing and validation.
+// ---------------------------------------------------------------------------
+
+pub mod schema {
+    #[allow(unused_imports)]
+    use crate::catalog::{Choice, OptionKind, OptionSpec, Scope, choice};
+
+    pub const OPTIONS: &[OptionSpec] = &[OptionSpec {
+        key: "dev",
+        label: "MTD device",
+        help: "MTD device number (e.g. 0 for /dev/mtd0)",
+        kind: OptionKind::Int { min: 0, max: 255 },
+        default: None,
+        scope: Scope::NativeOnly,
+    }];
+
+    pub fn validate_options(options: &[(&str, &str)]) -> std::result::Result<(), String> {
+        crate::linux_mtd::parse_options(options)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}

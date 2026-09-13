@@ -421,10 +421,9 @@ pub fn parse_options(options: &[(&str, &str)]) -> std::result::Result<LinuxSpiCo
                 config.device = value.to_string();
             }
             "spispeed" => {
-                // Parse speed in kHz
-                let speed_khz: u32 = value
-                    .parse()
-                    .map_err(|_| format!("Invalid spispeed value: {}", value))?;
+                // Accepts kHz with an optional k/m/g suffix.
+                let speed_khz = crate::catalog::parse_speed_khz(value)
+                    .ok_or_else(|| format!("Invalid spispeed value: {value}"))?;
                 config.speed_hz = speed_khz * 1000;
             }
             "mode" => {
@@ -437,7 +436,7 @@ pub fn parse_options(options: &[(&str, &str)]) -> std::result::Result<LinuxSpiCo
                 config.mode = mode;
             }
             _ => {
-                log::warn!("linux_spi: Unknown option: {}={}", key, value);
+                return Err(format!("unknown option: {key}"));
             }
         }
     }

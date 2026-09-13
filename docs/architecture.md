@@ -46,3 +46,33 @@ platform-specific access layer by implementing `rflasher_internal::HostAccess`:
 
 See [crates/rflasher-internal/README.md](../crates/rflasher-internal/README.md)
 for details.
+
+## Programmer option catalog
+
+Every programmer's connection options are described once, in
+`rflasher-programmers::catalog`, and consumed by both frontends:
+
+- Each backend keeps its typed config and `parse_options` as the semantic
+  source of truth. It also declares an `OptionSpec` table next to the parser
+  (in a backend-local `schema` module) describing each option's key, label,
+  help, value domain, default, and platform scope, plus a `validate` entry
+  point that runs that same parser. `catalog` only aggregates the backend
+  schemas for listing and validation, so the table and the parser it describes
+  are read and reviewed together.
+- The CLI renders `-p <name>:key=value,...`, and `list-programmers` prints the
+  option syntax generated from the catalog rather than hand-written prose.
+- The web frontend renders widgets from the schema and hands the same raw
+  `(key, value)` pairs to `validate`, so both surfaces validate the same
+  web-visible options. Native-only selection uses the browser device picker.
+
+The catalog is compiled on every `std` target, including `wasm`. Programmers
+are listed by compile-time feature; individual options that only make sense on
+native targets (device paths, serial numbers) are marked `Scope::NativeOnly`
+and are hidden by the web frontend, which uses the browser device picker
+instead.
+
+Schema and parsers are kept in sync by tests in `catalog` that feed every
+declared key, every choice value, and every declared default back through the
+real parser, and assert that unknown keys are rejected. Parsers therefore error
+on unrecognised options instead of logging a warning and silently ignoring
+them.

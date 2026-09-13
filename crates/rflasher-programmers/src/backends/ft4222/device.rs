@@ -862,8 +862,8 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<SpiConfig> {
     for (key, value) in options {
         match *key {
             "spispeed" => {
-                let khz: u32 = value.parse().map_err(|_| {
-                    Ft4222Error::InvalidParameter(format!("Invalid spispeed value: {}", value))
+                let khz = crate::catalog::parse_speed_khz(value).ok_or_else(|| {
+                    Ft4222Error::InvalidParameter(format!("Invalid spispeed value: {value}"))
                 })?;
                 config.speed_khz = khz;
                 log::debug!("Setting target SPI speed to {} kHz", khz);
@@ -889,7 +889,9 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<SpiConfig> {
                 })?;
             }
             _ => {
-                log::warn!("Unknown FT4222 option: {}={}", key, value);
+                return Err(Ft4222Error::InvalidParameter(format!(
+                    "unknown option: {key}"
+                )));
             }
         }
     }

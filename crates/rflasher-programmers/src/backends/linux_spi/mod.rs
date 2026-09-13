@@ -66,3 +66,52 @@ pub mod error;
 // Re-exports
 pub use device::{LinuxSpi, LinuxSpiConfig, mode, parse_options};
 pub use error::{LinuxSpiError, Result};
+
+// ---------------------------------------------------------------------------
+// Option schema shared by the CLI and the web frontend.
+// The table sits next to the parser it describes; `crate::catalog` only
+// aggregates these modules for listing and validation.
+// ---------------------------------------------------------------------------
+
+pub mod schema {
+    #[allow(unused_imports)]
+    use crate::catalog::{Choice, OptionKind, OptionSpec, Scope, choice};
+
+    const SPI_MODES: &[Choice] = &[
+        choice("0", "Mode 0"),
+        choice("1", "Mode 1"),
+        choice("2", "Mode 2"),
+        choice("3", "Mode 3"),
+    ];
+
+    pub const OPTIONS: &[OptionSpec] = &[
+        OptionSpec {
+            key: "dev",
+            label: "Device",
+            help: "spidev device node (e.g. /dev/spidev0.0)",
+            kind: OptionKind::Path,
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "spispeed",
+            label: "SPI speed",
+            help: "SPI clock in kHz",
+            kind: OptionKind::SpeedKhz { presets: &[] },
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "mode",
+            label: "SPI mode",
+            help: "SPI mode (0-3)",
+            kind: OptionKind::Choice(SPI_MODES),
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+    ];
+
+    pub fn validate_options(options: &[(&str, &str)]) -> std::result::Result<(), String> {
+        crate::linux_spi::parse_options(options).map(|_| ())
+    }
+}
