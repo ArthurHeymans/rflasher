@@ -387,7 +387,10 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<LinuxMtdConfig> {
                 })?);
             }
             _ => {
-                warn!("Unknown linux_mtd option: {}={}", key, value);
+                return Err(LinuxMtdError::InvalidParameter {
+                    name: "option",
+                    message: format!("unknown option: {key}"),
+                });
             }
         }
     }

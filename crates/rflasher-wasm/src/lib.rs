@@ -6,16 +6,20 @@
 #![warn(missing_docs)]
 
 mod app;
+mod form;
 mod transport;
 
 pub use app::RflasherApp;
 pub use transport::WebSerialTransport;
 
+#[cfg(not(test))]
 use wasm_bindgen::prelude::*;
 
 /// Initialize the web application
 ///
-/// This is the entry point called from the HTML page.
+/// This is the entry point called from the HTML page. Hidden from the test
+/// harness, which supplies its own `main`.
+#[cfg(not(test))]
 #[wasm_bindgen(start)]
 pub fn main() {
     // Set up panic hook for better error messages

@@ -664,15 +664,15 @@ impl SpiMaster for Ch347 {
 /// let options = [("spispeed", "30000"), ("cs", "1")];
 /// let config = parse_options(&options)?;
 /// ```
-#[cfg(all(feature = "std", not(feature = "wasm")))]
+#[cfg(feature = "std")]
 pub fn parse_options(options: &[(&str, &str)]) -> Result<SpiConfig> {
     let mut config = SpiConfig::default();
 
     for (key, value) in options {
         match *key {
             "spispeed" => {
-                let khz: u32 = value.parse().map_err(|_| {
-                    Ch347Error::ConfigError(format!("Invalid spispeed value: {}", value))
+                let khz = crate::catalog::parse_speed_khz(value).ok_or_else(|| {
+                    Ch347Error::ConfigError(format!("Invalid spispeed value: {value}"))
                 })?;
                 config.speed = SpiSpeed::from_khz(khz);
                 log::debug!(
@@ -714,7 +714,7 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<SpiConfig> {
                 };
             }
             _ => {
-                log::warn!("Unknown CH347 option: {}={}", key, value);
+                return Err(Ch347Error::ConfigError(format!("unknown option: {key}")));
             }
         }
     }

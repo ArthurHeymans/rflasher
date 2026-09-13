@@ -51,7 +51,9 @@ impl InternalOptions {
                     ))?;
                 }
                 _ => {
-                    log::warn!("Unknown internal programmer option: {}={}", key, value);
+                    return Err(InternalError::NotSupported(
+                        "Unknown internal programmer option (supported: ich_spi_mode=auto|hwseq|swseq)",
+                    ));
                 }
             }
         }

@@ -2,3 +2,4 @@
 # See: https://wasm-bindgen.github.io/wasm-bindgen/web-sys/unstable-apis.html
 [target.wasm32-unknown-unknown]
 rustflags = ["--cfg=web_sys_unstable_apis"]
+runner = "wasm-bindgen-test-runner"

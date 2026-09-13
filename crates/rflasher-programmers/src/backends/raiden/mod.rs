@@ -70,3 +70,46 @@ pub use device::{RaidenConfig, RaidenDebugSpi, RaidenDeviceInfo, parse_options};
 pub use error::{RaidenError, Result};
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use protocol::Target;
+
+// ---------------------------------------------------------------------------
+// Option schema shared by the CLI and the web frontend.
+// The table sits next to the parser it describes; `crate::catalog` only
+// aggregates these modules for listing and validation.
+// ---------------------------------------------------------------------------
+
+pub mod schema {
+    #[allow(unused_imports)]
+    use crate::catalog::{Choice, OptionKind, OptionSpec, Scope, choice};
+
+    const RAIDEN_TARGETS: &[Choice] = &[
+        choice("ap", "AP"),
+        choice("ec", "EC"),
+        choice("h1", "H1 / Cr50"),
+        choice("ap-custom", "AP custom"),
+    ];
+
+    pub const OPTIONS: &[OptionSpec] = &[
+        OptionSpec {
+            key: "serial",
+            label: "Serial number",
+            help: "Select a device by USB serial number",
+            kind: OptionKind::Text,
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "target",
+            label: "Target",
+            help: "Target to enable",
+            kind: OptionKind::Choice(RAIDEN_TARGETS),
+            default: Some("ap"),
+            scope: Scope::Any,
+        },
+    ];
+
+    pub fn validate_options(options: &[(&str, &str)]) -> std::result::Result<(), String> {
+        crate::raiden::parse_options(options)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}

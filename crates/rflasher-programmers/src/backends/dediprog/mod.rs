@@ -81,3 +81,95 @@ pub use device::{Dediprog, DediprogConfig, parse_options};
 pub use error::{DediprogError, Result};
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use protocol::{DeviceType, Protocol};
+
+// ---------------------------------------------------------------------------
+// Option schema shared by the CLI and the web frontend.
+// The table sits next to the parser it describes; `crate::catalog` only
+// aggregates these modules for listing and validation.
+// ---------------------------------------------------------------------------
+
+pub mod schema {
+    #[allow(unused_imports)]
+    use crate::catalog::{Choice, OptionKind, OptionSpec, Scope, choice};
+
+    const DEDIPROG_SPEEDS: &[Choice] = &[
+        choice("24M", "24 MHz"),
+        choice("12M", "12 MHz"),
+        choice("8M", "8 MHz"),
+        choice("3M", "3 MHz"),
+        choice("2.18M", "2.18 MHz"),
+        choice("1.5M", "1.5 MHz"),
+        choice("750k", "750 kHz"),
+        choice("375k", "375 kHz"),
+    ];
+
+    const DEDIPROG_VOLTAGES: &[Choice] = &[
+        choice("0", "Off (no target voltage)"),
+        choice("1.8", "1.8 V"),
+        choice("2.5", "2.5 V"),
+        choice("3.5", "3.5 V"),
+    ];
+
+    const IO_MODES: &[Choice] = &[
+        choice("single", "Single"),
+        choice("dual", "Dual"),
+        choice("quad", "Quad"),
+    ];
+
+    pub const OPTIONS: &[OptionSpec] = &[
+        OptionSpec {
+            key: "device",
+            label: "Device index",
+            help: "Select the Nth connected device (0-indexed)",
+            kind: OptionKind::Int { min: 0, max: 255 },
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "id",
+            label: "Device ID",
+            help: "Select a device by serial number (e.g. SF123456)",
+            kind: OptionKind::Text,
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "target",
+            label: "Target",
+            help: "Flash target on dual-chip programmers",
+            kind: OptionKind::Choice(&[choice("1", "Flash 1"), choice("2", "Flash 2")]),
+            default: Some("1"),
+            scope: Scope::Any,
+        },
+        OptionSpec {
+            key: "spispeed",
+            label: "SPI speed",
+            help: "SPI clock preset",
+            kind: OptionKind::Choice(DEDIPROG_SPEEDS),
+            default: Some("12M"),
+            scope: Scope::Any,
+        },
+        OptionSpec {
+            key: "voltage",
+            label: "Target voltage",
+            help: "Target voltage (0 = off; the programmer's own default is 3.5 V)",
+            kind: OptionKind::Choice(DEDIPROG_VOLTAGES),
+            default: Some("3.5"),
+            scope: Scope::Any,
+        },
+        OptionSpec {
+            key: "iomode",
+            label: "I/O mode",
+            help: "Maximum I/O mode (SF600 and newer)",
+            kind: OptionKind::Choice(IO_MODES),
+            default: None,
+            scope: Scope::Any,
+        },
+    ];
+
+    pub fn validate_options(options: &[(&str, &str)]) -> std::result::Result<(), String> {
+        crate::dediprog::parse_options(options)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}

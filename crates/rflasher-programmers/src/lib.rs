@@ -63,6 +63,11 @@ pub mod sunxi_fel;
 #[path = "backends/usb_ep.rs"]
 pub(crate) mod usb_ep;
 
+// Shared programmer catalog (option schema, parameter parsing, listing).
+// Available on every `std` target so the CLI and web frontend use one source.
+#[cfg(feature = "std")]
+pub mod catalog;
+
 // The registry and its erasure layer are native-only: WASM frontends select
 // and construct their backend explicitly (WebUSB permission flow).
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
@@ -77,9 +82,13 @@ pub use erased::{ErasedFlashDevice, ErasedSpiMaster};
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use handle::{ChipInfo, FlashHandle};
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
-pub use registry::{
-    BoxedSpiMaster, ProgrammerInfo, ProgrammerParams, available_programmers, open_flash,
-    open_spi_programmer, parse_programmer_params, programmer_names_short,
+pub use registry::{BoxedSpiMaster, open_flash, open_spi_programmer};
+
+// The catalog is shared by the CLI and the web frontend on every `std` target.
+#[cfg(feature = "std")]
+pub use catalog::{
+    Choice, OptionKind, OptionSpec, ProgrammerInfo, ProgrammerParams, Scope, Transport,
+    available_programmers, parse_programmer_params, parse_speed_khz, programmer_names_short,
 };
 
 pub use rflasher_core::flash::FlashDevice;

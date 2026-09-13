@@ -3,6 +3,8 @@
 //! This module handles opening programmers by name and creating FlashHandles.
 //! It completely hides SpiMaster and OpaqueMaster from the public API.
 
+#[allow(unused_imports)] // Only used when at least one programmer backend is enabled
+use crate::catalog::{ProgrammerParams, parse_programmer_params};
 use crate::erased::{ErasedFlashDevice, ErasedSpiMaster};
 use crate::handle::{ChipInfo, FlashHandle};
 use rflasher_core::chip::ChipProvider;
@@ -18,7 +20,6 @@ use rflasher_core::layout::parse_ifd;
 #[cfg(feature = "internal")]
 use rflasher_core::programmer::OpaqueMaster;
 use rflasher_core::sfdp::SfdpMismatch;
-use std::collections::HashMap;
 
 /// Log any SFDP mismatches as warnings
 fn log_sfdp_mismatches(mismatches: &[SfdpMismatch], chip_name: &str) {
@@ -86,78 +87,6 @@ fn log_probe_result(result: &ProbeResult) {
     log_sfdp_mismatches(&result.mismatches, &result.chip.name);
 }
 
-/// Parse a speed value in kHz from a string with optional suffix
-///
-/// Supports formats like:
-/// - "1000" - plain number in kHz
-/// - "1000k" or "1000K" - kHz (same as plain)
-/// - "30m" or "30M" - MHz (multiplied by 1000)
-/// - "1g" or "1G" - GHz (multiplied by 1_000_000)
-///
-/// Returns None if the string cannot be parsed.
-fn parse_speed_khz(s: &str) -> Option<u32> {
-    const MAX_KHZ: u32 = u32::MAX / 1000;
-
-    /// Convert a parsed value with the given unit multiplier to kHz,
-    /// rejecting non-finite, non-positive, and out-of-range results.
-    fn khz_from(val: f64, multiplier: f64) -> Option<u32> {
-        let khz = (val * multiplier).round();
-        if !khz.is_finite() || !(1.0..=MAX_KHZ as f64).contains(&khz) {
-            return None;
-        }
-        Some(khz as u32)
-    }
-
-    let s = s.trim().to_lowercase();
-
-    // Try with GHz suffix
-    if let Some(num) = s.strip_suffix('g') {
-        let val: f64 = num.trim().parse().ok()?;
-        return khz_from(val, 1_000_000.0);
-    }
-
-    // Try with MHz suffix
-    if let Some(num) = s.strip_suffix('m') {
-        let val: f64 = num.trim().parse().ok()?;
-        return khz_from(val, 1000.0);
-    }
-
-    // Try with kHz suffix
-    if let Some(num) = s.strip_suffix('k') {
-        return num
-            .trim()
-            .parse()
-            .ok()
-            .filter(|&khz| (1..=MAX_KHZ).contains(&khz));
-    }
-
-    // Plain number (assumed kHz)
-    s.parse().ok().filter(|&khz| (1..=MAX_KHZ).contains(&khz))
-}
-
-#[cfg(test)]
-mod speed_tests {
-    use super::parse_speed_khz;
-
-    #[test]
-    fn parses_supported_speed_units() {
-        assert_eq!(parse_speed_khz("1000"), Some(1000));
-        assert_eq!(parse_speed_khz("1000K"), Some(1000));
-        assert_eq!(parse_speed_khz("30m"), Some(30_000));
-        assert_eq!(parse_speed_khz("1.5g"), Some(1_500_000));
-    }
-
-    #[test]
-    fn rejects_speeds_that_cannot_be_converted_to_hz() {
-        assert_eq!(parse_speed_khz("0"), None);
-        assert_eq!(parse_speed_khz("-5m"), None);
-        assert_eq!(parse_speed_khz("nan"), None);
-        assert_eq!(parse_speed_khz("4.294968g"), None);
-        assert_eq!(parse_speed_khz("4294968k"), None);
-        assert_eq!(parse_speed_khz("4294968"), None);
-    }
-}
-
 /// Common probe and create handle logic for SPI programmers
 async fn probe_and_create_handle<M>(
     master: M,
@@ -178,59 +107,6 @@ where
         ErasedFlashDevice::new(device),
         chip_info,
     ))
-}
-
-/// Parsed programmer parameters
-pub struct ProgrammerParams {
-    /// Programmer name (canonical)
-    pub name: String,
-    /// Key-value parameters
-    pub params: HashMap<String, String>,
-}
-
-impl ProgrammerParams {
-    /// Convert parameters to a Vec of (&str, &str) pairs for passing to parse_options
-    ///
-    /// This eliminates the repetitive `.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()`
-    /// pattern used throughout the registry.
-    pub fn as_option_pairs(&self) -> Vec<(&str, &str)> {
-        self.params
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect()
-    }
-}
-
-/// Parse a programmer string into name and parameters
-///
-/// Format: "name" or "name:key1=value1,key2=value2"
-///
-/// # Example
-/// ```ignore
-/// let params = parse_programmer_params("ch341a:index=1")?;
-/// assert_eq!(params.name, "ch341a");
-/// assert_eq!(params.params.get("index"), Some(&"1".to_string()));
-/// ```
-pub fn parse_programmer_params(s: &str) -> Result<ProgrammerParams, Box<dyn std::error::Error>> {
-    let (name, opts_str) = s.split_once(':').unwrap_or((s, ""));
-
-    let mut params = HashMap::new();
-    if !opts_str.is_empty() {
-        for opt in opts_str.split(',') {
-            if let Some((key, value)) = opt.split_once('=') {
-                params.insert(key.to_string(), value.to_string());
-            } else {
-                return Err(
-                    format!("Invalid parameter format: '{}' (expected key=value)", opt).into(),
-                );
-            }
-        }
-    }
-
-    Ok(ProgrammerParams {
-        name: name.to_string(),
-        params,
-    })
 }
 
 /// A type-erased SPI master for use with the REPL
@@ -304,26 +180,11 @@ pub async fn open_spi_programmer(
         "serprog" => {
             use crate::serprog::SerprogConnection;
             log::info!("Opening serprog programmer for REPL...");
-            let conn_str = params
-                .params
-                .iter()
-                .filter(|(k, _)| *k == "dev" || *k == "ip")
-                .map(|(k, v)| format!("{}={}", k, v))
-                .collect::<Vec<_>>()
-                .join(",");
-            if conn_str.is_empty() {
-                return Err("serprog requires connection parameters (dev= or ip=)".into());
-            }
-            let conn = SerprogConnection::parse(&conn_str)
+            let config = crate::serprog::parse_options(&params.as_option_pairs())
                 .map_err(|e| format!("Invalid serprog parameters: {}", e))?;
-            let spispeed: Option<u32> = params.params.get("spispeed").and_then(|v| {
-                let parsed = parse_speed_khz(v);
-                if parsed.is_none() {
-                    log::warn!("Invalid spispeed value '{}', ignoring", v);
-                }
-                parsed
-            });
-            let cs: Option<u8> = params.params.get("cs").and_then(|v| v.parse().ok());
+            let conn = config.connection()?;
+            let spispeed = config.spispeed_khz;
+            let cs = config.cs;
 
             match conn {
                 SerprogConnection::Serial { device, baud } => {
@@ -656,33 +517,11 @@ async fn open_serprog(
 
     log::info!("Opening serprog programmer...");
 
-    // Build connection string from dev= or ip= parameters
-    let conn_str = params
-        .params
-        .iter()
-        .filter(|(k, _)| *k == "dev" || *k == "ip")
-        .map(|(k, v)| format!("{}={}", k, v))
-        .collect::<Vec<_>>()
-        .join(",");
-
-    if conn_str.is_empty() {
-        return Err("serprog requires connection parameters.\n\
-             Usage: serprog:dev=/dev/ttyUSB0[:baud] or serprog:ip=host:port"
-            .into());
-    }
-
-    let conn = SerprogConnection::parse(&conn_str)
+    let config = crate::serprog::parse_options(&params.as_option_pairs())
         .map_err(|e| format!("Invalid serprog parameters: {}", e))?;
-
-    // Parse optional parameters
-    let spispeed: Option<u32> = params.params.get("spispeed").and_then(|v| {
-        let parsed = parse_speed_khz(v);
-        if parsed.is_none() {
-            log::warn!("Invalid spispeed value '{}', ignoring", v);
-        }
-        parsed
-    });
-    let cs: Option<u8> = params.params.get("cs").and_then(|v| v.parse().ok());
+    let conn = config.connection()?;
+    let spispeed = config.spispeed_khz;
+    let cs = config.cs;
 
     // Open connection and create device with concrete type
     match conn {
@@ -1077,126 +916,4 @@ async fn open_sunxi_fel(
         ErasedFlashDevice::new(device),
         chip_info,
     ))
-}
-
-// Programmer information and listing
-/// Information about a programmer
-pub struct ProgrammerInfo {
-    /// Primary name (used for matching)
-    pub name: &'static str,
-    /// Alternative names/aliases
-    pub aliases: &'static [&'static str],
-    /// Short description
-    pub description: &'static str,
-}
-
-/// Get information about all available programmers (enabled at compile time)
-#[allow(unused_mut, clippy::vec_init_then_push)]
-pub fn available_programmers() -> Vec<ProgrammerInfo> {
-    let mut programmers = Vec::new();
-
-    #[cfg(feature = "dummy")]
-    programmers.push(ProgrammerInfo {
-        name: "dummy",
-        aliases: &[],
-        description: "In-memory flash emulator for testing",
-    });
-
-    #[cfg(feature = "ch341a")]
-    programmers.push(ProgrammerInfo {
-        name: "ch341a",
-        aliases: &["ch341a_spi"],
-        description: "CH341A USB SPI programmer (VID:1a86 PID:5512)",
-    });
-
-    #[cfg(feature = "ch347")]
-    programmers.push(ProgrammerInfo {
-        name: "ch347",
-        aliases: &["ch347_spi"],
-        description: "CH347 USB SPI programmer (VID:1a86 PID:55db/55de) (spispeed=<khz>,cs=<0|1>)",
-    });
-
-    #[cfg(feature = "dediprog")]
-    programmers.push(ProgrammerInfo {
-        name: "dediprog",
-        aliases: &["dediprog_spi"],
-        description:
-            "Dediprog SF100/SF200/SF600/SF700 USB SPI (voltage=<V>,spispeed=<speed>,target=<1|2>)",
-    });
-
-    #[cfg(feature = "serprog-native")]
-    programmers.push(ProgrammerInfo {
-        name: "serprog",
-        aliases: &[],
-        description:
-            "Serial Flasher Protocol over serial/network (dev=<port>,ip=<host:port>,spispeed=<khz>)",
-    });
-
-    #[cfg(feature = "ftdi")]
-    programmers.push(ProgrammerInfo {
-        name: "ftdi",
-        aliases: &["ft2232_spi", "ft4232_spi"],
-        description: "FTDI MPSSE programmer (FT2232H/FT4232H/FT232H) (type=<dev>,port=<A-D>)",
-    });
-
-    #[cfg(feature = "ft4222")]
-    programmers.push(ProgrammerInfo {
-        name: "ft4222",
-        aliases: &["ft4222_spi"],
-        description: "FTDI FT4222H USB SPI programmer (spispeed=<khz>,cs=<0-3>)",
-    });
-
-    #[cfg(feature = "linux-spi")]
-    programmers.push(ProgrammerInfo {
-        name: "linux_spi",
-        aliases: &["linux-spi", "spidev"],
-        description: "Linux SPI device via spidev interface (dev=/dev/spidevX.Y)",
-    });
-
-    #[cfg(feature = "linux-mtd")]
-    programmers.push(ProgrammerInfo {
-        name: "linux_mtd",
-        aliases: &["linux-mtd", "mtd"],
-        description: "Linux MTD (Memory Technology Device) for NOR flash (dev=N)",
-    });
-
-    #[cfg(feature = "linux-gpio")]
-    programmers.push(ProgrammerInfo {
-        name: "linux_gpio_spi",
-        aliases: &["linux-gpio-spi", "linux_gpio", "linux-gpio"],
-        description: "Linux GPIO bitbang SPI (dev=/dev/gpiochipN,cs=N,sck=N,mosi=N,miso=N)",
-    });
-
-    #[cfg(feature = "internal")]
-    programmers.push(ProgrammerInfo {
-        name: "internal",
-        aliases: &[],
-        description: "Intel/AMD internal SPI controller (ich_spi_mode=<auto|swseq|hwseq>)",
-    });
-
-    #[cfg(feature = "raiden")]
-    programmers.push(ProgrammerInfo {
-        name: "raiden_debug_spi",
-        aliases: &["raiden", "raiden_spi"],
-        description: "Chrome OS EC USB SPI (serial=<sn>,target=<ap|ec|h1>)",
-    });
-
-    #[cfg(feature = "sunxi-fel")]
-    programmers.push(ProgrammerInfo {
-        name: "sunxi_fel",
-        aliases: &["sunxi-fel", "fel"],
-        description: "Allwinner sunxi FEL USB SPI NOR programmer (VID:1F3A PID:EFE8)",
-    });
-
-    programmers
-}
-
-/// Generate a short list of programmer names for CLI help
-pub fn programmer_names_short() -> String {
-    let programmers = available_programmers();
-    if programmers.is_empty() {
-        return "none (recompile with features)".to_string();
-    }
-    let names: Vec<&str> = programmers.iter().map(|p| p.name).collect();
-    names.join(", ")
 }

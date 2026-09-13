@@ -98,3 +98,6 @@ console_error_panic_hook = "0.1"
 
 # Async utilities
 futures = "0.3"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

@@ -16,6 +16,10 @@ pub fn list_programmers() {
             print!(" (aliases: {})", p.aliases.join(", "));
         }
         println!();
+        let options = p.options_syntax();
+        if !options.is_empty() {
+            println!("  {:12}   options: {}", "", options);
+        }
     }
 
     println!();

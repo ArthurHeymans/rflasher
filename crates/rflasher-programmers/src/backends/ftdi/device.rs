@@ -400,29 +400,35 @@ impl std::fmt::Display for FtdiDeviceInfo {
 /// Parse programmer options from a string
 ///
 /// Format: `type=<type>,port=<A|B|C|D>,divisor=<N>,serial=<serial>,gpiol0=<H|L|C>`
-#[cfg(all(feature = "ftdi", not(target_arch = "wasm32")))]
+/// `type` is applied before anything else: selecting a device type resets its
+/// derived pin/divisor defaults, so a `divisor` or `gpiolN` given alongside
+/// `type` must win regardless of where it appears in the option list.
+#[cfg(any(feature = "ftdi", feature = "ftdi-wasm"))]
 pub fn parse_options(options: &[(&str, &str)]) -> Result<FtdiConfig> {
     let mut config = FtdiConfig::default();
 
+    if let Some((_, value)) = options.iter().rev().find(|(key, _)| *key == "type") {
+        config.device_type = FtdiDeviceType::parse(value).ok_or_else(|| {
+            FtdiError::InvalidDeviceType(format!(
+                "Unknown device type '{}'. Valid types: 2232h, 4232h, 232h, 4233h, \
+                 jtagkey, tumpa, tumpalite, picotap, busblaster, flyswatter, \
+                 arm-usb-ocd, arm-usb-tiny, arm-usb-ocd-h, arm-usb-tiny-h, \
+                 google-servo, google-servo-v2, kt-link",
+                value
+            ))
+        })?;
+        // Update defaults for new device type
+        config.cs_bits = config.device_type.default_cs_bits();
+        config.aux_bits = config.device_type.default_aux_bits();
+        config.pindir = config.device_type.default_pindir();
+        config.pindir_high = config.device_type.default_pindir_high();
+        config.divisor = config.device_type.default_divisor();
+    }
+
     for (key, value) in options {
         match *key {
-            "type" => {
-                config.device_type = FtdiDeviceType::parse(value).ok_or_else(|| {
-                    FtdiError::InvalidDeviceType(format!(
-                        "Unknown device type '{}'. Valid types: 2232h, 4232h, 232h, 4233h, \
-                         jtagkey, tumpa, tumpalite, picotap, busblaster, flyswatter, \
-                         arm-usb-ocd, arm-usb-tiny, arm-usb-ocd-h, arm-usb-tiny-h, \
-                         google-servo, google-servo-v2, kt-link",
-                        value
-                    ))
-                })?;
-                // Update defaults for new device type
-                config.cs_bits = config.device_type.default_cs_bits();
-                config.aux_bits = config.device_type.default_aux_bits();
-                config.pindir = config.device_type.default_pindir();
-                config.pindir_high = config.device_type.default_pindir_high();
-                config.divisor = config.device_type.default_divisor();
-            }
+            // Already applied above.
+            "type" => {}
             "port" | "channel" => {
                 if value.len() != 1 {
                     return Err(FtdiError::InvalidChannel(format!(
@@ -464,10 +470,32 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<FtdiConfig> {
                 config = config.gpiol(pin, value.chars().next().unwrap())?;
             }
             _ => {
-                log::warn!("Unknown FTDI option: {}={}", key, value);
+                return Err(FtdiError::InvalidParameter(format!(
+                    "unknown option: {key}"
+                )));
             }
         }
     }
 
     Ok(config)
+}
+
+#[cfg(test)]
+mod option_order_tests {
+    use super::*;
+
+    #[test]
+    fn device_type_is_applied_before_derived_divisor() {
+        // Selecting a device type resets the divisor to that type's default, so
+        // a `divisor` given alongside `type` must win in either order.
+        let type_first = parse_options(&[("type", "232h"), ("divisor", "6")]).unwrap();
+        let divisor_first = parse_options(&[("divisor", "6"), ("type", "232h")]).unwrap();
+        assert_eq!(type_first.divisor, 6);
+        assert_eq!(divisor_first.divisor, 6);
+    }
+
+    #[test]
+    fn unknown_options_are_rejected() {
+        assert!(parse_options(&[("definitely_not_an_option", "1")]).is_err());
+    }
 }

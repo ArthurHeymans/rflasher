@@ -92,3 +92,93 @@ pub mod error;
 // Re-exports
 pub use device::{LinuxGpioSpi, LinuxGpioSpiConfig, parse_options};
 pub use error::{LinuxGpioError, Result};
+
+// ---------------------------------------------------------------------------
+// Option schema shared by the CLI and the web frontend.
+// The table sits next to the parser it describes; `crate::catalog` only
+// aggregates these modules for listing and validation.
+// ---------------------------------------------------------------------------
+
+pub mod schema {
+    #[allow(unused_imports)]
+    use crate::catalog::{Choice, OptionKind, OptionSpec, Scope, choice};
+
+    pub const OPTIONS: &[OptionSpec] = &[
+        OptionSpec {
+            key: "dev",
+            label: "GPIO chip",
+            help: "GPIO character device (e.g. /dev/gpiochip0)",
+            kind: OptionKind::Path,
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "gpiochip",
+            label: "GPIO chip number",
+            help: "GPIO chip number; alternative to `dev`",
+            kind: OptionKind::Int { min: 0, max: 9 },
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "cs",
+            label: "CS pin",
+            help: "GPIO line for chip select",
+            kind: OptionKind::Int { min: 0, max: 1023 },
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "sck",
+            label: "SCK pin",
+            help: "GPIO line for the serial clock",
+            kind: OptionKind::Int { min: 0, max: 1023 },
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "mosi",
+            label: "MOSI pin",
+            help: "GPIO line for MOSI (also accepted as `io0`)",
+            kind: OptionKind::Int { min: 0, max: 1023 },
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "miso",
+            label: "MISO pin",
+            help: "GPIO line for MISO (also accepted as `io1`)",
+            kind: OptionKind::Int { min: 0, max: 1023 },
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "io2",
+            label: "IO2 pin",
+            help: "GPIO line for IO2 (quad I/O)",
+            kind: OptionKind::Int { min: 0, max: 1023 },
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "io3",
+            label: "IO3 pin",
+            help: "GPIO line for IO3 (quad I/O)",
+            kind: OptionKind::Int { min: 0, max: 1023 },
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+        OptionSpec {
+            key: "spispeed",
+            label: "SPI speed",
+            help: "Approximate SPI clock in kHz",
+            kind: OptionKind::SpeedKhz { presets: &[] },
+            default: None,
+            scope: Scope::NativeOnly,
+        },
+    ];
+
+    pub fn validate_options(options: &[(&str, &str)]) -> std::result::Result<(), String> {
+        crate::linux_gpio::parse_options(options).map(|_| ())
+    }
+}

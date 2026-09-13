@@ -123,9 +123,14 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<DediprogConfig> {
                 })?;
             }
             "voltage" => {
-                config.voltage_mv = parse_voltage(value).ok_or_else(|| {
-                    DediprogError::InvalidParameter(format!("voltage: {}", value))
-                })?;
+                let millivolt = parse_voltage(value)
+                    .ok_or_else(|| DediprogError::InvalidParameter(format!("voltage: {value}")))?;
+                if voltage_selector(millivolt).is_none() {
+                    return Err(DediprogError::InvalidParameter(format!(
+                        "voltage: {value} (supported: 0, 1.8, 2.5, 3.5 V)"
+                    )));
+                }
+                config.voltage_mv = millivolt;
             }
             "iomode" => match value.to_lowercase().as_str() {
                 "single" | "1" => config.io_mode = DpIoMode::Single,
