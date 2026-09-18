@@ -27,7 +27,7 @@ dediprog = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
 ft4222 = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
 raiden = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer", "dep:zerocopy"]
 sunxi-fel = ["std", "dep:nusb"]
-serprog = ["std", "dep:embedded-io", "dep:embedded-io-async", "dep:thiserror"]
+serprog = ["std", "dep:embedded-io", "dep:embedded-io-async", "dep:thiserror", "dep:futures-lite"]
 serprog-native = ["serprog", "dep:serialport"]
 
 # FTDI backends (pure-Rust ftdi-nusb MPSSE)
