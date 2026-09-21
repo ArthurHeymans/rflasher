@@ -19,7 +19,7 @@ use super::error::AtiSpiError;
 use super::ids::{AtiSpiType, find_ati_spi_device};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::{AddressWidth, SpiCommand};
+use rflasher_core::spi::{AddressWidth, SpiCommand, check_io_mode_supported};
 
 use core::marker::PhantomData;
 use tock_registers::fields::FieldValue;
@@ -34,7 +34,7 @@ register_bitfields![u32,
  PageMirror [ MODE OFFSET(26) NUMBITS(2) [] ],
  SoftwareControl [ DATA_BYTES OFFSET(0) NUMBITS(16) [], COMMAND_BYTES OFFSET(16) NUMBITS(2) [], READ OFFSET(18) NUMBITS(1) [] ],
  SoftwareStatus [ COMPLETE OFFSET(0) NUMBITS(32) [] ],
- GpioPad [ SPI OFFSET(7) NUMBITS(3) [], LEGACY OFFSET(19) NUMBITS(1) [], EXTRA OFFSET(30) NUMBITS(1) [] ],
+ GpioPad [ SPI OFFSET(8) NUMBITS(3) [], LEGACY OFFSET(19) NUMBITS(1) [], EXTRA OFFSET(30) NUMBITS(1) [] ],
  NiGpio [ ENABLE OFFSET(8) NUMBITS(1) [] ],
  DrmStraps [ VALUE OFFSET(28) NUMBITS(4) [] ]
 ];
@@ -629,12 +629,18 @@ impl SpiMaster for AtiSpiController {
     }
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        // Single-I/O only: reject anything the hardware cannot frame.
+        check_io_mode_supported(cmd.io_mode, self.features())?;
+
         if cmd.write_data.len() > self.max_write_len() || cmd.read_buf.len() > self.max_read_len() {
             return Err(CoreError::SpiTransferFailed);
         }
 
-        // Build the write array: opcode + address + write data
-        let max = self.max_transfer_size() + 4; // opcode + 3-byte address + data
+        // Build the write array: opcode + address + dummy + write data.
+        // Dummy clock cycles go out as 0xFF bytes after the address,
+        // matching `SpiCommand::encode_header` semantics.
+        let dummy_bytes = cmd.dummy_cycles.div_ceil(8) as usize;
+        let max = self.max_transfer_size() + 4 + dummy_bytes; // opcode + address + data + dummy
         let mut writearr = vec![0u8; max];
         let mut write_len = 1;
 
@@ -663,6 +669,10 @@ impl SpiMaster for AtiSpiController {
         if write_data.len() > max - write_len {
             return Err(CoreError::SpiTransferFailed);
         }
+        if dummy_bytes > 0 {
+            writearr[write_len..write_len + dummy_bytes].fill(0xFF);
+            write_len += dummy_bytes;
+        }
         if !write_data.is_empty() {
             writearr[write_len..write_len + write_data.len()].copy_from_slice(write_data);
             write_len += write_data.len();
@@ -686,5 +696,20 @@ fn map_ati_error(e: AtiSpiError) -> CoreError {
         AtiSpiError::Io(_) => CoreError::IoError,
         AtiSpiError::SpiInit(_) => CoreError::ProgrammerError,
         _ => CoreError::ProgrammerError,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// GPIO pad mux bits must match the masks upstream ati_spi.c drives
+    /// (0x700 for GPIO7-9, 0x80000 legacy bit); a shifted field would wedge
+    /// the SPI mux on real GPUs. tock stores the unshifted mask + shift.
+    #[test]
+    fn gpio_pad_field_positions_match_upstream_masks() {
+        assert_eq!((GpioPad::SPI.mask, GpioPad::SPI.shift), (0x7, 8)); // 0x700
+        assert_eq!((GpioPad::LEGACY.mask, GpioPad::LEGACY.shift), (0x1, 19)); // 0x80000
+        assert_eq!((GpioPad::EXTRA.mask, GpioPad::EXTRA.shift), (0x1, 30)); // 0x40000000
     }
 }

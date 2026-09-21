@@ -181,7 +181,7 @@ const INTERNAL_OPTIONS: &[OptionSpec] = &[OptionSpec {
 // ============================================================================
 
 /// Accept no options at all (programmers without configurable behavior).
-fn validate_no_options(options: &[(&str, &str)]) -> Result<(), String> {
+pub(crate) fn validate_no_options(options: &[(&str, &str)]) -> Result<(), String> {
     match options.first() {
         None => Ok(()),
         Some((key, _)) => Err(format!("unknown option: {key}")),

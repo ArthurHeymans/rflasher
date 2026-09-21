@@ -9,7 +9,6 @@ pub enum AtiSpiError {
     },
     Pci(rflasher_pci::PciError),
     SpiInit(&'static str),
-    NotSupported(&'static str),
     Io(&'static str),
 }
 
@@ -32,7 +31,6 @@ impl fmt::Display for AtiSpiError {
             ),
             Self::Pci(error) => write!(f, "PCI access error: {error}"),
             Self::SpiInit(message) => write!(f, "SPI controller init failed: {message}"),
-            Self::NotSupported(message) => write!(f, "not supported: {message}"),
             Self::Io(message) => write!(f, "I/O error: {message}"),
         }
     }

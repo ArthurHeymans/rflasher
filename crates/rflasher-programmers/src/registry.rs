@@ -221,6 +221,8 @@ pub async fn open_spi_programmer(
         "ati_spi" | "ati-spi" | "ati" | "amdgpu" => {
             use crate::ati_spi::find_ati_gpu;
             log::info!("Opening ATI/AMD GPU SPI programmer for REPL...");
+            crate::catalog::validate_no_options(&params.as_option_pairs())
+                .map_err(|e| format!("Invalid ATI SPI parameters: {e}"))?;
             let master = find_ati_gpu()
                 .map_err(|e| format!("Failed to scan for ATI GPUs: {e}"))?
                 .ok_or("No supported ATI/AMD GPU found on PCI bus")?
@@ -1165,12 +1167,15 @@ mod serprog_open_tests {
 
 #[cfg(feature = "ati-spi")]
 async fn open_ati_spi(
-    _params: &ProgrammerParams,
+    params: &ProgrammerParams,
     db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use crate::ati_spi::find_ati_gpu;
 
     log::info!("Opening ATI/AMD GPU SPI programmer...");
+
+    crate::catalog::validate_no_options(&params.as_option_pairs())
+        .map_err(|e| format!("Invalid ATI SPI parameters: {e}"))?;
 
     let gpu = find_ati_gpu()
         .map_err(|e| format!("Failed to scan for ATI GPUs: {e}"))?
