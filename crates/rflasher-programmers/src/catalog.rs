@@ -304,6 +304,16 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         validate: crate::linux_gpio::schema::validate_options,
     });
 
+    #[cfg(all(feature = "ati-spi", target_os = "linux"))]
+    programmers.push(ProgrammerInfo {
+        name: "ati_spi",
+        aliases: &["ati-spi", "ati", "amdgpu"],
+        description: "ATI/AMD Radeon GPU VBIOS SPI flash (R600 through Polaris)",
+        transport: Transport::Internal,
+        options: &[],
+        validate: validate_no_options,
+    });
+
     #[cfg(feature = "internal")]
     programmers.push(ProgrammerInfo {
         name: "internal",

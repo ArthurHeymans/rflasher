@@ -217,6 +217,22 @@ pub async fn open_spi_programmer(
             Ok(ErasedSpiMaster::new(open_sunxi_fel_master(&params, choose_usb_device).await?))
         }
 
+        #[cfg(feature = "ati-spi")]
+        "ati_spi" | "ati-spi" | "ati" | "amdgpu" => {
+            use crate::ati_spi::find_ati_gpu;
+            log::info!("Opening ATI/AMD GPU SPI programmer for REPL...");
+            let master = find_ati_gpu()
+                .map_err(|e| format!("Failed to scan for ATI GPUs: {e}"))?
+                .ok_or("No supported ATI/AMD GPU found on PCI bus")?
+                .create_controller()
+                .map_err(|e| {
+                    format!(
+                        "Failed to initialize ATI SPI controller: {e}\nMake sure you have root privileges and the GPU driver isn't blocking MMIO access."
+                    )
+                })?;
+            Ok(ErasedSpiMaster::new(master))
+        }
+
         // Internal and MTD are opaque-only or not SPI-based
         #[cfg(feature = "internal")]
         "internal" => {
@@ -342,6 +358,9 @@ pub async fn open_flash_with_options(
         "sunxi_fel" | "sunxi-fel" | "fel" => {
             open_sunxi_fel(&params, db, options.choose_usb_device).await
         }
+
+        #[cfg(feature = "ati-spi")]
+        "ati_spi" | "ati-spi" | "ati" | "amdgpu" => open_ati_spi(&params, db).await,
 
         _ => Err(format!("Unknown programmer: {}", params.name).into()),
     }
@@ -1142,4 +1161,39 @@ mod serprog_open_tests {
         ));
         assert!(parse_serprog_config(&parse_programmer_params("serprog:bad=1").unwrap()).is_err());
     }
+}
+
+#[cfg(feature = "ati-spi")]
+async fn open_ati_spi(
+    _params: &ProgrammerParams,
+    db: &dyn ChipProvider,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    use crate::ati_spi::find_ati_gpu;
+
+    log::info!("Opening ATI/AMD GPU SPI programmer...");
+
+    let gpu = find_ati_gpu()
+        .map_err(|e| format!("Failed to scan for ATI GPUs: {e}"))?
+        .ok_or(
+            "No supported ATI/AMD GPU found on PCI bus.\n\
+             Supported: Radeon HD 2000 through RX 500 series (R600 → Polaris).",
+        )?;
+
+    log::info!(
+        "Using GPU: {} ({}) at {:02x}:{:02x}.{:x}",
+        gpu.name(),
+        gpu.family(),
+        gpu.address.bus(),
+        gpu.address.device(),
+        gpu.address.function()
+    );
+
+    let master = gpu.create_controller().map_err(|e| {
+        format!(
+            "Failed to initialize ATI SPI controller: {e}\n\
+             Make sure you have root privileges and the GPU driver isn't blocking MMIO access."
+        )
+    })?;
+
+    probe_and_create_handle(master, db).await
 }

@@ -23,6 +23,7 @@ wasm = [
 usb = ["std", "dep:nusb"]
 
 # Programmer backends
+ati-spi = ["std", "dep:rflasher-pci", "rflasher-pci/std", "dep:tock-registers"]
 dummy = ["alloc"]
 ch341a = ["usb", "dep:futures-lite", "dep:futures-timer"]
 ch347 = ["usb", "dep:futures-lite", "dep:futures-timer"]
@@ -76,6 +77,8 @@ embedded-io-async = { workspace = true, optional = true }
 nusb = { workspace = true, optional = true }
 web-time = { version = "1", optional = true }
 futures-lite = { version = "2", optional = true }
+rflasher-pci = { workspace = true, optional = true }
+tock-registers = { version = "0.10", default-features = false, features = ["register_types"], optional = true }
 
 ftdi-nusb = { version = "0.3.0", default-features = false, optional = true }
 serialport = { version = "4.5", optional = true }
