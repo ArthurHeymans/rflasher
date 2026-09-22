@@ -21,13 +21,10 @@
 
 use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{Error, Result};
-use crate::flash::context::{AddressMode, FlashContext};
+use crate::flash::context::FlashContext;
 use crate::flash::device::FlashDevice;
-use crate::flash::operations::{
-    addressing_for_4byte_operation, check_erased_range, select_erase_block,
-};
-use crate::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
-use crate::protocol::{self, CommandAddressing};
+use crate::flash::operations;
+use crate::programmer::{OpaqueMaster, SpiMaster};
 #[cfg(feature = "alloc")]
 use crate::wp::{
     self, RangeDecoder, WpBits, WpConfig, WpMode, WpRange, WpRegBitMap, WpResult, WriteOptions,
@@ -205,90 +202,9 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         // genuine mid-erase failure; the SPI fallback retries the whole range
         // either way, which is safe for flash (erase is idempotent) but means
         // opaque hardware errors are not surfaced here.
-        // SST26 chips use a per-block protection register (not SR BP bits).
-        // A global unlock (WREN + ULBPR 0x98) is required before any erase
-        // succeeds — same as SpiFlashDevice::erase.
-        let needs_sst26_unprotect = self
-            .context()
-            .chip
-            .features
-            .contains(crate::chip::Features::SST26_BPR);
-        if needs_sst26_unprotect {
-            protocol::sst26_global_unprotect(&mut self.master).await?;
-        }
-
-        let ctx = self.context();
-        let erase_block = select_erase_block(ctx.chip.erase_blocks(), addr, len)
-            .ok_or(Error::InvalidAlignment)?;
-
-        let chip_features = ctx.chip.features;
-        let use_4byte = ctx.address_mode == AddressMode::FourByte;
-        let master_features = self.master.features();
-        let use_native = use_4byte
-            && erase_block.opcode_4b.is_some_and(|opcode| {
-                master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
-                    && self.master.probe_opcode(opcode)
-            });
-        let opcode = erase_block.opcode_for_address_width(use_native);
-        let (addressing, enter_exit_4byte) = if use_4byte {
-            addressing_for_4byte_operation(use_native, chip_features, master_features)?
-        } else {
-            (CommandAddressing::ThreeByte, false)
-        };
-
-        if enter_exit_4byte {
-            protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
-        }
-
-        let mut current_addr = addr;
-        let end_addr = addr + len;
-        let max_block_size = erase_block.max_block_size();
-
-        let (poll_delay_us, timeout_us) = match max_block_size {
-            s if s <= 4096 => (10_000, 1_000_000),
-            s if s <= 32768 => (100_000, 4_000_000),
-            s if s <= 65536 => (100_000, 4_000_000),
-            _ => (500_000, 60_000_000),
-        };
-
-        while current_addr < end_addr {
-            let offset_in_layout = current_addr - addr;
-            let block_size = erase_block
-                .block_size_at_offset(offset_in_layout)
-                .unwrap_or(max_block_size);
-
-            let result = protocol::erase_block(
-                self.master(),
-                opcode,
-                current_addr,
-                addressing,
-                poll_delay_us,
-                timeout_us,
-            )
-            .await;
-
-            if result.is_err() {
-                if enter_exit_4byte
-                    && let Err(e) =
-                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
-                {
-                    log::warn!("Failed to exit 4-byte address mode: {}", e);
-                }
-                return result;
-            }
-
-            current_addr += block_size;
-        }
-
-        if enter_exit_4byte {
-            protocol::exit_4byte_mode_with_features(self.master(), chip_features).await?;
-        }
-
-        // Verify only after the erase loop has left its persistent 4-byte
-        // mode. The read helper manages 4-byte mode itself; calling it inside
-        // the loop would exit that mode and make the next legacy erase opcode
-        // target the wrong address.
-        check_erased_range(&mut self.master, &self.ctx, addr, len).await
+        operations::erase_spi_range(&mut self.master, &self.ctx, addr, len).await?;
+        // Verify after the shared helper has exited persistent 4-byte mode.
+        operations::check_erased_range(&mut self.master, &self.ctx, addr, len).await
     }
 }
 

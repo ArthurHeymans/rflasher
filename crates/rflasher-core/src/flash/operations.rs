@@ -992,6 +992,99 @@ pub async fn check_erased_range<M: SpiMaster + ?Sized>(
     Ok(())
 }
 
+/// Erase through SPI for both SPI-only and hybrid devices. The physical
+/// geometry is measured from chip address zero, including across region changes.
+pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    len: u32,
+) -> Result<()> {
+    if ctx.chip.features.contains(Features::SST26_BPR) {
+        protocol::sst26_global_unprotect(master).await?;
+    }
+
+    let block = select_erase_block(ctx.chip.erase_blocks(), addr, len);
+    if block.is_none()
+        && addr == 0
+        && len == ctx.total_size() as u32
+        && let Some(chip_erase) = ctx
+            .chip
+            .erase_blocks()
+            .iter()
+            .find(|eb| eb.is_chip_erase() && eb.total_size() == len)
+    {
+        return protocol::chip_erase_with_opcode(master, chip_erase.opcode).await;
+    }
+    let block = block.ok_or(Error::InvalidAlignment)?;
+    let features = ctx.chip.features;
+    let use_4byte = ctx.address_mode == AddressMode::FourByte;
+    let master_features = master.features();
+    let use_native = use_4byte
+        && block.opcode_4b.is_some_and(|opcode| {
+            master_features.contains(SpiFeatures::FOUR_BYTE_ADDR) && master.probe_opcode(opcode)
+        });
+    let opcode = block.opcode_for_address_width(use_native);
+    let (addressing, enter_exit_4byte) = if use_4byte {
+        addressing_for_4byte_operation(use_native, features, master_features)?
+    } else {
+        (CommandAddressing::ThreeByte, false)
+    };
+    // Validate the complete walk before issuing any erase command.
+    let mut current = addr;
+    let end = addr.checked_add(len).ok_or(Error::AddressOutOfBounds)?;
+    while current < end {
+        let size = block
+            .block_size_at_boundary(current)
+            .ok_or(Error::InvalidAlignment)?;
+        current = current.checked_add(size).ok_or(Error::AddressOutOfBounds)?;
+        if current > end {
+            return Err(Error::InvalidAlignment);
+        }
+    }
+
+    if enter_exit_4byte {
+        protocol::enter_4byte_mode_with_features(master, features).await?;
+    }
+    let max_size = block.max_block_size();
+    let (poll_delay_us, timeout_us) = match max_size {
+        s if s <= 4096 => (10_000, 1_000_000),
+        s if s <= 65536 => (100_000, 4_000_000),
+        _ => (500_000, 60_000_000),
+    };
+    let mut current = addr;
+    let mut result = Ok(());
+    while current < end {
+        let size = block
+            .block_size_at_boundary(current)
+            .expect("validated erase geometry");
+        if let Err(err) = protocol::erase_block(
+            master,
+            opcode,
+            current,
+            addressing,
+            poll_delay_us,
+            timeout_us,
+        )
+        .await
+        {
+            result = Err(err);
+            break;
+        }
+        current += size;
+    }
+    if enter_exit_4byte {
+        let exit_result = protocol::exit_4byte_mode_with_features(master, features).await;
+        if let Err(err) = exit_result {
+            if result.is_ok() {
+                return Err(err);
+            }
+            log::warn!("Failed to exit 4-byte address mode: {}", err);
+        }
+    }
+    result
+}
+
 /// Select the best erase block size for the given operation
 ///
 /// Finds the largest erase block that:
@@ -1012,10 +1105,27 @@ pub fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> O
             !eb.is_chip_erase() && eb.min_block_size() <= len
         })
         .filter(|eb| {
-            // For uniform blocks, check alignment
-            // For non-uniform blocks, we need the min block size for alignment
-            let min_size = eb.min_block_size();
-            addr.is_multiple_of(min_size) && len.is_multiple_of(min_size)
+            if eb.is_uniform() {
+                let size = eb.min_block_size();
+                return size > 0 && addr.is_multiple_of(size) && len.is_multiple_of(size);
+            }
+            let mut current = addr;
+            let Some(end) = addr.checked_add(len) else {
+                return false;
+            };
+            while current < end {
+                let Some(size) = eb.block_size_at_boundary(current) else {
+                    return false;
+                };
+                let Some(next) = current.checked_add(size) else {
+                    return false;
+                };
+                if next > end {
+                    return false;
+                }
+                current = next;
+            }
+            true
         })
         .max_by_key(|eb| eb.max_block_size())
         .cloned()
@@ -1086,8 +1196,152 @@ impl WriteProgress for NoProgress {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
-    use crate::chip::{EraseBlock, WriteGranularity};
+    use crate::chip::{EraseBlock, Features, WriteGranularity};
     use crate::spi::opcodes;
+
+    struct EraseMaster {
+        commands: Vec<(u8, Option<u32>)>,
+        fail_erase: bool,
+    }
+
+    impl SpiMaster for EraseMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::FOUR_BYTE_ADDR
+        }
+        fn max_read_len(&self) -> usize {
+            256
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
+            self.commands.push((cmd.opcode, cmd.address));
+            if self.fail_erase && cmd.opcode == 0x20 {
+                return Err(Error::SpiTransferFailed);
+            }
+            if cmd.opcode == crate::spi::opcodes::RDSR {
+                cmd.read_buf.fill(0);
+            } else {
+                cmd.read_buf.fill(0xff);
+            }
+            Ok(())
+        }
+        async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    impl crate::programmer::OpaqueMaster for EraseMaster {
+        fn size(&self) -> usize {
+            48
+        }
+        async fn read(&mut self, _addr: u32, buf: &mut [u8]) -> Result<()> {
+            buf.fill(0xff);
+            Ok(())
+        }
+        async fn write(&mut self, _addr: u32, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        async fn erase(&mut self, _addr: u32, _len: u32) -> Result<()> {
+            Err(Error::ProgrammerError)
+        }
+    }
+
+    fn nonuniform_context() -> FlashContext {
+        use crate::chip::{ChipTestStatus, EraseRegion, FlashChip};
+        FlashContext::new(FlashChip {
+            vendor: "test".into(),
+            name: "test".into(),
+            jedec_manufacturer: 0,
+            jedec_device: 0,
+            total_size: 48,
+            page_size: 16,
+            features: Features::empty(),
+            voltage_min_mv: 2700,
+            voltage_max_mv: 3600,
+            write_granularity: WriteGranularity::Byte,
+            erase_blocks: vec![EraseBlock::with_regions(
+                0x20,
+                &[EraseRegion::new(8, 2), EraseRegion::new(16, 2)],
+            )],
+            tested: ChipTestStatus::default(),
+        })
+    }
+
+    #[test]
+    fn spi_and_hybrid_fallback_use_physical_nonuniform_boundaries() {
+        use crate::flash::{FlashDevice, HybridFlashDevice, SpiFlashDevice};
+        use futures_lite::future::block_on;
+        for hybrid in [false, true] {
+            let master = EraseMaster {
+                commands: vec![],
+                fail_erase: false,
+            };
+            let commands = if hybrid {
+                let mut device = HybridFlashDevice::new(master, nonuniform_context());
+                block_on(device.erase(8, 24)).unwrap();
+                device.into_parts().0.commands
+            } else {
+                let mut device = SpiFlashDevice::new(master, nonuniform_context());
+                block_on(device.erase(8, 24)).unwrap();
+                device.into_parts().0.commands
+            };
+            let erases: Vec<_> = commands
+                .iter()
+                .filter(|(opcode, _)| *opcode == 0x20)
+                .collect();
+            assert_eq!(
+                erases.iter().map(|(_, addr)| *addr).collect::<Vec<_>>(),
+                vec![Some(8), Some(16)]
+            );
+        }
+    }
+
+    #[test]
+    fn nonuniform_erase_rejects_mid_block_before_spi_commands() {
+        use futures_lite::future::block_on;
+        let mut master = EraseMaster {
+            commands: vec![],
+            fail_erase: false,
+        };
+        assert_eq!(
+            block_on(erase_spi_range(&mut master, &nonuniform_context(), 24, 16)),
+            Err(Error::InvalidAlignment)
+        );
+        assert!(master.commands.is_empty());
+    }
+
+    #[test]
+    fn spi_erase_exits_four_byte_mode_on_failure() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.address_mode = AddressMode::FourByte;
+        ctx.chip.features = Features::FOUR_BYTE_ENTER;
+        let mut master = EraseMaster {
+            commands: vec![],
+            fail_erase: true,
+        };
+        assert_eq!(
+            block_on(erase_spi_range(&mut master, &ctx, 8, 24)),
+            Err(Error::SpiTransferFailed)
+        );
+        assert_eq!(master.commands.last().unwrap().0, crate::spi::opcodes::EX4B);
+    }
+
+    #[test]
+    fn spi_chip_erase_only_uses_addressless_opcode() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.chip.erase_blocks = vec![EraseBlock::new(0x60, 48)];
+        let mut master = EraseMaster {
+            commands: vec![],
+            fail_erase: false,
+        };
+        block_on(erase_spi_range(&mut master, &ctx, 0, 48)).unwrap();
+        assert!(master.commands.contains(&(0x60, None)));
+        assert_eq!(
+            block_on(erase_spi_range(&mut master, &ctx, 0, 16)),
+            Err(Error::InvalidAlignment)
+        );
+    }
 
     /// Create test erase blocks for a chip of given size
     /// These have proper block counts so they aren't detected as chip erase

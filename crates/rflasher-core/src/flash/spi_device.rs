@@ -5,12 +5,11 @@
 
 use crate::chip::{EraseBlock, WriteGranularity};
 use crate::error::{Error, Result};
-use crate::flash::context::{AddressMode, FlashContext};
+use crate::flash::context::FlashContext;
 use crate::flash::device::FlashDevice;
-use crate::flash::operations::addressing_for_4byte_operation;
-use crate::flash::{operations, select_erase_block};
-use crate::programmer::{SpiFeatures, SpiMaster};
-use crate::protocol::{self, CommandAddressing};
+use crate::flash::operations;
+use crate::programmer::SpiMaster;
+
 use crate::wp::{
     self, RangeDecoder, WpBits, WpConfig, WpMode, WpRange, WpRegBitMap, WpResult, WriteOptions,
 };
@@ -152,101 +151,10 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
-        use crate::chip::Features;
-
-        let ctx = self.context();
-        if !ctx.is_valid_range(addr, len as usize) {
+        if !self.ctx.is_valid_range(addr, len as usize) {
             return Err(Error::AddressOutOfBounds);
         }
-
-        // Extract what we need from ctx before taking a mutable borrow on self.master()
-        let needs_sst26_unprotect = ctx.chip.features.contains(Features::SST26_BPR);
-
-        // SST26 chips use a per-block protection register (not SR BP bits).
-        // A global unlock (WREN + ULBPR 0x98) is required before any erase succeeds.
-        // This is equivalent to flashprog's ssi_disable_blockprotect_sst26_global_unprotect().
-        if needs_sst26_unprotect {
-            protocol::sst26_global_unprotect(self.master()).await?;
-        }
-
-        // Re-borrow ctx after the mutable borrow above is released
-        let ctx = self.context();
-
-        // Find the best erase block size for this operation
-        let erase_block = select_erase_block(ctx.chip.erase_blocks(), addr, len)
-            .ok_or(Error::InvalidAlignment)?;
-
-        let chip_features = ctx.chip.features;
-        let use_4byte = ctx.address_mode == AddressMode::FourByte;
-        let master_features = self.master.features();
-        let use_native = use_4byte
-            && erase_block.opcode_4b.is_some_and(|opcode| {
-                master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
-                    && self.master.probe_opcode(opcode)
-            });
-        let opcode = erase_block.opcode_for_address_width(use_native);
-        let (addressing, enter_exit_4byte) = if use_4byte {
-            addressing_for_4byte_operation(use_native, chip_features, master_features)?
-        } else {
-            (CommandAddressing::ThreeByte, false)
-        };
-
-        if enter_exit_4byte {
-            protocol::enter_4byte_mode_with_features(self.master(), chip_features).await?;
-        }
-
-        let mut current_addr = addr;
-        let end_addr = addr + len;
-
-        // For non-uniform erase blocks, use the maximum block size for timeout calculation
-        let max_block_size = erase_block.max_block_size();
-
-        // Poll delay and timeout depend on block size
-        let (poll_delay_us, timeout_us) = match max_block_size {
-            s if s <= 4096 => (10_000, 1_000_000), // 4KB: 10ms poll, 1s timeout
-            s if s <= 32768 => (100_000, 4_000_000), // 32KB: 100ms poll, 4s timeout
-            s if s <= 65536 => (100_000, 4_000_000), // 64KB: 100ms poll, 4s timeout
-            _ => (500_000, 60_000_000),            // Larger: 500ms poll, 60s timeout
-        };
-
-        while current_addr < end_addr {
-            // Get the block size at the current offset within the erase layout
-            let offset_in_layout = current_addr - addr;
-            let block_size = erase_block
-                .block_size_at_offset(offset_in_layout)
-                .unwrap_or(max_block_size);
-
-            let result = protocol::erase_block(
-                self.master(),
-                opcode,
-                current_addr,
-                addressing,
-                poll_delay_us,
-                timeout_us,
-            )
-            .await;
-
-            if result.is_err() {
-                if enter_exit_4byte
-                    && let Err(e) =
-                        protocol::exit_4byte_mode_with_features(self.master(), chip_features).await
-                {
-                    log::warn!("Failed to exit 4-byte address mode: {}", e);
-                }
-                return result;
-            }
-
-            current_addr += block_size;
-        }
-
-        if enter_exit_4byte {
-            protocol::exit_4byte_mode_with_features(self.master(), chip_features).await?;
-        }
-
-        // Verify only after the erase loop has left its persistent 4-byte
-        // mode. The read helper manages 4-byte mode itself; calling it inside
-        // the loop would exit that mode and make the next legacy erase opcode
-        // target the wrong address.
+        operations::erase_spi_range(&mut self.master, &self.ctx, addr, len).await?;
         self.check_erased_range(addr, len).await
     }
 }

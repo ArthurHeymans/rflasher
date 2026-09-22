@@ -470,9 +470,17 @@ pub async fn erase_block<M: SpiMaster + ?Sized>(
 /// Chip erase typically takes 25-100s for large chips.
 /// We poll every 1s with a 200s timeout.
 pub async fn chip_erase<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
+    chip_erase_with_opcode(master, opcodes::CE_C7).await
+}
+
+/// Erase the entire chip using the opcode declared by its erase geometry.
+pub async fn chip_erase_with_opcode<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    opcode: u8,
+) -> Result<()> {
     write_enable(master).await?;
 
-    let mut cmd = SpiCommand::simple(opcodes::CE_C7);
+    let mut cmd = SpiCommand::simple(opcode);
     master.execute(&mut cmd).await?;
 
     // Chip erase: poll every 1s, timeout after 200s

@@ -182,6 +182,21 @@ impl EraseBlock {
         self.regions.len() == 1 && self.regions[0].count == 1
     }
 
+    /// Get the block size only at a physical erase-block boundary.
+    /// Offsets are relative to the start of the chip, not the requested erase.
+    pub fn block_size_at_boundary(&self, offset: u32) -> Option<u32> {
+        let mut start = 0u64;
+        for region in self.regions.iter() {
+            let size = region.size as u64;
+            let end = start + size * region.count as u64;
+            if size > 0 && (offset as u64) >= start && (offset as u64) < end {
+                return ((offset as u64 - start).is_multiple_of(size)).then_some(region.size);
+            }
+            start = end;
+        }
+        None
+    }
+
     /// Get the block size at a given offset within this erase operation's coverage.
     ///
     /// For uniform erase blocks, this returns the same size regardless of offset.
@@ -439,6 +454,17 @@ mod tests {
         let block_erase = EraseBlock::with_count(0xD8, 65536, 128);
         assert!(!block_erase.is_chip_erase());
         assert!(block_erase.is_uniform());
+    }
+
+    #[test]
+    fn test_nonuniform_physical_boundaries() {
+        let block =
+            EraseBlock::with_regions(0xd8, &[EraseRegion::new(8, 2), EraseRegion::new(16, 2)]);
+        assert_eq!(block.block_size_at_boundary(8), Some(8));
+        assert_eq!(block.block_size_at_boundary(16), Some(16));
+        assert_eq!(block.block_size_at_boundary(24), None);
+        assert_eq!(block.block_size_at_boundary(32), Some(16));
+        assert_eq!(block.block_size_at_boundary(48), None);
     }
 
     #[test]
