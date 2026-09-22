@@ -171,15 +171,14 @@ impl EraseBlock {
         self.regions.iter().map(|r| r.size).max().unwrap_or(0)
     }
 
-    /// Check if this is a chip erase block (single large block, typically used for full chip erase)
+    /// Check whether this is an addressless chip-erase command.
     ///
-    /// A chip erase block is characterized by having a single region with count=1.
-    /// This is used by opcodes like 0xC7 or 0x60 which erase the entire chip at once.
+    /// A single addressed block can also cover the whole chip, but its opcode
+    /// still needs an address. Only the known addressless chip-erase opcodes
+    /// (0x60 and 0xC7) qualify here.
     #[must_use]
     pub fn is_chip_erase(&self) -> bool {
-        // Chip erase blocks have exactly one region with count=1
-        // This distinguishes them from sector/block erase which have count > 1
-        self.regions.len() == 1 && self.regions[0].count == 1
+        matches!(self.opcode, 0x60 | 0xC7) && self.regions.len() == 1 && self.regions[0].count == 1
     }
 
     /// Get the block size only at a physical erase-block boundary.
@@ -454,6 +453,10 @@ mod tests {
         let block_erase = EraseBlock::with_count(0xD8, 65536, 128);
         assert!(!block_erase.is_chip_erase());
         assert!(block_erase.is_uniform());
+
+        // An addressed erase command still needs its address when only one
+        // block happens to cover the chip.
+        assert!(!EraseBlock::new(0xD8, 65536).is_chip_erase());
     }
 
     #[test]

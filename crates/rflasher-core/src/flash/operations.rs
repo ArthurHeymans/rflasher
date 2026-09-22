@@ -316,10 +316,16 @@ pub struct OptimalEraseOp {
 /// the next-smaller eraser it contains.
 #[cfg(feature = "alloc")]
 fn create_erase_layout(erase_blocks: &[EraseBlock], flash_size: u32) -> Vec<EraserLayout> {
-    // Filter out chip erase (size >= flash_size) and non-uniform blocks, sort by size (smallest first)
+    // Exclude addressless chip erase, but retain a single addressed block
+    // even when that block covers the entire chip.
     let mut sorted_erasers: Vec<EraseBlock> = erase_blocks
         .iter()
-        .filter(|eb| eb.is_uniform() && eb.min_block_size() > 0 && eb.min_block_size() < flash_size)
+        .filter(|eb| {
+            eb.is_uniform()
+                && !eb.is_chip_erase()
+                && eb.min_block_size() > 0
+                && eb.min_block_size() <= flash_size
+        })
         .cloned()
         .collect();
     sorted_erasers.sort_by_key(|eb| eb.min_block_size());
@@ -1324,6 +1330,24 @@ mod tests {
             Err(Error::SpiTransferFailed)
         );
         assert_eq!(master.commands.last().unwrap().0, crate::spi::opcodes::EX4B);
+    }
+
+    #[test]
+    fn single_addressed_block_erase_keeps_its_address() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.chip.erase_blocks = vec![EraseBlock::new(0xD8, 48)];
+        let plan = plan_optimal_erase_region(ctx.chip.erase_blocks(), 48, 0, 47).unwrap();
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].erase_block.opcode, 0xD8);
+
+        let mut master = EraseMaster {
+            commands: vec![],
+            fail_erase: false,
+        };
+        block_on(erase_spi_range(&mut master, &ctx, 0, 48)).unwrap();
+        assert!(master.commands.contains(&(0xD8, Some(0))));
+        assert!(!master.commands.contains(&(0xD8, None)));
     }
 
     #[test]
