@@ -439,6 +439,11 @@ pub async fn smart_write_by_layout<D: FlashDevice + ?Sized, P: WriteProgress>(
         return Err(Error::BufferTooSmall);
     }
 
+    // Reject protected regions before processing any included region.
+    if layout.included_regions().any(|region| region.readonly) {
+        return Err(Error::RegionProtected);
+    }
+
     // Collect included regions
     let included: Vec<_> = layout.included_regions().collect();
     if included.is_empty() {
@@ -549,6 +554,11 @@ pub async fn erase_by_layout<D: FlashDevice + ?Sized>(
         LayoutError::ChipSizeMismatch { .. } => Error::AddressOutOfBounds,
         _ => Error::LayoutError,
     })?;
+
+    // Reject protected regions before erasing any included region.
+    if layout.included_regions().any(|region| region.readonly) {
+        return Err(Error::RegionProtected);
+    }
 
     for region in layout.included_regions() {
         erase_region(device, region).await?;
@@ -688,4 +698,86 @@ pub async fn verify_by_layout<D: FlashDevice>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chip::{EraseBlock, WriteGranularity};
+    use futures_lite::future::block_on;
+
+    struct FakeFlash {
+        bytes: Vec<u8>,
+        blocks: Vec<EraseBlock>,
+        mutations: usize,
+    }
+
+    impl FakeFlash {
+        fn new(size: u32) -> Self {
+            Self {
+                bytes: vec![0; size as usize],
+                blocks: vec![EraseBlock::with_count(0x20, 16, size / 16)],
+                mutations: 0,
+            }
+        }
+    }
+
+    impl FlashDevice for FakeFlash {
+        fn size(&self) -> u32 {
+            self.bytes.len() as u32
+        }
+        fn erase_granularity(&self) -> u32 {
+            16
+        }
+        fn write_granularity(&self) -> WriteGranularity {
+            WriteGranularity::Byte
+        }
+        fn erase_blocks(&self) -> &[EraseBlock] {
+            &self.blocks
+        }
+        async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
+            buf.copy_from_slice(&self.bytes[addr as usize..addr as usize + buf.len()]);
+            Ok(())
+        }
+        async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+            self.mutations += 1;
+            self.bytes[addr as usize..addr as usize + data.len()].copy_from_slice(data);
+            Ok(())
+        }
+        async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
+            self.mutations += 1;
+            self.bytes[addr as usize..(addr + len) as usize].fill(0xff);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn readonly_layout_rejected_before_any_mutation() {
+        let mut device = FakeFlash::new(64);
+        let mut layout = Layout::new();
+        let mut writable = Region::new("writable", 0, 15);
+        writable.included = true;
+        let mut protected = Region::new("protected", 16, 31);
+        protected.included = true;
+        protected.readonly = true;
+        layout.add_region(writable);
+        layout.add_region(protected);
+
+        assert!(matches!(
+            block_on(smart_write_by_layout(
+                &mut device,
+                &layout,
+                &[0xff; 64],
+                &mut NoProgress
+            )),
+            Err(Error::RegionProtected)
+        ));
+        assert_eq!(device.mutations, 0);
+        assert_eq!(
+            block_on(erase_by_layout(&mut device, &layout)),
+            Err(Error::RegionProtected)
+        );
+        assert_eq!(device.mutations, 0);
+        assert!(device.bytes.iter().all(|byte| *byte == 0));
+    }
 }
