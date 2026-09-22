@@ -456,10 +456,11 @@ async fn configure_serprog<T: crate::serprog::Transport>(
     let mut serprog = crate::serprog::Serprog::new(transport)
         .await
         .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
-    if let Some(speed_khz) = config.spispeed_khz
-        && let Err(e) = serprog.set_spi_speed(speed_khz * 1000).await
-    {
-        log::warn!("Failed to set SPI speed: {}", e);
+    if let Some(speed_khz) = config.spispeed_khz {
+        serprog
+            .set_spi_speed(speed_khz * 1000)
+            .await
+            .map_err(|e| format!("Failed to set requested SPI speed of {speed_khz} kHz: {e}"))?;
     }
     if let Some(chip_select) = config.cs {
         serprog
