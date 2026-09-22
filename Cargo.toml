@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/rflasher-chip-types",
+    "crates/rflasher-chip-defs",
     "crates/rflasher-core",
     "crates/rflasher-chips",
     "crates/rflasher-chips-codegen",
@@ -14,6 +15,7 @@ members = [
 default-members = [
     ".",
     "crates/rflasher-chip-types",
+    "crates/rflasher-chip-defs",
     "crates/rflasher-core",
     "crates/rflasher-chips",
     "crates/rflasher-chips-codegen",

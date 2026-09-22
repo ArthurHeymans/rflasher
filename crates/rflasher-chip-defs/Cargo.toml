@@ -1,0 +1,11 @@
+[package]
+name = "rflasher-chip-defs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared RON chip definition schema and validation"
+
+[dependencies]
+serde.workspace = true
+ron.workspace = true

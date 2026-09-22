@@ -5,9 +5,11 @@
 
 use proc_macro2::{Literal, TokenStream};
 use quote::quote;
-use serde::Deserialize;
+pub use rflasher_chip_defs::{
+    ChipDef, EraseBlockDef, FeaturesDef, RegionDef, Size, TestStatus, TestStatusDef, VendorDef,
+    VoltageDef, WriteGranularity,
+};
 
-use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -44,408 +46,156 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-// ============================================================================
-// Size types - makes RON files more readable
-// ============================================================================
+/// Generate token stream for Features bitflags
+fn features_to_tokens(def: FeaturesDef) -> TokenStream {
+    let mut flags = Vec::new();
 
-/// Size specification with human-readable units
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub enum Size {
-    /// Size in bytes
-    B(u32),
-    /// Size in kibibytes (1024 bytes)
-    KiB(u32),
-    /// Size in mebibytes (1024 * 1024 bytes)
-    MiB(u32),
+    if def.wrsr_wren {
+        flags.push(quote!(Features::WRSR_WREN));
+    }
+    if def.wrsr_ewsr {
+        flags.push(quote!(Features::WRSR_EWSR));
+    }
+    if def.wrsr_ext {
+        flags.push(quote!(Features::WRSR_EXT));
+    }
+    if def.fast_read {
+        flags.push(quote!(Features::FAST_READ));
+    }
+    if def.dual_io {
+        flags.push(quote!(Features::DUAL_IO));
+    }
+    if def.quad_io {
+        flags.push(quote!(Features::QUAD_IO));
+    }
+    if def.four_byte_addr {
+        flags.push(quote!(Features::FOUR_BYTE_ADDR));
+    }
+    if def.four_byte_enter {
+        flags.push(quote!(Features::FOUR_BYTE_ENTER));
+    }
+    if def.four_byte_native {
+        flags.push(quote!(Features::FOUR_BYTE_NATIVE));
+    }
+    if def.ext_addr_reg || def.ext_addr_reg_c5c8 || def.ext_addr_reg_1716 {
+        flags.push(quote!(Features::EXT_ADDR_REG));
+    }
+    if def.four_byte_enter_wren {
+        flags.push(quote!(Features::FOUR_BYTE_ENTER_WREN));
+    }
+    if def.four_byte_enter_ear7 {
+        flags.push(quote!(Features::FOUR_BYTE_ENTER_EAR7));
+    }
+    if def.ext_addr_reg_c5c8 {
+        flags.push(quote!(Features::EXT_ADDR_REG_C5C8));
+    }
+    if def.ext_addr_reg_1716 {
+        flags.push(quote!(Features::EXT_ADDR_REG_1716));
+    }
+    if def.four_byte_read {
+        flags.push(quote!(Features::FOUR_BYTE_READ));
+    }
+    if def.four_byte_fast_read {
+        flags.push(quote!(Features::FOUR_BYTE_FAST_READ));
+    }
+    if def.four_byte_program {
+        flags.push(quote!(Features::FOUR_BYTE_PROGRAM));
+    }
+    if def.four_byte_dual_out_read {
+        flags.push(quote!(Features::FOUR_BYTE_DUAL_OUT_READ));
+    }
+    if def.four_byte_dual_io_read {
+        flags.push(quote!(Features::FOUR_BYTE_DUAL_IO_READ));
+    }
+    if def.four_byte_quad_out_read {
+        flags.push(quote!(Features::FOUR_BYTE_QUAD_OUT_READ));
+    }
+    if def.four_byte_quad_io_read {
+        flags.push(quote!(Features::FOUR_BYTE_QUAD_IO_READ));
+    }
+    if def.otp {
+        flags.push(quote!(Features::OTP));
+    }
+    if def.qpi {
+        flags.push(quote!(Features::QPI));
+    }
+    if def.security_reg {
+        flags.push(quote!(Features::SECURITY_REG));
+    }
+    if def.sfdp {
+        flags.push(quote!(Features::SFDP));
+    }
+    if def.write_byte {
+        flags.push(quote!(Features::WRITE_BYTE));
+    }
+    if def.aai_word {
+        flags.push(quote!(Features::AAI_WORD));
+    }
+    if def.sst26_bpr {
+        flags.push(quote!(Features::SST26_BPR));
+    }
+    if def.status_reg_2 {
+        flags.push(quote!(Features::STATUS_REG_2));
+    }
+    if def.status_reg_3 {
+        flags.push(quote!(Features::STATUS_REG_3));
+    }
+    if def.qe_sr2 {
+        flags.push(quote!(Features::QE_SR2));
+    }
+    if def.deep_power_down {
+        flags.push(quote!(Features::DEEP_POWER_DOWN));
+    }
+    if def.wp_tb {
+        flags.push(quote!(Features::WP_TB));
+    }
+    if def.wp_sec {
+        flags.push(quote!(Features::WP_SEC));
+    }
+    if def.wp_cmp {
+        flags.push(quote!(Features::WP_CMP));
+    }
+
+    if flags.is_empty() {
+        quote!(Features::empty())
+    } else {
+        let first = &flags[0];
+        let rest = &flags[1..];
+        quote!(#first #(.union(#rest))*)
+    }
 }
+fn status_to_tokens(status: TestStatus) -> TokenStream {
+    match status {
+        TestStatus::Untested => quote!(TestStatus::Untested),
+        TestStatus::Ok => quote!(TestStatus::Ok),
+        TestStatus::Bad => quote!(TestStatus::Bad),
+        TestStatus::Na => quote!(TestStatus::Na),
+    }
+}
+fn test_statuses_to_tokens(statuses: &TestStatusDef) -> TokenStream {
+    let probe = status_to_tokens(statuses.probe);
+    let read = status_to_tokens(statuses.read);
+    let erase = status_to_tokens(statuses.erase);
+    let write = status_to_tokens(statuses.write);
+    let wp = status_to_tokens(statuses.wp);
 
-impl Size {
-    /// Convert to bytes
-    pub fn to_bytes(self) -> u32 {
-        match self {
-            Size::B(n) => n,
-            Size::KiB(n) => n * 1024,
-            Size::MiB(n) => n * 1024 * 1024,
+    quote! {
+        ChipTestStatus {
+            probe: #probe,
+            read: #read,
+            erase: #erase,
+            write: #write,
+            wp: #wp,
         }
     }
 }
-
-// ============================================================================
-// Feature flags - structured instead of string array
-// ============================================================================
-
-/// Feature flags for flash chips (structured for better RON ergonomics)
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-#[serde(default)]
-pub struct FeaturesDef {
-    // Write enable behavior
-    /// Use WREN (0x06) before WRSR
-    pub wrsr_wren: bool,
-    /// Use EWSR (0x50) before WRSR (legacy SST)
-    pub wrsr_ewsr: bool,
-    /// WRSR writes both SR1 and SR2 with one command
-    pub wrsr_ext: bool,
-
-    // Read capabilities
-    /// Supports Fast Read (0x0B)
-    pub fast_read: bool,
-    /// Supports Dual I/O read commands
-    pub dual_io: bool,
-    /// Supports Quad I/O read commands
-    pub quad_io: bool,
-
-    // 4-byte addressing
-    /// Supports 4-byte address mode
-    pub four_byte_addr: bool,
-    /// Can enter 4BA mode with EN4B (0xB7)
-    pub four_byte_enter: bool,
-    /// Has native 4BA commands (0x13, 0x12, etc.)
-    pub four_byte_native: bool,
-    /// Supports extended address register (legacy coarse flag)
-    pub ext_addr_reg: bool,
-    /// Enter/exit 4BA mode requires WREN before 0xB7/0xE9
-    pub four_byte_enter_wren: bool,
-    /// Enter/exit 4BA mode by setting bit 7 of the extended address register
-    pub four_byte_enter_ear7: bool,
-    /// Extended Address Register uses 0xC5/0xC8
-    pub ext_addr_reg_c5c8: bool,
-    /// Extended Address Register uses 0x17/0x16
-    pub ext_addr_reg_1716: bool,
-    /// Native 4BA read instruction 0x13
-    pub four_byte_read: bool,
-    /// Native 4BA fast-read instruction 0x0C
-    pub four_byte_fast_read: bool,
-    /// Native 4BA page-program instruction 0x12
-    pub four_byte_program: bool,
-    /// Native 4BA dual-output read instruction 0x3C
-    pub four_byte_dual_out_read: bool,
-    /// Native 4BA dual-I/O read instruction 0xBC
-    pub four_byte_dual_io_read: bool,
-    /// Native 4BA quad-output read instruction 0x6C
-    pub four_byte_quad_out_read: bool,
-    /// Native 4BA quad-I/O read instruction 0xEC
-    pub four_byte_quad_io_read: bool,
-
-    // Special features
-    /// Has OTP (One-Time Programmable) area
-    pub otp: bool,
-    /// Supports QPI mode (4-4-4)
-    pub qpi: bool,
-    /// Has security registers
-    pub security_reg: bool,
-    /// Supports SFDP (Serial Flash Discoverable Parameters)
-    pub sfdp: bool,
-
-    // Write behavior
-    /// Byte-granularity writes (can write single bytes)
-    pub write_byte: bool,
-    /// Supports AAI (Auto Address Increment) word program
-    pub aai_word: bool,
-    /// SST26-style per-block protection register (requires WREN + ULBPR to unlock)
-    pub sst26_bpr: bool,
-
-    // Status register features
-    /// Has status register 2
-    pub status_reg_2: bool,
-    /// Has status register 3
-    pub status_reg_3: bool,
-    /// Quad Enable bit is in SR2
-    pub qe_sr2: bool,
-
-    // Power management
-    /// Supports deep power down
-    pub deep_power_down: bool,
-
-    // Write protection
-    /// Top/Bottom protect bit available
-    pub wp_tb: bool,
-    /// Sector/Block protect bit available
-    pub wp_sec: bool,
-    /// Complement (CMP) bit available
-    pub wp_cmp: bool,
-}
-
-impl FeaturesDef {
-    /// Generate token stream for Features bitflags
-    fn to_tokens(self) -> TokenStream {
-        let mut flags = Vec::new();
-
-        if self.wrsr_wren {
-            flags.push(quote!(Features::WRSR_WREN));
-        }
-        if self.wrsr_ewsr {
-            flags.push(quote!(Features::WRSR_EWSR));
-        }
-        if self.wrsr_ext {
-            flags.push(quote!(Features::WRSR_EXT));
-        }
-        if self.fast_read {
-            flags.push(quote!(Features::FAST_READ));
-        }
-        if self.dual_io {
-            flags.push(quote!(Features::DUAL_IO));
-        }
-        if self.quad_io {
-            flags.push(quote!(Features::QUAD_IO));
-        }
-        if self.four_byte_addr {
-            flags.push(quote!(Features::FOUR_BYTE_ADDR));
-        }
-        if self.four_byte_enter {
-            flags.push(quote!(Features::FOUR_BYTE_ENTER));
-        }
-        if self.four_byte_native {
-            flags.push(quote!(Features::FOUR_BYTE_NATIVE));
-        }
-        if self.ext_addr_reg || self.ext_addr_reg_c5c8 || self.ext_addr_reg_1716 {
-            flags.push(quote!(Features::EXT_ADDR_REG));
-        }
-        if self.four_byte_enter_wren {
-            flags.push(quote!(Features::FOUR_BYTE_ENTER_WREN));
-        }
-        if self.four_byte_enter_ear7 {
-            flags.push(quote!(Features::FOUR_BYTE_ENTER_EAR7));
-        }
-        if self.ext_addr_reg_c5c8 {
-            flags.push(quote!(Features::EXT_ADDR_REG_C5C8));
-        }
-        if self.ext_addr_reg_1716 {
-            flags.push(quote!(Features::EXT_ADDR_REG_1716));
-        }
-        if self.four_byte_read {
-            flags.push(quote!(Features::FOUR_BYTE_READ));
-        }
-        if self.four_byte_fast_read {
-            flags.push(quote!(Features::FOUR_BYTE_FAST_READ));
-        }
-        if self.four_byte_program {
-            flags.push(quote!(Features::FOUR_BYTE_PROGRAM));
-        }
-        if self.four_byte_dual_out_read {
-            flags.push(quote!(Features::FOUR_BYTE_DUAL_OUT_READ));
-        }
-        if self.four_byte_dual_io_read {
-            flags.push(quote!(Features::FOUR_BYTE_DUAL_IO_READ));
-        }
-        if self.four_byte_quad_out_read {
-            flags.push(quote!(Features::FOUR_BYTE_QUAD_OUT_READ));
-        }
-        if self.four_byte_quad_io_read {
-            flags.push(quote!(Features::FOUR_BYTE_QUAD_IO_READ));
-        }
-        if self.otp {
-            flags.push(quote!(Features::OTP));
-        }
-        if self.qpi {
-            flags.push(quote!(Features::QPI));
-        }
-        if self.security_reg {
-            flags.push(quote!(Features::SECURITY_REG));
-        }
-        if self.sfdp {
-            flags.push(quote!(Features::SFDP));
-        }
-        if self.write_byte {
-            flags.push(quote!(Features::WRITE_BYTE));
-        }
-        if self.aai_word {
-            flags.push(quote!(Features::AAI_WORD));
-        }
-        if self.sst26_bpr {
-            flags.push(quote!(Features::SST26_BPR));
-        }
-        if self.status_reg_2 {
-            flags.push(quote!(Features::STATUS_REG_2));
-        }
-        if self.status_reg_3 {
-            flags.push(quote!(Features::STATUS_REG_3));
-        }
-        if self.qe_sr2 {
-            flags.push(quote!(Features::QE_SR2));
-        }
-        if self.deep_power_down {
-            flags.push(quote!(Features::DEEP_POWER_DOWN));
-        }
-        if self.wp_tb {
-            flags.push(quote!(Features::WP_TB));
-        }
-        if self.wp_sec {
-            flags.push(quote!(Features::WP_SEC));
-        }
-        if self.wp_cmp {
-            flags.push(quote!(Features::WP_CMP));
-        }
-
-        if flags.is_empty() {
-            quote!(Features::empty())
-        } else {
-            let first = &flags[0];
-            let rest = &flags[1..];
-            quote!(#first #(.union(#rest))*)
-        }
+fn write_granularity_to_tokens(granularity: WriteGranularity) -> TokenStream {
+    match granularity {
+        WriteGranularity::Bit => quote!(WriteGranularity::Bit),
+        WriteGranularity::Byte => quote!(WriteGranularity::Byte),
+        WriteGranularity::Page => quote!(WriteGranularity::Page),
     }
 }
-
-// ============================================================================
-// Chip definitions
-// ============================================================================
-
-/// Region definition: size and count pair
-#[derive(Debug, Clone, Deserialize)]
-pub struct RegionDef {
-    /// Size of each block in this region
-    pub size: Size,
-    /// Number of blocks of this size
-    pub count: u32,
-}
-
-/// Erase block definition in RON format
-///
-/// Supports both uniform blocks (single size across entire chip) and
-/// non-uniform layouts (multiple regions with different sizes, common
-/// in boot sector chips like PT/PU variants).
-#[derive(Debug, Clone, Deserialize)]
-pub struct EraseBlockDef {
-    /// Regular SPI opcode for this erase operation
-    pub opcode: u8,
-    /// Native 4-byte-address SPI opcode for this erase operation, if supported
-    pub opcode_4b: Option<u8>,
-    /// Regions for this erase opcode.
-    /// For uniform chips: single region covering the whole chip.
-    /// For non-uniform chips: multiple regions (e.g., boot sector chips).
-    pub regions: Vec<RegionDef>,
-}
-
-/// Test status for chip operations
-#[derive(Debug, Clone, Copy, Deserialize, Default)]
-pub enum TestStatus {
-    #[default]
-    Untested,
-    Ok,
-    Bad,
-    Na,
-}
-
-impl TestStatus {
-    fn to_tokens(self) -> TokenStream {
-        match self {
-            TestStatus::Untested => quote!(TestStatus::Untested),
-            TestStatus::Ok => quote!(TestStatus::Ok),
-            TestStatus::Bad => quote!(TestStatus::Bad),
-            TestStatus::Na => quote!(TestStatus::Na),
-        }
-    }
-}
-
-/// Test results for various chip operations
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(default)]
-pub struct TestStatusDef {
-    pub probe: TestStatus,
-    pub read: TestStatus,
-    pub erase: TestStatus,
-    pub write: TestStatus,
-    pub wp: TestStatus,
-}
-
-impl TestStatusDef {
-    fn to_tokens(&self) -> TokenStream {
-        let probe = self.probe.to_tokens();
-        let read = self.read.to_tokens();
-        let erase = self.erase.to_tokens();
-        let write = self.write.to_tokens();
-        let wp = self.wp.to_tokens();
-
-        quote! {
-            ChipTestStatus {
-                probe: #probe,
-                read: #read,
-                erase: #erase,
-                write: #write,
-                wp: #wp,
-            }
-        }
-    }
-}
-
-/// Write granularity
-#[derive(Debug, Clone, Copy, Deserialize, Default)]
-pub enum WriteGranularity {
-    Bit,
-    Byte,
-    #[default]
-    Page,
-}
-
-impl WriteGranularity {
-    fn to_tokens(self) -> TokenStream {
-        match self {
-            WriteGranularity::Bit => quote!(WriteGranularity::Bit),
-            WriteGranularity::Byte => quote!(WriteGranularity::Byte),
-            WriteGranularity::Page => quote!(WriteGranularity::Page),
-        }
-    }
-}
-
-/// Voltage range in millivolts
-#[derive(Debug, Clone, Deserialize)]
-pub struct VoltageDef {
-    pub min: u16,
-    pub max: u16,
-}
-
-impl Default for VoltageDef {
-    fn default() -> Self {
-        Self {
-            min: 2700,
-            max: 3600,
-        }
-    }
-}
-
-/// Single chip definition in RON format
-#[derive(Debug, Clone, Deserialize)]
-pub struct ChipDef {
-    /// Chip model name (e.g., "W25Q128FV")
-    pub name: String,
-    /// JEDEC device ID (2 bytes, e.g., 0x4018)
-    pub device_id: u16,
-    /// Total flash size
-    pub total_size: Size,
-    /// Page size in bytes (for programming)
-    #[serde(default = "default_page_size")]
-    pub page_size: u16,
-    /// Feature flags
-    #[serde(default)]
-    pub features: FeaturesDef,
-    /// Operating voltage range
-    #[serde(default)]
-    pub voltage: VoltageDef,
-    /// Write granularity
-    #[serde(default)]
-    pub write_granularity: WriteGranularity,
-    /// Available erase block sizes
-    pub erase_blocks: Vec<EraseBlockDef>,
-    /// Test status
-    #[serde(default)]
-    pub tested: TestStatusDef,
-}
-
-fn default_page_size() -> u16 {
-    256
-}
-
-/// Vendor definition containing multiple chips
-#[derive(Debug, Clone, Deserialize)]
-pub struct VendorDef {
-    /// Vendor name (e.g., "Winbond")
-    pub vendor: String,
-    /// JEDEC manufacturer ID (1 byte, e.g., 0xEF)
-    pub manufacturer_id: u8,
-    /// List of chips from this vendor
-    pub chips: Vec<ChipDef>,
-}
-
 /// Complete chip database
 #[derive(Debug, Clone)]
 pub struct ChipDatabase {
@@ -481,44 +231,11 @@ impl ChipDatabase {
         Ok(vendor)
     }
 
-    /// Validate the chip database
+    /// Validate the chip database using the shared RON rules.
     pub fn validate(&self) -> Result<(), Error> {
         for vendor in &self.vendors {
-            let mut chip_names = HashSet::new();
-
-            for chip in &vendor.chips {
-                if !chip_names.insert(chip.name.as_str()) {
-                    return Err(Error::Validation(format!(
-                        "Vendor {} defines chip name {} more than once",
-                        vendor.vendor, chip.name
-                    )));
-                }
-
-                // Validate erase blocks
-                if chip.erase_blocks.is_empty() {
-                    return Err(Error::Validation(format!(
-                        "Chip {} has no erase blocks defined",
-                        chip.name
-                    )));
-                }
-
-                // Validate that chip erase exists
-                let total_size = chip.total_size.to_bytes();
-                let has_chip_erase = chip.erase_blocks.iter().any(|eb| {
-                    // Check if this erase block covers the entire chip
-                    let erase_total: u32 =
-                        eb.regions.iter().map(|r| r.size.to_bytes() * r.count).sum();
-                    erase_total == total_size
-                });
-                if !has_chip_erase {
-                    return Err(Error::Validation(format!(
-                        "Chip {} has no chip-erase block (size {} not found in erase_blocks)",
-                        chip.name, total_size
-                    )));
-                }
-            }
+            vendor.validate().map_err(Error::Validation)?;
         }
-
         Ok(())
     }
 
@@ -577,11 +294,11 @@ impl ChipDatabase {
                 let dev_id = Literal::u16_unsuffixed(chip.device_id);
                 let total_size = Literal::u32_unsuffixed(chip.total_size.to_bytes());
                 let page_size = Literal::u16_unsuffixed(chip.page_size);
-                let features = chip.features.to_tokens();
+                let features = features_to_tokens(chip.features);
                 let voltage_min = Literal::u16_unsuffixed(chip.voltage.min);
                 let voltage_max = Literal::u16_unsuffixed(chip.voltage.max);
-                let write_gran = chip.write_granularity.to_tokens();
-                let tested = chip.tested.to_tokens();
+                let write_gran = write_granularity_to_tokens(chip.write_granularity);
+                let tested = test_statuses_to_tokens(&chip.tested);
 
                 chip_defs.push(quote! {
                     FlashChip {
@@ -688,6 +405,24 @@ mod tests {
     }
 
     #[test]
+    fn static_validation_rejects_missing_chip_erase() {
+        let invalid = r#"(
+            vendor: "Test", manufacturer_id: 1,
+            chips: [(
+                name: "Broken", device_id: 1, total_size: KiB(8),
+                erase_blocks: [(opcode: 0x20, regions: [(size: KiB(4), count: 1)])],
+            )],
+        )"#;
+        let vendor: VendorDef = ron::from_str(invalid).unwrap();
+        let db = ChipDatabase {
+            vendors: vec![vendor],
+        };
+        assert!(
+            matches!(db.validate(), Err(Error::Validation(msg)) if msg.contains("no chip-erase block"))
+        );
+    }
+
+    #[test]
     fn test_parse_non_uniform_erase() {
         // Test parsing a chip with non-uniform erase blocks (boot sector chip)
         let ron = r#"
@@ -757,7 +492,7 @@ mod tests {
             fast_read: true,
             ..Default::default()
         };
-        let tokens = features.to_tokens();
+        let tokens = features_to_tokens(features);
         let s = tokens.to_string();
         assert!(s.contains("WRSR_WREN"));
         assert!(s.contains("FAST_READ"));
