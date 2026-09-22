@@ -611,6 +611,14 @@ pub async fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_layout(layout, device.size())?;
+
+    let readonly = layout.readonly_included();
+    if !readonly.is_empty() {
+        let names: Vec<_> = readonly.iter().map(|r| r.name.as_str()).collect();
+        return Err(format!("Cannot erase readonly region(s): {}", names.join(", ")).into());
+    }
+
     print_flash_size(device.size());
 
     let included: Vec<_> = layout.included_regions().collect();
@@ -914,6 +922,28 @@ mod tests {
             futures_lite::future::block_on(run_read_with_layout(&mut device, None, &layout, &[]))
                 .unwrap_err();
         assert!(err.to_string().contains("No regions selected"));
+        assert_eq!(device.mutations, 0);
+    }
+
+    #[test]
+    fn erase_rejects_readonly_before_erasing_other_regions() {
+        let mut device = TestFlash::new();
+        let mut layout = two_region_layout();
+        layout.find_region_mut("b").unwrap().readonly = true;
+        let err = futures_lite::future::block_on(run_erase_with_layout(&mut device, &layout))
+            .unwrap_err();
+        assert!(err.to_string().contains("readonly region(s): b"));
+        assert_eq!(device.mutations, 0);
+    }
+
+    #[test]
+    fn erase_rejects_invalid_layout_before_mutation() {
+        let mut device = TestFlash::new();
+        let mut layout = two_region_layout();
+        layout.find_region_mut("b").unwrap().end = FLASH_SIZE;
+        let err = futures_lite::future::block_on(run_erase_with_layout(&mut device, &layout))
+            .unwrap_err();
+        assert!(err.to_string().contains("beyond flash size"));
         assert_eq!(device.mutations, 0);
     }
 
