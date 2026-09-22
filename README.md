@@ -91,14 +91,7 @@ The `internal` programmer uses the chipset's SPI controller on Linux via PCI sys
 
 ### Chip database
 
-Chips are defined as RON files in `crates/rflasher-chips/data/vendors/`. Builds with the `static-chips` feature embed the database; otherwise RON files are loaded at runtime from:
-
-1. `./crates/rflasher-chips/data/vendors/`
-2. `./chips/vendors/`
-3. `/usr/share/rflasher/chips/`
-4. `/usr/local/share/rflasher/chips/`
-
-or from a custom path given with `--chip-db <path>`.
+Chips are defined as RON files in `crates/rflasher-chips/data/vendors/` and compiled into the CLI by default, so installed binaries work without the source tree or separate data files. `--chip-db <path>` replaces the bundled database with a RON file or a directory of RON files.
 
 ### Layouts and regions
 

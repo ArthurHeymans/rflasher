@@ -117,7 +117,7 @@ static-linux-programmers = ["portable-programmers", "linux-spi", "linux-mtd", "i
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std"] }
-rflasher-chips.workspace = true
+rflasher-chips = { workspace = true, features = ["static-chips"] }
 rflasher-programmers = { workspace = true, features = ["std"] }
 rflasher-repl = { version = "0.1.0", path = "crates/rflasher-repl", optional = true }
 futures-lite.workspace = true

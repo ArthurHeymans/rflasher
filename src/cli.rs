@@ -31,7 +31,7 @@ pub struct Cli {
     pub programmer: Option<String>,
 
     /// Path to chip database directory (contains .ron files)
-    /// Defaults to the bundled development database and system data directories.
+    /// Replaces the bundled chip database when specified.
     #[arg(long, global = true)]
     pub chip_db: Option<PathBuf>,
 

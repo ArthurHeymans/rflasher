@@ -23,7 +23,7 @@ use rflasher_programmers::{FlashHandle, open_flash};
 
 use rflasher_core::flash::FlashDevice;
 use rflasher_core::layout::Layout;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn main() {
     // Initialize logger
@@ -189,9 +189,13 @@ fn require_programmer(programmer: &Option<String>) -> Result<&str, Box<dyn std::
     })
 }
 
-/// Load the chip database from the specified path or default locations
+/// Load the bundled database, or replace it with definitions at the specified path.
 fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::error::Error>> {
-    let mut db = ChipDatabase::new();
+    let mut db = if path.is_some() {
+        ChipDatabase::empty()
+    } else {
+        ChipDatabase::new()
+    };
 
     if let Some(path) = path {
         // User specified a path
@@ -201,33 +205,6 @@ fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::
             db.load_file(path)?;
         } else {
             return Err(format!("Chip database path not found: {}", path.display()).into());
-        }
-    } else {
-        // Try default locations
-        let default_paths = [
-            PathBuf::from("crates/rflasher-chips/data/vendors"),
-            PathBuf::from("chips/vendors"),
-            PathBuf::from("/usr/share/rflasher/chips"),
-            PathBuf::from("/usr/local/share/rflasher/chips"),
-        ];
-
-        let mut loaded = false;
-        for dir in &default_paths {
-            if dir.is_dir() {
-                match db.load_dir(dir) {
-                    Ok(count) => {
-                        log::debug!("Loaded {} chips from {}", count, dir.display());
-                        loaded = true;
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to load chips from {}: {}", dir.display(), e);
-                    }
-                }
-            }
-        }
-
-        if !loaded {
-            log::warn!("No chip database found in default locations");
         }
     }
 
@@ -438,6 +415,18 @@ mod tests {
         layout.add_region(Region::new("a", 0, 15));
         layout.add_region(Region::new("b", 16, 31));
         layout
+    }
+
+    #[test]
+    fn bundled_chips_and_explicit_override() {
+        let bundled = load_chip_database(None).unwrap();
+        assert!(bundled.len() > 400);
+        let vendor_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/rflasher-chips/data/vendors/winbond.ron");
+        let custom = load_chip_database(Some(&vendor_file)).unwrap();
+        assert!(!custom.is_empty());
+        assert!(custom.len() < bundled.len());
+        assert!(custom.chips().iter().all(|chip| chip.vendor == "Winbond"));
     }
 
     #[test]
