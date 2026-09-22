@@ -81,7 +81,11 @@ async fn spi_transfer_with_io<T: SpiIo>(
     write_data: &[u8],
     read_buf: &mut [u8],
 ) -> Result<()> {
-    io.set_cs(true).await?;
+    if let Err(error) = io.set_cs(true).await {
+        // The assertion may have reached the device before its transfer failed.
+        let _ = io.set_cs(false).await;
+        return Err(error);
+    }
     let result = async {
         if !write_data.is_empty() {
             io.write(write_data).await?;
@@ -790,7 +794,7 @@ mod tests {
     #[test]
     fn spi_transfer_deasserts_after_each_phase_error() {
         for (failure, expected) in [
-            ("assert", vec!["assert"]),
+            ("assert", vec!["assert", "deassert"]),
             ("write", vec!["assert", "write", "deassert"]),
             ("read", vec!["assert", "write", "read", "deassert"]),
             ("deassert", vec!["assert", "write", "read", "deassert"]),
