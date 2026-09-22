@@ -162,7 +162,7 @@ pub async fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
         0,
         flash_size - 1,
         granularity,
-    );
+    )?;
 
     // Step 3: Erase blocks that need it
     if !erase_ops.is_empty() {
@@ -295,7 +295,7 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
         addr,
         region_end,
         granularity,
-    );
+    )?;
 
     // Step 3: Erase blocks that need it
     if !erase_ops.is_empty() {
@@ -582,7 +582,7 @@ pub async fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Regi
     let erase_blocks: Vec<_> = device.erase_blocks().to_vec();
 
     // Plan optimal erase operations for this region
-    let erase_ops = plan_optimal_erase_region(&erase_blocks, flash_size, region.start, region.end);
+    let erase_ops = plan_optimal_erase_region(&erase_blocks, flash_size, region.start, region.end)?;
 
     for op in &erase_ops {
         let block_end = op.start + op.size - 1;
@@ -749,6 +749,46 @@ mod tests {
             self.bytes[addr as usize..(addr + len) as usize].fill(0xff);
             Ok(())
         }
+    }
+
+    #[test]
+    fn nonuniform_only_erase_fails_instead_of_succeeding_without_erasing() {
+        use crate::chip::EraseRegion;
+
+        let mut device = FakeFlash::new(64);
+        device.blocks = vec![EraseBlock::with_regions(
+            0x20,
+            &[EraseRegion::new(8, 2), EraseRegion::new(16, 3)],
+        )];
+        let region = Region::new("partial", 4, 11);
+        assert_eq!(
+            block_on(erase_region(&mut device, &region)),
+            Err(Error::InvalidAlignment)
+        );
+        assert_eq!(device.mutations, 0);
+        assert!(matches!(
+            block_on(smart_write_region(
+                &mut device,
+                4,
+                &[0xff; 8],
+                &mut NoProgress
+            )),
+            Err(Error::InvalidAlignment)
+        ));
+        assert_eq!(device.mutations, 0);
+    }
+
+    #[test]
+    fn chip_erase_only_full_region_is_not_a_noop() {
+        let mut device = FakeFlash::new(64);
+        device.blocks = vec![EraseBlock::new(0xc7, 64)];
+        block_on(erase_region(&mut device, &Region::new("full", 0, 63))).unwrap();
+        assert_eq!(device.mutations, 1);
+        assert!(device.bytes.iter().all(|byte| *byte == 0xff));
+        assert_eq!(
+            block_on(erase_region(&mut device, &Region::new("partial", 0, 7))),
+            Err(Error::InvalidAlignment)
+        );
     }
 
     #[test]

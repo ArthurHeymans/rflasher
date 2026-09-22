@@ -539,11 +539,33 @@ pub fn plan_optimal_erase(
     region_start: u32,
     region_end: u32,
     granularity: WriteGranularity,
-) -> Vec<OptimalEraseOp> {
+) -> Result<Vec<OptimalEraseOp>> {
     let mut layouts = create_erase_layout(erase_blocks, flash_size);
 
     if layouts.is_empty() {
-        return Vec::new();
+        // There are no uniform sector erasers. A chip-erase-only device can
+        // still erase the entire chip, but never report a partial erase as done.
+        if region_start == 0
+            && region_end == flash_size.saturating_sub(1)
+            && let Some(block) = erase_blocks
+                .iter()
+                .find(|block| block.is_chip_erase() && block.total_size() == flash_size)
+        {
+            let needs_erase = match (have, want) {
+                (Some(have), Some(want)) => need_erase(have, want, granularity),
+                _ => true,
+            };
+            return Ok(if needs_erase {
+                vec![OptimalEraseOp {
+                    start: 0,
+                    size: flash_size,
+                    erase_block: block.clone(),
+                }]
+            } else {
+                Vec::new()
+            });
+        }
+        return Err(Error::InvalidAlignment);
     }
 
     // Determine buffer offset (if buffers are region-sized vs full-chip).
@@ -581,11 +603,11 @@ pub fn plan_optimal_erase(
         // Find chip erase block if available
         if let Some(chip_erase_block) = erase_blocks.iter().find(|eb| eb.is_chip_erase()) {
             // Use chip erase instead of individual blocks
-            return vec![OptimalEraseOp {
+            return Ok(vec![OptimalEraseOp {
                 start: 0,
                 size: flash_size,
                 erase_block: chip_erase_block.clone(),
-            }];
+            }]);
         }
     }
 
@@ -610,7 +632,7 @@ pub fn plan_optimal_erase(
     // Sort by address
     result.sort_by_key(|op| op.start);
 
-    result
+    Ok(result)
 }
 
 /// Plan optimal erase operations for a region with explicit erase (no content comparison)
@@ -623,7 +645,7 @@ pub fn plan_optimal_erase_region(
     flash_size: u32,
     region_start: u32,
     region_end: u32,
-) -> Vec<OptimalEraseOp> {
+) -> Result<Vec<OptimalEraseOp>> {
     plan_optimal_erase(
         erase_blocks,
         flash_size,
@@ -1377,7 +1399,7 @@ mod tests {
         // Erasing exactly one 4KB block should use the 4KB eraser
         let erase_blocks = test_erase_blocks_4k_64k(1024 * 1024); // 1MB flash
 
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 4095);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 4095).unwrap();
 
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].start, 0);
@@ -1392,7 +1414,7 @@ mod tests {
         let erase_blocks = test_erase_blocks_4k_64k(1024 * 1024); // 1MB flash
 
         // 40KB = 10 x 4KB blocks, but that's <50% of 64KB, so no promotion
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 40959);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 40959).unwrap();
 
         // Should be 10 x 4KB blocks
         assert_eq!(ops.len(), 10);
@@ -1404,7 +1426,7 @@ mod tests {
         // Erasing exactly 64KB should use a single 64KB eraser
         let erase_blocks = test_erase_blocks_4k_64k(1024 * 1024); // 1MB flash
 
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 65535);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 65535).unwrap();
 
         // >50% of 64KB needs erasing (100%), so should promote to 64KB
         assert_eq!(ops.len(), 1);
@@ -1423,7 +1445,7 @@ mod tests {
         // The 64KB block at 0 covers 0-64KB, but we only need 0-36KB
         // Since 36KB < 64KB (end of region), the 64KB block extends past our region
         // The algorithm should NOT promote because the block would erase outside region
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 36863);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 36863).unwrap();
 
         // Should be 9 x 4KB blocks (no promotion because 64KB extends past 36KB)
         assert_eq!(ops.len(), 9);
@@ -1435,7 +1457,7 @@ mod tests {
         // Erasing 64KB exactly should promote
         let erase_blocks = test_erase_blocks_4k_32k_64k(1024 * 1024); // 1MB flash
 
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 65535);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 65535).unwrap();
 
         // Should use a single 64KB erase
         assert_eq!(ops.len(), 1);
@@ -1450,7 +1472,7 @@ mod tests {
         // 48KB at offset 0: should promote first 32KB (8x4KB) to 32KB block
         // remaining 16KB (4x4KB) can be promoted to 32KB? No, 16KB < 16KB (50% of 32KB)
         // Wait, 16KB = 50%, so it's exactly at the boundary. Let's test >50%:
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 49151); // 48KB
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 49151).unwrap(); // 48KB
 
         // 48KB < 50% of 64KB? 48KB > 32KB (50% of 64KB), but ends before 64KB
         // First 32KB: 8x4KB, but >50% of 32KB (16KB), and block is within region
@@ -1485,7 +1507,8 @@ mod tests {
             0,
             65535,
             WriteGranularity::Byte,
-        );
+        )
+        .unwrap();
 
         assert!(ops.is_empty(), "No erase needed when contents match");
     }
@@ -1506,7 +1529,8 @@ mod tests {
             0,
             65535,
             WriteGranularity::Byte,
-        );
+        )
+        .unwrap();
 
         assert!(
             ops.is_empty(),
@@ -1533,7 +1557,8 @@ mod tests {
             0,
             65535,
             WriteGranularity::Byte,
-        );
+        )
+        .unwrap();
 
         // Only the first 4KB block should need erasing
         assert_eq!(ops.len(), 1);
@@ -1547,7 +1572,7 @@ mod tests {
         let erase_blocks = test_erase_blocks_4k_64k(1024 * 1024); // 1MB flash
 
         // Erase 8KB starting at 64KB offset
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 65536, 73727);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 65536, 73727).unwrap();
 
         // Should be 2 x 4KB blocks
         assert_eq!(ops.len(), 2);
@@ -1560,8 +1585,10 @@ mod tests {
     #[test]
     fn test_optimal_erase_empty_blocks() {
         // Empty erase blocks should return empty result
-        let ops = plan_optimal_erase_region(&[], 65536, 0, 4095);
-        assert!(ops.is_empty());
+        assert!(matches!(
+            plan_optimal_erase_region(&[], 65536, 0, 4095),
+            Err(Error::InvalidAlignment)
+        ));
     }
 
     #[test]
@@ -1573,7 +1600,7 @@ mod tests {
         erase_blocks.push(EraseBlock::new(0xC7, flash_size)); // Chip erase
 
         // Erase the entire chip
-        let ops = plan_optimal_erase_region(&erase_blocks, flash_size, 0, flash_size - 1);
+        let ops = plan_optimal_erase_region(&erase_blocks, flash_size, 0, flash_size - 1).unwrap();
 
         // Should use a single chip erase
         assert_eq!(ops.len(), 1, "Should use chip erase for full chip");
@@ -1607,7 +1634,8 @@ mod tests {
             0,
             flash_size - 1,
             WriteGranularity::Byte,
-        );
+        )
+        .unwrap();
 
         // Should use chip erase since >50% needs erasing
         assert_eq!(
@@ -1643,7 +1671,8 @@ mod tests {
             0,
             flash_size - 1,
             WriteGranularity::Byte,
-        );
+        )
+        .unwrap();
 
         // Should NOT use chip erase since <50% needs erasing
         assert!(
@@ -1667,7 +1696,7 @@ mod tests {
 
         // Erase only 60% of the chip (which is >50%, but not full chip)
         let region_end = (flash_size as f32 * 0.6) as u32 - 1;
-        let ops = plan_optimal_erase_region(&erase_blocks, flash_size, 0, region_end);
+        let ops = plan_optimal_erase_region(&erase_blocks, flash_size, 0, region_end).unwrap();
 
         // Should NOT use chip erase since region doesn't cover full chip
         assert!(
