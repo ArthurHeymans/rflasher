@@ -323,6 +323,8 @@ pub struct IchSpiController<H: HostAccess> {
     lpc_function: u8,
     /// Whether configuration is locked (HSFS.FLOCKDN)
     locked: bool,
+    /// BIOS_CNTL.BWE was observed or successfully verified during enable.
+    bios_writes_enabled: bool,
     /// Whether software sequencing is locked (DLOCK.SSEQ_LOCKDN on PCH100+)
     swseq_locked: bool,
     /// Flash descriptor valid
@@ -425,6 +427,7 @@ impl<H: HostAccess> IchSpiController<H> {
             lpc_device: chipset.device,
             lpc_function: chipset.function,
             locked: false,
+            bios_writes_enabled: false,
             swseq_locked: false,
             desc_valid: false,
             requested_mode: mode,
@@ -1170,6 +1173,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
     /// Enable BIOS write access via BIOS_CNTL register
     pub fn enable_bios_write(&mut self) -> Result<(), InternalError> {
+        self.bios_writes_enabled = false;
         let lpc_bdf = PciAddress::new(
             self.lpc_segment,
             self.lpc_bus,
@@ -1210,6 +1214,7 @@ impl<H: HostAccess> IchSpiController<H> {
             log::debug!("BIOS Write Enable already active");
         }
 
+        self.bios_writes_enabled = true;
         Ok(())
     }
 
@@ -2433,10 +2438,7 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
     }
 
     fn writes_enabled(&self) -> bool {
-        // Intel controllers need to check BIOS_CNTL.BIOSWE
-        // This is checked during enable_bios_write()
-        // For now, we assume if enable_bios_write succeeded, writes are enabled
-        true
+        self.bios_writes_enabled
     }
 
     fn enable_bios_write(&mut self) -> Result<(), InternalError> {
@@ -2615,7 +2617,79 @@ impl IchSpiController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::tests::FakeHost;
+    use crate::host::tests::{FakeHost, FakeMmio};
+
+    fn test_controller() -> IchSpiController<FakeHost> {
+        IchSpiController {
+            host: FakeHost::default(),
+            spibar: FakeMmio,
+            generation: IchChipset::Series100SunrisePoint,
+            lpc_segment: 0,
+            lpc_bus: 0,
+            lpc_device: 0x1f,
+            lpc_function: 0,
+            locked: false,
+            bios_writes_enabled: false,
+            swseq_locked: false,
+            desc_valid: false,
+            requested_mode: SpiMode::HardwareSequencing,
+            mode: SpiMode::HardwareSequencing,
+            swseq: SwseqRegs {
+                ssfsc: PCH100_REG_SSFSC,
+                preop: PCH100_REG_PREOP,
+                optype: PCH100_REG_OPTYPE,
+                opmenu: PCH100_REG_OPMENU,
+            },
+            ich7_swseq: Ich7SwseqRegs {
+                spis: ICH7_REG_SPIS,
+                spic: ICH7_REG_SPIC,
+                spia: ICH7_REG_SPIA,
+                spid0: ICH7_REG_SPID0,
+                preop: ICH7_REG_PREOP,
+                optype: ICH7_REG_OPTYPE,
+                opmenu: ICH7_REG_OPMENU,
+            },
+            hwseq: HwseqData {
+                addr_mask: PCH100_FADDR_FLA,
+                only_4k: true,
+                hsfc_fcycle: PCH100_HSFC_FCYCLE,
+                size_comp0: 0,
+                size_comp1: 0,
+            },
+            opcodes: None,
+            bbar: 0,
+        }
+    }
+
+    #[test]
+    fn enable_bios_write_only_reports_verified_enable() {
+        let mut controller = test_controller();
+        let bdf = PciAddress::new(0, 0, 0x1f, 0);
+        assert!(!controller.writes_enabled());
+
+        // The fake host accepts writes without changing the PCI register.
+        controller.host.set_config32(bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        assert!(matches!(
+            controller.enable_bios_write(),
+            Err(InternalError::ChipsetEnable(_))
+        ));
+        assert!(!controller.writes_enabled());
+
+        controller
+            .host
+            .set_config32(bdf, PCI_REG_BIOS_CNTL as u16, BIOS_CNTL_BWE as u32);
+        controller.enable_bios_write().unwrap();
+        assert!(controller.writes_enabled());
+
+        controller
+            .host
+            .set_config32(bdf, PCI_REG_BIOS_CNTL as u16, BIOS_CNTL_SMM_BWP as u32);
+        assert!(matches!(
+            controller.enable_bios_write(),
+            Err(InternalError::AccessDenied { .. })
+        ));
+        assert!(!controller.writes_enabled());
+    }
     use crate::intel_pci::INTEL_CHIPSETS;
 
     fn detected_with_generation(generation: IchChipset) -> DetectedChipset {
