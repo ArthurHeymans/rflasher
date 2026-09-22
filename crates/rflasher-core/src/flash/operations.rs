@@ -1006,10 +1006,6 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
     addr: u32,
     len: u32,
 ) -> Result<()> {
-    if ctx.chip.features.contains(Features::SST26_BPR) {
-        protocol::sst26_global_unprotect(master).await?;
-    }
-
     let block = select_erase_block(ctx.chip.erase_blocks(), addr, len);
     if block.is_none()
         && addr == 0
@@ -1020,6 +1016,9 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
             .iter()
             .find(|eb| eb.is_chip_erase() && eb.total_size() == len)
     {
+        if ctx.chip.features.contains(Features::SST26_BPR) {
+            protocol::sst26_global_unprotect(master).await?;
+        }
         return protocol::chip_erase_with_opcode(master, chip_erase.opcode).await;
     }
     let block = block.ok_or(Error::InvalidAlignment)?;
@@ -1049,6 +1048,9 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
         }
     }
 
+    if features.contains(Features::SST26_BPR) {
+        protocol::sst26_global_unprotect(master).await?;
+    }
     if enter_exit_4byte {
         protocol::enter_4byte_mode_with_features(master, features).await?;
     }
@@ -1304,15 +1306,21 @@ mod tests {
     #[test]
     fn nonuniform_erase_rejects_mid_block_before_spi_commands() {
         use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.chip.features = Features::SST26_BPR;
         let mut master = EraseMaster {
             commands: vec![],
             fail_erase: false,
         };
         assert_eq!(
-            block_on(erase_spi_range(&mut master, &nonuniform_context(), 24, 16)),
+            block_on(erase_spi_range(&mut master, &ctx, 24, 16)),
             Err(Error::InvalidAlignment)
         );
+        // An invalid request must not unlock the chip's block protection.
         assert!(master.commands.is_empty());
+
+        block_on(erase_spi_range(&mut master, &ctx, 8, 24)).unwrap();
+        assert!(master.commands.contains(&(opcodes::ULBPR, None)));
     }
 
     #[test]
