@@ -26,6 +26,7 @@ extracted="$package_dir/rflasher-chips-$package_version"
 mkdir -p "$extracted/.cargo"
 cat >"$extracted/.cargo/config.toml" <<EOF
 [patch.crates-io]
+rflasher-chip-defs = { path = "$workspace_root/crates/rflasher-chip-defs" }
 rflasher-chip-types = { path = "$workspace_root/crates/rflasher-chip-types" }
 rflasher-chips-codegen = { path = "$workspace_root/crates/rflasher-chips-codegen" }
 EOF
