@@ -282,6 +282,12 @@ fn apply_region_filters(
     layout: &mut Layout,
     args: &LayoutArgs,
 ) -> Result<Vec<(String, std::path::PathBuf)>, Box<dyn std::error::Error>> {
+    // Without explicit includes, start with every region and subtract excludes.
+    // Do this before exclusions so excluding the last region stays empty.
+    if args.region.is_none() && args.include.is_empty() {
+        layout.include_all();
+    }
+
     // --region is shorthand for --include with one region
     let specs = args.region.iter().chain(args.include.iter());
 
@@ -298,14 +304,8 @@ fn apply_region_filters(
         .flatten()
         .collect();
 
-    // Handle --exclude (only applies if some regions are already included)
     for name in &args.exclude {
         layout.exclude_region(name)?;
-    }
-
-    // If no regions specified, include all
-    if !layout.has_included_regions() {
-        layout.include_all();
     }
 
     commands::unified::validate_region_files(layout, &region_files)?;
@@ -424,5 +424,67 @@ async fn print_chip_info(handle: &mut FlashHandle) {
                 println!("Note: No Intel Flash Descriptor found.");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cli::RegionSpec;
+    use rflasher_core::layout::{LayoutSource, Region};
+
+    fn layout() -> Layout {
+        let mut layout = Layout::with_source(LayoutSource::Manual);
+        layout.add_region(Region::new("a", 0, 15));
+        layout.add_region(Region::new("b", 16, 31));
+        layout
+    }
+
+    #[test]
+    fn excludes_subtract_from_all_without_explicit_includes() {
+        let mut layout = layout();
+        let args = LayoutArgs {
+            exclude: vec!["a".into()],
+            ..Default::default()
+        };
+        apply_region_filters(&mut layout, &args).unwrap();
+        assert_eq!(
+            layout
+                .included_regions()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b"]
+        );
+    }
+
+    #[test]
+    fn excluding_last_region_does_not_reinclude_it() {
+        let mut layout = layout();
+        let args = LayoutArgs {
+            exclude: vec!["a".into(), "b".into()],
+            ..Default::default()
+        };
+        apply_region_filters(&mut layout, &args).unwrap();
+        assert!(!layout.has_included_regions());
+    }
+
+    #[test]
+    fn explicit_includes_are_not_replaced_by_include_all() {
+        let mut layout = layout();
+        let args = LayoutArgs {
+            include: vec![RegionSpec {
+                name: "a".into(),
+                file: None,
+            }],
+            ..Default::default()
+        };
+        apply_region_filters(&mut layout, &args).unwrap();
+        assert_eq!(
+            layout
+                .included_regions()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
     }
 }

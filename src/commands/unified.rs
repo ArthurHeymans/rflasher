@@ -862,6 +862,61 @@ mod tests {
         path
     }
 
+    struct TestFlash {
+        mutations: usize,
+        blocks: Vec<rflasher_core::chip::EraseBlock>,
+    }
+
+    impl TestFlash {
+        fn new() -> Self {
+            Self {
+                mutations: 0,
+                blocks: vec![rflasher_core::chip::EraseBlock::with_count(
+                    0x20,
+                    16,
+                    FLASH_SIZE / 16,
+                )],
+            }
+        }
+    }
+
+    impl FlashDevice for TestFlash {
+        fn size(&self) -> u32 {
+            FLASH_SIZE
+        }
+        fn erase_granularity(&self) -> u32 {
+            16
+        }
+        fn write_granularity(&self) -> rflasher_core::chip::WriteGranularity {
+            rflasher_core::chip::WriteGranularity::Byte
+        }
+        fn erase_blocks(&self) -> &[rflasher_core::chip::EraseBlock] {
+            &self.blocks
+        }
+        async fn read(&mut self, _: u32, _: &mut [u8]) -> rflasher_core::Result<()> {
+            panic!("unexpected read")
+        }
+        async fn write(&mut self, _: u32, _: &[u8]) -> rflasher_core::Result<()> {
+            self.mutations += 1;
+            Ok(())
+        }
+        async fn erase(&mut self, _: u32, _: u32) -> rflasher_core::Result<()> {
+            self.mutations += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn empty_selection_read_errors_without_device_access() {
+        let mut device = TestFlash::new();
+        let layout = Layout::with_source(LayoutSource::Manual);
+        let err =
+            futures_lite::future::block_on(run_read_with_layout(&mut device, None, &layout, &[]))
+                .unwrap_err();
+        assert!(err.to_string().contains("No regions selected"));
+        assert_eq!(device.mutations, 0);
+    }
+
     #[test]
     fn region_files_without_image_file() {
         let layout = two_region_layout();
