@@ -175,10 +175,12 @@ impl EraseBlock {
     ///
     /// A single addressed block can also cover the whole chip, but its opcode
     /// still needs an address. Only the known addressless chip-erase opcodes
-    /// (0x60 and 0xC7) qualify here.
+    /// (0x60, 0x62, and 0xC7) qualify here.
     #[must_use]
     pub fn is_chip_erase(&self) -> bool {
-        matches!(self.opcode, 0x60 | 0xC7) && self.regions.len() == 1 && self.regions[0].count == 1
+        matches!(self.opcode, 0x60 | 0x62 | 0xC7)
+            && self.regions.len() == 1
+            && self.regions[0].count == 1
     }
 
     /// Get the block size only at a physical erase-block boundary.
@@ -443,6 +445,7 @@ mod tests {
         let chip_erase = EraseBlock::new(0xC7, 8 * 1024 * 1024);
         assert!(chip_erase.is_chip_erase());
         assert!(chip_erase.is_uniform());
+        assert!(EraseBlock::new(0x62, 8 * 1024 * 1024).is_chip_erase());
 
         // 4KB sector erase: count > 1
         let sector_erase = EraseBlock::with_count(0x20, 4096, 2048);

@@ -1353,18 +1353,20 @@ mod tests {
     #[test]
     fn spi_chip_erase_only_uses_addressless_opcode() {
         use futures_lite::future::block_on;
-        let mut ctx = nonuniform_context();
-        ctx.chip.erase_blocks = vec![EraseBlock::new(0x60, 48)];
-        let mut master = EraseMaster {
-            commands: vec![],
-            fail_erase: false,
-        };
-        block_on(erase_spi_range(&mut master, &ctx, 0, 48)).unwrap();
-        assert!(master.commands.contains(&(0x60, None)));
-        assert_eq!(
-            block_on(erase_spi_range(&mut master, &ctx, 0, 16)),
-            Err(Error::InvalidAlignment)
-        );
+        for opcode in [0x60, 0x62, 0xC7] {
+            let mut ctx = nonuniform_context();
+            ctx.chip.erase_blocks = vec![EraseBlock::new(opcode, 48)];
+            let mut master = EraseMaster {
+                commands: vec![],
+                fail_erase: false,
+            };
+            block_on(erase_spi_range(&mut master, &ctx, 0, 48)).unwrap();
+            assert!(master.commands.contains(&(opcode, None)));
+            assert_eq!(
+                block_on(erase_spi_range(&mut master, &ctx, 0, 16)),
+                Err(Error::InvalidAlignment)
+            );
+        }
     }
 
     /// Create test erase blocks for a chip of given size
