@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/rflasher-chip-types",
+    "crates/rflasher-chip-defs",
     "crates/rflasher-core",
     "crates/rflasher-chips",
     "crates/rflasher-chips-codegen",
@@ -14,6 +15,7 @@ members = [
 default-members = [
     ".",
     "crates/rflasher-chip-types",
+    "crates/rflasher-chip-defs",
     "crates/rflasher-core",
     "crates/rflasher-chips",
     "crates/rflasher-chips-codegen",
@@ -117,7 +119,7 @@ static-linux-programmers = ["portable-programmers", "linux-spi", "linux-mtd", "i
 
 [dependencies]
 rflasher-core = { workspace = true, features = ["std"] }
-rflasher-chips.workspace = true
+rflasher-chips = { workspace = true, features = ["static-chips"] }
 rflasher-programmers = { workspace = true, features = ["std"] }
 rflasher-repl = { version = "0.1.0", path = "crates/rflasher-repl", optional = true }
 futures-lite.workspace = true

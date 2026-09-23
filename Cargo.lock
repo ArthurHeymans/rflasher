@@ -3093,6 +3093,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rflasher-chip-defs"
+version = "0.1.0"
+dependencies = [
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "rflasher-chip-types"
 version = "0.1.0"
 dependencies = [
@@ -3107,10 +3115,10 @@ name = "rflasher-chips"
 version = "0.1.0"
 dependencies = [
  "once_cell",
+ "rflasher-chip-defs",
  "rflasher-chip-types",
  "rflasher-chips-codegen",
  "ron",
- "serde",
  "thiserror 2.0.19",
 ]
 
@@ -3121,8 +3129,8 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
+ "rflasher-chip-defs",
  "ron",
- "serde",
  "syn 2.0.119",
 ]
 

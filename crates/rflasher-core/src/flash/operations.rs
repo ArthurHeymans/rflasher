@@ -316,10 +316,16 @@ pub struct OptimalEraseOp {
 /// the next-smaller eraser it contains.
 #[cfg(feature = "alloc")]
 fn create_erase_layout(erase_blocks: &[EraseBlock], flash_size: u32) -> Vec<EraserLayout> {
-    // Filter out chip erase (size >= flash_size) and non-uniform blocks, sort by size (smallest first)
+    // Exclude addressless chip erase, but retain a single addressed block
+    // even when that block covers the entire chip.
     let mut sorted_erasers: Vec<EraseBlock> = erase_blocks
         .iter()
-        .filter(|eb| eb.is_uniform() && eb.min_block_size() > 0 && eb.min_block_size() < flash_size)
+        .filter(|eb| {
+            eb.is_uniform()
+                && !eb.is_chip_erase()
+                && eb.min_block_size() > 0
+                && eb.min_block_size() <= flash_size
+        })
         .cloned()
         .collect();
     sorted_erasers.sort_by_key(|eb| eb.min_block_size());
@@ -539,11 +545,33 @@ pub fn plan_optimal_erase(
     region_start: u32,
     region_end: u32,
     granularity: WriteGranularity,
-) -> Vec<OptimalEraseOp> {
+) -> Result<Vec<OptimalEraseOp>> {
     let mut layouts = create_erase_layout(erase_blocks, flash_size);
 
     if layouts.is_empty() {
-        return Vec::new();
+        // There are no uniform sector erasers. A chip-erase-only device can
+        // still erase the entire chip, but never report a partial erase as done.
+        if region_start == 0
+            && region_end == flash_size.saturating_sub(1)
+            && let Some(block) = erase_blocks
+                .iter()
+                .find(|block| block.is_chip_erase() && block.total_size() == flash_size)
+        {
+            let needs_erase = match (have, want) {
+                (Some(have), Some(want)) => need_erase(have, want, granularity),
+                _ => true,
+            };
+            return Ok(if needs_erase {
+                vec![OptimalEraseOp {
+                    start: 0,
+                    size: flash_size,
+                    erase_block: block.clone(),
+                }]
+            } else {
+                Vec::new()
+            });
+        }
+        return Err(Error::InvalidAlignment);
     }
 
     // Determine buffer offset (if buffers are region-sized vs full-chip).
@@ -581,11 +609,11 @@ pub fn plan_optimal_erase(
         // Find chip erase block if available
         if let Some(chip_erase_block) = erase_blocks.iter().find(|eb| eb.is_chip_erase()) {
             // Use chip erase instead of individual blocks
-            return vec![OptimalEraseOp {
+            return Ok(vec![OptimalEraseOp {
                 start: 0,
                 size: flash_size,
                 erase_block: chip_erase_block.clone(),
-            }];
+            }]);
         }
     }
 
@@ -610,7 +638,7 @@ pub fn plan_optimal_erase(
     // Sort by address
     result.sort_by_key(|op| op.start);
 
-    result
+    Ok(result)
 }
 
 /// Plan optimal erase operations for a region with explicit erase (no content comparison)
@@ -623,7 +651,7 @@ pub fn plan_optimal_erase_region(
     flash_size: u32,
     region_start: u32,
     region_end: u32,
-) -> Vec<OptimalEraseOp> {
+) -> Result<Vec<OptimalEraseOp>> {
     plan_optimal_erase(
         erase_blocks,
         flash_size,
@@ -970,6 +998,101 @@ pub async fn check_erased_range<M: SpiMaster + ?Sized>(
     Ok(())
 }
 
+/// Erase through SPI for both SPI-only and hybrid devices. The physical
+/// geometry is measured from chip address zero, including across region changes.
+pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    len: u32,
+) -> Result<()> {
+    let block = select_erase_block(ctx.chip.erase_blocks(), addr, len);
+    if block.is_none()
+        && addr == 0
+        && len == ctx.total_size() as u32
+        && let Some(chip_erase) = ctx
+            .chip
+            .erase_blocks()
+            .iter()
+            .find(|eb| eb.is_chip_erase() && eb.total_size() == len)
+    {
+        if ctx.chip.features.contains(Features::SST26_BPR) {
+            protocol::sst26_global_unprotect(master).await?;
+        }
+        return protocol::chip_erase_with_opcode(master, chip_erase.opcode).await;
+    }
+    let block = block.ok_or(Error::InvalidAlignment)?;
+    let features = ctx.chip.features;
+    let use_4byte = ctx.address_mode == AddressMode::FourByte;
+    let master_features = master.features();
+    let use_native = use_4byte
+        && block.opcode_4b.is_some_and(|opcode| {
+            master_features.contains(SpiFeatures::FOUR_BYTE_ADDR) && master.probe_opcode(opcode)
+        });
+    let opcode = block.opcode_for_address_width(use_native);
+    let (addressing, enter_exit_4byte) = if use_4byte {
+        addressing_for_4byte_operation(use_native, features, master_features)?
+    } else {
+        (CommandAddressing::ThreeByte, false)
+    };
+    // Validate the complete walk before issuing any erase command.
+    let mut current = addr;
+    let end = addr.checked_add(len).ok_or(Error::AddressOutOfBounds)?;
+    while current < end {
+        let size = block
+            .block_size_at_boundary(current)
+            .ok_or(Error::InvalidAlignment)?;
+        current = current.checked_add(size).ok_or(Error::AddressOutOfBounds)?;
+        if current > end {
+            return Err(Error::InvalidAlignment);
+        }
+    }
+
+    if features.contains(Features::SST26_BPR) {
+        protocol::sst26_global_unprotect(master).await?;
+    }
+    if enter_exit_4byte {
+        protocol::enter_4byte_mode_with_features(master, features).await?;
+    }
+    let max_size = block.max_block_size();
+    let (poll_delay_us, timeout_us) = match max_size {
+        s if s <= 4096 => (10_000, 1_000_000),
+        s if s <= 65536 => (100_000, 4_000_000),
+        _ => (500_000, 60_000_000),
+    };
+    let mut current = addr;
+    let mut result = Ok(());
+    while current < end {
+        let size = block
+            .block_size_at_boundary(current)
+            .expect("validated erase geometry");
+        if let Err(err) = protocol::erase_block(
+            master,
+            opcode,
+            current,
+            addressing,
+            poll_delay_us,
+            timeout_us,
+        )
+        .await
+        {
+            result = Err(err);
+            break;
+        }
+        current += size;
+    }
+    if enter_exit_4byte {
+        let exit_result = protocol::exit_4byte_mode_with_features(master, features).await;
+        if let Err(err) = exit_result {
+            if result.is_ok() {
+                return Err(err);
+            }
+            log::warn!("Failed to exit 4-byte address mode: {}", err);
+        }
+    }
+    result
+}
+
 /// Select the best erase block size for the given operation
 ///
 /// Finds the largest erase block that:
@@ -990,10 +1113,27 @@ pub fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> O
             !eb.is_chip_erase() && eb.min_block_size() <= len
         })
         .filter(|eb| {
-            // For uniform blocks, check alignment
-            // For non-uniform blocks, we need the min block size for alignment
-            let min_size = eb.min_block_size();
-            addr.is_multiple_of(min_size) && len.is_multiple_of(min_size)
+            if eb.is_uniform() {
+                let size = eb.min_block_size();
+                return size > 0 && addr.is_multiple_of(size) && len.is_multiple_of(size);
+            }
+            let mut current = addr;
+            let Some(end) = addr.checked_add(len) else {
+                return false;
+            };
+            while current < end {
+                let Some(size) = eb.block_size_at_boundary(current) else {
+                    return false;
+                };
+                let Some(next) = current.checked_add(size) else {
+                    return false;
+                };
+                if next > end {
+                    return false;
+                }
+                current = next;
+            }
+            true
         })
         .max_by_key(|eb| eb.max_block_size())
         .cloned()
@@ -1064,8 +1204,178 @@ impl WriteProgress for NoProgress {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
-    use crate::chip::{EraseBlock, WriteGranularity};
+    use crate::chip::{EraseBlock, Features, WriteGranularity};
     use crate::spi::opcodes;
+
+    struct EraseMaster {
+        commands: Vec<(u8, Option<u32>)>,
+        fail_erase: bool,
+    }
+
+    impl SpiMaster for EraseMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::FOUR_BYTE_ADDR
+        }
+        fn max_read_len(&self) -> usize {
+            256
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
+            self.commands.push((cmd.opcode, cmd.address));
+            if self.fail_erase && cmd.opcode == 0x20 {
+                return Err(Error::SpiTransferFailed);
+            }
+            if cmd.opcode == crate::spi::opcodes::RDSR {
+                cmd.read_buf.fill(0);
+            } else {
+                cmd.read_buf.fill(0xff);
+            }
+            Ok(())
+        }
+        async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    impl crate::programmer::OpaqueMaster for EraseMaster {
+        fn size(&self) -> usize {
+            48
+        }
+        async fn read(&mut self, _addr: u32, buf: &mut [u8]) -> Result<()> {
+            buf.fill(0xff);
+            Ok(())
+        }
+        async fn write(&mut self, _addr: u32, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        async fn erase(&mut self, _addr: u32, _len: u32) -> Result<()> {
+            Err(Error::ProgrammerError)
+        }
+    }
+
+    fn nonuniform_context() -> FlashContext {
+        use crate::chip::{ChipTestStatus, EraseRegion, FlashChip};
+        FlashContext::new(FlashChip {
+            vendor: "test".into(),
+            name: "test".into(),
+            jedec_manufacturer: 0,
+            jedec_device: 0,
+            total_size: 48,
+            page_size: 16,
+            features: Features::empty(),
+            voltage_min_mv: 2700,
+            voltage_max_mv: 3600,
+            write_granularity: WriteGranularity::Byte,
+            erase_blocks: vec![EraseBlock::with_regions(
+                0x20,
+                &[EraseRegion::new(8, 2), EraseRegion::new(16, 2)],
+            )],
+            tested: ChipTestStatus::default(),
+        })
+    }
+
+    #[test]
+    fn spi_and_hybrid_fallback_use_physical_nonuniform_boundaries() {
+        use crate::flash::{FlashDevice, HybridFlashDevice, SpiFlashDevice};
+        use futures_lite::future::block_on;
+        for hybrid in [false, true] {
+            let master = EraseMaster {
+                commands: vec![],
+                fail_erase: false,
+            };
+            let commands = if hybrid {
+                let mut device = HybridFlashDevice::new(master, nonuniform_context());
+                block_on(device.erase(8, 24)).unwrap();
+                device.into_parts().0.commands
+            } else {
+                let mut device = SpiFlashDevice::new(master, nonuniform_context());
+                block_on(device.erase(8, 24)).unwrap();
+                device.into_parts().0.commands
+            };
+            let erases: Vec<_> = commands
+                .iter()
+                .filter(|(opcode, _)| *opcode == 0x20)
+                .collect();
+            assert_eq!(
+                erases.iter().map(|(_, addr)| *addr).collect::<Vec<_>>(),
+                vec![Some(8), Some(16)]
+            );
+        }
+    }
+
+    #[test]
+    fn nonuniform_erase_rejects_mid_block_before_spi_commands() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.chip.features = Features::SST26_BPR;
+        let mut master = EraseMaster {
+            commands: vec![],
+            fail_erase: false,
+        };
+        assert_eq!(
+            block_on(erase_spi_range(&mut master, &ctx, 24, 16)),
+            Err(Error::InvalidAlignment)
+        );
+        // An invalid request must not unlock the chip's block protection.
+        assert!(master.commands.is_empty());
+
+        block_on(erase_spi_range(&mut master, &ctx, 8, 24)).unwrap();
+        assert!(master.commands.contains(&(opcodes::ULBPR, None)));
+    }
+
+    #[test]
+    fn spi_erase_exits_four_byte_mode_on_failure() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.address_mode = AddressMode::FourByte;
+        ctx.chip.features = Features::FOUR_BYTE_ENTER;
+        let mut master = EraseMaster {
+            commands: vec![],
+            fail_erase: true,
+        };
+        assert_eq!(
+            block_on(erase_spi_range(&mut master, &ctx, 8, 24)),
+            Err(Error::SpiTransferFailed)
+        );
+        assert_eq!(master.commands.last().unwrap().0, crate::spi::opcodes::EX4B);
+    }
+
+    #[test]
+    fn single_addressed_block_erase_keeps_its_address() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.chip.erase_blocks = vec![EraseBlock::new(0xD8, 48)];
+        let plan = plan_optimal_erase_region(ctx.chip.erase_blocks(), 48, 0, 47).unwrap();
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].erase_block.opcode, 0xD8);
+
+        let mut master = EraseMaster {
+            commands: vec![],
+            fail_erase: false,
+        };
+        block_on(erase_spi_range(&mut master, &ctx, 0, 48)).unwrap();
+        assert!(master.commands.contains(&(0xD8, Some(0))));
+        assert!(!master.commands.contains(&(0xD8, None)));
+    }
+
+    #[test]
+    fn spi_chip_erase_only_uses_addressless_opcode() {
+        use futures_lite::future::block_on;
+        for opcode in [0x60, 0x62, 0xC7] {
+            let mut ctx = nonuniform_context();
+            ctx.chip.erase_blocks = vec![EraseBlock::new(opcode, 48)];
+            let mut master = EraseMaster {
+                commands: vec![],
+                fail_erase: false,
+            };
+            block_on(erase_spi_range(&mut master, &ctx, 0, 48)).unwrap();
+            assert!(master.commands.contains(&(opcode, None)));
+            assert_eq!(
+                block_on(erase_spi_range(&mut master, &ctx, 0, 16)),
+                Err(Error::InvalidAlignment)
+            );
+        }
+    }
 
     /// Create test erase blocks for a chip of given size
     /// These have proper block counts so they aren't detected as chip erase
@@ -1377,7 +1687,7 @@ mod tests {
         // Erasing exactly one 4KB block should use the 4KB eraser
         let erase_blocks = test_erase_blocks_4k_64k(1024 * 1024); // 1MB flash
 
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 4095);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 4095).unwrap();
 
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].start, 0);
@@ -1392,7 +1702,7 @@ mod tests {
         let erase_blocks = test_erase_blocks_4k_64k(1024 * 1024); // 1MB flash
 
         // 40KB = 10 x 4KB blocks, but that's <50% of 64KB, so no promotion
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 40959);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 40959).unwrap();
 
         // Should be 10 x 4KB blocks
         assert_eq!(ops.len(), 10);
@@ -1404,7 +1714,7 @@ mod tests {
         // Erasing exactly 64KB should use a single 64KB eraser
         let erase_blocks = test_erase_blocks_4k_64k(1024 * 1024); // 1MB flash
 
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 65535);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 65535).unwrap();
 
         // >50% of 64KB needs erasing (100%), so should promote to 64KB
         assert_eq!(ops.len(), 1);
@@ -1423,7 +1733,7 @@ mod tests {
         // The 64KB block at 0 covers 0-64KB, but we only need 0-36KB
         // Since 36KB < 64KB (end of region), the 64KB block extends past our region
         // The algorithm should NOT promote because the block would erase outside region
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 36863);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 36863).unwrap();
 
         // Should be 9 x 4KB blocks (no promotion because 64KB extends past 36KB)
         assert_eq!(ops.len(), 9);
@@ -1435,7 +1745,7 @@ mod tests {
         // Erasing 64KB exactly should promote
         let erase_blocks = test_erase_blocks_4k_32k_64k(1024 * 1024); // 1MB flash
 
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 65535);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 65535).unwrap();
 
         // Should use a single 64KB erase
         assert_eq!(ops.len(), 1);
@@ -1450,7 +1760,7 @@ mod tests {
         // 48KB at offset 0: should promote first 32KB (8x4KB) to 32KB block
         // remaining 16KB (4x4KB) can be promoted to 32KB? No, 16KB < 16KB (50% of 32KB)
         // Wait, 16KB = 50%, so it's exactly at the boundary. Let's test >50%:
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 49151); // 48KB
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 0, 49151).unwrap(); // 48KB
 
         // 48KB < 50% of 64KB? 48KB > 32KB (50% of 64KB), but ends before 64KB
         // First 32KB: 8x4KB, but >50% of 32KB (16KB), and block is within region
@@ -1485,7 +1795,8 @@ mod tests {
             0,
             65535,
             WriteGranularity::Byte,
-        );
+        )
+        .unwrap();
 
         assert!(ops.is_empty(), "No erase needed when contents match");
     }
@@ -1506,7 +1817,8 @@ mod tests {
             0,
             65535,
             WriteGranularity::Byte,
-        );
+        )
+        .unwrap();
 
         assert!(
             ops.is_empty(),
@@ -1533,7 +1845,8 @@ mod tests {
             0,
             65535,
             WriteGranularity::Byte,
-        );
+        )
+        .unwrap();
 
         // Only the first 4KB block should need erasing
         assert_eq!(ops.len(), 1);
@@ -1547,7 +1860,7 @@ mod tests {
         let erase_blocks = test_erase_blocks_4k_64k(1024 * 1024); // 1MB flash
 
         // Erase 8KB starting at 64KB offset
-        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 65536, 73727);
+        let ops = plan_optimal_erase_region(&erase_blocks, 1024 * 1024, 65536, 73727).unwrap();
 
         // Should be 2 x 4KB blocks
         assert_eq!(ops.len(), 2);
@@ -1560,8 +1873,10 @@ mod tests {
     #[test]
     fn test_optimal_erase_empty_blocks() {
         // Empty erase blocks should return empty result
-        let ops = plan_optimal_erase_region(&[], 65536, 0, 4095);
-        assert!(ops.is_empty());
+        assert!(matches!(
+            plan_optimal_erase_region(&[], 65536, 0, 4095),
+            Err(Error::InvalidAlignment)
+        ));
     }
 
     #[test]
@@ -1573,7 +1888,7 @@ mod tests {
         erase_blocks.push(EraseBlock::new(0xC7, flash_size)); // Chip erase
 
         // Erase the entire chip
-        let ops = plan_optimal_erase_region(&erase_blocks, flash_size, 0, flash_size - 1);
+        let ops = plan_optimal_erase_region(&erase_blocks, flash_size, 0, flash_size - 1).unwrap();
 
         // Should use a single chip erase
         assert_eq!(ops.len(), 1, "Should use chip erase for full chip");
@@ -1607,7 +1922,8 @@ mod tests {
             0,
             flash_size - 1,
             WriteGranularity::Byte,
-        );
+        )
+        .unwrap();
 
         // Should use chip erase since >50% needs erasing
         assert_eq!(
@@ -1643,7 +1959,8 @@ mod tests {
             0,
             flash_size - 1,
             WriteGranularity::Byte,
-        );
+        )
+        .unwrap();
 
         // Should NOT use chip erase since <50% needs erasing
         assert!(
@@ -1667,7 +1984,7 @@ mod tests {
 
         // Erase only 60% of the chip (which is >50%, but not full chip)
         let region_end = (flash_size as f32 * 0.6) as u32 - 1;
-        let ops = plan_optimal_erase_region(&erase_blocks, flash_size, 0, region_end);
+        let ops = plan_optimal_erase_region(&erase_blocks, flash_size, 0, region_end).unwrap();
 
         // Should NOT use chip erase since region doesn't cover full chip
         assert!(

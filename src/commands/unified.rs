@@ -611,6 +611,14 @@ pub async fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_layout(layout, device.size())?;
+
+    let readonly = layout.readonly_included();
+    if !readonly.is_empty() {
+        let names: Vec<_> = readonly.iter().map(|r| r.name.as_str()).collect();
+        return Err(format!("Cannot erase readonly region(s): {}", names.join(", ")).into());
+    }
+
     print_flash_size(device.size());
 
     let included: Vec<_> = layout.included_regions().collect();
@@ -860,6 +868,83 @@ mod tests {
             std::env::temp_dir().join(format!("rflasher-test-{}-{}", std::process::id(), name));
         std::fs::write(&path, data).unwrap();
         path
+    }
+
+    struct TestFlash {
+        mutations: usize,
+        blocks: Vec<rflasher_core::chip::EraseBlock>,
+    }
+
+    impl TestFlash {
+        fn new() -> Self {
+            Self {
+                mutations: 0,
+                blocks: vec![rflasher_core::chip::EraseBlock::with_count(
+                    0x20,
+                    16,
+                    FLASH_SIZE / 16,
+                )],
+            }
+        }
+    }
+
+    impl FlashDevice for TestFlash {
+        fn size(&self) -> u32 {
+            FLASH_SIZE
+        }
+        fn erase_granularity(&self) -> u32 {
+            16
+        }
+        fn write_granularity(&self) -> rflasher_core::chip::WriteGranularity {
+            rflasher_core::chip::WriteGranularity::Byte
+        }
+        fn erase_blocks(&self) -> &[rflasher_core::chip::EraseBlock] {
+            &self.blocks
+        }
+        async fn read(&mut self, _: u32, _: &mut [u8]) -> rflasher_core::Result<()> {
+            panic!("unexpected read")
+        }
+        async fn write(&mut self, _: u32, _: &[u8]) -> rflasher_core::Result<()> {
+            self.mutations += 1;
+            Ok(())
+        }
+        async fn erase(&mut self, _: u32, _: u32) -> rflasher_core::Result<()> {
+            self.mutations += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn empty_selection_read_errors_without_device_access() {
+        let mut device = TestFlash::new();
+        let layout = Layout::with_source(LayoutSource::Manual);
+        let err =
+            futures_lite::future::block_on(run_read_with_layout(&mut device, None, &layout, &[]))
+                .unwrap_err();
+        assert!(err.to_string().contains("No regions selected"));
+        assert_eq!(device.mutations, 0);
+    }
+
+    #[test]
+    fn erase_rejects_readonly_before_erasing_other_regions() {
+        let mut device = TestFlash::new();
+        let mut layout = two_region_layout();
+        layout.find_region_mut("b").unwrap().readonly = true;
+        let err = futures_lite::future::block_on(run_erase_with_layout(&mut device, &layout))
+            .unwrap_err();
+        assert!(err.to_string().contains("readonly region(s): b"));
+        assert_eq!(device.mutations, 0);
+    }
+
+    #[test]
+    fn erase_rejects_invalid_layout_before_mutation() {
+        let mut device = TestFlash::new();
+        let mut layout = two_region_layout();
+        layout.find_region_mut("b").unwrap().end = FLASH_SIZE;
+        let err = futures_lite::future::block_on(run_erase_with_layout(&mut device, &layout))
+            .unwrap_err();
+        assert!(err.to_string().contains("beyond flash size"));
+        assert_eq!(device.mutations, 0);
     }
 
     #[test]

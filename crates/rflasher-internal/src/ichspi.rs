@@ -323,6 +323,8 @@ pub struct IchSpiController<H: HostAccess> {
     lpc_function: u8,
     /// Whether configuration is locked (HSFS.FLOCKDN)
     locked: bool,
+    /// BIOS_CNTL.BWE was observed or successfully verified during enable.
+    bios_writes_enabled: bool,
     /// Whether software sequencing is locked (DLOCK.SSEQ_LOCKDN on PCH100+)
     swseq_locked: bool,
     /// Flash descriptor valid
@@ -425,6 +427,7 @@ impl<H: HostAccess> IchSpiController<H> {
             lpc_device: chipset.device,
             lpc_function: chipset.function,
             locked: false,
+            bios_writes_enabled: false,
             swseq_locked: false,
             desc_valid: false,
             requested_mode: mode,
@@ -1170,6 +1173,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
     /// Enable BIOS write access via BIOS_CNTL register
     pub fn enable_bios_write(&mut self) -> Result<(), InternalError> {
+        self.bios_writes_enabled = false;
         let lpc_bdf = PciAddress::new(
             self.lpc_segment,
             self.lpc_bus,
@@ -1210,6 +1214,7 @@ impl<H: HostAccess> IchSpiController<H> {
             log::debug!("BIOS Write Enable already active");
         }
 
+        self.bios_writes_enabled = true;
         Ok(())
     }
 
@@ -1252,6 +1257,21 @@ impl<H: HostAccess> IchSpiController<H> {
     // ========================================================================
     // Hardware Sequencing Operations
     // ========================================================================
+
+    /// Reject ranges that FADDR would truncate before touching controller registers.
+    fn hwseq_check_range(&self, addr: u32, len: usize) -> Result<(), InternalError> {
+        let end = u64::try_from(len)
+            .ok()
+            .and_then(|len| (addr as u64).checked_add(len));
+        if addr & !self.hwseq.addr_mask != 0
+            || end.is_none_or(|end| end > self.hwseq.addr_mask as u64 + 1)
+        {
+            return Err(InternalError::Io(
+                "Hardware sequencing address out of range",
+            ));
+        }
+        Ok(())
+    }
 
     /// Set the flash address for hardware sequencing
     #[inline(always)]
@@ -1300,12 +1320,13 @@ impl<H: HostAccess> IchSpiController<H> {
     /// This is the main read path - optimized for throughput.
     pub fn hwseq_read(&self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
         let len = buf.len();
+        self.hwseq_check_range(addr, len)?;
         if len == 0 {
             return Ok(());
         }
 
         let mut offset = 0;
-        let mut current_addr = addr;
+        let mut current_addr = addr as u64;
 
         // Clear FDONE, FCERR, AEL by writing 1s to them (do once at start)
         self.spibar
@@ -1317,7 +1338,7 @@ impl<H: HostAccess> IchSpiController<H> {
             let page_remaining = 256 - (current_addr as usize & 0xFF);
             let block_len = remaining.min(HWSEQ_MAX_DATA).min(page_remaining);
 
-            self.hwseq_set_addr(current_addr);
+            self.hwseq_set_addr(current_addr as u32);
 
             // Set up read cycle using read-modify-write to preserve reserved bits
             let mut hsfc = self.spibar.read16(ICH9_REG_HSFC);
@@ -1334,7 +1355,7 @@ impl<H: HostAccess> IchSpiController<H> {
             self.read_data(&mut buf[offset..offset + block_len]);
 
             offset += block_len;
-            current_addr += block_len as u32;
+            current_addr += block_len as u64;
         }
 
         Ok(())
@@ -1345,12 +1366,13 @@ impl<H: HostAccess> IchSpiController<H> {
     /// This is the main write path - optimized for throughput.
     pub fn hwseq_write(&self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
         let len = data.len();
+        self.hwseq_check_range(addr, len)?;
         if len == 0 {
             return Ok(());
         }
 
         let mut offset = 0;
-        let mut current_addr = addr;
+        let mut current_addr = addr as u64;
 
         // Clear FDONE, FCERR, AEL by writing 1s to them (do once at start)
         self.spibar
@@ -1362,7 +1384,7 @@ impl<H: HostAccess> IchSpiController<H> {
             let page_remaining = 256 - (current_addr as usize & 0xFF);
             let block_len = remaining.min(HWSEQ_MAX_DATA).min(page_remaining);
 
-            self.hwseq_set_addr(current_addr);
+            self.hwseq_set_addr(current_addr as u32);
 
             // Fill data registers first (before starting cycle)
             self.fill_data(&data[offset..offset + block_len]);
@@ -1380,7 +1402,7 @@ impl<H: HostAccess> IchSpiController<H> {
             self.hwseq_wait_for_cycle(30_000_000)?;
 
             offset += block_len;
-            current_addr += block_len as u32;
+            current_addr += block_len as u64;
         }
 
         Ok(())
@@ -1402,15 +1424,16 @@ impl<H: HostAccess> IchSpiController<H> {
             ));
         }
 
-        let mut current_addr = addr;
-        let end_addr = addr + len;
+        self.hwseq_check_range(addr, len as usize)?;
+        let mut current_addr = addr as u64;
+        let end_addr = current_addr + len as u64;
 
         // Clear FDONE, FCERR, AEL by writing 1s to them (do once at start)
         self.spibar
             .write16(ICH9_REG_HSFS, self.spibar.read16(ICH9_REG_HSFS));
 
         while current_addr < end_addr {
-            self.hwseq_set_addr(current_addr);
+            self.hwseq_set_addr(current_addr as u32);
 
             // Set up erase cycle using read-modify-write to preserve reserved bits
             let mut hsfc = self.spibar.read16(ICH9_REG_HSFC);
@@ -1422,7 +1445,7 @@ impl<H: HostAccess> IchSpiController<H> {
             // Wait for completion (60 second timeout for erase)
             self.hwseq_wait_for_cycle(60_000_000)?;
 
-            current_addr += erase_size;
+            current_addr += erase_size as u64;
         }
 
         Ok(())
@@ -2433,10 +2456,7 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
     }
 
     fn writes_enabled(&self) -> bool {
-        // Intel controllers need to check BIOS_CNTL.BIOSWE
-        // This is checked during enable_bios_write()
-        // For now, we assume if enable_bios_write succeeded, writes are enabled
-        true
+        self.bios_writes_enabled
     }
 
     fn enable_bios_write(&mut self) -> Result<(), InternalError> {
@@ -2615,7 +2635,103 @@ impl IchSpiController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::tests::FakeHost;
+    use crate::host::tests::{FakeHost, FakeMmio};
+
+    fn test_controller() -> IchSpiController<FakeHost> {
+        IchSpiController {
+            host: FakeHost::default(),
+            spibar: FakeMmio,
+            generation: IchChipset::Series100SunrisePoint,
+            lpc_segment: 0,
+            lpc_bus: 0,
+            lpc_device: 0x1f,
+            lpc_function: 0,
+            locked: false,
+            bios_writes_enabled: false,
+            swseq_locked: false,
+            desc_valid: false,
+            requested_mode: SpiMode::HardwareSequencing,
+            mode: SpiMode::HardwareSequencing,
+            swseq: SwseqRegs {
+                ssfsc: PCH100_REG_SSFSC,
+                preop: PCH100_REG_PREOP,
+                optype: PCH100_REG_OPTYPE,
+                opmenu: PCH100_REG_OPMENU,
+            },
+            ich7_swseq: Ich7SwseqRegs {
+                spis: ICH7_REG_SPIS,
+                spic: ICH7_REG_SPIC,
+                spia: ICH7_REG_SPIA,
+                spid0: ICH7_REG_SPID0,
+                preop: ICH7_REG_PREOP,
+                optype: ICH7_REG_OPTYPE,
+                opmenu: ICH7_REG_OPMENU,
+            },
+            hwseq: HwseqData {
+                addr_mask: PCH100_FADDR_FLA,
+                only_4k: true,
+                hsfc_fcycle: PCH100_HSFC_FCYCLE,
+                size_comp0: 0,
+                size_comp1: 0,
+            },
+            opcodes: None,
+            bbar: 0,
+        }
+    }
+
+    #[test]
+    fn hwseq_rejects_unrepresentable_ranges_before_mmio() {
+        for mask in [ICH9_FADDR_FLA, PCH100_FADDR_FLA] {
+            let mut controller = test_controller();
+            controller.hwseq.addr_mask = mask;
+            assert!(controller.hwseq_check_range(mask, 1).is_ok());
+            assert!(controller.hwseq_check_range(mask, 2).is_err());
+            assert!(controller.hwseq_check_range(mask + 1, 0).is_err());
+            assert!(controller.hwseq_read(mask, &mut [0; 2]).is_err());
+            assert!(controller.hwseq_write(mask, &[0; 2]).is_err());
+            assert!(controller.hwseq_erase(mask + 1, 4096).is_err());
+            assert!(controller.hwseq_erase(mask - 4095, 8192).is_err());
+        }
+
+        let mut controller = test_controller();
+        controller.hwseq.addr_mask = u32::MAX;
+        assert!(controller.hwseq_check_range(u32::MAX, 1).is_ok());
+        assert!(controller.hwseq_check_range(u32::MAX, 2).is_err());
+        assert!(controller.hwseq_check_range(2, usize::MAX).is_err());
+        assert!(controller.hwseq_check_range(0xffff_f000, 4096).is_ok());
+    }
+
+    #[test]
+    fn enable_bios_write_only_reports_verified_enable() {
+        let mut controller = test_controller();
+        let bdf = PciAddress::new(0, 0, 0x1f, 0);
+        assert!(!controller.writes_enabled());
+
+        // The fake host accepts writes without changing the PCI register.
+        controller
+            .host
+            .set_config32(bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        assert!(matches!(
+            controller.enable_bios_write(),
+            Err(InternalError::ChipsetEnable(_))
+        ));
+        assert!(!controller.writes_enabled());
+
+        controller
+            .host
+            .set_config32(bdf, PCI_REG_BIOS_CNTL as u16, BIOS_CNTL_BWE as u32);
+        controller.enable_bios_write().unwrap();
+        assert!(controller.writes_enabled());
+
+        controller
+            .host
+            .set_config32(bdf, PCI_REG_BIOS_CNTL as u16, BIOS_CNTL_SMM_BWP as u32);
+        assert!(matches!(
+            controller.enable_bios_write(),
+            Err(InternalError::AccessDenied { .. })
+        ));
+        assert!(!controller.writes_enabled());
+    }
     use crate::intel_pci::INTEL_CHIPSETS;
 
     fn detected_with_generation(generation: IchChipset) -> DetectedChipset {

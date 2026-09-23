@@ -67,12 +67,6 @@
               "rflasher-wasm"
             ];
 
-            postPatch = ''
-              substituteInPlace src/main.rs \
-                --replace-fail 'PathBuf::from("/usr/share/rflasher/chips"),' \
-                  "PathBuf::from(\"$out/share/rflasher/chips\"),"
-            '';
-
             postInstall = ''
               install -Dm644 crates/rflasher-chips/data/vendors/*.ron -t $out/share/rflasher/chips
             '';

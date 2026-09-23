@@ -23,7 +23,7 @@ use rflasher_programmers::{FlashHandle, open_flash};
 
 use rflasher_core::flash::FlashDevice;
 use rflasher_core::layout::Layout;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn main() {
     // Initialize logger
@@ -189,9 +189,13 @@ fn require_programmer(programmer: &Option<String>) -> Result<&str, Box<dyn std::
     })
 }
 
-/// Load the chip database from the specified path or default locations
+/// Load the bundled database, or replace it with definitions at the specified path.
 fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::error::Error>> {
-    let mut db = ChipDatabase::new();
+    let mut db = if path.is_some() {
+        ChipDatabase::empty()
+    } else {
+        ChipDatabase::new()
+    };
 
     if let Some(path) = path {
         // User specified a path
@@ -201,33 +205,6 @@ fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::
             db.load_file(path)?;
         } else {
             return Err(format!("Chip database path not found: {}", path.display()).into());
-        }
-    } else {
-        // Try default locations
-        let default_paths = [
-            PathBuf::from("crates/rflasher-chips/data/vendors"),
-            PathBuf::from("chips/vendors"),
-            PathBuf::from("/usr/share/rflasher/chips"),
-            PathBuf::from("/usr/local/share/rflasher/chips"),
-        ];
-
-        let mut loaded = false;
-        for dir in &default_paths {
-            if dir.is_dir() {
-                match db.load_dir(dir) {
-                    Ok(count) => {
-                        log::debug!("Loaded {} chips from {}", count, dir.display());
-                        loaded = true;
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to load chips from {}: {}", dir.display(), e);
-                    }
-                }
-            }
-        }
-
-        if !loaded {
-            log::warn!("No chip database found in default locations");
         }
     }
 
@@ -282,6 +259,12 @@ fn apply_region_filters(
     layout: &mut Layout,
     args: &LayoutArgs,
 ) -> Result<Vec<(String, std::path::PathBuf)>, Box<dyn std::error::Error>> {
+    // Without explicit includes, start with every region and subtract excludes.
+    // Do this before exclusions so excluding the last region stays empty.
+    if args.region.is_none() && args.include.is_empty() {
+        layout.include_all();
+    }
+
     // --region is shorthand for --include with one region
     let specs = args.region.iter().chain(args.include.iter());
 
@@ -298,14 +281,8 @@ fn apply_region_filters(
         .flatten()
         .collect();
 
-    // Handle --exclude (only applies if some regions are already included)
     for name in &args.exclude {
         layout.exclude_region(name)?;
-    }
-
-    // If no regions specified, include all
-    if !layout.has_included_regions() {
-        layout.include_all();
     }
 
     commands::unified::validate_region_files(layout, &region_files)?;
@@ -424,5 +401,79 @@ async fn print_chip_info(handle: &mut FlashHandle) {
                 println!("Note: No Intel Flash Descriptor found.");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cli::RegionSpec;
+    use rflasher_core::layout::{LayoutSource, Region};
+
+    fn layout() -> Layout {
+        let mut layout = Layout::with_source(LayoutSource::Manual);
+        layout.add_region(Region::new("a", 0, 15));
+        layout.add_region(Region::new("b", 16, 31));
+        layout
+    }
+
+    #[test]
+    fn bundled_chips_and_explicit_override() {
+        let bundled = load_chip_database(None).unwrap();
+        assert!(bundled.len() > 400);
+        let vendor_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/rflasher-chips/data/vendors/winbond.ron");
+        let custom = load_chip_database(Some(&vendor_file)).unwrap();
+        assert!(!custom.is_empty());
+        assert!(custom.len() < bundled.len());
+        assert!(custom.chips().iter().all(|chip| chip.vendor == "Winbond"));
+    }
+
+    #[test]
+    fn excludes_subtract_from_all_without_explicit_includes() {
+        let mut layout = layout();
+        let args = LayoutArgs {
+            exclude: vec!["a".into()],
+            ..Default::default()
+        };
+        apply_region_filters(&mut layout, &args).unwrap();
+        assert_eq!(
+            layout
+                .included_regions()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b"]
+        );
+    }
+
+    #[test]
+    fn excluding_last_region_does_not_reinclude_it() {
+        let mut layout = layout();
+        let args = LayoutArgs {
+            exclude: vec!["a".into(), "b".into()],
+            ..Default::default()
+        };
+        apply_region_filters(&mut layout, &args).unwrap();
+        assert!(!layout.has_included_regions());
+    }
+
+    #[test]
+    fn explicit_includes_are_not_replaced_by_include_all() {
+        let mut layout = layout();
+        let args = LayoutArgs {
+            include: vec![RegionSpec {
+                name: "a".into(),
+                file: None,
+            }],
+            ..Default::default()
+        };
+        apply_region_filters(&mut layout, &args).unwrap();
+        assert_eq!(
+            layout
+                .included_regions()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
     }
 }

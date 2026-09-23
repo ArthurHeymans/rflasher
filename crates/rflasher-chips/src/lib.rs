@@ -26,6 +26,11 @@ use std::{string::String, vec::Vec};
 #[cfg(feature = "static-chips")]
 use std::{string::ToString, vec};
 
+pub use rflasher_chip_defs::Size;
+use rflasher_chip_defs::{
+    FeaturesDef, TestStatus as RonTestStatus, TestStatusDef as TestStatusesDef, VendorDef,
+    WriteGranularity as RonWriteGranularity,
+};
 pub use rflasher_chip_types::*;
 
 /// Error type for chip database operations
@@ -42,254 +47,89 @@ pub enum ChipDbError {
     Validation(String),
 }
 
-// ============================================================================
-// RON deserialization types (intermediate format)
-// ============================================================================
+// Convert the shared RON schema into the runtime chip model.
 
-/// Size specification with human-readable units (for RON parsing)
-#[derive(Debug, Clone, Copy, serde::Deserialize)]
-pub enum Size {
-    /// Size in bytes
-    B(u32),
-    /// Size in kibibytes (1024 bytes)
-    KiB(u32),
-    /// Size in mebibytes (1024 * 1024 bytes)
-    MiB(u32),
+fn features_from(def: FeaturesDef) -> Features {
+    [
+        (def.wrsr_wren, Features::WRSR_WREN),
+        (def.wrsr_ewsr, Features::WRSR_EWSR),
+        (def.wrsr_ext, Features::WRSR_EXT),
+        (def.fast_read, Features::FAST_READ),
+        (def.dual_io, Features::DUAL_IO),
+        (def.quad_io, Features::QUAD_IO),
+        (def.four_byte_addr, Features::FOUR_BYTE_ADDR),
+        (def.four_byte_enter, Features::FOUR_BYTE_ENTER),
+        (def.four_byte_native, Features::FOUR_BYTE_NATIVE),
+        (
+            def.ext_addr_reg || def.ext_addr_reg_c5c8 || def.ext_addr_reg_1716,
+            Features::EXT_ADDR_REG,
+        ),
+        (def.four_byte_enter_wren, Features::FOUR_BYTE_ENTER_WREN),
+        (def.four_byte_enter_ear7, Features::FOUR_BYTE_ENTER_EAR7),
+        (def.ext_addr_reg_c5c8, Features::EXT_ADDR_REG_C5C8),
+        (def.ext_addr_reg_1716, Features::EXT_ADDR_REG_1716),
+        (def.four_byte_read, Features::FOUR_BYTE_READ),
+        (def.four_byte_fast_read, Features::FOUR_BYTE_FAST_READ),
+        (def.four_byte_program, Features::FOUR_BYTE_PROGRAM),
+        (
+            def.four_byte_dual_out_read,
+            Features::FOUR_BYTE_DUAL_OUT_READ,
+        ),
+        (def.four_byte_dual_io_read, Features::FOUR_BYTE_DUAL_IO_READ),
+        (
+            def.four_byte_quad_out_read,
+            Features::FOUR_BYTE_QUAD_OUT_READ,
+        ),
+        (def.four_byte_quad_io_read, Features::FOUR_BYTE_QUAD_IO_READ),
+        (def.otp, Features::OTP),
+        (def.qpi, Features::QPI),
+        (def.security_reg, Features::SECURITY_REG),
+        (def.sfdp, Features::SFDP),
+        (def.write_byte, Features::WRITE_BYTE),
+        (def.aai_word, Features::AAI_WORD),
+        (def.sst26_bpr, Features::SST26_BPR),
+        (def.status_reg_2, Features::STATUS_REG_2),
+        (def.status_reg_3, Features::STATUS_REG_3),
+        (def.qe_sr2, Features::QE_SR2),
+        (def.deep_power_down, Features::DEEP_POWER_DOWN),
+        (def.wp_tb, Features::WP_TB),
+        (def.wp_sec, Features::WP_SEC),
+        (def.wp_cmp, Features::WP_CMP),
+    ]
+    .into_iter()
+    .fold(
+        Features::empty(),
+        |acc, (enabled, flag)| {
+            if enabled { acc | flag } else { acc }
+        },
+    )
 }
 
-impl Size {
-    /// Convert to bytes
-    pub fn to_bytes(self) -> u32 {
-        match self {
-            Size::B(n) => n,
-            Size::KiB(n) => n * 1024,
-            Size::MiB(n) => n * 1024 * 1024,
-        }
+fn status_from(def: RonTestStatus) -> TestStatus {
+    match def {
+        RonTestStatus::Untested => TestStatus::Untested,
+        RonTestStatus::Ok => TestStatus::Ok,
+        RonTestStatus::Bad => TestStatus::Bad,
+        RonTestStatus::Na => TestStatus::Na,
     }
 }
 
-/// Feature flags for flash chips (RON format)
-#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
-#[serde(default)]
-struct FeaturesDef {
-    wrsr_wren: bool,
-    wrsr_ewsr: bool,
-    wrsr_ext: bool,
-    fast_read: bool,
-    dual_io: bool,
-    quad_io: bool,
-    four_byte_addr: bool,
-    four_byte_enter: bool,
-    four_byte_native: bool,
-    ext_addr_reg: bool,
-    four_byte_enter_wren: bool,
-    four_byte_enter_ear7: bool,
-    ext_addr_reg_c5c8: bool,
-    ext_addr_reg_1716: bool,
-    four_byte_read: bool,
-    four_byte_fast_read: bool,
-    four_byte_program: bool,
-    four_byte_dual_out_read: bool,
-    four_byte_dual_io_read: bool,
-    four_byte_quad_out_read: bool,
-    four_byte_quad_io_read: bool,
-    otp: bool,
-    qpi: bool,
-    security_reg: bool,
-    sfdp: bool,
-    write_byte: bool,
-    aai_word: bool,
-    sst26_bpr: bool,
-    status_reg_2: bool,
-    status_reg_3: bool,
-    qe_sr2: bool,
-    deep_power_down: bool,
-    wp_tb: bool,
-    wp_sec: bool,
-    wp_cmp: bool,
-}
-
-impl From<FeaturesDef> for Features {
-    fn from(def: FeaturesDef) -> Self {
-        [
-            (def.wrsr_wren, Features::WRSR_WREN),
-            (def.wrsr_ewsr, Features::WRSR_EWSR),
-            (def.wrsr_ext, Features::WRSR_EXT),
-            (def.fast_read, Features::FAST_READ),
-            (def.dual_io, Features::DUAL_IO),
-            (def.quad_io, Features::QUAD_IO),
-            (def.four_byte_addr, Features::FOUR_BYTE_ADDR),
-            (def.four_byte_enter, Features::FOUR_BYTE_ENTER),
-            (def.four_byte_native, Features::FOUR_BYTE_NATIVE),
-            (
-                def.ext_addr_reg || def.ext_addr_reg_c5c8 || def.ext_addr_reg_1716,
-                Features::EXT_ADDR_REG,
-            ),
-            (def.four_byte_enter_wren, Features::FOUR_BYTE_ENTER_WREN),
-            (def.four_byte_enter_ear7, Features::FOUR_BYTE_ENTER_EAR7),
-            (def.ext_addr_reg_c5c8, Features::EXT_ADDR_REG_C5C8),
-            (def.ext_addr_reg_1716, Features::EXT_ADDR_REG_1716),
-            (def.four_byte_read, Features::FOUR_BYTE_READ),
-            (def.four_byte_fast_read, Features::FOUR_BYTE_FAST_READ),
-            (def.four_byte_program, Features::FOUR_BYTE_PROGRAM),
-            (
-                def.four_byte_dual_out_read,
-                Features::FOUR_BYTE_DUAL_OUT_READ,
-            ),
-            (def.four_byte_dual_io_read, Features::FOUR_BYTE_DUAL_IO_READ),
-            (
-                def.four_byte_quad_out_read,
-                Features::FOUR_BYTE_QUAD_OUT_READ,
-            ),
-            (def.four_byte_quad_io_read, Features::FOUR_BYTE_QUAD_IO_READ),
-            (def.otp, Features::OTP),
-            (def.qpi, Features::QPI),
-            (def.security_reg, Features::SECURITY_REG),
-            (def.sfdp, Features::SFDP),
-            (def.write_byte, Features::WRITE_BYTE),
-            (def.aai_word, Features::AAI_WORD),
-            (def.sst26_bpr, Features::SST26_BPR),
-            (def.status_reg_2, Features::STATUS_REG_2),
-            (def.status_reg_3, Features::STATUS_REG_3),
-            (def.qe_sr2, Features::QE_SR2),
-            (def.deep_power_down, Features::DEEP_POWER_DOWN),
-            (def.wp_tb, Features::WP_TB),
-            (def.wp_sec, Features::WP_SEC),
-            (def.wp_cmp, Features::WP_CMP),
-        ]
-        .into_iter()
-        .fold(
-            Features::empty(),
-            |acc, (enabled, flag)| {
-                if enabled { acc | flag } else { acc }
-            },
-        )
+fn statuses_from(def: TestStatusesDef) -> ChipTestStatus {
+    ChipTestStatus {
+        probe: status_from(def.probe),
+        read: status_from(def.read),
+        erase: status_from(def.erase),
+        write: status_from(def.write),
+        wp: status_from(def.wp),
     }
 }
 
-/// Region definition: size and count pair
-#[derive(Debug, Clone, serde::Deserialize)]
-struct RegionDef {
-    size: Size,
-    count: u32,
-}
-
-/// Erase block definition in RON format
-#[derive(Debug, Clone, serde::Deserialize)]
-struct EraseBlockDef {
-    opcode: u8,
-    opcode_4b: Option<u8>,
-    regions: Vec<RegionDef>,
-}
-
-/// Voltage range in millivolts
-#[derive(Debug, Clone, serde::Deserialize)]
-struct VoltageDef {
-    min: u16,
-    max: u16,
-}
-
-impl Default for VoltageDef {
-    fn default() -> Self {
-        Self {
-            min: 2700,
-            max: 3600,
-        }
+fn granularity_from(def: RonWriteGranularity) -> WriteGranularity {
+    match def {
+        RonWriteGranularity::Bit => WriteGranularity::Bit,
+        RonWriteGranularity::Byte => WriteGranularity::Byte,
+        RonWriteGranularity::Page => WriteGranularity::Page,
     }
-}
-
-/// Test status (RON format)
-#[derive(Debug, Clone, Copy, serde::Deserialize, Default)]
-enum TestStatusDef {
-    #[default]
-    Untested,
-    Ok,
-    Bad,
-    Na,
-}
-
-impl From<TestStatusDef> for TestStatus {
-    fn from(def: TestStatusDef) -> Self {
-        match def {
-            TestStatusDef::Untested => TestStatus::Untested,
-            TestStatusDef::Ok => TestStatus::Ok,
-            TestStatusDef::Bad => TestStatus::Bad,
-            TestStatusDef::Na => TestStatus::Na,
-        }
-    }
-}
-
-/// Test results (RON format)
-#[derive(Debug, Clone, serde::Deserialize, Default)]
-#[serde(default)]
-struct TestStatusesDef {
-    probe: TestStatusDef,
-    read: TestStatusDef,
-    erase: TestStatusDef,
-    write: TestStatusDef,
-    wp: TestStatusDef,
-}
-
-impl From<TestStatusesDef> for ChipTestStatus {
-    fn from(def: TestStatusesDef) -> Self {
-        ChipTestStatus {
-            probe: def.probe.into(),
-            read: def.read.into(),
-            erase: def.erase.into(),
-            write: def.write.into(),
-            wp: def.wp.into(),
-        }
-    }
-}
-
-/// Write granularity (RON format)
-#[derive(Debug, Clone, Copy, serde::Deserialize, Default)]
-enum WriteGranularityDef {
-    Bit,
-    Byte,
-    #[default]
-    Page,
-}
-
-impl From<WriteGranularityDef> for WriteGranularity {
-    fn from(def: WriteGranularityDef) -> Self {
-        match def {
-            WriteGranularityDef::Bit => WriteGranularity::Bit,
-            WriteGranularityDef::Byte => WriteGranularity::Byte,
-            WriteGranularityDef::Page => WriteGranularity::Page,
-        }
-    }
-}
-
-/// Single chip definition in RON format
-#[derive(Debug, Clone, serde::Deserialize)]
-struct ChipDef {
-    name: String,
-    device_id: u16,
-    total_size: Size,
-    #[serde(default = "default_page_size")]
-    page_size: u16,
-    #[serde(default)]
-    features: FeaturesDef,
-    #[serde(default)]
-    voltage: VoltageDef,
-    #[serde(default)]
-    write_granularity: WriteGranularityDef,
-    erase_blocks: Vec<EraseBlockDef>,
-    #[serde(default)]
-    tested: TestStatusesDef,
-}
-
-fn default_page_size() -> u16 {
-    256
-}
-
-/// Vendor definition containing multiple chips
-#[derive(Debug, Clone, serde::Deserialize)]
-struct VendorDef {
-    vendor: String,
-    manufacturer_id: u8,
-    chips: Vec<ChipDef>,
 }
 
 // ============================================================================
@@ -358,6 +198,7 @@ impl ChipDatabase {
     /// Load chip definitions from a RON string
     pub fn load_ron(&mut self, content: &str) -> Result<usize, ChipDbError> {
         let vendor_def: VendorDef = ron::from_str(content)?;
+        vendor_def.validate().map_err(ChipDbError::Validation)?;
         let count = vendor_def.chips.len();
 
         for chip_def in vendor_def.chips {
@@ -368,10 +209,10 @@ impl ChipDatabase {
                 jedec_device: chip_def.device_id,
                 total_size: chip_def.total_size.to_bytes(),
                 page_size: chip_def.page_size,
-                features: chip_def.features.into(),
+                features: features_from(chip_def.features),
                 voltage_min_mv: chip_def.voltage.min,
                 voltage_max_mv: chip_def.voltage.max,
-                write_granularity: chip_def.write_granularity.into(),
+                write_granularity: granularity_from(chip_def.write_granularity),
                 erase_blocks: chip_def
                     .erase_blocks
                     .into_iter()
@@ -384,7 +225,7 @@ impl ChipDatabase {
                         EraseBlock::with_regions_and_4b(eb.opcode, eb.opcode_4b, &regions)
                     })
                     .collect(),
-                tested: chip_def.tested.into(),
+                tested: statuses_from(chip_def.tested),
             };
             self.chips.push(chip);
         }
@@ -505,6 +346,22 @@ mod tests {
         assert_eq!(chip.total_size, 16 * 1024 * 1024);
         assert!(chip.features.contains(Features::WRSR_WREN));
         assert!(chip.features.contains(Features::FAST_READ));
+    }
+
+    #[test]
+    fn custom_ron_rejects_missing_chip_erase_without_loading_partial_vendor() {
+        let mut db = ChipDatabase::empty();
+        let invalid = r#"(
+            vendor: "Test", manufacturer_id: 1,
+            chips: [(
+                name: "Broken", device_id: 1, total_size: KiB(8),
+                erase_blocks: [(opcode: 0x20, regions: [(size: KiB(4), count: 1)])],
+            )],
+        )"#;
+        let err = db.load_ron(invalid).unwrap_err();
+        assert!(matches!(err, ChipDbError::Validation(_)));
+        assert!(err.to_string().contains("no chip-erase block"));
+        assert!(db.is_empty());
     }
 
     #[test]

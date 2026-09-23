@@ -114,116 +114,7 @@ pub async fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
         return Err(Error::BufferTooSmall);
     }
 
-    // Clone erase blocks to avoid borrow checker issues
-    let erase_blocks: Vec<_> = device.erase_blocks().to_vec();
-    let granularity = device.write_granularity();
-    let page_size = device.page_size();
-
-    let mut stats = WriteStats::default();
-
-    // Step 1: Read current flash contents
-    progress.reading(flash_size as usize);
-    let mut current = vec![0u8; flash_size as usize];
-
-    let mut bytes_read = 0;
-    while bytes_read < flash_size as usize {
-        let chunk_size = core::cmp::min(READ_CHUNK_SIZE, flash_size as usize - bytes_read);
-        device
-            .read(
-                bytes_read as u32,
-                &mut current[bytes_read..bytes_read + chunk_size],
-            )
-            .await?;
-        bytes_read += chunk_size;
-        progress.read_progress(bytes_read);
-    }
-
-    // Check if any changes are needed
-    if !need_write(&current, data) {
-        // Nothing to do - flash already matches
-        progress.complete(&stats);
-        return Ok(stats);
-    }
-
-    // Calculate statistics
-    stats.bytes_changed = get_all_write_ranges(&current, data)
-        .iter()
-        .map(|r| r.len as usize)
-        .sum();
-
-    // Step 2: Plan optimal erase operations
-    // This uses the hierarchical algorithm that minimizes erase operations
-    // by promoting to larger blocks when >50% of sub-blocks need erasing
-    let erase_ops = plan_optimal_erase(
-        &erase_blocks,
-        flash_size,
-        Some(&current),
-        Some(data),
-        0,
-        flash_size - 1,
-        granularity,
-    );
-
-    // Step 3: Erase blocks that need it
-    if !erase_ops.is_empty() {
-        let bytes_to_erase: usize = erase_ops.iter().map(|op| op.size as usize).sum();
-        progress.erasing(erase_ops.len(), bytes_to_erase);
-
-        for (i, op) in erase_ops.iter().enumerate() {
-            device.erase(op.start, op.size).await?;
-
-            // Update our view of current contents
-            let buf_start = op.start as usize;
-            let buf_end = (op.start + op.size) as usize;
-            if buf_end <= current.len() {
-                current[buf_start..buf_end].fill(ERASED_VALUE);
-            }
-
-            stats.erases_performed += 1;
-            stats.bytes_erased += op.size as usize;
-            progress.erase_progress(i + 1, stats.bytes_erased);
-        }
-        stats.flash_modified = true;
-    }
-
-    // Step 4: Write pages that differ
-    // Re-calculate write ranges after erasing, then coalesce to page boundaries
-    // so that hardware-accelerated programmers (like Dediprog) can use their fast
-    // bulk transfer path instead of slow byte-at-a-time SPI command sequencing.
-    let write_ranges = get_all_write_ranges(&current, data);
-    let write_ranges = coalesce_write_ranges(&write_ranges, page_size, flash_size);
-
-    if !write_ranges.is_empty() {
-        let bytes_to_write: usize = write_ranges.iter().map(|r| r.len as usize).sum();
-        progress.writing(bytes_to_write);
-
-        let mut bytes_written = 0;
-
-        for range in &write_ranges {
-            // Split large ranges into sub-chunks for progress reporting.
-            // Each chunk stays page-aligned so the bulk transfer path is used.
-            let range_start = range.start as usize;
-            let range_end = range_start + range.len as usize;
-            let mut offset = range_start;
-
-            while offset < range_end {
-                let chunk_len = (range_end - offset).min(WRITE_CHUNK_SIZE);
-                device
-                    .write(offset as u32, &data[offset..offset + chunk_len])
-                    .await?;
-                offset += chunk_len;
-                bytes_written += chunk_len;
-                stats.writes_performed += 1;
-                progress.write_progress(bytes_written);
-            }
-        }
-
-        stats.bytes_written = bytes_written;
-        stats.flash_modified = true;
-    }
-
-    progress.complete(&stats);
-    Ok(stats)
+    smart_write_region(device, 0, data, progress).await
 }
 
 /// Perform a smart write operation for a specific region
@@ -295,7 +186,7 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
         addr,
         region_end,
         granularity,
-    );
+    )?;
 
     // Step 3: Erase blocks that need it
     if !erase_ops.is_empty() {
@@ -439,6 +330,11 @@ pub async fn smart_write_by_layout<D: FlashDevice + ?Sized, P: WriteProgress>(
         return Err(Error::BufferTooSmall);
     }
 
+    // Reject protected regions before processing any included region.
+    if layout.included_regions().any(|region| region.readonly) {
+        return Err(Error::RegionProtected);
+    }
+
     // Collect included regions
     let included: Vec<_> = layout.included_regions().collect();
     if included.is_empty() {
@@ -550,6 +446,11 @@ pub async fn erase_by_layout<D: FlashDevice + ?Sized>(
         _ => Error::LayoutError,
     })?;
 
+    // Reject protected regions before erasing any included region.
+    if layout.included_regions().any(|region| region.readonly) {
+        return Err(Error::RegionProtected);
+    }
+
     for region in layout.included_regions() {
         erase_region(device, region).await?;
     }
@@ -572,7 +473,7 @@ pub async fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Regi
     let erase_blocks: Vec<_> = device.erase_blocks().to_vec();
 
     // Plan optimal erase operations for this region
-    let erase_ops = plan_optimal_erase_region(&erase_blocks, flash_size, region.start, region.end);
+    let erase_ops = plan_optimal_erase_region(&erase_blocks, flash_size, region.start, region.end)?;
 
     for op in &erase_ops {
         let block_end = op.start + op.size - 1;
@@ -688,4 +589,218 @@ pub async fn verify_by_layout<D: FlashDevice>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chip::{EraseBlock, WriteGranularity};
+    use futures_lite::future::block_on;
+
+    struct FakeFlash {
+        bytes: Vec<u8>,
+        blocks: Vec<EraseBlock>,
+        mutations: usize,
+    }
+
+    impl FakeFlash {
+        fn new(size: u32) -> Self {
+            Self {
+                bytes: vec![0; size as usize],
+                blocks: vec![EraseBlock::with_count(0x20, 16, size / 16)],
+                mutations: 0,
+            }
+        }
+    }
+
+    impl FlashDevice for FakeFlash {
+        fn size(&self) -> u32 {
+            self.bytes.len() as u32
+        }
+        fn erase_granularity(&self) -> u32 {
+            16
+        }
+        fn write_granularity(&self) -> WriteGranularity {
+            WriteGranularity::Byte
+        }
+        fn erase_blocks(&self) -> &[EraseBlock] {
+            &self.blocks
+        }
+        async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
+            buf.copy_from_slice(&self.bytes[addr as usize..addr as usize + buf.len()]);
+            Ok(())
+        }
+        async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+            self.mutations += 1;
+            self.bytes[addr as usize..addr as usize + data.len()].copy_from_slice(data);
+            Ok(())
+        }
+        async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
+            self.mutations += 1;
+            self.bytes[addr as usize..(addr + len) as usize].fill(0xff);
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct TraceProgress {
+        reading: Vec<usize>,
+        read_progress: Vec<usize>,
+        erasing: Vec<(usize, usize)>,
+        erase_progress: Vec<(usize, usize)>,
+        writing: Vec<usize>,
+        write_progress: Vec<usize>,
+        completions: usize,
+    }
+
+    impl WriteProgress for TraceProgress {
+        fn reading(&mut self, total: usize) {
+            self.reading.push(total);
+        }
+        fn read_progress(&mut self, bytes: usize) {
+            self.read_progress.push(bytes);
+        }
+        fn erasing(&mut self, count: usize, bytes: usize) {
+            self.erasing.push((count, bytes));
+        }
+        fn erase_progress(&mut self, count: usize, bytes: usize) {
+            self.erase_progress.push((count, bytes));
+        }
+        fn writing(&mut self, bytes: usize) {
+            self.writing.push(bytes);
+        }
+        fn write_progress(&mut self, bytes: usize) {
+            self.write_progress.push(bytes);
+        }
+        fn complete(&mut self, _: &WriteStats) {
+            self.completions += 1;
+        }
+    }
+
+    #[test]
+    fn full_and_partial_smart_write_share_stats_and_progress_engine() {
+        let mut full = FakeFlash::new(64);
+        let mut full_progress = TraceProgress::default();
+        let full_stats = block_on(smart_write(&mut full, &[0xff; 64], &mut full_progress)).unwrap();
+        assert_eq!(full_stats.bytes_changed, 64);
+        assert_eq!(full_stats.bytes_erased, 64);
+        assert_eq!(full_stats.erases_performed, 4);
+        assert_eq!(full_progress.reading, vec![64]);
+        assert_eq!(full_progress.read_progress, vec![64]);
+        assert_eq!(full_progress.erasing, vec![(4, 64)]);
+        assert_eq!(full_progress.erase_progress.last(), Some(&(4, 64)));
+        assert!(full_progress.writing.is_empty());
+        assert!(full_progress.write_progress.is_empty());
+        assert_eq!(full_progress.completions, 1);
+
+        let mut partial = FakeFlash::new(64);
+        let mut partial_progress = TraceProgress::default();
+        let stats = block_on(smart_write_region(
+            &mut partial,
+            4,
+            &[0xff; 8],
+            &mut partial_progress,
+        ))
+        .unwrap();
+        assert_eq!(stats.bytes_changed, 8);
+        assert_eq!(stats.bytes_erased, 16);
+        assert_eq!(stats.erases_performed, 1);
+        assert_eq!(partial_progress.reading, vec![8]);
+        assert_eq!(partial_progress.read_progress, vec![8]);
+        assert_eq!(partial_progress.erasing, vec![(1, 16)]);
+        assert_eq!(partial_progress.erase_progress, vec![(1, 16)]);
+        assert_eq!(partial_progress.completions, 1);
+        assert_eq!(&partial.bytes[..4], &[0; 4]);
+        assert_eq!(&partial.bytes[4..12], &[0xff; 8]);
+        assert_eq!(&partial.bytes[12..], &[0; 52]);
+    }
+
+    #[test]
+    fn full_smart_write_reports_write_progress_and_stats() {
+        let mut device = FakeFlash::new(64);
+        device.bytes.fill(0xff);
+        let mut data = vec![0xff; 64];
+        data[7] = 0x12;
+        let mut progress = TraceProgress::default();
+        let stats = block_on(smart_write(&mut device, &data, &mut progress)).unwrap();
+        assert_eq!(stats.bytes_changed, 1);
+        assert_eq!(stats.bytes_erased, 0);
+        assert_eq!(stats.bytes_written, 1);
+        assert_eq!(stats.writes_performed, 1);
+        assert!(stats.flash_modified);
+        assert_eq!(progress.writing, vec![1]);
+        assert_eq!(progress.write_progress, vec![1]);
+        assert_eq!(progress.completions, 1);
+        assert_eq!(device.bytes, data);
+    }
+
+    #[test]
+    fn nonuniform_only_erase_fails_instead_of_succeeding_without_erasing() {
+        use crate::chip::EraseRegion;
+
+        let mut device = FakeFlash::new(64);
+        device.blocks = vec![EraseBlock::with_regions(
+            0x20,
+            &[EraseRegion::new(8, 2), EraseRegion::new(16, 3)],
+        )];
+        let region = Region::new("partial", 4, 11);
+        assert_eq!(
+            block_on(erase_region(&mut device, &region)),
+            Err(Error::InvalidAlignment)
+        );
+        assert_eq!(device.mutations, 0);
+        assert!(matches!(
+            block_on(smart_write_region(
+                &mut device,
+                4,
+                &[0xff; 8],
+                &mut NoProgress
+            )),
+            Err(Error::InvalidAlignment)
+        ));
+        assert_eq!(device.mutations, 0);
+    }
+
+    #[test]
+    fn chip_erase_only_full_region_is_not_a_noop() {
+        let mut device = FakeFlash::new(64);
+        device.blocks = vec![EraseBlock::new(0xc7, 64)];
+        block_on(erase_region(&mut device, &Region::new("full", 0, 63))).unwrap();
+        assert_eq!(device.mutations, 1);
+        assert!(device.bytes.iter().all(|byte| *byte == 0xff));
+        assert_eq!(
+            block_on(erase_region(&mut device, &Region::new("partial", 0, 7))),
+            Err(Error::InvalidAlignment)
+        );
+    }
+
+    #[test]
+    fn readonly_layout_rejected_before_any_mutation() {
+        let mut device = FakeFlash::new(64);
+        let mut layout = Layout::new();
+        let mut writable = Region::new("writable", 0, 15);
+        writable.included = true;
+        let mut protected = Region::new("protected", 16, 31);
+        protected.included = true;
+        protected.readonly = true;
+        layout.add_region(writable);
+        layout.add_region(protected);
+
+        assert!(matches!(
+            block_on(smart_write_by_layout(
+                &mut device,
+                &layout,
+                &[0xff; 64],
+                &mut NoProgress
+            )),
+            Err(Error::RegionProtected)
+        ));
+        assert_eq!(device.mutations, 0);
+        assert_eq!(
+            block_on(erase_by_layout(&mut device, &layout)),
+            Err(Error::RegionProtected)
+        );
+        assert_eq!(device.mutations, 0);
+        assert!(device.bytes.iter().all(|byte| *byte == 0));
+    }
 }

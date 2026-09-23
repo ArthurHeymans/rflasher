@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Build-time code generator for flash chip database"
 
 [dependencies]
-serde.workspace = true
+rflasher-chip-defs = { version = "0.1.0", path = "../rflasher-chip-defs" }
 ron.workspace = true
 quote.workspace = true
 proc-macro2.workspace = true

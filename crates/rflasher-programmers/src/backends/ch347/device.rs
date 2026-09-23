@@ -54,6 +54,70 @@ pub struct Ch347 {
     variant: Ch347Variant,
 }
 
+// The SPI transfer orchestration is generic so error cleanup can be tested
+// without opening a USB device.
+trait SpiIo {
+    async fn set_cs(&mut self, assert: bool) -> Result<()>;
+    async fn write(&mut self, data: &[u8]) -> Result<()>;
+    async fn read(&mut self, data: &mut [u8]) -> Result<()>;
+}
+
+impl SpiIo for Ch347 {
+    async fn set_cs(&mut self, assert: bool) -> Result<()> {
+        self.cs_control(assert).await
+    }
+
+    async fn write(&mut self, data: &[u8]) -> Result<()> {
+        self.spi_write(data).await
+    }
+
+    async fn read(&mut self, data: &mut [u8]) -> Result<()> {
+        self.spi_read(data).await
+    }
+}
+
+async fn spi_transfer_with_io<T: SpiIo>(
+    io: &mut T,
+    write_data: &[u8],
+    read_buf: &mut [u8],
+) -> Result<()> {
+    if let Err(error) = io.set_cs(true).await {
+        // The assertion may have reached the device before its transfer failed.
+        let _ = io.set_cs(false).await;
+        return Err(error);
+    }
+    let result = async {
+        if !write_data.is_empty() {
+            io.write(write_data).await?;
+        }
+        if !read_buf.is_empty() {
+            io.read(read_buf).await?;
+        }
+        Ok(())
+    }
+    .await;
+    let deassert_result = io.set_cs(false).await;
+    result.and(deassert_result)
+}
+
+fn parse_spi_read_packet(packet: &[u8], remaining: usize) -> Result<&[u8]> {
+    if packet.len() < 3 {
+        return Err(Ch347Error::InvalidResponse("Response too short".into()));
+    }
+    if packet[0] != CH347_CMD_SPI_IN {
+        return Err(Ch347Error::InvalidResponse(
+            "Unexpected SPI read response".into(),
+        ));
+    }
+    let data_len = packet[1] as usize | ((packet[2] as usize) << 8);
+    if data_len == 0 || packet.len() < 3 + data_len {
+        return Err(Ch347Error::InvalidResponse(
+            "Empty or incomplete SPI read response".into(),
+        ));
+    }
+    Ok(&packet[3..3 + data_len.min(remaining)])
+}
+
 // ---------------------------------------------------------------------------
 // Native-only methods (device enumeration, Drop)
 // ---------------------------------------------------------------------------
@@ -487,26 +551,9 @@ impl Ch347 {
         while bytes_read < readcnt {
             let received = self.usb_read(&mut buffer).await?;
 
-            if received < 3 {
-                return Err(Ch347Error::InvalidResponse(
-                    "Response too short".to_string(),
-                ));
-            }
-
-            // Response format: [cmd, len_lo, len_hi, data...]
-            let data_len = (buffer[1] as usize) | ((buffer[2] as usize) << 8);
-
-            if received < 3 + data_len {
-                return Err(Ch347Error::InvalidResponse(format!(
-                    "Incomplete response: got {} bytes, expected {}",
-                    received,
-                    3 + data_len
-                )));
-            }
-
-            let to_copy = std::cmp::min(data_len, readcnt - bytes_read);
-            data[bytes_read..bytes_read + to_copy].copy_from_slice(&buffer[3..3 + to_copy]);
-            bytes_read += to_copy;
+            let payload = parse_spi_read_packet(&buffer[..received], readcnt - bytes_read)?;
+            data[bytes_read..bytes_read + payload.len()].copy_from_slice(payload);
+            bytes_read += payload.len();
         }
 
         Ok(())
@@ -514,23 +561,7 @@ impl Ch347 {
 
     /// Perform an SPI transfer (write then read)
     async fn spi_transfer(&mut self, write_data: &[u8], read_buf: &mut [u8]) -> Result<()> {
-        // Assert CS
-        self.cs_control(true).await?;
-
-        // Write phase
-        if !write_data.is_empty() {
-            self.spi_write(write_data).await?;
-        }
-
-        // Read phase
-        if !read_buf.is_empty() {
-            self.spi_read(read_buf).await?;
-        }
-
-        // Deassert CS
-        self.cs_control(false).await?;
-
-        Ok(())
+        spi_transfer_with_io(self, write_data, read_buf).await
     }
 
     /// Write data to USB endpoint
@@ -720,4 +751,83 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<SpiConfig> {
     }
 
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct FakeSpiIo {
+        events: Vec<&'static str>,
+        fail: Option<&'static str>,
+        fail_deassert: bool,
+    }
+
+    impl SpiIo for FakeSpiIo {
+        async fn set_cs(&mut self, assert: bool) -> Result<()> {
+            let event = if assert { "assert" } else { "deassert" };
+            self.events.push(event);
+            if self.fail == Some(event) || (!assert && self.fail_deassert) {
+                return Err(Ch347Error::TransferFailed(event.into()));
+            }
+            Ok(())
+        }
+
+        async fn write(&mut self, _data: &[u8]) -> Result<()> {
+            self.events.push("write");
+            if self.fail == Some("write") {
+                return Err(Ch347Error::TransferFailed("write".into()));
+            }
+            Ok(())
+        }
+
+        async fn read(&mut self, _data: &mut [u8]) -> Result<()> {
+            self.events.push("read");
+            if self.fail == Some("read") {
+                return Err(Ch347Error::TransferFailed("read".into()));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn spi_transfer_deasserts_after_each_phase_error() {
+        for (failure, expected) in [
+            ("assert", vec!["assert", "deassert"]),
+            ("write", vec!["assert", "write", "deassert"]),
+            ("read", vec!["assert", "write", "read", "deassert"]),
+            ("deassert", vec!["assert", "write", "read", "deassert"]),
+        ] {
+            let mut io = FakeSpiIo {
+                fail: Some(failure),
+                fail_deassert: true,
+                ..Default::default()
+            };
+            let error =
+                futures_lite::future::block_on(spi_transfer_with_io(&mut io, &[1], &mut [0]))
+                    .unwrap_err();
+            assert!(matches!(error, Ch347Error::TransferFailed(message) if message == failure));
+            assert_eq!(io.events, expected);
+        }
+    }
+
+    #[test]
+    fn spi_read_packet_rejects_empty_and_malformed_responses() {
+        for packet in [
+            &[][..],
+            &[CH347_CMD_SPI_IN, 0, 0],
+            &[CH347_CMD_SPI_IN, 2, 0, 7],
+            &[CH347_CMD_SPI_OUT, 1, 0, 7],
+        ] {
+            assert!(matches!(
+                parse_spi_read_packet(packet, 3),
+                Err(Ch347Error::InvalidResponse(_))
+            ));
+        }
+        assert_eq!(
+            parse_spi_read_packet(&[CH347_CMD_SPI_IN, 2, 0, 4, 5], 1).unwrap(),
+            &[4]
+        );
+    }
 }
