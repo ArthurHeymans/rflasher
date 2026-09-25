@@ -40,6 +40,7 @@ trait DynFlashDevice {
     fn erase(&mut self, addr: u32, len: u32) -> BoxFuture<'_, Result<()>>;
     fn erase_operation<'a>(&'a mut self, op: &'a OptimalEraseOp) -> BoxFuture<'a, Result<()>>;
     fn validate_erase_operation(&self, op: &OptimalEraseOp) -> Result<()>;
+    fn read_unique_id(&mut self) -> BoxFuture<'_, Result<Vec<u8>>>;
     fn wp_supported(&self) -> bool;
     fn read_wp_config(&mut self) -> BoxFuture<'_, WpResult<WpConfig>>;
     fn write_wp_config<'a>(
@@ -90,6 +91,9 @@ impl<D: FlashDevice> DynFlashDevice for D {
     }
     fn validate_erase_operation(&self, op: &OptimalEraseOp) -> Result<()> {
         FlashDevice::validate_erase_operation(self, op)
+    }
+    fn read_unique_id(&mut self) -> BoxFuture<'_, Result<Vec<u8>>> {
+        Box::pin(FlashDevice::read_unique_id(self))
     }
     fn wp_supported(&self) -> bool {
         FlashDevice::wp_supported(self)
@@ -173,6 +177,9 @@ impl FlashDevice for ErasedFlashDevice {
     }
     fn validate_erase_operation(&self, op: &OptimalEraseOp) -> Result<()> {
         self.inner.validate_erase_operation(op)
+    }
+    async fn read_unique_id(&mut self) -> Result<Vec<u8>> {
+        self.inner.read_unique_id().await
     }
     fn wp_supported(&self) -> bool {
         self.inner.wp_supported()

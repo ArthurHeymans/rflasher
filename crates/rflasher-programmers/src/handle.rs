@@ -153,6 +153,15 @@ impl FlashHandle {
         self.device.erase(addr, len).await.map_err(Into::into)
     }
 
+    /// Read the chip's unique ID, if supported
+    ///
+    /// Returns the factory-programmed unique identifier (e.g., the 8-byte
+    /// serial read via RDUID on supported SPI chips). Opaque programmers and
+    /// unsupported chips return an error.
+    pub async fn read_unique_id(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        self.device.read_unique_id().await.map_err(Into::into)
+    }
+
     /// Get mutable reference to the underlying flash device
     ///
     /// This is used by command implementations that need the FlashDevice

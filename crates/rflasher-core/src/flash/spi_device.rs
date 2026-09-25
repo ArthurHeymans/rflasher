@@ -166,6 +166,12 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         // Callers verify the erased range (see `unified`), so do not read it twice.
         operations::erase_spi_operation(&mut self.master, &self.ctx, op).await
     }
+
+    #[cfg(feature = "alloc")]
+    async fn read_unique_id(&mut self) -> Result<alloc::vec::Vec<u8>> {
+        let id = crate::protocol::read_unique_id(&mut self.master).await?;
+        Ok(id.to_vec())
+    }
 }
 
 impl<M: SpiMaster> SpiFlashDevice<M> {

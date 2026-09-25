@@ -200,6 +200,17 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         // Callers verify the erased range (see `unified`), so do not read it twice.
         operations::erase_spi_operation(&mut self.master, &self.ctx, op).await
     }
+
+    // =========================================================================
+    // Unique ID: only available through raw SPI commands (RDUID), which the
+    // opaque path cannot express.
+    // =========================================================================
+
+    #[cfg(feature = "alloc")]
+    async fn read_unique_id(&mut self) -> Result<alloc::vec::Vec<u8>> {
+        let id = crate::protocol::read_unique_id(&mut self.master).await?;
+        Ok(id.to_vec())
+    }
 }
 
 // =============================================================================
