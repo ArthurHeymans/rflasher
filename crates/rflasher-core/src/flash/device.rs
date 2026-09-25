@@ -120,6 +120,18 @@ pub trait FlashDevice {
     /// * `EraseError` - If the erase operation fails
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
 
+    /// Read the chip's unique ID, if supported
+    ///
+    /// Returns the factory-programmed unique identifier, e.g. the 8-byte
+    /// serial read via RDUID (0x4B) on supported SPI chips.
+    ///
+    /// Opaque programmers and unsupported chips return
+    /// `Error::ChipNotSupported`.
+    #[cfg(feature = "alloc")]
+    async fn read_unique_id(&mut self) -> Result<alloc::vec::Vec<u8>> {
+        Err(crate::error::Error::ChipNotSupported)
+    }
+
     /// Check if a range is valid for this device
     ///
     /// Uses u64 arithmetic to avoid truncation when `len > u32::MAX`.

@@ -206,6 +206,17 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
         // Verify after the shared helper has exited persistent 4-byte mode.
         operations::check_erased_range(&mut self.master, &self.ctx, addr, len).await
     }
+
+    // =========================================================================
+    // Unique ID: only available through raw SPI commands (RDUID), which the
+    // opaque path cannot express.
+    // =========================================================================
+
+    #[cfg(feature = "alloc")]
+    async fn read_unique_id(&mut self) -> Result<alloc::vec::Vec<u8>> {
+        let id = crate::protocol::read_unique_id(&mut self.master).await?;
+        Ok(id.to_vec())
+    }
 }
 
 // =============================================================================
