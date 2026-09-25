@@ -293,6 +293,19 @@ fn apply_region_filters(
 async fn print_chip_info(handle: &mut FlashHandle) {
     use rflasher_core::layout::parse_ifd;
 
+    // Read the unique ID before borrowing the chip info below (the read
+    // needs mutable access to the handle). Only SPI programmers support it.
+    let unique_id = handle
+        .read_unique_id()
+        .await
+        .ok()
+        .map(|id| {
+            id.iter()
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join("")
+        });
+
     if let Some(info) = handle.chip_info() {
         // SPI device - we have chip information
         println!("Flash Chip Information");
@@ -312,6 +325,10 @@ async fn print_chip_info(handle: &mut FlashHandle) {
             "JEDEC ID:        {:02X} {:04X}",
             info.jedec_manufacturer, info.jedec_device
         );
+        match &unique_id {
+            Some(uid) => println!("Unique ID:       {}", uid),
+            None => println!("Unique ID:       Not supported"),
+        }
         println!(
             "Size:            {} bytes ({})",
             info.total_size,
