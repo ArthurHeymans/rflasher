@@ -1006,9 +1006,12 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
     addr: u32,
     len: u32,
 ) -> Result<()> {
-    let block = select_erase_block(ctx.chip.erase_blocks(), addr, len);
-    if block.is_none()
-        && addr == 0
+    // A request for the whole chip uses the addressless chip-erase opcode when
+    // the chip has one. This is what the erase planner selects for a full-chip
+    // erase; walking every sector instead is correct but far slower. Chips
+    // without one (e.g. stacked-die parts that only offer per-die erase) fall
+    // through to the addressed blocks below.
+    if addr == 0
         && len == ctx.total_size() as u32
         && let Some(chip_erase) = ctx
             .chip
@@ -1021,7 +1024,8 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
         }
         return protocol::chip_erase_with_opcode(master, chip_erase.opcode).await;
     }
-    let block = block.ok_or(Error::InvalidAlignment)?;
+    let block =
+        select_erase_block(ctx.chip.erase_blocks(), addr, len).ok_or(Error::InvalidAlignment)?;
     let features = ctx.chip.features;
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
     let master_features = master.features();
@@ -1054,12 +1058,7 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
     if enter_exit_4byte {
         protocol::enter_4byte_mode_with_features(master, features).await?;
     }
-    let max_size = block.max_block_size();
-    let (poll_delay_us, timeout_us) = match max_size {
-        s if s <= 4096 => (10_000, 1_000_000),
-        s if s <= 65536 => (100_000, 4_000_000),
-        _ => (500_000, 60_000_000),
-    };
+    let (poll_delay_us, timeout_us) = protocol::erase_timing(block.max_block_size());
     let mut current = addr;
     let mut result = Ok(());
     while current < end {
@@ -1375,6 +1374,41 @@ mod tests {
                 Err(Error::InvalidAlignment)
             );
         }
+    }
+
+    #[test]
+    fn full_chip_erase_uses_chip_erase_opcode_even_with_sector_erase_available() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.chip.erase_blocks = vec![
+            EraseBlock::with_count(0x20, 16, 3),
+            EraseBlock::new(0xC7, 48),
+        ];
+        let mut master = EraseMaster {
+            commands: vec![],
+            fail_erase: false,
+        };
+        block_on(erase_spi_range(&mut master, &ctx, 0, 48)).unwrap();
+        assert!(master.commands.contains(&(0xC7, None)));
+        assert!(master.commands.iter().all(|(opcode, _)| *opcode != 0x20));
+
+        // Anything short of the whole chip still walks addressed sectors.
+        master.commands.clear();
+        block_on(erase_spi_range(&mut master, &ctx, 16, 16)).unwrap();
+        assert!(master.commands.contains(&(0x20, Some(16))));
+        assert!(master.commands.iter().all(|(opcode, _)| *opcode != 0xC7));
+    }
+
+    #[test]
+    fn erase_timing_scales_from_sector_to_die_erase() {
+        let (sector_poll, sector_timeout) = protocol::erase_timing(4096);
+        let (block_poll, block_timeout) = protocol::erase_timing(64 * 1024);
+        let (die_poll, die_timeout) = protocol::erase_timing(32 * 1024 * 1024);
+        assert!(sector_poll < block_poll && block_poll < die_poll);
+        assert!(sector_timeout < block_timeout && block_timeout < die_timeout);
+        // Micron die erase takes up to ~480 s; block erase up to ~4 s.
+        assert!(die_timeout >= 480_000_000);
+        assert!(block_timeout >= 4_000_000 && sector_timeout >= 800_000);
     }
 
     /// Create test erase blocks for a chip of given size

@@ -20,23 +20,47 @@ use crate::error::{Error, Result};
 use crate::programmer::{SpiFeatures, SpiMaster};
 use crate::spi::{AddressWidth, IoMode, SpiCommand, opcodes};
 
-// Timing constants for SPI flash operations
+// Timing constants for SPI flash operations.
+//
+// The timeouts only bound how long we wait on a chip that never reports
+// completion; polling ends as soon as WIP clears. They are therefore chosen
+// with generous headroom over datasheet maxima, since a too-short timeout
+// aborts a healthy operation while a long one merely delays a hard failure.
+// Reference figures (flashprog spi25.c): 4 KiB erase 15-800 ms, 32/64 KiB
+// erase 100-4000 ms, chip erase 1-85 s, Micron die erase 240-480 s, and
+// status register writes 50-85 ms (flashprog waits up to 5 s).
+
 /// Poll interval for status register write completion (microseconds)
 const WRSR_POLL_US: u32 = 10_000;
 /// Timeout for status register write completion (microseconds)
-const WRSR_TIMEOUT_US: u32 = 500_000;
+const WRSR_TIMEOUT_US: u32 = 5_000_000;
 /// Poll interval for page program completion (microseconds)
 const PAGE_PROGRAM_POLL_US: u32 = 10;
 /// Timeout for page program completion (microseconds)
-const PAGE_PROGRAM_TIMEOUT_US: u32 = 10_000;
+const PAGE_PROGRAM_TIMEOUT_US: u32 = 100_000;
 /// Poll interval for chip erase completion (microseconds)
 const CHIP_ERASE_POLL_US: u32 = 1_000_000;
 /// Timeout for chip erase completion (microseconds)
-const CHIP_ERASE_TIMEOUT_US: u32 = 200_000_000;
+const CHIP_ERASE_TIMEOUT_US: u32 = 600_000_000;
 /// Poll interval for block erase completion (microseconds)
 pub const BLOCK_ERASE_POLL_US: u32 = 10_000;
 /// Timeout for block erase completion (microseconds)
 pub const BLOCK_ERASE_TIMEOUT_US: u32 = 10_000_000;
+
+/// Poll interval and timeout (both in microseconds) for an addressed erase
+/// whose largest block is `block_size` bytes.
+///
+/// Sector and block erases are quick, but blocks larger than a few hundred
+/// KiB are per-die erases of stacked-die chips (e.g. Micron MT25Q/N25Q, 32 MiB
+/// or more per die), which take minutes and must be timed like a chip erase.
+#[must_use]
+pub const fn erase_timing(block_size: u32) -> (u32, u32) {
+    match block_size {
+        0..=4096 => (10_000, 10_000_000),
+        4097..=262_144 => (100_000, 40_000_000),
+        _ => (500_000, 900_000_000),
+    }
+}
 
 /// Addressing behavior for an addressed SPI command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,7 +295,7 @@ pub async fn read_4b<M: SpiMaster + ?Sized>(
 /// Program a single page with an explicitly selected opcode and addressing mode.
 ///
 /// The data must not cross a page boundary.
-/// Page program typically takes 0.7-5ms, we poll every 10us with 10ms timeout.
+/// Page program typically takes 0.7-5ms, we poll every 10us with 100ms timeout.
 pub async fn program_page_with_addressing<M: SpiMaster + ?Sized>(
     master: &mut M,
     opcode: u8,
@@ -296,7 +320,7 @@ pub async fn program_page_with_addressing<M: SpiMaster + ?Sized>(
     };
     master.execute(&mut cmd).await?;
 
-    // Page program: poll every 10us, timeout after 10ms (typical is 0.7-5ms)
+    // Page program: poll every 10us, timeout after 100ms (typical is 0.7-5ms)
     wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await
 }
 
@@ -433,10 +457,8 @@ pub async fn sst26_global_unprotect<M: SpiMaster + ?Sized>(master: &mut M) -> Re
 
 /// Erase a sector/block at the given address
 ///
-/// Poll delay should match the expected erase time:
-/// - 4KB sector: 10ms poll, 1s timeout (typical 45-400ms)
-/// - 32KB block: 100ms poll, 4s timeout (typical 120-1600ms)
-/// - 64KB block: 100ms poll, 4s timeout (typical 150-2000ms)
+/// Poll delay should match the expected erase time; see [`erase_timing`] for
+/// the values used by the flash operations.
 pub async fn erase_block<M: SpiMaster + ?Sized>(
     master: &mut M,
     opcode: u8,
@@ -467,8 +489,8 @@ pub async fn erase_block<M: SpiMaster + ?Sized>(
 
 /// Erase the entire chip
 ///
-/// Chip erase typically takes 25-100s for large chips.
-/// We poll every 1s with a 200s timeout.
+/// Chip erase takes 1-85 s on common chips and several minutes on the largest
+/// ones. We poll every 1 s with a 600 s timeout.
 pub async fn chip_erase<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()> {
     chip_erase_with_opcode(master, opcodes::CE_C7).await
 }
@@ -483,7 +505,7 @@ pub async fn chip_erase_with_opcode<M: SpiMaster + ?Sized>(
     let mut cmd = SpiCommand::simple(opcode);
     master.execute(&mut cmd).await?;
 
-    // Chip erase: poll every 1s, timeout after 200s
+    // Chip erase: poll every 1s, timeout after 600s
     wait_ready(master, CHIP_ERASE_POLL_US, CHIP_ERASE_TIMEOUT_US).await
 }
 
