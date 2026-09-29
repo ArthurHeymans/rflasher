@@ -372,15 +372,20 @@ mod linux {
     /// `CAP_SYS_RAWIO` (normally root) and serializes the global CF8/CFC pair.
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub fn read32_direct(address: PciAddress, offset: u16) -> Result<u32, PciError> {
-        use std::sync::Mutex;
+        use std::sync::{Mutex, OnceLock};
         static LOCK: Mutex<()> = Mutex::new(());
+        // I/O privilege is per process and stays granted, so ask for it once
+        // instead of issuing a syscall per configuration read.
+        static IO_PRIVILEGE: OnceLock<bool> = OnceLock::new();
         if address.segment() != 0 || offset > u8::MAX as u16 {
             return Err(PciError::NotSupported(
                 "legacy PCI config access requires segment 0 and an offset below 256",
             ));
         }
         let _guard = LOCK.lock().expect("PCI configuration lock poisoned");
-        if unsafe { libc::iopl(3) } != 0 {
+        // SAFETY: iopl takes no pointers; failure (missing CAP_SYS_RAWIO) is
+        // reported as an error below.
+        if !*IO_PRIVILEGE.get_or_init(|| unsafe { libc::iopl(3) } == 0) {
             return Err(PciError::ConfigRead { address, offset });
         }
         let config_address = 0x8000_0000
