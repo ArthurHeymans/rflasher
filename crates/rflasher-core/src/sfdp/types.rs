@@ -287,9 +287,18 @@ impl SfdpEraseType {
         self.size > 0 && self.opcode != 0xFF
     }
 
+    /// Largest erase-size exponent accepted from a table (erase blocks of
+    /// 1 GiB or more are treated as unused, matching flashprog's
+    /// `tmp8 >= 31` check). It also keeps `1 << exp` well inside `u32`:
+    /// the exponent comes straight from the chip.
+    const MAX_SIZE_EXP: u8 = 30;
+
     /// Parse from size exponent (N where size = 2^N) and opcode
+    ///
+    /// Unused entries (exponent 0, opcode 0xFF) and exponents beyond
+    /// [`Self::MAX_SIZE_EXP`] produce an invalid, default entry.
     pub fn from_raw(size_exp: u8, opcode: u8) -> Self {
-        if size_exp == 0 || opcode == 0xFF {
+        if size_exp == 0 || size_exp > Self::MAX_SIZE_EXP || opcode == 0xFF {
             Self::default()
         } else {
             Self {

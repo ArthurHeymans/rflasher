@@ -135,14 +135,23 @@ fn parse_bfpt_dword2(dword: u32, params: &mut BasicFlashParams) {
         let bits = dword & 0x7FFFFFFF;
         params.density_bytes = ((bits as u64) + 1) / 8;
     } else {
-        // 2^N format
+        // 2^N format. Densities that do not fit the 32-bit flash address space
+        // (and nonsensical exponents below one byte) are left at zero so that
+        // the table is rejected rather than misread; shifting by an
+        // unchecked, chip-supplied exponent would wrap in release builds.
         let n = dword & 0x7FFFFFFF;
-        if n >= 3 {
-            // Divide by 8 to convert bits to bytes (subtract 3 from exponent)
-            params.density_bytes = 1u64 << (n - 3);
-        }
+        params.density_bytes = n
+            .checked_sub(3)
+            .filter(|&exp| exp <= MAX_DENSITY_EXP_BYTES)
+            .map_or(0, |exp| 1u64 << exp);
     }
 }
+
+/// Largest supported flash density, as a power of two in bytes (2 GiB).
+///
+/// Flash addresses are 32-bit, and a 4 GiB device cannot even be expressed as
+/// a `u32` size. flashprog stops earlier (it refuses any 2^N-format density).
+const MAX_DENSITY_EXP_BYTES: u32 = 31;
 
 /// Parse Basic Flash Parameter Table DWORD 3
 ///
@@ -323,8 +332,8 @@ async fn parse_bfpt<M: SpiMaster + ?Sized>(
         parse_bfpt_dword16(get_dword(60), &mut params); // DWORD 16
     }
 
-    // Validate density
-    if params.density_bytes == 0 {
+    // Validate density (zero means missing, malformed, or beyond 32-bit flash addressing)
+    if params.density_bytes == 0 || params.density_bytes > u64::from(u32::MAX) {
         return Err(Error::ChipNotSupported);
     }
 
@@ -567,7 +576,7 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         .erase_types
         .iter()
         .enumerate()
-        .filter(|(_, et)| et.is_valid())
+        .filter(|(_, et)| et.is_valid() && et.size <= total_size)
         .map(|(type_index, et)| {
             let opcode_4b = info
                 .four_byte_addr_table
@@ -594,6 +603,10 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     let write_granularity = if params.write_granularity_64 {
         WriteGranularity::Page
     } else {
+        log::warn!(
+            "SFDP reports 1-byte write granularity: every byte is programmed by its own \
+             command, so writes to this chip will be very slow"
+        );
         WriteGranularity::Byte
     };
 
@@ -949,6 +962,38 @@ mod tests {
         params = BasicFlashParams::default();
         parse_bfpt_dword2(0x8000001C, &mut params); // bit 31 set, N=28
         assert_eq!(params.density_bytes, 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn density_from_untrusted_exponent_never_overflows() {
+        // 2^N format with a chip-supplied N: only exponents that fit the 32-bit
+        // flash address space are accepted; everything else reads as "missing".
+        for (dword, expected) in [
+            (0x8000_0022u32, 1u64 << 31), // 2^34 bits = 2 GiB, the largest accepted
+            (0x8000_0023, 0),             // 2^35 bits = 4 GiB: not addressable
+            (0x8000_0040, 0),             // would overflow a 64-bit shift
+            (0x8000_00FF, 0),
+            (0xFFFF_FFFF, 0),
+            (0x8000_0003, 1), // 2^3 bits = 1 byte
+            (0x8000_0002, 0), // below one byte
+            (0x8000_0000, 0),
+        ] {
+            let mut params = BasicFlashParams::default();
+            parse_bfpt_dword2(dword, &mut params);
+            assert_eq!(params.density_bytes, expected, "dword {dword:#010x}");
+        }
+    }
+
+    #[test]
+    fn oversized_erase_exponents_are_ignored() {
+        // Exponents >= 31 (and unused 0 / opcode 0xFF entries) must not become
+        // erase blocks; in release builds `1u32 << 32` would have wrapped to 1.
+        for exp in [31u8, 32, 33, 64, 255] {
+            assert!(!SfdpEraseType::from_raw(exp, 0x20).is_valid(), "exp {exp}");
+        }
+        assert!(SfdpEraseType::from_raw(30, 0x20).is_valid());
+        assert!(!SfdpEraseType::from_raw(0, 0x20).is_valid());
+        assert!(!SfdpEraseType::from_raw(12, 0xFF).is_valid());
     }
 
     #[test]
