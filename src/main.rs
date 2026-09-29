@@ -295,16 +295,12 @@ async fn print_chip_info(handle: &mut FlashHandle) {
 
     // Read the unique ID before borrowing the chip info below (the read
     // needs mutable access to the handle). Only SPI programmers support it.
-    let unique_id = handle
-        .read_unique_id()
-        .await
-        .ok()
-        .map(|id| {
-            id.iter()
-                .map(|b| format!("{:02X}", b))
-                .collect::<Vec<_>>()
-                .join("")
-        });
+    let unique_id = handle.read_unique_id().await.ok().map(|id| {
+        id.iter()
+            .map(|b| format!("{:02X}", b))
+            .collect::<Vec<_>>()
+            .join("")
+    });
 
     if let Some(info) = handle.chip_info() {
         // SPI device - we have chip information
