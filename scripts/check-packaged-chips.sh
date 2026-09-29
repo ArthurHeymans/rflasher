@@ -13,8 +13,8 @@ package_version=$(
 archive="$workspace_root/target/package/rflasher-chips-$package_version.crate"
 
 vendor_count=$(tar -tzf "$archive" | grep -cE '/data/vendors/[^/]+\.ron$')
-if [[ "$vendor_count" -ne 22 ]]; then
-  echo "expected 22 vendor database files in $archive, found $vendor_count" >&2
+if [[ "$vendor_count" -ne 24 ]]; then
+  echo "expected 24 vendor database files in $archive, found $vendor_count" >&2
   exit 1
 fi
 
