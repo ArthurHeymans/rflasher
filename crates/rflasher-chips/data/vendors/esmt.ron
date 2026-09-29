@@ -10,9 +10,10 @@
             name: "F25L004A",
             device_id: 0x2013,
             total_size: KiB(512),
-            // Byte program (0x02) or AAI only, no page program; WRSR accepts EWSR or WREN.
+            // Byte program (0x02) or AAI word program (0xAD), no page program;
+            // WRSR accepts EWSR or WREN.
             write_granularity: Byte,
-            features: (wrsr_wren: true, wrsr_ewsr: true),
+            features: (wrsr_wren: true, wrsr_ewsr: true, aai_word: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -39,9 +40,10 @@
             name: "F25L016A",
             device_id: 0x2015,
             total_size: MiB(2),
-            // Byte program (0x02) or AAI only, no page program; WRSR accepts EWSR or WREN.
+            // Byte program (0x02) or AAI word program (0xAD), no page program;
+            // WRSR accepts EWSR or WREN.
             write_granularity: Byte,
-            features: (wrsr_wren: true, wrsr_ewsr: true),
+            features: (wrsr_wren: true, wrsr_ewsr: true, aai_word: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
