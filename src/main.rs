@@ -60,6 +60,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         chip: cli.chip.as_deref(),
         force: cli.force,
     };
+    let force = cli.force;
 
     match cli.command {
         Commands::Probe => {
@@ -105,6 +106,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     &mut layout_obj,
                     &region_files,
                     !no_verify,
+                    force,
                 )
                 .await
             } else {
@@ -122,7 +124,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 if !region_files.is_empty() {
                     return Err("Per-region files (NAME:FILE) make no sense for erase".into());
                 }
-                commands::unified::run_erase_with_layout(handle.as_device_mut(), &layout_obj).await
+                commands::unified::run_erase_with_layout(handle.as_device_mut(), &layout_obj, force)
+                    .await
             } else {
                 commands::unified::run_erase(handle.as_device_mut()).await
             }
