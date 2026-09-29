@@ -206,25 +206,16 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
         wp::read_wp_config(&mut self.master, &bit_map, total_size, decoder).await
     }
 
-    /// Augment `WriteOptions` with chip-specific settings derived from feature flags.
-    ///
-    /// Injects `use_ewsr = true` when the chip has `WRSR_EWSR` (legacy SST25 chips
-    /// that require EWSR (0x50) instead of WREN (0x06) before status register writes).
-    fn chip_write_options(&self, options: WriteOptions) -> WriteOptions {
-        WriteOptions {
-            use_ewsr: self
-                .ctx
-                .chip
-                .features
-                .contains(crate::chip::Features::WRSR_EWSR),
-            ..options
-        }
+    /// Augment `WriteOptions` with the write-enable command this chip needs
+    /// (see [`WriteOptions::for_features`]).
+    fn chip_write_options(&self, options: WriteOptions) -> WpResult<WriteOptions> {
+        options.for_features(self.ctx.chip.features)
     }
 
     /// Write write protection bits
     pub async fn write_wp_bits(&mut self, bits: &WpBits, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
-        let options = self.chip_write_options(options);
+        let options = self.chip_write_options(options)?;
         wp::write_wp_bits(&mut self.master, bits, &bit_map, options).await
     }
 
@@ -237,7 +228,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
-        let options = self.chip_write_options(options);
+        let options = self.chip_write_options(options)?;
         wp::write_wp_config(
             &mut self.master,
             config,
@@ -252,7 +243,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// Set write protection mode
     pub async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
-        let options = self.chip_write_options(options);
+        let options = self.chip_write_options(options)?;
         wp::set_wp_mode(&mut self.master, mode, &bit_map, options).await
     }
 
@@ -261,7 +252,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
-        let options = self.chip_write_options(options);
+        let options = self.chip_write_options(options)?;
         wp::set_wp_range(
             &mut self.master,
             range,
@@ -276,7 +267,7 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// Disable write protection
     pub async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
-        let options = self.chip_write_options(options);
+        let options = self.chip_write_options(options)?;
         wp::disable_wp(&mut self.master, &bit_map, options).await
     }
 

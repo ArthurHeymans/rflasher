@@ -222,6 +222,17 @@ pub enum Commands {
     },
 }
 
+/// Options shared by the write-protection subcommands that change the chip
+#[derive(clap::Args, Debug, Clone, Copy, Default)]
+pub struct WpWriteArgs {
+    /// Change the protection only until the next power cycle
+    ///
+    /// Uses the volatile status register write (EWSR, 0x50). Fails on chips
+    /// that do not support it. Without this flag the change is persistent.
+    #[arg(long)]
+    pub temporary: bool,
+}
+
 /// Write protection subcommands
 #[derive(Subcommand)]
 pub enum WpCommands {
@@ -232,15 +243,24 @@ pub enum WpCommands {
     List,
 
     /// Enable hardware write protection
-    Enable,
+    Enable {
+        #[command(flatten)]
+        write: WpWriteArgs,
+    },
 
     /// Disable hardware write protection
-    Disable,
+    Disable {
+        #[command(flatten)]
+        write: WpWriteArgs,
+    },
 
     /// Set protection range by address
     Range {
         /// Protection range as "start,length" (e.g., "0,0x100000" or "0x10000,65536")
         range: String,
+
+        #[command(flatten)]
+        write: WpWriteArgs,
     },
 
     /// Set protection range by region name (requires layout)
@@ -250,6 +270,9 @@ pub enum WpCommands {
 
         /// Region name to protect
         region_name: String,
+
+        #[command(flatten)]
+        write: WpWriteArgs,
     },
 }
 

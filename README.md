@@ -128,7 +128,10 @@ rflasher wp enable -p ch341a                       # hardware protection (WP# pi
 rflasher wp disable -p ch341a
 rflasher wp range -p ch341a 0,0x100000             # protect start,length
 rflasher wp region -p ch341a --ifd bios            # protect a named region
+rflasher wp disable -p ch341a --temporary          # until the next power cycle only
 ```
+
+Changes are persistent by default. `--temporary` uses the chip's volatile status register write (EWSR, `0x50`) and fails on chips without one.
 
 ## Web interface
 

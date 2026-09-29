@@ -241,9 +241,16 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
         wp::read_wp_config(&mut self.master, &bit_map, total_size, decoder).await
     }
 
+    /// Resolve the write-enable command this chip needs for status register
+    /// writes (see [`WriteOptions::for_features`]).
+    fn chip_write_options(&self, options: WriteOptions) -> WpResult<WriteOptions> {
+        options.for_features(self.ctx.chip.features)
+    }
+
     /// Write write protection bits
     pub async fn write_wp_bits(&mut self, bits: &WpBits, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
+        let options = self.chip_write_options(options)?;
         wp::write_wp_bits(&mut self.master, bits, &bit_map, options).await
     }
 
@@ -256,6 +263,7 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
+        let options = self.chip_write_options(options)?;
         wp::write_wp_config(
             &mut self.master,
             config,
@@ -270,6 +278,7 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     /// Set write protection mode
     pub async fn set_wp_mode(&mut self, mode: WpMode, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
+        let options = self.chip_write_options(options)?;
         wp::set_wp_mode(&mut self.master, mode, &bit_map, options).await
     }
 
@@ -278,6 +287,7 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
+        let options = self.chip_write_options(options)?;
         wp::set_wp_range(
             &mut self.master,
             range,
@@ -292,6 +302,7 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     /// Disable all write protection
     pub async fn disable_wp(&mut self, options: WriteOptions) -> WpResult<()> {
         let bit_map = self.wp_bit_map();
+        let options = self.chip_write_options(options)?;
         wp::disable_wp(&mut self.master, &bit_map, options).await
     }
 

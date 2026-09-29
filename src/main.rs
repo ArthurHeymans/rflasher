@@ -163,15 +163,20 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             match subcmd {
                 WpCommands::Status => commands::wp::cmd_status(&mut handle).await,
                 WpCommands::List => commands::wp::cmd_list(&mut handle).await,
-                WpCommands::Enable => commands::wp::cmd_enable(&mut handle).await,
-                WpCommands::Disable => commands::wp::cmd_disable(&mut handle).await,
-                WpCommands::Range { range } => commands::wp::cmd_range(&mut handle, &range).await,
+                WpCommands::Enable { write } => commands::wp::cmd_enable(&mut handle, write).await,
+                WpCommands::Disable { write } => {
+                    commands::wp::cmd_disable(&mut handle, write).await
+                }
+                WpCommands::Range { range, write } => {
+                    commands::wp::cmd_range(&mut handle, &range, write).await
+                }
                 WpCommands::Region {
                     layout,
                     region_name,
+                    write,
                 } => {
                     let layout_obj = load_layout(&mut handle, &layout).await?;
-                    commands::wp::cmd_region(&mut handle, &layout_obj, &region_name).await
+                    commands::wp::cmd_region(&mut handle, &layout_obj, &region_name, write).await
                 }
             }
         }

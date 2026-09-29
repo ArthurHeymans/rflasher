@@ -31,6 +31,9 @@ pub enum WpError {
     RangeListUnavailable,
     /// Write Protect Selection (WPS) bit is set, indicating per-sector mode
     UnsupportedState,
+    /// A volatile (temporary) status register write was requested but the
+    /// chip has no volatile write-enable (EWSR) according to its definition
+    VolatileUnsupported,
     /// SPI communication error
     SpiError(Error),
 }
@@ -53,6 +56,9 @@ impl core::fmt::Display for WpError {
             WpError::RangeListUnavailable => write!(f, "cannot enumerate available ranges"),
             WpError::UnsupportedState => {
                 write!(f, "WPS bit set, per-sector protection mode not supported")
+            }
+            WpError::VolatileUnsupported => {
+                write!(f, "chip does not support volatile status register writes")
             }
             WpError::SpiError(e) => write!(f, "SPI error: {}", e),
         }
@@ -245,19 +251,50 @@ fn build_register_masks(bit_map: &WpRegBitMap, bits: &WpBits) -> (u8, u8, u8) {
 }
 
 /// Write protection configuration options
+///
+/// `volatile` is the caller's choice. `use_ewsr` is derived from it and the
+/// chip's features by [`WriteOptions::for_features`], which the flash devices
+/// apply before any status register write; callers normally leave it unset.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WriteOptions {
-    /// Use volatile write (currently ignored; see note below)
+    /// Write the status register volatilely: the change takes effect
+    /// immediately but is lost at the next power cycle. Volatile writes are
+    /// enabled with EWSR (0x50), so the chip must have the `WRSR_EWSR`
+    /// feature; otherwise the operation fails with
+    /// [`WpError::VolatileUnsupported`].
     ///
-    /// NOTE: currently ignored — all status register writes use the
-    /// non-volatile path. Volatile writes require a separate SR copy on
-    /// some chips and are not implemented yet.
+    /// The default (`false`) is a non-volatile write, enabled with WREN
+    /// (0x06).
     pub volatile: bool,
     /// Use EWSR (0x50) instead of WREN (0x06) before status register writes.
     ///
-    /// Required for legacy SST25 chips. Set automatically by `SpiFlashDevice`
-    /// when the chip has the `WRSR_EWSR` feature flag.
+    /// Derived by [`WriteOptions::for_features`]: set for volatile writes and
+    /// for legacy SST25 chips whose only write-enable is EWSR.
     pub use_ewsr: bool,
+}
+
+impl WriteOptions {
+    /// Resolve the write-enable command for a chip with the given features.
+    ///
+    /// Chips that list both `WRSR_WREN` and `WRSR_EWSR` (e.g. many GigaDevice
+    /// and XTX parts) use WREN for the default non-volatile write and EWSR
+    /// only when a volatile write was asked for. Chips with only `WRSR_EWSR`
+    /// (legacy SST25) have EWSR as their sole write-enable, so it is used for
+    /// non-volatile writes too.
+    pub fn for_features(self, features: crate::chip::Features) -> WpResult<Self> {
+        use crate::chip::Features;
+        let has_ewsr = features.contains(Features::WRSR_EWSR);
+        let has_wren = features.contains(Features::WRSR_WREN);
+        let use_ewsr = if self.volatile {
+            if !has_ewsr {
+                return Err(WpError::VolatileUnsupported);
+            }
+            true
+        } else {
+            has_ewsr && !has_wren
+        };
+        Ok(Self { use_ewsr, ..self })
+    }
 }
 
 /// Write WP bits to the chip
@@ -287,11 +324,8 @@ pub async fn write_wp_bits<M: SpiMaster + ?Sized>(
         return Ok(());
     }
 
-    // Perform the write, selecting EWSR vs WREN based on chip requirements.
-    // SST25 chips need EWSR (0x50) before WRSR rather than standard WREN (0x06).
-    // TODO: Implement separate volatile/non-volatile paths: volatile writes on
-    // some chips require a separate SR copy that resets on power cycle.
-    let _ = options.volatile;
+    // Perform the write; `options.use_ewsr` (resolved by
+    // `WriteOptions::for_features`) selects EWSR (0x50) over WREN (0x06).
     if need_sr2 {
         if options.use_ewsr {
             protocol::write_status12_ewsr(master, final_sr1, final_sr2).await?;
@@ -464,6 +498,38 @@ pub fn get_available_ranges(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_enable_command_follows_chip_features_and_volatility() {
+        use crate::chip::Features;
+        let resolve = |features, volatile| {
+            WriteOptions {
+                volatile,
+                use_ewsr: false,
+            }
+            .for_features(features)
+            .map(|o| o.use_ewsr)
+        };
+        let wren = Features::WRSR_WREN;
+        let ewsr = Features::WRSR_EWSR;
+
+        // Ordinary chip: non-volatile via WREN, no volatile write available.
+        assert_eq!(resolve(wren, false), Ok(false));
+        assert_eq!(resolve(wren, true), Err(WpError::VolatileUnsupported));
+        // Chips that can do both must not silently turn a normal (persistent)
+        // write into a volatile one just because they also know EWSR.
+        assert_eq!(resolve(wren | ewsr, false), Ok(false));
+        assert_eq!(resolve(wren | ewsr, true), Ok(true));
+        // Legacy SST25: EWSR is the only write-enable there is.
+        assert_eq!(resolve(ewsr, false), Ok(true));
+        assert_eq!(resolve(ewsr, true), Ok(true));
+        // Undocumented chip: default to WREN, refuse volatile.
+        assert_eq!(resolve(Features::empty(), false), Ok(false));
+        assert_eq!(
+            resolve(Features::empty(), true),
+            Err(WpError::VolatileUnsupported)
+        );
+    }
 
     #[test]
     fn test_mode_from_bits() {
