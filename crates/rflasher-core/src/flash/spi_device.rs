@@ -157,6 +157,12 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         operations::erase_spi_range(&mut self.master, &self.ctx, addr, len).await?;
         self.check_erased_range(addr, len).await
     }
+
+    #[cfg(feature = "alloc")]
+    async fn read_unique_id(&mut self) -> Result<alloc::vec::Vec<u8>> {
+        let id = crate::protocol::read_unique_id(&mut self.master).await?;
+        Ok(id.to_vec())
+    }
 }
 
 impl<M: SpiMaster> SpiFlashDevice<M> {
