@@ -113,3 +113,4 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
 futures-lite = "2"
+proptest = "1"
