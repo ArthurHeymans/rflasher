@@ -30,6 +30,24 @@ pub struct Cli {
     )]
     pub programmer: Option<String>,
 
+    /// Use the chip definition with this name
+    ///
+    /// Needed when several definitions share the probed JEDEC ID and differ in
+    /// how they erase or program (the error lists the candidates). Matching
+    /// ignores case and understands the database's name patterns, so the part
+    /// number printed on the chip works: "A/B" alternatives, optional "(B)"
+    /// suffixes and "." wildcards, as in flashprog.
+    #[arg(short = 'c', long, global = true, value_name = "NAME")]
+    pub chip: Option<String>,
+
+    /// Proceed despite safety refusals
+    ///
+    /// Overrides: a chip definition that contradicts the chip's own SFDP data
+    /// (size, or a larger page size), and writes or erases that include
+    /// regions marked dangerous (Intel ME, flash descriptor, PTT).
+    #[arg(long, global = true)]
+    pub force: bool,
+
     /// Path to chip database directory (contains .ron files)
     /// Replaces the bundled chip database when specified.
     #[arg(long, global = true)]

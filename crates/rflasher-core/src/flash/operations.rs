@@ -709,15 +709,13 @@ impl ProbeResult {
         !self.mismatches.is_empty()
     }
 
-    /// Check if there are critical mismatches (size/page size)
+    /// Check if there are critical mismatches (see [`SfdpMismatch::is_critical`])
+    ///
+    /// [`SfdpMismatch::is_critical`]: crate::sfdp::SfdpMismatch::is_critical
     pub fn has_critical_mismatches(&self) -> bool {
-        self.mismatches.iter().any(|m| {
-            matches!(
-                m,
-                crate::sfdp::SfdpMismatch::TotalSize { .. }
-                    | crate::sfdp::SfdpMismatch::PageSize { .. }
-            )
-        })
+        self.mismatches
+            .iter()
+            .any(crate::sfdp::SfdpMismatch::is_critical)
     }
 
     /// Create a FlashContext from this probe result
@@ -726,18 +724,178 @@ impl ProbeResult {
     }
 }
 
+/// How a probed chip is matched against the chip database
+#[cfg(feature = "std")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProbeOptions<'a> {
+    /// Select the database entry with this name instead of deciding by ID.
+    ///
+    /// Needed when several entries share the probed JEDEC ID and cannot be
+    /// told apart automatically. Matched against entry names with
+    /// [`name_matches`](crate::chip::name_matches), i.e. ignoring case and
+    /// honouring the database's `A/B`, `(B)` and `.` name patterns.
+    pub chip: Option<&'a str>,
+    /// Proceed although the database entry contradicts the chip's SFDP data
+    /// in a way that makes operating on it unsafe (see
+    /// [`SfdpMismatch::is_critical`](crate::sfdp::SfdpMismatch::is_critical)).
+    pub force: bool,
+}
+
+/// Pick the database entry for a probed JEDEC ID.
+///
+/// JEDEC IDs are not unique, so several entries may match. Alias entries that
+/// behave identically are interchangeable and the first is used. Otherwise the
+/// chip's own SFDP data breaks the tie (fewest critical, then fewest total,
+/// mismatches), and if that still leaves behaviourally different entries the
+/// choice is refused instead of guessed: guessing wrong means wrong erase
+/// opcodes or geometry.
+#[cfg(feature = "std")]
+fn select_database_chip<'a, P>(
+    provider: &'a P,
+    manufacturer: u8,
+    device: u16,
+    sfdp: Option<&crate::sfdp::SfdpInfo>,
+    wanted: Option<&str>,
+) -> Result<Option<&'a crate::chip::FlashChip>>
+where
+    P: ChipProvider + ?Sized,
+{
+    let mut candidates: Vec<&crate::chip::FlashChip> = (0..)
+        .map_while(|i| provider.find_nth_by_jedec_id(manufacturer, device, i))
+        .collect();
+    let names = |chips: &[&crate::chip::FlashChip]| -> std::string::String {
+        chips
+            .iter()
+            .map(|c| c.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    if let Some(wanted) = wanted {
+        let matching: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|c| crate::chip::name_matches(c.name(), wanted))
+            .collect();
+        if matching.is_empty() {
+            log::error!(
+                "No chip definition named \"{}\" matches JEDEC ID {:02X}:{:04X}{}",
+                wanted,
+                manufacturer,
+                device,
+                if candidates.is_empty() {
+                    std::string::String::new()
+                } else {
+                    std::format!(" (candidates: {})", names(&candidates))
+                }
+            );
+            return Err(Error::ChipNotFound);
+        }
+        // The user named the chip: take the entry they wrote if it is
+        // spelled exactly, else the first that the name matches (as
+        // flashprog's `-c` does), without second-guessing the choice.
+        let chosen = matching
+            .iter()
+            .copied()
+            .find(|c| c.name().eq_ignore_ascii_case(wanted))
+            .unwrap_or(matching[0]);
+        if matching.len() > 1 {
+            log::info!(
+                "\"{}\" matches {}; using {}",
+                wanted,
+                names(&matching),
+                chosen.name()
+            );
+        }
+        return Ok(Some(chosen));
+    }
+
+    let Some(&first) = candidates.first() else {
+        return Ok(None);
+    };
+    if candidates.iter().all(|c| c.is_equivalent_to(first)) {
+        if candidates.len() > 1 {
+            log::debug!(
+                "Interchangeable chip definitions for {:02X}:{:04X}: {}",
+                manufacturer,
+                device,
+                names(&candidates)
+            );
+        }
+        return Ok(Some(first));
+    }
+
+    if let Some(sfdp) = sfdp {
+        let score = |c: &crate::chip::FlashChip| {
+            let mismatches = crate::sfdp::compare_with_chip(sfdp, c);
+            (
+                mismatches.iter().filter(|m| m.is_critical()).count(),
+                mismatches.len(),
+            )
+        };
+        let best = candidates.iter().map(|c| score(c)).min();
+        let best_matches: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|c| Some(score(c)) == best)
+            .collect();
+        if best_matches
+            .iter()
+            .all(|c| c.is_equivalent_to(best_matches[0]))
+        {
+            log::info!(
+                "Several chip definitions match {:02X}:{:04X} ({}); chose {} by its SFDP data",
+                manufacturer,
+                device,
+                names(&candidates),
+                best_matches[0].name()
+            );
+            return Ok(Some(best_matches[0]));
+        }
+        candidates = best_matches;
+    }
+
+    log::error!(
+        "Multiple chip definitions match JEDEC ID {:02X}:{:04X} and differ in erase \
+         geometry or features: {}. Select one explicitly with --chip.",
+        manufacturer,
+        device,
+        names(&candidates)
+    );
+    Err(Error::ChipAmbiguous)
+}
+
+/// Probe for a flash chip with detailed results
+///
+/// Equivalent to [`probe_with_options`] with default options.
+#[cfg(feature = "std")]
+pub async fn probe_detailed<M, P>(master: &mut M, provider: &P) -> Result<ProbeResult>
+where
+    M: SpiMaster + ?Sized,
+    P: ChipProvider + ?Sized,
+{
+    probe_with_options(master, provider, &ProbeOptions::default()).await
+}
+
 /// Probe for a flash chip with detailed results
 ///
 /// This function performs comprehensive probing:
 /// 1. Reads JEDEC ID
 /// 2. Probes SFDP (if supported)
-/// 3. Looks up in database
-/// 4. Compares SFDP with database (if both available)
+/// 3. Looks up in database, resolving JEDEC ID collisions (see
+///    [`ProbeOptions::chip`])
+/// 4. Compares SFDP with database (if both available) and refuses a database
+///    entry that contradicts SFDP on size or page size unless
+///    [`ProbeOptions::force`] is set
 ///
 /// Returns detailed information about what was found, allowing the caller
 /// to decide how to handle mismatches or unknown chips.
 #[cfg(feature = "std")]
-pub async fn probe_detailed<M, P>(master: &mut M, provider: &P) -> Result<ProbeResult>
+pub async fn probe_with_options<M, P>(
+    master: &mut M,
+    provider: &P,
+    options: &ProbeOptions<'_>,
+) -> Result<ProbeResult>
 where
     M: SpiMaster + ?Sized,
     P: ChipProvider + ?Sized,
@@ -769,7 +927,13 @@ where
     };
 
     // Look up in database
-    let db_chip = provider.find_by_jedec_id(jedec_manufacturer, jedec_device);
+    let db_chip = select_database_chip(
+        provider,
+        jedec_manufacturer,
+        jedec_device,
+        sfdp.as_ref(),
+        options.chip,
+    )?;
     if db_chip.is_some() {
         log::debug!("Chip found in database");
     } else {
@@ -794,14 +958,27 @@ where
         (None, None) => return Err(Error::ChipNotFound),
     };
 
-    Ok(ProbeResult {
+    let result = ProbeResult {
         jedec_manufacturer,
         jedec_device,
         chip,
         from_database,
         sfdp,
         mismatches,
-    })
+    };
+
+    if result.has_critical_mismatches() && !options.force {
+        for mismatch in result.mismatches.iter().filter(|m| m.is_critical()) {
+            log::error!("{}: {}", result.chip.name(), mismatch);
+        }
+        log::error!(
+            "The database entry contradicts the chip's SFDP data, so operating on it could \
+             corrupt data. Select the right entry with --chip, or override with --force."
+        );
+        return Err(Error::ChipMismatch);
+    }
+
+    Ok(result)
 }
 
 /// Read flash contents

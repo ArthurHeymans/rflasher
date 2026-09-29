@@ -355,6 +355,33 @@ impl FlashChip {
         self.jedec_manufacturer == manufacturer && self.jedec_device == device
     }
 
+    /// Check whether two definitions modify flash in the same way.
+    ///
+    /// Identity fields (vendor, name, JEDEC ID), voltage range, test status
+    /// and pure capability flags (read modes, OTP, status-register layout,
+    /// write-protection decode; everything outside [`Features::PROCEDURE`])
+    /// are ignored, and so is which addressless chip-erase opcodes (0x60,
+    /// 0x62, 0xC7) are listed: they only accelerate a full-chip erase, whose
+    /// result is verified. Size, page size, write granularity, the addressed
+    /// erase geometry and opcodes, addressing and the program/status-write
+    /// procedure must match.
+    ///
+    /// Used to tell alias entries, which are interchangeable for erase and
+    /// write, from entries that merely share a JEDEC ID and would erase or
+    /// program differently.
+    #[must_use]
+    pub fn is_equivalent_to(&self, other: &Self) -> bool {
+        self.total_size == other.total_size
+            && self.page_size == other.page_size
+            && self.features & Features::PROCEDURE == other.features & Features::PROCEDURE
+            && self.write_granularity == other.write_granularity
+            && self
+                .erase_blocks()
+                .iter()
+                .filter(|eb| !eb.is_chip_erase())
+                .eq(other.erase_blocks().iter().filter(|eb| !eb.is_chip_erase()))
+    }
+
     /// Maximum addressable size with 3-byte addresses (16 MiB)
     const MAX_3BYTE_ADDR_SIZE: u32 = 16 * 1024 * 1024;
 

@@ -931,10 +931,26 @@ impl RflasherApp {
                                 .push(AsyncMessage::ProbeComplete(Box::new(result)));
                         }
                         Err(e) => {
+                            let message = match e {
+                                rflasher_core::Error::ChipAmbiguous => {
+                                    "Several chip definitions match this chip's JEDEC ID and \
+                                     differ in how they erase or program. The web interface \
+                                     cannot choose between them yet; use the command line \
+                                     with --chip."
+                                        .to_string()
+                                }
+                                rflasher_core::Error::ChipMismatch => {
+                                    "The chip definition contradicts the chip's own SFDP data \
+                                     (size or page size), so operating on it could corrupt \
+                                     data. Use the command line with --chip or --force."
+                                        .to_string()
+                                }
+                                e => format!("{:?}", e),
+                            };
                             shared
                                 .borrow_mut()
                                 .messages
-                                .push(AsyncMessage::ProbeFailed(format!("{:?}", e)));
+                                .push(AsyncMessage::ProbeFailed(message));
                         }
                     }
                 });

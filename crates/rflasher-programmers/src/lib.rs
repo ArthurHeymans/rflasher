@@ -82,7 +82,9 @@ pub use erased::{ErasedFlashDevice, ErasedSpiMaster};
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use handle::{ChipInfo, FlashHandle};
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
-pub use registry::{BoxedSpiMaster, open_flash, open_spi_programmer};
+pub use registry::{
+    BoxedSpiMaster, OpenOptions, open_flash, open_flash_with_options, open_spi_programmer,
+};
 
 // The catalog is shared by the CLI and the web frontend on every `std` target.
 #[cfg(feature = "std")]

@@ -59,4 +59,4 @@ pub use operations::{read, select_erase_block, write};
 
 // Re-export detailed probe result
 #[cfg(feature = "std")]
-pub use operations::{ProbeResult, probe_detailed};
+pub use operations::{ProbeOptions, ProbeResult, probe_detailed, probe_with_options};

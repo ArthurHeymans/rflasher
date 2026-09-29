@@ -113,6 +113,31 @@ bitflags! {
 }
 
 impl Features {
+    /// Flags that change how erase, program, addressing and status-register
+    /// writes are issued.
+    ///
+    /// Everything else (read modes, OTP/security registers, status-register
+    /// layout, write-protection decode, ...) affects capabilities and
+    /// read-only behaviour, not how flash contents are modified. See
+    /// [`FlashChip::is_equivalent_to`](crate::FlashChip::is_equivalent_to).
+    pub const PROCEDURE: Self = Self::WRSR_WREN
+        .union(Self::WRSR_EWSR)
+        .union(Self::WRSR_EXT)
+        .union(Self::FOUR_BYTE_ADDR)
+        .union(Self::FOUR_BYTE_ENTER)
+        .union(Self::FOUR_BYTE_NATIVE)
+        .union(Self::EXT_ADDR_REG)
+        .union(Self::WRITE_BYTE)
+        .union(Self::AAI_WORD)
+        .union(Self::SST26_BPR)
+        .union(Self::FOUR_BYTE_ENTER_WREN)
+        .union(Self::EXT_ADDR_REG_C5C8)
+        .union(Self::FOUR_BYTE_ENTER_EAR7)
+        .union(Self::EXT_ADDR_REG_1716)
+        .union(Self::FOUR_BYTE_READ)
+        .union(Self::FOUR_BYTE_FAST_READ)
+        .union(Self::FOUR_BYTE_PROGRAM);
+
     /// Whether any 4-byte mode enter/exit mechanism is supported.
     pub fn supports_4ba_mode_switch(self) -> bool {
         self.intersects(

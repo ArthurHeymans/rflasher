@@ -681,6 +681,25 @@ pub enum SfdpMismatch {
 }
 
 #[cfg(feature = "alloc")]
+impl SfdpMismatch {
+    /// Whether operating on the chip with the database entry would be unsafe.
+    ///
+    /// A wrong size makes reads, erases and writes hit the wrong addresses. A
+    /// database page size *larger* than the chip's makes page programs wrap
+    /// inside the chip's real page and corrupt data; a smaller one only costs
+    /// speed. Everything else (erase opcodes, address mode, ...) is reported
+    /// but not critical.
+    #[must_use]
+    pub fn is_critical(&self) -> bool {
+        match self {
+            Self::TotalSize { .. } => true,
+            Self::PageSize { sfdp, database } => u32::from(*database) > *sfdp,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
 impl core::fmt::Display for SfdpMismatch {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -864,15 +883,10 @@ impl SfdpProbeResult {
 
     /// Check if there are any concerning mismatches
     ///
-    /// Size and page size mismatches are considered critical.
+    /// See [`SfdpMismatch::is_critical`].
     #[cfg(feature = "alloc")]
     pub fn has_critical_mismatches(&self) -> bool {
-        self.mismatches.iter().any(|m| {
-            matches!(
-                m,
-                SfdpMismatch::TotalSize { .. } | SfdpMismatch::PageSize { .. }
-            )
-        })
+        self.mismatches.iter().any(SfdpMismatch::is_critical)
     }
 }
 
@@ -1077,6 +1091,11 @@ mod tests {
                 sfdp_data: &MX25L6436E_SFDP,
             }
         }
+
+        /// A chip with the MX25L6436E JEDEC ID but no SFDP support
+        fn without_sfdp() -> Self {
+            Self { sfdp_data: &[] }
+        }
     }
 
     impl crate::programmer::SpiMaster for MockSfdpFlash {
@@ -1099,6 +1118,11 @@ mod tests {
             use crate::spi::opcodes;
 
             match cmd.opcode {
+                opcodes::RDID => {
+                    // Macronix MX25L6436E: C2 20 17
+                    cmd.read_buf[..3].copy_from_slice(&[0xC2, 0x20, 0x17]);
+                    Ok(())
+                }
                 opcodes::RDSFDP => {
                     // SFDP read: address is in cmd.address, dummy cycles expected
                     if let Some(addr) = cmd.address {
@@ -1130,6 +1154,186 @@ mod tests {
         }
 
         async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    // ------------------------------------------------------------------
+    // Database selection and mismatch policy (probe_with_options)
+    // ------------------------------------------------------------------
+
+    use crate::chip::{ChipProvider, EraseBlock, FlashChip};
+    use crate::flash::{ProbeOptions, probe_with_options};
+    use std::vec;
+    use std::vec::Vec;
+
+    /// Chip database with (deliberately colliding) entries for JEDEC C2:2017
+    struct CollidingDb(Vec<FlashChip>);
+
+    impl ChipProvider for CollidingDb {
+        fn find_by_jedec_id(&self, m: u8, d: u16) -> Option<&FlashChip> {
+            self.find_nth_by_jedec_id(m, d, 0)
+        }
+        fn find_nth_by_jedec_id(&self, m: u8, d: u16, index: usize) -> Option<&FlashChip> {
+            self.0
+                .iter()
+                .filter(|c| c.matches_jedec_id(m, d))
+                .nth(index)
+        }
+    }
+
+    /// The MX25L6436E as SFDP describes it, under a different name
+    fn sfdp_described_chip(name: &str) -> FlashChip {
+        let mut mock = MockSfdpFlash::new();
+        let info = futures_lite::future::block_on(probe(&mut mock)).unwrap();
+        let mut chip = to_flash_chip(&info, 0xC2, 0x2017);
+        chip.name = name.into();
+        chip
+    }
+
+    fn with_erase_blocks(mut chip: FlashChip, blocks: Vec<EraseBlock>) -> FlashChip {
+        chip.erase_blocks = blocks;
+        chip
+    }
+
+    fn probe_db(
+        mut mock: MockSfdpFlash,
+        db: &CollidingDb,
+        options: &ProbeOptions<'_>,
+    ) -> crate::error::Result<crate::flash::ProbeResult> {
+        futures_lite::future::block_on(probe_with_options(&mut mock, db, options))
+    }
+
+    #[test]
+    fn interchangeable_entries_are_not_ambiguous() {
+        let db = CollidingDb(vec![
+            sfdp_described_chip("MX25L6406E"),
+            sfdp_described_chip("MX25L6436E"),
+        ]);
+        let result =
+            probe_db(MockSfdpFlash::without_sfdp(), &db, &ProbeOptions::default()).unwrap();
+        assert_eq!(result.chip.name, "MX25L6406E");
+    }
+
+    #[test]
+    fn colliding_entries_without_sfdp_are_refused_until_named() {
+        let uniform = sfdp_described_chip("MX25L6406E");
+        let boot_block = with_erase_blocks(
+            sfdp_described_chip("MX25L6436E/MX25L6473E"),
+            vec![EraseBlock::with_count(0xD8, 65536, 128)],
+        );
+        let db = CollidingDb(vec![uniform, boot_block]);
+        let no_sfdp = MockSfdpFlash::without_sfdp;
+
+        assert_eq!(
+            probe_db(no_sfdp(), &db, &ProbeOptions::default()).unwrap_err(),
+            Error::ChipAmbiguous
+        );
+
+        let pick = |name| ProbeOptions {
+            chip: Some(name),
+            ..Default::default()
+        };
+        // Case-insensitive, and one alias of an "A/B" entry is enough.
+        let result = probe_db(no_sfdp(), &db, &pick("mx25l6436e")).unwrap();
+        assert_eq!(result.chip.erase_blocks.len(), 1);
+        let result = probe_db(no_sfdp(), &db, &pick("MX25L6406E")).unwrap();
+        assert_eq!(result.chip.name, "MX25L6406E");
+        assert_eq!(
+            probe_db(no_sfdp(), &db, &pick("W25Q64FV")).unwrap_err(),
+            Error::ChipNotFound
+        );
+    }
+
+    #[test]
+    fn chip_names_select_through_database_name_patterns() {
+        // Entries are named with patterns ("." wildcard, optional "(B)"), while
+        // users type the part number printed on the chip.
+        let plain = with_erase_blocks(
+            sfdp_described_chip("MX25L64.6E"),
+            vec![EraseBlock::with_count(0xD8, 65536, 128)],
+        );
+        let suffixed = sfdp_described_chip("MX25L6473(F)");
+        let db = CollidingDb(vec![plain, suffixed]);
+        let pick = |name| ProbeOptions {
+            chip: Some(name),
+            ..Default::default()
+        };
+        let chosen = |name| {
+            probe_db(MockSfdpFlash::without_sfdp(), &db, &pick(name)).map(|r| r.chip.name.clone())
+        };
+
+        assert_eq!(chosen("MX25L6406E").unwrap(), "MX25L64.6E");
+        assert_eq!(chosen("MX25L6436E").unwrap(), "MX25L64.6E");
+        assert_eq!(chosen("MX25L6473F").unwrap(), "MX25L6473(F)");
+        // The optional letter may be left out.
+        assert_eq!(chosen("MX25L6473").unwrap(), "MX25L6473(F)");
+        assert_eq!(chosen("MX25L6473G"), Err(Error::ChipNotFound));
+    }
+
+    #[test]
+    fn an_exact_chip_name_beats_a_looser_pattern_match() {
+        let base = with_erase_blocks(
+            sfdp_described_chip("GD25Q64"),
+            vec![EraseBlock::with_count(0xD8, 65536, 128)],
+        );
+        let variant = sfdp_described_chip("GD25Q64(B)");
+        // The variant is listed first, and its pattern also matches "GD25Q64".
+        let db = CollidingDb(vec![variant, base]);
+        let pick = |name| ProbeOptions {
+            chip: Some(name),
+            ..Default::default()
+        };
+        let chosen = |name| {
+            probe_db(MockSfdpFlash::without_sfdp(), &db, &pick(name)).map(|r| r.chip.name.clone())
+        };
+        assert_eq!(chosen("GD25Q64").unwrap(), "GD25Q64");
+        assert_eq!(chosen("GD25Q64B").unwrap(), "GD25Q64(B)");
+    }
+
+    #[test]
+    fn sfdp_breaks_ties_between_colliding_entries() {
+        // The wrong entry is listed first: first-match would have picked it.
+        let wrong = with_erase_blocks(
+            sfdp_described_chip("wrong"),
+            vec![EraseBlock::with_count(0x20, 4096, 2048)],
+        );
+        let right = sfdp_described_chip("right");
+        let db = CollidingDb(vec![wrong, right]);
+        let result = probe_db(MockSfdpFlash::new(), &db, &ProbeOptions::default()).unwrap();
+        assert_eq!(result.chip.name, "right");
+        assert!(result.from_database);
+    }
+
+    #[test]
+    fn critical_sfdp_mismatch_is_refused_unless_forced() {
+        let mut oversized = sfdp_described_chip("oversized");
+        oversized.total_size *= 2;
+        let db = CollidingDb(vec![oversized]);
+
+        assert_eq!(
+            probe_db(MockSfdpFlash::new(), &db, &ProbeOptions::default()).unwrap_err(),
+            Error::ChipMismatch
+        );
+        let forced = ProbeOptions {
+            force: true,
+            ..Default::default()
+        };
+        let result = probe_db(MockSfdpFlash::new(), &db, &forced).unwrap();
+        assert!(result.has_critical_mismatches());
+    }
+
+    #[test]
+    fn page_size_mismatch_is_critical_only_when_database_page_is_larger() {
+        let page = |sfdp, database| SfdpMismatch::PageSize { sfdp, database };
+        assert!(page(256, 512).is_critical());
+        assert!(!page(256, 128).is_critical());
+        assert!(!page(256, 256).is_critical());
+        assert!(
+            SfdpMismatch::TotalSize {
+                sfdp: 8,
+                database: 4
+            }
+            .is_critical()
+        );
     }
 
     #[test]

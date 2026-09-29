@@ -42,6 +42,13 @@ pub enum Error {
     ChipNotSupported,
     /// JEDEC ID does not match expected value
     JedecIdMismatch,
+    /// Several database entries match the probed JEDEC ID and they cannot be
+    /// told apart (select one explicitly)
+    ChipAmbiguous,
+    /// The database entry disagrees with the chip's own SFDP data on a
+    /// property that makes operating on it unsafe (size, or a page size
+    /// larger than the chip's)
+    ChipMismatch,
 
     // Operation errors
     /// Erase operation failed
@@ -122,6 +129,14 @@ impl fmt::Display for Error {
             Self::ChipNotFound => write!(f, "flash chip not found"),
             Self::ChipNotSupported => write!(f, "flash chip not supported"),
             Self::JedecIdMismatch => write!(f, "JEDEC ID mismatch"),
+            Self::ChipAmbiguous => write!(
+                f,
+                "several chip definitions match the probed JEDEC ID; select one explicitly"
+            ),
+            Self::ChipMismatch => write!(
+                f,
+                "chip definition contradicts the chip's SFDP data (size or page size)"
+            ),
             Self::EraseError(failure) => write!(f, "{}", failure),
             Self::WriteError { addr } => {
                 write!(f, "write operation failed at address 0x{addr:08X}")

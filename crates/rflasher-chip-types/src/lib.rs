@@ -11,9 +11,11 @@
 extern crate alloc;
 
 mod features;
+mod name;
 mod provider;
 mod types;
 
 pub use features::Features;
+pub use name::name_matches;
 pub use provider::ChipProvider;
 pub use types::*;

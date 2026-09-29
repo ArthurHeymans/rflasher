@@ -19,7 +19,7 @@ mod commands;
 use clap::Parser;
 use cli::{Cli, Commands, LayoutArgs, LayoutCommands, WpCommands};
 use rflasher_chips::ChipDatabase;
-use rflasher_programmers::{FlashHandle, open_flash};
+use rflasher_programmers::{FlashHandle, OpenOptions, open_flash_with_options};
 
 use rflasher_core::flash::FlashDevice;
 use rflasher_core::layout::Layout;
@@ -56,15 +56,23 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Loaded {} chip definitions", db.len());
 
     let programmer = cli.programmer;
+    let open_options = OpenOptions {
+        chip: cli.chip.as_deref(),
+        force: cli.force,
+    };
 
     match cli.command {
         Commands::Probe => {
             // Probe doesn't use the device, just shows info
-            let _handle = open_flash(require_programmer(&programmer)?, &db).await?;
+            let _handle =
+                open_flash_with_options(require_programmer(&programmer)?, &db, &open_options)
+                    .await?;
             Ok(())
         }
         Commands::Read { file, layout } => {
-            let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
+            let mut handle =
+                open_flash_with_options(require_programmer(&programmer)?, &db, &open_options)
+                    .await?;
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout).await?;
                 let region_files = apply_region_filters(&mut layout_obj, &layout)?;
@@ -85,7 +93,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             no_verify,
             layout,
         } => {
-            let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
+            let mut handle =
+                open_flash_with_options(require_programmer(&programmer)?, &db, &open_options)
+                    .await?;
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout).await?;
                 let region_files = apply_region_filters(&mut layout_obj, &layout)?;
@@ -103,7 +113,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Erase { layout } => {
-            let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
+            let mut handle =
+                open_flash_with_options(require_programmer(&programmer)?, &db, &open_options)
+                    .await?;
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout).await?;
                 let region_files = apply_region_filters(&mut layout_obj, &layout)?;
@@ -116,7 +128,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Verify { file, layout } => {
-            let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
+            let mut handle =
+                open_flash_with_options(require_programmer(&programmer)?, &db, &open_options)
+                    .await?;
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout).await?;
                 let region_files = apply_region_filters(&mut layout_obj, &layout)?;
@@ -133,7 +147,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Info => {
-            let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
+            let mut handle =
+                open_flash_with_options(require_programmer(&programmer)?, &db, &open_options)
+                    .await?;
             print_chip_info(&mut handle).await;
             Ok(())
         }
@@ -159,7 +175,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             LayoutCommands::Create { output, size } => commands::layout::cmd_create(&output, &size),
         },
         Commands::Wp(subcmd) => {
-            let mut handle = open_flash(require_programmer(&programmer)?, &db).await?;
+            let mut handle =
+                open_flash_with_options(require_programmer(&programmer)?, &db, &open_options)
+                    .await?;
             match subcmd {
                 WpCommands::Status => commands::wp::cmd_status(&mut handle).await,
                 WpCommands::List => commands::wp::cmd_list(&mut handle).await,

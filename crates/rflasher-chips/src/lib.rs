@@ -152,6 +152,18 @@ impl ChipProvider for ChipDatabase {
     fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
         ChipDatabase::find_by_jedec_id(self, manufacturer, device)
     }
+
+    fn find_nth_by_jedec_id(
+        &self,
+        manufacturer: u8,
+        device: u16,
+        index: usize,
+    ) -> Option<&FlashChip> {
+        self.chips
+            .iter()
+            .filter(|c| c.matches_jedec_id(manufacturer, device))
+            .nth(index)
+    }
 }
 
 impl ChipDatabase {
@@ -394,6 +406,43 @@ mod tests {
 
         assert_eq!(db.len(), runtime_db.len());
         assert!(provider.find_by_jedec_id(0xEF, 0x4018).is_some());
+    }
+
+    /// All database entries for one JEDEC ID, in database order
+    fn candidates(db: &ChipDatabase, manufacturer: u8, device: u16) -> Vec<&FlashChip> {
+        (0..)
+            .map_while(|i| ChipProvider::find_nth_by_jedec_id(db, manufacturer, device, i))
+            .collect()
+    }
+
+    #[test]
+    fn colliding_jedec_ids_are_enumerable_and_only_real_differences_are_ambiguous() {
+        let db = ChipDatabase::from_dir(&vendors_dir()).unwrap();
+
+        // Enumeration starts with the first-match entry and covers every entry.
+        let all = candidates(&db, 0xEF, 0x4017);
+        assert_eq!(
+            all.first().map(|c| c.name.as_str()),
+            db.find_by_jedec_id(0xEF, 0x4017).map(|c| c.name.as_str())
+        );
+        assert_eq!(
+            all.len(),
+            db.chips()
+                .iter()
+                .filter(|c| c.matches_jedec_id(0xEF, 0x4017))
+                .count()
+        );
+
+        // W25Q64 revisions differ only in read capabilities, so they must not
+        // force the user to pick an entry by hand ...
+        assert!(all.len() > 1);
+        assert!(all.iter().all(|c| c.is_equivalent_to(all[0])));
+
+        // ... whereas boot-block EN25B and uniform-sector EN25P parts erase
+        // differently and share an ID: guessing would be unsafe.
+        let en25 = candidates(&db, 0x1C, 0x2010);
+        assert!(en25.len() > 1);
+        assert!(!en25.iter().all(|c| c.is_equivalent_to(en25[0])));
     }
 
     #[test]
