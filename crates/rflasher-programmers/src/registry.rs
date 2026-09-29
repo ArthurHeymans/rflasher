@@ -813,7 +813,17 @@ async fn open_internal(
         let flash_size = get_flash_size_from_ifd(&mut programmer).await?;
         log::info!("Flash size: {} bytes (from IFD)", flash_size);
 
-        let device = OpaqueFlashDevice::new(programmer, flash_size);
+        // The controller erases whole hardware blocks (BERASE), so erases must
+        // be planned with the block size it reports, not an assumed 4 KiB.
+        let erase_size = programmer
+            .erase_block_size(flash_size)
+            .map_err(|e| format!("Cannot determine the hardware erase block size: {}", e))?;
+
+        let mut device = OpaqueFlashDevice::new(programmer, flash_size);
+        if let Some(size) = erase_size {
+            log::info!("Hardware sequencing erase block size: {} bytes", size);
+            device.set_erase_block_size(size);
+        }
         Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(
             device,
         )))
