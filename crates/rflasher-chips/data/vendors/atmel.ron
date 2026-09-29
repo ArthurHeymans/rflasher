@@ -136,9 +136,10 @@
                 (opcode: 0xC7, regions: [(size: MiB(8), count: 1)]),
             ],
         ),
+        // Same JEDEC id as AT25DF081 (told apart only by EDI 0x0100), so probing returns AT25DF081; this entry is reachable by name only.
         (
             name: "AT25DL081",
-            device_id: 0x4503,
+            device_id: 0x4502,
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 1650, max: 1950),

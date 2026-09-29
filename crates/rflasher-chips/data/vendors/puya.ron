@@ -438,6 +438,8 @@
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 32768)]),
                 (opcode: 0x52, opcode_4b: Some(0x5C), regions: [(size: KiB(32), count: 4096)]),
                 (opcode: 0xD8, opcode_4b: Some(0xDC), regions: [(size: KiB(64), count: 2048)]),
+                (opcode: 0x60, regions: [(size: MiB(128), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(128), count: 1)]),
             ],
         ),
     ],
