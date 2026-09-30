@@ -5,6 +5,31 @@
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
+use zerocopy::byteorder::{LittleEndian, U32};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
+
+// Wire layout only. Validation and bitfield interpretation stay in the parser.
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
+struct HeaderWire {
+    signature: U32<LittleEndian>,
+    minor: u8,
+    major: u8,
+    nph: u8,
+    access_protocol: u8,
+}
+
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
+struct ParameterWire {
+    id_lsb: u8,
+    minor: u8,
+    major: u8,
+    length_dwords: u8,
+    pointer: [u8; 3],
+    id_msb: u8,
+}
+
 /// SFDP signature magic value ("SFDP" in little-endian)
 pub const SFDP_SIGNATURE: u32 = 0x50444653;
 
@@ -159,14 +184,15 @@ impl SfdpHeader {
     ///
     /// Expects 8 bytes in little-endian format.
     pub fn parse(data: &[u8; 8]) -> Self {
+        let wire = HeaderWire::ref_from_bytes(data).expect("fixed eight-byte wire header");
         Self {
-            signature: u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+            signature: wire.signature.get(),
             revision: SfdpRevision {
-                minor: data[4],
-                major: data[5],
+                minor: wire.minor,
+                major: wire.major,
             },
-            nph: data[6],
-            access_protocol: data[7],
+            nph: wire.nph,
+            access_protocol: wire.access_protocol,
         }
     }
 
@@ -203,14 +229,20 @@ impl ParameterHeader {
     ///
     /// Expects 8 bytes in little-endian format.
     pub fn parse(data: &[u8; 8]) -> Self {
+        let wire = ParameterWire::ref_from_bytes(data).expect("fixed eight-byte parameter header");
         Self {
-            id: ((data[7] as u16) << 8) | (data[0] as u16),
+            id: u16::from_le_bytes([wire.id_lsb, wire.id_msb]),
             revision: SfdpRevision {
-                minor: data[1],
-                major: data[2],
+                minor: wire.minor,
+                major: wire.major,
             },
-            length_dwords: data[3],
-            table_pointer: u32::from_le_bytes([data[4], data[5], data[6], 0]),
+            length_dwords: wire.length_dwords,
+            table_pointer: u32::from_le_bytes([
+                wire.pointer[0],
+                wire.pointer[1],
+                wire.pointer[2],
+                0,
+            ]),
         }
     }
 

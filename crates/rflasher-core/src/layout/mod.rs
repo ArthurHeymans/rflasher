@@ -31,7 +31,9 @@
 //! let fmap_layout = read_fmap_from_flash(master, &ctx)?;
 //! ```
 
+mod size;
 mod types;
+pub use size::parse_size;
 
 #[cfg(feature = "std")]
 mod flash;

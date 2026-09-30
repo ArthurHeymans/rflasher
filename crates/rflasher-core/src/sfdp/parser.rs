@@ -11,6 +11,17 @@ use crate::programmer::SpiMaster;
 use crate::protocol;
 
 use super::types::*;
+use zerocopy::{
+    FromBytes,
+    byteorder::{LittleEndian, U32},
+};
+
+fn read_dword(data: &[u8], byte_offset: usize) -> Option<u32> {
+    let end = byte_offset.checked_add(4)?;
+    U32::<LittleEndian>::ref_from_bytes(data.get(byte_offset..end)?)
+        .ok()
+        .map(|v| v.get())
+}
 
 /// Read raw SFDP data from flash
 ///
@@ -296,19 +307,7 @@ async fn parse_bfpt<M: SpiMaster + ?Sized>(
         ..Default::default()
     };
 
-    // Helper to read a DWORD from the buffer
-    let get_dword = |offset: usize| -> u32 {
-        if offset + 4 <= read_len {
-            u32::from_le_bytes([
-                buf[offset],
-                buf[offset + 1],
-                buf[offset + 2],
-                buf[offset + 3],
-            ])
-        } else {
-            0
-        }
-    };
+    let get_dword = |offset| read_dword(&buf[..read_len], offset).unwrap_or(0);
 
     // Parse mandatory DWORDs (JESD216, 9 DWORDs minimum)
     parse_bfpt_dword1(get_dword(0), &mut params); // DWORD 1
@@ -361,18 +360,7 @@ async fn parse_4byte_addr_table<M: SpiMaster + ?Sized>(
     let read_len = core::cmp::min(len, buf.len());
     read_sfdp(master, header.table_pointer, &mut buf[..read_len]).await?;
 
-    let get_dword = |offset: usize| -> u32 {
-        if offset + 4 <= read_len {
-            u32::from_le_bytes([
-                buf[offset],
-                buf[offset + 1],
-                buf[offset + 2],
-                buf[offset + 3],
-            ])
-        } else {
-            0
-        }
-    };
+    let get_dword = |offset| read_dword(&buf[..read_len], offset).unwrap_or(0);
 
     let table = FourByteAddrTable {
         revision: header.revision,
