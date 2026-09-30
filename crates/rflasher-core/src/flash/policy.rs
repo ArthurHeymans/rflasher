@@ -5,9 +5,10 @@ use crate::layout::{Layout, Region};
 use crate::{Error, Result};
 use alloc::vec;
 
-/// Store a recoverable image before erasing outside the requested region.
-/// Returning success promises that the image survives process/power failure.
-/// RAM-only implementations must not report success.
+/// Store a full-device image before the first mutation, so an interrupted
+/// operation (e.g. power loss during an erase/restore of neighboring data)
+/// can be recovered. Returning success promises that the image survives
+/// process/power failure.
 pub trait RecoveryBackup {
     /// Persist a full image and synchronize its data and directory metadata.
     fn persist(&mut self, image: &[u8]) -> Result<()>;
@@ -20,7 +21,7 @@ pub struct MutationPolicy<'a> {
     pub allow_dangerous: bool,
     /// Authorize a selection covering the entire device.
     pub allow_full_chip: bool,
-    /// Durable recovery storage required by cross-region erase footprints.
+    /// Optional durable storage for a full image taken before any mutation.
     pub recovery: Option<&'a mut dyn RecoveryBackup>,
 }
 
@@ -71,9 +72,10 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
             {
                 Ok(actual) => {
                     if !policy.allow_dangerous
-                        && let Some(p) = actual.regions.iter().find(|p| {
-                            p.dangerous && regions.iter().any(|r| overlaps(r, p))
-                        })
+                        && let Some(p) = actual
+                            .regions
+                            .iter()
+                            .find(|p| p.dangerous && regions.iter().any(|r| overlaps(r, p)))
                     {
                         return Err(refuse(format_args!(
                             "the flash descriptor on the chip marks '{}' as dangerous; {}",
@@ -98,7 +100,6 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         }
     }
 
-    let mut cross_boundary = false;
     for region in regions {
         let plan = plan_optimal_erase_region(
             device.erase_blocks(),
@@ -109,20 +110,26 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         for op in plan {
             device.validate_erase_operation(&op)?;
             if op.start < region.start || op.start as u64 + op.size as u64 > region.end as u64 + 1 {
-                cross_boundary = true;
                 // An erase/restore still temporarily destroys neighboring
                 // protected data. Its footprint needs the same authorization.
                 let touched = |r: &&Region| {
                     (r.start as u64) < op.start as u64 + op.size as u64 && r.end >= op.start
                 };
-                if let Some(r) = protected_regions.iter().filter(touched).find(|r| r.readonly) {
+                if let Some(r) = protected_regions
+                    .iter()
+                    .filter(touched)
+                    .find(|r| r.readonly)
+                {
                     return Err(refuse(format_args!(
                         "erasing {:#x}+{:#x} would temporarily erase read-only region '{}'",
                         op.start, op.size, r.name
                     )));
                 }
                 if !policy.allow_dangerous
-                    && let Some(r) = protected_regions.iter().filter(touched).find(|r| r.dangerous)
+                    && let Some(r) = protected_regions
+                        .iter()
+                        .filter(touched)
+                        .find(|r| r.dangerous)
                 {
                     return Err(refuse(format_args!(
                         "erasing {:#x}+{:#x} would temporarily erase dangerous region '{}'; {}",
@@ -132,11 +139,7 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
             }
         }
     }
-    if cross_boundary {
-        let sink = policy.recovery.as_mut().ok_or_else(|| {
-            log::error!("Erase crosses a region boundary; a durable recovery backup is required");
-            Error::RegionProtected
-        })?;
+    if let Some(sink) = policy.recovery.as_mut() {
         // Snapshot once, before the first destructive command, rather than
         // overwriting recovery data after earlier regions have been changed.
         let mut image = vec![0; device.size() as usize];

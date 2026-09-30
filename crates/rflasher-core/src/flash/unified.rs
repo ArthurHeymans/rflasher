@@ -55,7 +55,7 @@ pub async fn smart_write_with_policy<D: FlashDevice + ?Sized, P: WriteProgress>(
     smart_write_region_prepared(device, 0, data, progress).await
 }
 
-/// Write a region after shared policy, erase-footprint and recovery preflight.
+/// Write a region after shared policy and erase-footprint preflight.
 pub async fn smart_write_region_with_policy<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     addr: u32,
@@ -85,7 +85,7 @@ pub async fn smart_write_by_layout_with_policy<D: FlashDevice + ?Sized, P: Write
     smart_write_by_layout_prepared(device, layout, image, progress).await
 }
 
-/// Preflight all included regions and recovery storage before the first erase.
+/// Preflight all included regions before the first erase.
 pub async fn erase_by_layout_with_policy<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
@@ -109,7 +109,7 @@ pub async fn erase_region_with_policy<D: FlashDevice + ?Sized>(
     erase_region_prepared(device, region).await
 }
 
-/// Write a region with safe defaults; cross-boundary erases need a recovery policy.
+/// Write a region with safe defaults (no full-chip or dangerous-region authorization).
 pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     addr: u32,
@@ -145,7 +145,7 @@ pub async fn erase_by_layout<D: FlashDevice + ?Sized>(
     erase_by_layout_with_policy(device, layout, &mut MutationPolicy::default()).await
 }
 
-/// Erase one region with safe defaults; never rely on RAM-only neighbor backup.
+/// Erase one region with safe defaults (no full-chip or dangerous-region authorization).
 pub async fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Region) -> Result<()> {
     erase_region_with_policy(device, region, &mut MutationPolicy::default()).await
 }
@@ -885,13 +885,9 @@ mod tests {
     }
 
     #[test]
-    fn missing_or_failed_recovery_is_refused_before_mutation() {
+    fn failed_recovery_is_refused_before_mutation() {
         let mut flash = FakeFlash::new(64);
         let region = Region::new("partial", 4, 11);
-        assert_eq!(
-            block_on(erase_region(&mut flash, &region)),
-            Err(Error::RegionProtected)
-        );
         let mut sink = TestBackup {
             fail: true,
             ..Default::default()
@@ -908,6 +904,16 @@ mod tests {
             Err(Error::IoError)
         );
         assert_eq!(flash.mutations, 0);
+    }
+
+    #[test]
+    fn cross_boundary_erase_restores_neighbors_without_a_recovery_image() {
+        let mut flash = FakeFlash::new(64);
+        block_on(erase_region(&mut flash, &Region::new("partial", 4, 11))).unwrap();
+        assert!(flash.mutations > 0);
+        assert_eq!(&flash.bytes[..4], &[0; 4]);
+        assert_eq!(&flash.bytes[4..12], &[0xff; 8]);
+        assert_eq!(&flash.bytes[12..16], &[0; 4]);
     }
 
     #[test]

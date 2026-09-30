@@ -721,7 +721,7 @@ pub async fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     pb.set_style(create_spinner_style()?);
     pb.enable_steady_tick(Duration::from_millis(100));
 
-    // One preflight checks all regions and persists recovery before any erase.
+    // One preflight checks all regions (and saves any backup) before any erase.
     unified::erase_by_layout_with_policy(device, layout, policy).await?;
 
     pb.finish_with_message("Erase complete");
