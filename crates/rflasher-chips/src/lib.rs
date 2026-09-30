@@ -53,6 +53,7 @@ fn features_from(def: FeaturesDef) -> Features {
     [
         (def.wrsr_wren, Features::WRSR_WREN),
         (def.wrsr_ewsr, Features::WRSR_EWSR),
+        (def.wrsr_persistent_ewsr, Features::WRSR_PERSISTENT_EWSR),
         (def.wrsr_ext, Features::WRSR_EXT),
         (def.fast_read, Features::FAST_READ),
         (def.dual_io, Features::DUAL_IO),
@@ -416,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn colliding_jedec_ids_are_enumerable_and_only_real_differences_are_ambiguous() {
+    fn colliding_jedec_ids_are_enumerable_without_claiming_identical_capabilities() {
         let db = ChipDatabase::from_dir(&vendors_dir()).unwrap();
 
         // Enumeration starts with the first-match entry and covers every entry.
@@ -433,10 +434,10 @@ mod tests {
                 .count()
         );
 
-        // W25Q64 revisions differ only in read capabilities, so they must not
-        // force the user to pick an entry by hand ...
+        // Revisions differ in capabilities: probing builds a conservative
+        // common profile rather than claiming that any row is interchangeable.
         assert!(all.len() > 1);
-        assert!(all.iter().all(|c| c.is_equivalent_to(all[0])));
+        assert!(all.iter().any(|c| !c.is_equivalent_to(all[0])));
 
         // ... whereas boot-block EN25B and uniform-sector EN25P parts erase
         // differently and share an ID: guessing would be unsafe.

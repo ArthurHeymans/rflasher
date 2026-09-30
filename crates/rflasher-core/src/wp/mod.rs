@@ -30,7 +30,8 @@
 //!
 //! // Disable write protection
 //! let new_config = WpConfig::new(WpMode::Disabled, WpRange::none());
-//! write_wp_config(&mut spi, &new_config, &bit_map, chip_size, RangeDecoder::Spi25, WriteOptions::default())?;
+//! let procedure = WriteOptions::default().for_features(chip.features)?;
+//! write_wp_config(&mut spi, &new_config, &bit_map, chip_size, RangeDecoder::Spi25, procedure)?;
 //! ```
 
 mod ops;

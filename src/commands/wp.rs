@@ -91,7 +91,6 @@ fn parse_number(s: &str) -> Result<u32, Box<dyn Error>> {
 fn write_options(args: WpWriteArgs) -> WriteOptions {
     WriteOptions {
         volatile: args.temporary,
-        ..WriteOptions::default()
     }
 }
 

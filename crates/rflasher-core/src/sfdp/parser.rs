@@ -559,11 +559,17 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     if params.soft_reset.supports_66_99() {
         // Mark that soft reset is supported (could add a feature flag)
     }
-    if params.volatile_sr_write_enable == WriteEnableForVolatileSr::Wren {
+    // Bit 4 describes the enable mechanism for a volatile status register,
+    // not whether persistent writes are possible. Bit 3 determines volatility.
+    if !params.status_reg_volatile {
         features |= Features::WRSR_WREN;
+    } else if params.volatile_sr_write_enable == WriteEnableForVolatileSr::Wren {
+        features |= Features::WRSR_VOLATILE_WREN;
     } else {
         features |= Features::WRSR_EWSR;
     }
+    // BFPT does not define the BP/TB/SEC/CMP protection-register layout.
+    features |= Features::WP_UNRESOLVED;
     if params.quad_enable.is_needed() {
         features |= Features::QE_SR2;
     }
@@ -687,8 +693,8 @@ impl SfdpMismatch {
     /// A wrong size makes reads, erases and writes hit the wrong addresses. A
     /// database page size *larger* than the chip's makes page programs wrap
     /// inside the chip's real page and corrupt data; a smaller one only costs
-    /// speed. Everything else (erase opcodes, address mode, ...) is reported
-    /// but not critical.
+    /// speed. Erase disagreements are reported separately: probing removes
+    /// disputed erasers from the executable profile, even under an override.
     #[must_use]
     pub fn is_critical(&self) -> bool {
         match self {
@@ -1203,6 +1209,57 @@ mod tests {
     }
 
     #[test]
+    fn disputed_erase_opcode_is_removed_even_under_override() {
+        let mut chip = sfdp_described_chip("wrong eraser");
+        let size = chip.erase_blocks[0].min_block_size();
+        let wrong = 0x81;
+        chip.erase_blocks[0].opcode = wrong;
+        let db = CollidingDb(vec![chip]);
+        for force in [false, true] {
+            let result = probe_db(
+                MockSfdpFlash::new(),
+                &db,
+                &ProbeOptions {
+                    force,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert!(result.mismatches.iter().any(|m| matches!(m, SfdpMismatch::EraseBlockOpcode { size: s, db_opcode, .. } if *s == size && *db_opcode == wrong)));
+            assert!(result.chip.erase_blocks.iter().all(|b| b.opcode != wrong));
+            assert!(!result.chip.erase_blocks.is_empty());
+        }
+    }
+
+    #[test]
+    fn sfdp_volatile_enable_never_becomes_a_persistent_method() {
+        use crate::{
+            chip::Features,
+            wp::{WpError, WriteOptions},
+        };
+        let mut mock = MockSfdpFlash::new();
+        let mut info = futures_lite::future::block_on(probe(&mut mock)).unwrap();
+        info.basic_params.status_reg_volatile = true;
+        for (enable, feature) in [
+            (WriteEnableForVolatileSr::Ewsr, Features::WRSR_EWSR),
+            (WriteEnableForVolatileSr::Wren, Features::WRSR_VOLATILE_WREN),
+        ] {
+            info.basic_params.volatile_sr_write_enable = enable;
+            let chip = to_flash_chip(&info, 0xc2, 0x2017);
+            assert!(chip.features.contains(feature));
+            assert!(
+                !chip
+                    .features
+                    .intersects(Features::WRSR_WREN | Features::WRSR_PERSISTENT_EWSR)
+            );
+            assert!(matches!(
+                WriteOptions::default().for_features(chip.features),
+                Err(WpError::PersistentUnsupported)
+            ));
+        }
+    }
+
+    #[test]
     fn interchangeable_entries_are_not_ambiguous() {
         let db = CollidingDb(vec![
             sfdp_described_chip("MX25L6406E"),
@@ -1214,7 +1271,7 @@ mod tests {
     }
 
     #[test]
-    fn colliding_entries_without_sfdp_are_refused_until_named() {
+    fn unresolved_aliases_use_only_common_erasers_until_named() {
         let uniform = sfdp_described_chip("MX25L6406E");
         let boot_block = with_erase_blocks(
             sfdp_described_chip("MX25L6436E/MX25L6473E"),
@@ -1223,9 +1280,10 @@ mod tests {
         let db = CollidingDb(vec![uniform, boot_block]);
         let no_sfdp = MockSfdpFlash::without_sfdp;
 
+        let common = probe_db(no_sfdp(), &db, &ProbeOptions::default()).unwrap();
         assert_eq!(
-            probe_db(no_sfdp(), &db, &ProbeOptions::default()).unwrap_err(),
-            Error::ChipAmbiguous
+            common.chip.erase_blocks,
+            vec![EraseBlock::with_count(0xD8, 65536, 128)]
         );
 
         let pick = |name| ProbeOptions {
@@ -1235,6 +1293,9 @@ mod tests {
         // Case-insensitive, and one alias of an "A/B" entry is enough.
         let result = probe_db(no_sfdp(), &db, &pick("mx25l6436e")).unwrap();
         assert_eq!(result.chip.erase_blocks.len(), 1);
+        // The web selector supplies the exact database row name, patterns included.
+        let exact = probe_db(no_sfdp(), &db, &pick("MX25L6436E/MX25L6473E")).unwrap();
+        assert_eq!(exact.chip.name, "MX25L6436E/MX25L6473E");
         let result = probe_db(no_sfdp(), &db, &pick("MX25L6406E")).unwrap();
         assert_eq!(result.chip.name, "MX25L6406E");
         assert_eq!(
@@ -1292,15 +1353,28 @@ mod tests {
     #[test]
     fn sfdp_breaks_ties_between_colliding_entries() {
         // The wrong entry is listed first: first-match would have picked it.
-        let wrong = with_erase_blocks(
-            sfdp_described_chip("wrong"),
-            vec![EraseBlock::with_count(0x20, 4096, 2048)],
-        );
+        let mut wrong = sfdp_described_chip("wrong size");
+        wrong.total_size *= 2;
         let right = sfdp_described_chip("right");
         let db = CollidingDb(vec![wrong, right]);
         let result = probe_db(MockSfdpFlash::new(), &db, &ProbeOptions::default()).unwrap();
         assert_eq!(result.chip.name, "right");
         assert!(result.from_database);
+    }
+
+    #[test]
+    fn erase_capability_counts_do_not_identify_a_program_procedure() {
+        let incomplete = with_erase_blocks(
+            sfdp_described_chip("incomplete"),
+            vec![EraseBlock::with_count(0x20, 4096, 2048)],
+        );
+        let mut aai = sfdp_described_chip("AAI procedure");
+        aai.features |= crate::chip::Features::AAI_WORD;
+        let db = CollidingDb(vec![incomplete, aai]);
+        assert_eq!(
+            probe_db(MockSfdpFlash::new(), &db, &ProbeOptions::default()).unwrap_err(),
+            Error::ChipAmbiguous
+        );
     }
 
     #[test]

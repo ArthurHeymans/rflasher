@@ -3199,6 +3199,7 @@ dependencies = [
  "futures-lite",
  "log",
  "rflasher-chip-types",
+ "rflasher-chips",
  "serde",
  "thiserror 2.0.19",
  "toml",

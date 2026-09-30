@@ -35,7 +35,7 @@
             device_id: 0x2548,
             total_size: KiB(64),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
-            features: (wrsr_ewsr: true),
+            features: (wrsr_persistent_ewsr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
@@ -60,7 +60,7 @@
             device_id: 0x2549,
             total_size: KiB(128),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
-            features: (wrsr_ewsr: true),
+            features: (wrsr_persistent_ewsr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
@@ -85,7 +85,7 @@
             device_id: 0x2543,
             total_size: KiB(256),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
-            features: (wrsr_ewsr: true),
+            features: (wrsr_persistent_ewsr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -98,7 +98,7 @@
             device_id: 0x258C,
             total_size: KiB(256),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
-            features: (wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -114,7 +114,7 @@
             device_id: 0x258D,
             total_size: KiB(512),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
-            features: (wrsr_ewsr: true),
+            features: (wrsr_persistent_ewsr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -129,8 +129,9 @@
             total_size: KiB(512),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
             // Note: same RDID device_id as SST25VF040; differentiated by REMS probe
-            // in flashprog. rflasher uses RDID only, so this entry takes precedence.
-            features: (wrsr_ewsr: true, aai_word: true),
+            // in flashprog. rflasher uses RDID only, so incompatible procedures
+            // require explicit --chip selection.
+            features: (wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -146,7 +147,7 @@
             device_id: 0x258E,
             total_size: MiB(1),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
-            features: (wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -161,7 +162,7 @@
             device_id: 0x2541,
             total_size: MiB(2),
             // AAI word program (0xAD); WRSR accepts both EWSR and WREN (flashprog: EITHER)
-            features: (wrsr_wren: true, wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -176,7 +177,7 @@
             device_id: 0x254A,
             total_size: MiB(4),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
-            features: (wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -191,7 +192,7 @@
             device_id: 0x254B,
             total_size: MiB(8),
             // Standard 256-byte page program (unlike older SST25 chips); WRSR needs EWSR
-            features: (wrsr_ewsr: true),
+            features: (wrsr_persistent_ewsr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -212,7 +213,7 @@
             device_id: 0x0043,
             total_size: KiB(256),
             // EWSR required; AAI uses 0xAF (not standard 0xAD), fall back to byte PP
-            features: (wrsr_ewsr: true),
+            features: (wrsr_persistent_ewsr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -225,7 +226,7 @@
             name: "SST25LF040A",
             device_id: 0x0044,
             total_size: KiB(512),
-            features: (wrsr_ewsr: true),
+            features: (wrsr_persistent_ewsr: true),
             voltage: (min: 3000, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -239,7 +240,7 @@
             device_id: 0x0080,
             total_size: MiB(1),
             // Accepts both EWSR and WREN (flashprog: FEATURE_WRSR_EITHER)
-            features: (wrsr_wren: true, wrsr_ewsr: true),
+            features: (wrsr_wren: true, wrsr_persistent_ewsr: true),
             voltage: (min: 3000, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -251,7 +252,7 @@
             name: "SST25VF010(A)",
             device_id: 0x0049,
             total_size: KiB(128),
-            features: (wrsr_ewsr: true),
+            features: (wrsr_persistent_ewsr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
@@ -268,7 +269,7 @@
             name: "SST25VF040B.REMS",
             device_id: 0x008D,
             total_size: KiB(512),
-            features: (wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -284,7 +285,7 @@
             name: "SST25VF512(A)",
             device_id: 0x0048,
             total_size: KiB(64),
-            features: (wrsr_ewsr: true),
+            features: (wrsr_persistent_ewsr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
@@ -307,7 +308,7 @@
             device_id: 0x2501,
             total_size: KiB(64),
             // AAI word program (0xAD); WRSR accepts both EWSR and WREN
-            features: (wrsr_wren: true, wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
@@ -321,7 +322,7 @@
             name: "SST25WF010",
             device_id: 0x2502,
             total_size: KiB(128),
-            features: (wrsr_wren: true, wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
@@ -335,7 +336,7 @@
             name: "SST25WF020",
             device_id: 0x2503,
             total_size: KiB(256),
-            features: (wrsr_wren: true, wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
@@ -350,7 +351,7 @@
             name: "SST25WF040",
             device_id: 0x2504,
             total_size: KiB(512),
-            features: (wrsr_wren: true, wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
@@ -365,7 +366,7 @@
             name: "SST25WF080",
             device_id: 0x2505,
             total_size: MiB(1),
-            features: (wrsr_wren: true, wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 1650, max: 1950),
             erase_blocks: [

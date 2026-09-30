@@ -114,7 +114,11 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
     // Write protection support (delegates to SpiMaster, same as SpiFlashDevice)
     #[cfg(feature = "alloc")]
     fn wp_supported(&self) -> bool {
-        true
+        !self
+            .ctx
+            .chip
+            .features
+            .intersects(crate::chip::Features::WP_UNRESOLVED | crate::chip::Features::SST26_BPR)
     }
 
     #[cfg(feature = "alloc")]
@@ -229,12 +233,18 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
 
     /// Read current write protection bits
     pub async fn read_wp_bits(&mut self) -> WpResult<WpBits> {
+        if !self.wp_supported() {
+            return Err(crate::wp::WpError::ChipUnsupported);
+        }
         let bit_map = self.wp_bit_map();
         wp::read_wp_bits(&mut self.master, &bit_map).await
     }
 
     /// Read current write protection configuration
     pub async fn read_wp_config(&mut self) -> WpResult<WpConfig> {
+        if !self.wp_supported() {
+            return Err(crate::wp::WpError::ChipUnsupported);
+        }
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;
@@ -243,7 +253,10 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
 
     /// Resolve the write-enable command this chip needs for status register
     /// writes (see [`WriteOptions::for_features`]).
-    fn chip_write_options(&self, options: WriteOptions) -> WpResult<WriteOptions> {
+    fn chip_write_options(&self, options: WriteOptions) -> WpResult<wp::ResolvedWriteOptions> {
+        if !self.wp_supported() {
+            return Err(crate::wp::WpError::ChipUnsupported);
+        }
         options.for_features(self.ctx.chip.features)
     }
 

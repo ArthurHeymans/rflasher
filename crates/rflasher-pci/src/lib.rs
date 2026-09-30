@@ -366,17 +366,45 @@ mod linux {
         })
     }
 
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    fn ensure_io_privilege(acquire: impl FnOnce() -> bool) -> bool {
+        // Linux grants I/O privilege to the calling thread, not the process.
+        // Cache successes only, so a later privilege grant can retry a failure.
+        std::thread_local! {
+            static IO_PRIVILEGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        IO_PRIVILEGE.with(|granted| {
+            if !granted.get() {
+                granted.set(acquire());
+            }
+            granted.get()
+        })
+    }
+
+    #[cfg(all(test, any(target_arch = "x86", target_arch = "x86_64")))]
+    #[test]
+    fn io_privilege_is_thread_local_and_failed_acquisition_is_retried() {
+        for _ in 0..2 {
+            std::thread::spawn(|| {
+                assert!(!ensure_io_privilege(|| false));
+                assert!(ensure_io_privilege(|| true));
+                assert!(ensure_io_privilege(|| panic!(
+                    "successful acquisition is cached on this thread"
+                )));
+            })
+            .join()
+            .unwrap();
+        }
+    }
+
     /// Reads a legacy PCI configuration dword through x86 configuration ports.
     ///
     /// This supports only segment zero and offsets below 256. It requires
     /// `CAP_SYS_RAWIO` (normally root) and serializes the global CF8/CFC pair.
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub fn read32_direct(address: PciAddress, offset: u16) -> Result<u32, PciError> {
-        use std::sync::{Mutex, OnceLock};
+        use std::sync::Mutex;
         static LOCK: Mutex<()> = Mutex::new(());
-        // I/O privilege is per process and stays granted, so ask for it once
-        // instead of issuing a syscall per configuration read.
-        static IO_PRIVILEGE: OnceLock<bool> = OnceLock::new();
         if address.segment() != 0 || offset > u8::MAX as u16 {
             return Err(PciError::NotSupported(
                 "legacy PCI config access requires segment 0 and an offset below 256",
@@ -385,7 +413,7 @@ mod linux {
         let _guard = LOCK.lock().expect("PCI configuration lock poisoned");
         // SAFETY: iopl takes no pointers; failure (missing CAP_SYS_RAWIO) is
         // reported as an error below.
-        if !*IO_PRIVILEGE.get_or_init(|| unsafe { libc::iopl(3) } == 0) {
+        if !ensure_io_privilege(|| unsafe { libc::iopl(3) } == 0) {
             return Err(PciError::ConfigRead { address, offset });
         }
         let config_address = 0x8000_0000

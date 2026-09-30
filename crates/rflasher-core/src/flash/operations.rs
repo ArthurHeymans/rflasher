@@ -745,18 +745,17 @@ pub struct ProbeOptions<'a> {
 ///
 /// JEDEC IDs are not unique, so several entries may match. Alias entries that
 /// behave identically are interchangeable and the first is used. Otherwise the
-/// chip's own SFDP data breaks the tie (fewest critical, then fewest total,
-/// mismatches), and if that still leaves behaviourally different entries the
-/// choice is refused instead of guessed: guessing wrong means wrong erase
-/// opcodes or geometry.
+/// chip's own SFDP size/page data eliminates contradictory geometries. Any
+/// remaining aliases use a safe common operation profile; conflicting essential
+/// procedures require explicit selection, never a mismatch-count heuristic.
 #[cfg(feature = "std")]
-fn select_database_chip<'a, P>(
-    provider: &'a P,
+fn select_database_chip<P>(
+    provider: &P,
     manufacturer: u8,
     device: u16,
     sfdp: Option<&crate::sfdp::SfdpInfo>,
     wanted: Option<&str>,
-) -> Result<Option<&'a crate::chip::FlashChip>>
+) -> Result<Option<crate::chip::FlashChip>>
 where
     P: ChipProvider + ?Sized,
 {
@@ -775,7 +774,9 @@ where
         let matching: Vec<_> = candidates
             .iter()
             .copied()
-            .filter(|c| crate::chip::name_matches(c.name(), wanted))
+            .filter(|c| {
+                c.name().eq_ignore_ascii_case(wanted) || crate::chip::name_matches(c.name(), wanted)
+            })
             .collect();
         if matching.is_empty() {
             log::error!(
@@ -791,23 +792,21 @@ where
             );
             return Err(Error::ChipNotFound);
         }
-        // The user named the chip: take the entry they wrote if it is
-        // spelled exactly, else the first that the name matches (as
-        // flashprog's `-c` does), without second-guessing the choice.
-        let chosen = matching
+        // Exact database names (including slash/optional patterns) are
+        // selectable by the web UI. A loose pattern is not authorization to
+        // choose an arbitrary, conflicting procedure.
+        if let Some(chosen) = matching
             .iter()
-            .copied()
             .find(|c| c.name().eq_ignore_ascii_case(wanted))
-            .unwrap_or(matching[0]);
-        if matching.len() > 1 {
-            log::info!(
-                "\"{}\" matches {}; using {}",
-                wanted,
-                names(&matching),
-                chosen.name()
-            );
+        {
+            return Ok(Some((*chosen).clone()));
         }
-        return Ok(Some(chosen));
+        if matching.len() == 1 || matching.iter().all(|c| c.is_equivalent_to(matching[0])) {
+            return Ok(Some(matching[0].clone()));
+        }
+        return common_operation_profile(&matching)
+            .map(Some)
+            .ok_or(Error::ChipAmbiguous);
     }
 
     let Some(&first) = candidates.first() else {
@@ -822,16 +821,15 @@ where
                 names(&candidates)
             );
         }
-        return Ok(Some(first));
+        return Ok(Some(first.clone()));
     }
 
     if let Some(sfdp) = sfdp {
         let score = |c: &crate::chip::FlashChip| {
             let mismatches = crate::sfdp::compare_with_chip(sfdp, c);
-            (
-                mismatches.iter().filter(|m| m.is_critical()).count(),
-                mismatches.len(),
-            )
+            // Missing optional capabilities are not evidence of chip identity.
+            // Only size/page facts can eliminate an unsafe geometry here.
+            mismatches.iter().filter(|m| m.is_critical()).count()
         };
         let best = candidates.iter().map(|c| score(c)).min();
         let best_matches: Vec<_> = candidates
@@ -850,9 +848,17 @@ where
                 names(&candidates),
                 best_matches[0].name()
             );
-            return Ok(Some(best_matches[0]));
+            return Ok(Some(best_matches[0].clone()));
         }
         candidates = best_matches;
+    }
+
+    if let Some(profile) = common_operation_profile(&candidates) {
+        log::warn!(
+            "Unresolved aliases {}; using only their common operations",
+            names(&candidates)
+        );
+        return Ok(Some(profile));
     }
 
     log::error!(
@@ -863,6 +869,77 @@ where
         names(&candidates)
     );
     Err(Error::ChipAmbiguous)
+}
+
+/// Build a conservative operational profile, not an arbitrary database row.
+/// Only shared commands survive. Missing optional flags do not prove that two
+/// aliases require conflicting procedures; essential program/address modes do.
+#[cfg(feature = "std")]
+fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::chip::FlashChip> {
+    let first = *chips.first()?;
+    let required = Features::AAI_WORD | Features::WRITE_BYTE | Features::SST26_BPR;
+    let addressing = Features::PROCEDURE
+        - (Features::WRSR_WREN
+            | Features::WRSR_EWSR
+            | Features::WRSR_EXT
+            | Features::WP_BP3
+            | Features::WRSR_VOLATILE_WREN
+            | Features::WRSR_PERSISTENT_EWSR);
+    if chips.iter().any(|c| {
+        c.total_size != first.total_size
+            || c.write_granularity != first.write_granularity
+            || c.features & required != first.features & required
+            || (first.requires_4byte_addr()
+                && c.features & addressing != first.features & addressing)
+    }) {
+        return None;
+    }
+    let mut profile = first.clone();
+    // A synthesized profile has not itself been hardware-tested.
+    profile.tested = crate::chip::ChipTestStatus::default();
+    profile.name = chips
+        .iter()
+        .map(|c| c.name())
+        .collect::<Vec<_>>()
+        .join(" / ");
+    profile.page_size = chips.iter().map(|c| c.page_size).min()?;
+    if profile.page_size == 0 {
+        return None;
+    }
+    profile.features = chips.iter().fold(first.features, |f, c| f & c.features);
+    let wp_layout = Features::WP_BP3
+        | Features::WP_TB
+        | Features::WP_SEC
+        | Features::WP_CMP
+        | Features::WRSR_EXT
+        | Features::STATUS_REG_2
+        | Features::STATUS_REG_3
+        | Features::SST26_BPR;
+    if chips
+        .iter()
+        .any(|c| c.features & wp_layout != first.features & wp_layout)
+    {
+        profile.features |= Features::WP_UNRESOLVED;
+    }
+    profile
+        .erase_blocks
+        .retain(|block| chips.iter().all(|c| c.erase_blocks().contains(block)));
+    // Do not substitute an addressless chip erase for missing addressed geometry.
+    if !profile.erase_blocks.iter().any(|b| !b.is_chip_erase()) {
+        return None;
+    }
+    profile.voltage_min_mv = chips.iter().map(|c| c.voltage_min_mv).max()?;
+    profile.voltage_max_mv = chips.iter().map(|c| c.voltage_max_mv).min()?;
+    if profile.voltage_min_mv > profile.voltage_max_mv {
+        return None;
+    }
+    if chips.iter().any(|c| {
+        c.tested.write == crate::chip::TestStatus::Bad
+            || c.tested.erase == crate::chip::TestStatus::Bad
+    }) {
+        return None;
+    }
+    Some(profile)
 }
 
 /// Probe for a flash chip with detailed results
@@ -958,7 +1035,7 @@ where
         (None, None) => return Err(Error::ChipNotFound),
     };
 
-    let result = ProbeResult {
+    let mut result = ProbeResult {
         jedec_manufacturer,
         jedec_device,
         chip,
@@ -978,6 +1055,32 @@ where
         return Err(Error::ChipMismatch);
     }
 
+    if let Some(info) = &result.sfdp {
+        // BFPT can disprove an addressed erase opcode but does not advertise
+        // addressless chip erase. Never execute a disputed database eraser.
+        result.chip.erase_blocks.retain(|block| {
+            block.is_chip_erase()
+                || (block.is_uniform()
+                    && info.basic_params.erase_types.iter().any(|e| {
+                        e.is_valid() && e.size == block.min_block_size() && e.opcode == block.opcode
+                    }))
+        });
+        if info.four_byte_addr_table.is_some() {
+            let validated = crate::sfdp::to_flash_chip(info, jedec_manufacturer, jedec_device);
+            for block in &mut result.chip.erase_blocks {
+                if !block.is_chip_erase() {
+                    let known = validated.erase_blocks.iter().find(|b| {
+                        b.opcode == block.opcode && b.min_block_size() == block.min_block_size()
+                    });
+                    if block.opcode_4b != known.and_then(|b| b.opcode_4b) {
+                        // Keep the validated three-byte opcode, but do not
+                        // execute an unadvertised native four-byte command.
+                        block.opcode_4b = None;
+                    }
+                }
+            }
+        }
+    }
     Ok(result)
 }
 
@@ -1382,6 +1485,33 @@ mod tests {
     use super::*;
     use crate::chip::{EraseBlock, Features, WriteGranularity};
     use crate::spi::opcodes;
+
+    #[test]
+    fn bundled_common_jedec_collisions_resolve_to_safe_profiles() {
+        let db = rflasher_chips::ChipDatabase::new();
+        for (manufacturer, device) in [
+            (0xc8, 0x4018),
+            (0x0b, 0x4018),
+            (0xc2, 0x2017),
+            (0xc2, 0x2018),
+            (0xef, 0x4017),
+        ] {
+            let profile = select_database_chip(&db, manufacturer, device, None, None)
+                .unwrap()
+                .unwrap();
+            let candidates: Vec<_> = (0..)
+                .map_while(|n| db.find_nth_by_jedec_id(manufacturer, device, n))
+                .collect();
+            assert!(candidates.len() > 1);
+            assert!(
+                profile
+                    .erase_blocks
+                    .iter()
+                    .all(|b| candidates.iter().all(|c| c.erase_blocks().contains(b)))
+            );
+            assert!(profile.erase_blocks.iter().any(|b| !b.is_chip_erase()));
+        }
+    }
 
     struct EraseMaster {
         commands: Vec<(u8, Option<u32>)>,

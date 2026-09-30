@@ -357,14 +357,9 @@ impl FlashChip {
 
     /// Check whether two definitions modify flash in the same way.
     ///
-    /// Identity fields (vendor, name, JEDEC ID), voltage range, test status
-    /// and pure capability flags (read modes, OTP, status-register layout,
-    /// write-protection decode; everything outside [`Features::PROCEDURE`])
-    /// are ignored, and so is which addressless chip-erase opcodes (0x60,
-    /// 0x62, 0xC7) are listed: they only accelerate a full-chip erase, whose
-    /// result is verified. Size, page size, write granularity, the addressed
-    /// erase geometry and opcodes, addressing and the program/status-write
-    /// procedure must match.
+    /// Only identity fields are ignored. In particular addressless erase
+    /// opcodes, read/restore capabilities, voltage and test status must match;
+    /// verification cannot make an undocumented command safe.
     ///
     /// Used to tell alias entries, which are interchangeable for erase and
     /// write, from entries that merely share a JEDEC ID and would erase or
@@ -373,13 +368,12 @@ impl FlashChip {
     pub fn is_equivalent_to(&self, other: &Self) -> bool {
         self.total_size == other.total_size
             && self.page_size == other.page_size
-            && self.features & Features::PROCEDURE == other.features & Features::PROCEDURE
+            && self.features == other.features
+            && self.voltage_min_mv == other.voltage_min_mv
+            && self.voltage_max_mv == other.voltage_max_mv
+            && self.tested == other.tested
             && self.write_granularity == other.write_granularity
-            && self
-                .erase_blocks()
-                .iter()
-                .filter(|eb| !eb.is_chip_erase())
-                .eq(other.erase_blocks().iter().filter(|eb| !eb.is_chip_erase()))
+            && self.erase_blocks() == other.erase_blocks()
     }
 
     /// Maximum addressable size with 3-byte addresses (16 MiB)

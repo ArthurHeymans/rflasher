@@ -44,8 +44,10 @@ pub struct FeaturesDef {
     // Write enable behavior
     /// Use WREN (0x06) before WRSR
     pub wrsr_wren: bool,
-    /// Use EWSR (0x50) before WRSR (legacy SST)
+    /// Use EWSR (0x50) for volatile status-register writes.
     pub wrsr_ewsr: bool,
+    /// Use EWSR (0x50) for persistent writes (legacy SST25).
+    pub wrsr_persistent_ewsr: bool,
     /// WRSR writes both SR1 and SR2 with one command
     pub wrsr_ext: bool,
 

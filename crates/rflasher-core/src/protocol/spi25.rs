@@ -201,7 +201,8 @@ pub async fn write_status1<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> 
 
 /// Write the status register 1, using EWSR (0x50) instead of WREN
 ///
-/// Required for legacy SST25 chips (those with the `WRSR_EWSR` feature flag).
+/// Persistent on legacy SST25 (`WRSR_PERSISTENT_EWSR`), but volatile on
+/// chips with `WRSR_EWSR`. Higher-level WP operations resolve these separately.
 pub async fn write_status1_ewsr<M: SpiMaster + ?Sized>(master: &mut M, value: u8) -> Result<()> {
     write_enable_ewsr(master).await?;
     let data = [value];

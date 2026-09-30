@@ -93,7 +93,7 @@ The `internal` programmer uses the chipset's SPI controller on Linux via PCI sys
 
 Chips are defined as RON files in `crates/rflasher-chips/data/vendors/` and compiled into the CLI by default, so installed binaries work without the source tree or separate data files. `--chip-db <path>` replaces the bundled database with a RON file or a directory of RON files.
 
-JEDEC IDs are not unique, so a probed chip can match several definitions. Definitions that erase and program identically (they differ only in read modes, names, ...) are interchangeable and the first is used. Otherwise the chip's own SFDP data picks the entry that fits it; when that cannot decide either, rflasher lists the candidates and stops rather than guess, and `-c`/`--chip NAME` selects one. Names are matched as flashprog does, ignoring case, so type the part number printed on the chip: database names may contain alternatives (`A/B`), optional parts (`GD25Q64(B)`) and `.` wildcards (`W25Q128.V` matches `W25Q128FV`):
+JEDEC IDs are not unique, so a probed chip can match several definitions. Identical operational definitions are interchangeable. Otherwise validated SFDP data narrows the candidates, and unresolved aliases use only their common erase/program/read capabilities. Contradictory sizes or essential program/addressing procedures still require explicit selection with `-c`/`--chip NAME`. A synthesized common profile disables write protection when candidates disagree on its register layout. Names are matched as flashprog does, ignoring case, so type the part number printed on the chip: database names may contain alternatives (`A/B`), optional parts (`GD25Q64(B)`) and `.` wildcards (`W25Q128.V` matches `W25Q128FV`):
 
 ```bash
 rflasher probe -p ch341a -c EN25P40

@@ -279,6 +279,11 @@ pub async fn open_flash_with_options(
     // `db` parameter warning.
     let _ = db;
     let params = parse_programmer_params(programmer)?;
+    if matches!(params.name.as_str(), "linux_mtd" | "linux-mtd" | "mtd")
+        && (options.chip.is_some() || options.force)
+    {
+        return Err("--chip and --force have no effect for an opaque MTD device".into());
+    }
 
     match params.name.as_str() {
         #[cfg(feature = "dummy")]
@@ -846,6 +851,9 @@ async fn open_internal(
         log::info!("Using SPI mode (swseq allows chip probing)");
         probe_and_create_handle(programmer, db).await
     } else {
+        if db.options.chip.is_some() || db.options.force {
+            return Err("--chip and --force apply to SPI probing, not opaque hardware sequencing; use ich_spi_mode=swseq or remove them".into());
+        }
         log::info!("Using opaque mode (hwseq - no chip probing available)");
         let flash_size = get_flash_size_from_ifd(&mut programmer).await?;
         log::info!("Flash size: {} bytes (from IFD)", flash_size);
