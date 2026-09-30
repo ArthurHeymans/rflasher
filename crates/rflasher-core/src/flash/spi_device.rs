@@ -163,8 +163,8 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn erase_operation(&mut self, op: &operations::OptimalEraseOp) -> Result<()> {
-        operations::erase_spi_operation(&mut self.master, &self.ctx, op).await?;
-        self.check_erased_range(op.start, op.size).await
+        // Callers verify the erased range (see `unified`), so do not read it twice.
+        operations::erase_spi_operation(&mut self.master, &self.ctx, op).await
     }
 }
 

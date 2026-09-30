@@ -12,7 +12,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::policy::{MutationPolicy, preflight, region_layout};
-use crate::error::{Error, Result};
+use crate::error::{EraseFailure, Error, Result};
 use crate::flash::device::FlashDevice;
 use crate::flash::operations::{
     coalesce_write_ranges, plan_optimal_erase, plan_optimal_erase_region,
@@ -656,16 +656,23 @@ async fn erase_region_prepared<D: FlashDevice + ?Sized>(
     Ok(())
 }
 
+/// The single post-erase check for every device type; `erase_operation`
+/// implementations do not read the range back themselves.
 async fn verify_erased<D: FlashDevice + ?Sized>(device: &mut D, addr: u32, len: u32) -> Result<()> {
     let mut buf = vec![0; READ_CHUNK_SIZE.min(len as usize)];
     let mut offset = 0;
     while offset < len {
         let count = (len - offset).min(buf.len() as u32) as usize;
         device.read(addr + offset, &mut buf[..count]).await?;
-        if let Some(index) = buf[..count].iter().position(|b| *b != ERASED_VALUE) {
-            return Err(Error::VerifyError {
+        if let Some((index, &found)) = buf[..count]
+            .iter()
+            .enumerate()
+            .find(|&(_, b)| *b != ERASED_VALUE)
+        {
+            return Err(Error::EraseError(EraseFailure::VerifyFailed {
                 addr: addr + offset + index as u32,
-            });
+                found,
+            }));
         }
         offset += count as u32;
     }

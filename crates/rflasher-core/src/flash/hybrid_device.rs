@@ -197,8 +197,8 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
 
     async fn erase_operation(&mut self, op: &operations::OptimalEraseOp) -> Result<()> {
         // Firmware range erase cannot promise which opcode it will execute.
-        operations::erase_spi_operation(&mut self.master, &self.ctx, op).await?;
-        operations::check_erased_range(&mut self.master, &self.ctx, op.start, op.size).await
+        // Callers verify the erased range (see `unified`), so do not read it twice.
+        operations::erase_spi_operation(&mut self.master, &self.ctx, op).await
     }
 }
 

@@ -158,6 +158,8 @@ pub trait FlashDevice {
 
     /// Execute the exact eraser selected by a plan. The default is only valid
     /// for devices with a single hardware geometry; SPI implementations override it.
+    /// Implementations need not verify the result: the unified operations
+    /// read the erased range back once for every device type.
     async fn erase_operation(&mut self, op: &super::operations::OptimalEraseOp) -> Result<()> {
         self.validate_erase_operation(op)?;
         if self.erase_blocks().len() != 1 {
