@@ -907,17 +907,13 @@ fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::
         return None;
     }
     profile.features = chips.iter().fold(first.features, |f, c| f & c.features);
-    let wp_layout = Features::WP_BP3
-        | Features::WP_TB
-        | Features::WP_SEC
-        | Features::WP_CMP
-        | Features::WRSR_EXT
-        | Features::STATUS_REG_2
-        | Features::STATUS_REG_3
-        | Features::SST26_BPR;
+    // Only flags that change the WP register bit map count (see
+    // `SpiFlashDevice::wp_bit_map`); SST26_BPR is already required to match.
+    // Descriptive flags such as STATUS_REG_2 or WP_TB are not used by WP
+    // access, so differences there must not disable it.
     if chips
         .iter()
-        .any(|c| c.features & wp_layout != first.features & wp_layout)
+        .any(|c| c.features & Features::WP_BP3 != first.features & Features::WP_BP3)
     {
         profile.features |= Features::WP_UNRESOLVED;
     }
@@ -1510,6 +1506,14 @@ mod tests {
                     .all(|b| candidates.iter().all(|c| c.erase_blocks().contains(b)))
             );
             assert!(profile.erase_blocks.iter().any(|b| !b.is_chip_erase()));
+            // Popular aliases must keep persistent write protection.
+            assert!(
+                crate::wp::WriteOptions::default()
+                    .for_features(profile.features)
+                    .is_ok(),
+                "{manufacturer:02x}:{device:04x}"
+            );
+            assert!(!profile.features.contains(Features::WP_UNRESOLVED));
         }
     }
 
