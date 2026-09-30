@@ -41,9 +41,13 @@ mod device;
 mod hybrid_device;
 mod opaque_device;
 mod operations;
+#[cfg(feature = "alloc")]
+mod policy;
 mod spi_device;
 #[cfg(feature = "alloc")]
 pub mod unified;
+#[cfg(feature = "alloc")]
+pub use policy::{MutationPolicy, RecoveryBackup};
 
 pub use context::FlashContext;
 pub use device::FlashDevice;
@@ -55,7 +59,7 @@ pub use spi_device::SpiFlashDevice;
 
 // Re-export low-level SPI operations (work with SpiMaster directly)
 // For high-level operations that work with any FlashDevice, use the `unified` module
-pub use operations::{read, select_erase_block, write};
+pub use operations::{OptimalEraseOp, read, select_erase_block, write};
 
 // Re-export detailed probe result
 #[cfg(feature = "std")]

@@ -176,12 +176,8 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
     }
 
     // =========================================================================
-    // Erase: try OpaqueMaster first, fall back to SpiMaster
-    //
-    // Following flashprog's architecture: erase is a first-class operation
-    // on the opaque interface. Programmers with firmware-accelerated erase
-    // (e.g., SPI_CMD_SPINOR_WAIT) implement OpaqueMaster::erase(). Those
-    // without (e.g., Dediprog) return Err, triggering the SPI fallback.
+    // Erase through SPI so the validated opcode/geometry reaches the wire.
+    // Never retry a firmware erase error as though it meant unsupported.
     // =========================================================================
 
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
@@ -190,25 +186,19 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
             return Err(Error::AddressOutOfBounds);
         }
 
-        // Try opaque erase first — the programmer handles everything internally
-        // (block selection, busy-wait, etc.). If it returns Ok, we're done.
-        // Programmers without firmware erase (e.g., Dediprog) return Err,
-        // triggering the SPI fallback below.
-        if OpaqueMaster::erase(&mut self.master, addr, len)
-            .await
-            .is_ok()
-        {
-            return Ok(());
-        }
-
-        // Opaque erase not supported — fall back to SPI-based erase.
-        // NOTE: OpaqueMaster::erase cannot distinguish "unsupported" from a
-        // genuine mid-erase failure; the SPI fallback retries the whole range
-        // either way, which is safe for flash (erase is idempotent) but means
-        // opaque hardware errors are not surfaced here.
         operations::erase_spi_range(&mut self.master, &self.ctx, addr, len).await?;
         // Verify after the shared helper has exited persistent 4-byte mode.
         operations::check_erased_range(&mut self.master, &self.ctx, addr, len).await
+    }
+
+    fn validate_erase_operation(&self, op: &operations::OptimalEraseOp) -> Result<()> {
+        operations::validate_spi_erase_operation(&self.master, &self.ctx, op)
+    }
+
+    async fn erase_operation(&mut self, op: &operations::OptimalEraseOp) -> Result<()> {
+        // Firmware range erase cannot promise which opcode it will execute.
+        operations::erase_spi_operation(&mut self.master, &self.ctx, op).await?;
+        operations::check_erased_range(&mut self.master, &self.ctx, op.start, op.size).await
     }
 }
 

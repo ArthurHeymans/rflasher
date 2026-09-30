@@ -26,6 +26,16 @@ use rflasher_core::flash::{self, FlashContext, FlashDevice, SpiFlashDevice};
 use rflasher_core::spi::opcodes;
 use rflasher_programmers::dummy::{DummyConfig, DummyFlash};
 
+/// Simulated durable storage for the in-memory emulator (not production I/O).
+#[derive(Default)]
+struct RecoveryImage(Vec<u8>);
+impl rflasher_core::flash::RecoveryBackup for RecoveryImage {
+    fn persist(&mut self, image: &[u8]) -> rflasher_core::Result<()> {
+        self.0 = image.to_vec();
+        Ok(())
+    }
+}
+
 const KIB: u32 = 1024;
 const MIB: u32 = 1024 * KIB;
 
@@ -136,8 +146,11 @@ proptest! {
             emulator(SIZE, busy_polls, &initial),
             FlashContext::new(chip(SIZE, Features::empty(), false)),
         );
-        block_on(unified::smart_write_region(&mut device, addr, &target, &mut NoProgress))
+        let mut backup = RecoveryImage::default();
+        let mut policy = rflasher_core::flash::MutationPolicy { recovery: Some(&mut backup), ..Default::default() };
+        block_on(unified::smart_write_region_with_policy(&mut device, addr, &target, &mut NoProgress, &mut policy))
             .expect("smart write");
+        if !backup.0.is_empty() { prop_assert_eq!(&backup.0, &initial); }
 
         let flash = device.master().data();
         prop_assert_eq!(&flash[start..end], &target[..], "region contents");
@@ -183,19 +196,26 @@ fn four_byte_roundtrip(features: Features, four_byte_erase: bool) {
     // on both sides of the boundary.
     let addr = 16 * MIB - 1500;
     let old = firmware_like(1, 6000);
-    block_on(unified::smart_write_region(
+    let mut backup = RecoveryImage::default();
+    let mut policy = rflasher_core::flash::MutationPolicy {
+        recovery: Some(&mut backup),
+        ..Default::default()
+    };
+    block_on(unified::smart_write_region_with_policy(
         &mut device,
         addr,
         &old,
         &mut NoProgress,
+        &mut policy,
     ))
     .expect("initial write");
     let new = mutate(&old, 2, 3);
-    block_on(unified::smart_write_region(
+    block_on(unified::smart_write_region_with_policy(
         &mut device,
         addr,
         &new,
         &mut NoProgress,
+        &mut policy,
     ))
     .expect("update write");
 

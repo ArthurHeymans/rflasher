@@ -37,7 +37,6 @@ mod types;
 mod flash;
 #[cfg(feature = "std")]
 mod fmap;
-#[cfg(feature = "std")]
 mod ifd;
 #[cfg(feature = "std")]
 mod toml;
@@ -51,5 +50,4 @@ pub use fmap::{
     FmapSearchable, fmap_offset, has_fmap, is_valid_fmap_header, parse_fmap, parse_fmap_at,
     search_fmap, validate_fmap,
 };
-#[cfg(feature = "std")]
 pub use ifd::{has_ifd, parse_ifd};

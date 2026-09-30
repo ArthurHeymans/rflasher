@@ -56,7 +56,11 @@ impl<M: OpaqueMaster> OpaqueFlashDevice<M> {
             master,
             size,
             erase_block_size: DEFAULT_ERASE_BLOCK_SIZE,
-            erase_blocks: [EraseBlock::new(opcodes::SE_20, DEFAULT_ERASE_BLOCK_SIZE)],
+            erase_blocks: [EraseBlock::with_count(
+                opcodes::SE_20,
+                DEFAULT_ERASE_BLOCK_SIZE,
+                size / DEFAULT_ERASE_BLOCK_SIZE,
+            )],
         }
     }
 
@@ -66,7 +70,11 @@ impl<M: OpaqueMaster> OpaqueFlashDevice<M> {
     /// * `size` - Erase block size in bytes
     pub fn set_erase_block_size(&mut self, size: u32) {
         self.erase_block_size = size;
-        self.erase_blocks = [EraseBlock::new(opcodes::SE_20, size)];
+        self.erase_blocks = [EraseBlock::with_count(
+            opcodes::SE_20,
+            size,
+            self.size.checked_div(size).unwrap_or(0),
+        )];
     }
 
     /// Get a mutable reference to the underlying opaque master

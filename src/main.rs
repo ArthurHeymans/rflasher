@@ -60,7 +60,14 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         chip: cli.chip.as_deref(),
         force: cli.force,
     };
-    let force = cli.force;
+    let mut backup = cli.recovery_backup.map(commands::unified::FileRecovery);
+    let mut policy = rflasher_core::flash::MutationPolicy {
+        allow_dangerous: cli.allow_dangerous_regions,
+        allow_full_chip: cli.allow_full_chip,
+        recovery: backup
+            .as_mut()
+            .map(|b| b as &mut dyn rflasher_core::flash::RecoveryBackup),
+    };
 
     match cli.command {
         Commands::Probe => {
@@ -106,12 +113,13 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     &mut layout_obj,
                     &region_files,
                     !no_verify,
-                    force,
+                    &mut policy,
                 )
                 .await
             } else {
                 let file = file.ok_or("Input file required")?;
-                commands::unified::run_write(handle.as_device_mut(), &file, !no_verify).await
+                commands::unified::run_write(handle.as_device_mut(), &file, !no_verify, &mut policy)
+                    .await
             }
         }
         Commands::Erase { layout } => {
@@ -124,10 +132,14 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 if !region_files.is_empty() {
                     return Err("Per-region files (NAME:FILE) make no sense for erase".into());
                 }
-                commands::unified::run_erase_with_layout(handle.as_device_mut(), &layout_obj, force)
-                    .await
+                commands::unified::run_erase_with_layout(
+                    handle.as_device_mut(),
+                    &layout_obj,
+                    &mut policy,
+                )
+                .await
             } else {
-                commands::unified::run_erase(handle.as_device_mut()).await
+                commands::unified::run_erase(handle.as_device_mut(), &mut policy).await
             }
         }
         Commands::Verify { file, layout } => {

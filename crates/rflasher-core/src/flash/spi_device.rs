@@ -157,6 +157,15 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         operations::erase_spi_range(&mut self.master, &self.ctx, addr, len).await?;
         self.check_erased_range(addr, len).await
     }
+
+    fn validate_erase_operation(&self, op: &operations::OptimalEraseOp) -> Result<()> {
+        operations::validate_spi_erase_operation(&self.master, &self.ctx, op)
+    }
+
+    async fn erase_operation(&mut self, op: &operations::OptimalEraseOp) -> Result<()> {
+        operations::erase_spi_operation(&mut self.master, &self.ctx, op).await?;
+        self.check_erased_range(op.start, op.size).await
+    }
 }
 
 impl<M: SpiMaster> SpiFlashDevice<M> {

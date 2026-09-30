@@ -120,6 +120,52 @@ pub trait FlashDevice {
     /// * `EraseError` - If the erase operation fails
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
 
+    /// Validate a planned eraser before the first destructive command.
+    fn validate_erase_operation(&self, op: &super::operations::OptimalEraseOp) -> Result<()> {
+        if self.erase_blocks().len() != 1
+            || !self.erase_blocks().contains(&op.erase_block)
+            || op.size == 0
+            || !self.is_valid_range(op.start, op.size as usize)
+        {
+            return Err(crate::Error::InvalidAlignment);
+        }
+        let end = op
+            .start
+            .checked_add(op.size)
+            .ok_or(crate::Error::AddressOutOfBounds)?;
+        if op.erase_block.is_chip_erase() {
+            if op.start != 0 || op.size != self.size() {
+                return Err(crate::Error::InvalidAlignment);
+            }
+        } else {
+            let mut addr = op.start;
+            while addr < end {
+                let size = op
+                    .erase_block
+                    .block_size_at_boundary(addr)
+                    .filter(|s| *s > 0)
+                    .ok_or(crate::Error::InvalidAlignment)?;
+                addr = addr
+                    .checked_add(size)
+                    .ok_or(crate::Error::AddressOutOfBounds)?;
+                if addr > end {
+                    return Err(crate::Error::InvalidAlignment);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Execute the exact eraser selected by a plan. The default is only valid
+    /// for devices with a single hardware geometry; SPI implementations override it.
+    async fn erase_operation(&mut self, op: &super::operations::OptimalEraseOp) -> Result<()> {
+        self.validate_erase_operation(op)?;
+        if self.erase_blocks().len() != 1 {
+            return Err(crate::Error::IoModeNotSupported);
+        }
+        self.erase(op.start, op.size).await
+    }
+
     /// Check if a range is valid for this device
     ///
     /// Uses u64 arithmetic to avoid truncation when `len > u32::MAX`.
@@ -194,9 +240,24 @@ pub trait FlashDeviceExt: FlashDevice {
         Ok(buf)
     }
 
-    /// Erase the entire flash chip
+    /// Erase the entire flash chip, enforcing safe-default policy.
+    /// Use `erase_all_with_policy` to explicitly authorize full-chip intent.
     async fn erase_all(&mut self) -> Result<()> {
-        self.erase(0, self.size()).await
+        self.erase_all_with_policy(&mut super::MutationPolicy::default())
+            .await
+    }
+
+    /// Erase the entire flash chip with independent region/full-chip acknowledgements.
+    async fn erase_all_with_policy(
+        &mut self,
+        policy: &mut super::MutationPolicy<'_>,
+    ) -> Result<()> {
+        let end = self
+            .size()
+            .checked_sub(1)
+            .ok_or(crate::Error::AddressOutOfBounds)?;
+        let region = crate::layout::Region::new("whole chip", 0, end);
+        super::unified::erase_region_with_policy(self, &region, policy).await
     }
 }
 

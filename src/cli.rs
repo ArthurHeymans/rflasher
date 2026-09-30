@@ -40,13 +40,22 @@ pub struct Cli {
     #[arg(short = 'c', long, global = true, value_name = "NAME")]
     pub chip: Option<String>,
 
-    /// Proceed despite safety refusals
-    ///
-    /// Overrides: a chip definition that contradicts the chip's own SFDP data
-    /// (size, or a larger page size), and writes or erases that include
-    /// regions marked dangerous (Intel ME, flash descriptor, PTT).
+    /// Override contradictory chip/SFDP geometry (does not authorize regions)
     #[arg(long, global = true)]
     pub force: bool,
+
+    /// Authorize modifying dangerous regions (ME/TXE/IE, descriptor, PTT)
+    #[arg(long, global = true)]
+    pub allow_dangerous_regions: bool,
+
+    /// Explicitly authorize an operation covering the whole chip
+    #[arg(long, global = true)]
+    pub allow_full_chip: bool,
+
+    /// Save a durable full-chip backup before cross-region erase/restore
+    /// (refuses to overwrite an existing file)
+    #[arg(long, global = true, value_name = "FILE")]
+    pub recovery_backup: Option<PathBuf>,
 
     /// Path to chip database directory (contains .ron files)
     /// Replaces the bundled chip database when specified.

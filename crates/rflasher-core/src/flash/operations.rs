@@ -297,7 +297,6 @@ struct EraserLayout {
 }
 
 /// Selected erase operation in the optimal erase plan
-#[cfg(feature = "alloc")]
 #[derive(Debug, Clone)]
 pub struct OptimalEraseOp {
     /// Start address of the erase block
@@ -305,7 +304,6 @@ pub struct OptimalEraseOp {
     /// Size of the erase block
     pub size: u32,
     /// The erase block definition (opcode and size)
-    #[allow(dead_code)]
     pub erase_block: EraseBlock,
 }
 
@@ -325,6 +323,8 @@ fn create_erase_layout(erase_blocks: &[EraseBlock], flash_size: u32) -> Vec<Eras
                 && !eb.is_chip_erase()
                 && eb.min_block_size() > 0
                 && eb.min_block_size() <= flash_size
+                && eb.total_size() == flash_size
+                && flash_size.is_multiple_of(eb.min_block_size())
         })
         .cloned()
         .collect();
@@ -332,6 +332,18 @@ fn create_erase_layout(erase_blocks: &[EraseBlock], flash_size: u32) -> Vec<Eras
 
     // Remove duplicates (same size, different opcode)
     sorted_erasers.dedup_by_key(|eb| eb.min_block_size());
+    // A hierarchy needs exact subdivision; otherwise upper blocks can hide
+    // trailing smaller sectors. Keep a compatible subset, never guess.
+    let mut previous = 0;
+    sorted_erasers.retain(|eb| {
+        let size = eb.min_block_size();
+        if previous == 0 || size.is_multiple_of(previous) {
+            previous = size;
+            true
+        } else {
+            false
+        }
+    });
 
     if sorted_erasers.is_empty() {
         return Vec::new();
@@ -546,6 +558,19 @@ pub fn plan_optimal_erase(
     region_end: u32,
     granularity: WriteGranularity,
 ) -> Result<Vec<OptimalEraseOp>> {
+    if flash_size == 0 || region_start > region_end || region_end >= flash_size {
+        return Err(Error::AddressOutOfBounds);
+    }
+    if let (Some(have), Some(want)) = (have, want) {
+        let region_len = (region_end - region_start + 1) as usize;
+        if have.len() != want.len()
+            || (have.len() != region_len && have.len() != flash_size as usize)
+        {
+            return Err(Error::BufferTooSmall);
+        }
+    } else if have.is_some() || want.is_some() {
+        return Err(Error::BufferTooSmall);
+    }
     let mut layouts = create_erase_layout(erase_blocks, flash_size);
 
     if layouts.is_empty() {
@@ -607,7 +632,10 @@ pub fn plan_optimal_erase(
 
     if covers_full_chip && more_than_half {
         // Find chip erase block if available
-        if let Some(chip_erase_block) = erase_blocks.iter().find(|eb| eb.is_chip_erase()) {
+        if let Some(chip_erase_block) = erase_blocks
+            .iter()
+            .find(|eb| eb.is_chip_erase() && eb.total_size() == flash_size)
+        {
             // Use chip erase instead of individual blocks
             return Ok(vec![OptimalEraseOp {
                 start: 0,
@@ -1282,26 +1310,113 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
     addr: u32,
     len: u32,
 ) -> Result<()> {
+    let block = if addr == 0 && len == ctx.chip.total_size {
+        ctx.chip
+            .erase_blocks()
+            .iter()
+            .find(|eb| eb.is_chip_erase() && eb.total_size() == len)
+            .cloned()
+            .or_else(|| select_erase_block(ctx.chip.erase_blocks(), addr, len))
+    } else {
+        select_erase_block(ctx.chip.erase_blocks(), addr, len)
+    }
+    .ok_or(Error::InvalidAlignment)?;
+    erase_spi_operation(
+        master,
+        ctx,
+        &OptimalEraseOp {
+            start: addr,
+            size: len,
+            erase_block: block,
+        },
+    )
+    .await
+}
+
+/// Check all planned-command prerequisites without issuing any SPI command.
+pub(crate) fn validate_spi_erase_operation<M: SpiMaster + ?Sized>(
+    master: &M,
+    ctx: &FlashContext,
+    op: &OptimalEraseOp,
+) -> Result<()> {
+    if op.size == 0
+        || !ctx.is_valid_range(op.start, op.size as usize)
+        || !ctx.chip.erase_blocks().contains(&op.erase_block)
+    {
+        return Err(Error::InvalidAlignment);
+    }
+    let block = &op.erase_block;
+    if block.is_chip_erase() {
+        if op.start != 0 || op.size != ctx.chip.total_size || block.total_size() != op.size {
+            return Err(Error::InvalidAlignment);
+        }
+        return if master.probe_opcode(block.opcode) {
+            Ok(())
+        } else {
+            Err(Error::OpcodeNotSupported)
+        };
+    }
+    let end = op
+        .start
+        .checked_add(op.size)
+        .ok_or(Error::AddressOutOfBounds)?;
+    let mut addr = op.start;
+    while addr < end {
+        let size = block
+            .block_size_at_boundary(addr)
+            .filter(|s| *s > 0)
+            .ok_or(Error::InvalidAlignment)?;
+        addr = addr.checked_add(size).ok_or(Error::AddressOutOfBounds)?;
+        if addr > end {
+            return Err(Error::InvalidAlignment);
+        }
+    }
+    let native = ctx.address_mode == AddressMode::FourByte
+        && block.opcode_4b.is_some_and(|opcode| {
+            master.features().contains(SpiFeatures::FOUR_BYTE_ADDR) && master.probe_opcode(opcode)
+        });
+    if !master.probe_opcode(block.opcode_for_address_width(native)) {
+        return Err(Error::OpcodeNotSupported);
+    }
+    if ctx.address_mode == AddressMode::FourByte {
+        addressing_for_4byte_operation(native, ctx.chip.features, master.features())?;
+    }
+    Ok(())
+}
+
+/// Execute exactly the validated eraser selected by the planner.
+pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    op: &OptimalEraseOp,
+) -> Result<()> {
+    validate_spi_erase_operation(master, ctx, op)?;
+    let addr = op.start;
+    let len = op.size;
+    if len == 0
+        || !ctx.is_valid_range(addr, len as usize)
+        || !ctx.chip.erase_blocks().contains(&op.erase_block)
+    {
+        return Err(Error::InvalidAlignment);
+    }
+    let block = &op.erase_block;
     // A request for the whole chip uses the addressless chip-erase opcode when
     // the chip has one. This is what the erase planner selects for a full-chip
     // erase; walking every sector instead is correct but far slower. Chips
     // without one (e.g. stacked-die parts that only offer per-die erase) fall
     // through to the addressed blocks below.
-    if addr == 0
-        && len == ctx.total_size() as u32
-        && let Some(chip_erase) = ctx
-            .chip
-            .erase_blocks()
-            .iter()
-            .find(|eb| eb.is_chip_erase() && eb.total_size() == len)
-    {
+    if block.is_chip_erase() {
+        if addr != 0 || len != ctx.chip.total_size || block.total_size() != len {
+            return Err(Error::InvalidAlignment);
+        }
+        if !master.probe_opcode(block.opcode) {
+            return Err(Error::OpcodeNotSupported);
+        }
         if ctx.chip.features.contains(Features::SST26_BPR) {
             protocol::sst26_global_unprotect(master).await?;
         }
-        return protocol::chip_erase_with_opcode(master, chip_erase.opcode).await;
+        return protocol::chip_erase_with_opcode(master, block.opcode).await;
     }
-    let block =
-        select_erase_block(ctx.chip.erase_blocks(), addr, len).ok_or(Error::InvalidAlignment)?;
     let features = ctx.chip.features;
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
     let master_features = master.features();
@@ -1310,6 +1425,9 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
             master_features.contains(SpiFeatures::FOUR_BYTE_ADDR) && master.probe_opcode(opcode)
         });
     let opcode = block.opcode_for_address_width(use_native);
+    if !master.probe_opcode(opcode) {
+        return Err(Error::OpcodeNotSupported);
+    }
     let (addressing, enter_exit_4byte) = if use_4byte {
         addressing_for_4byte_operation(use_native, features, master_features)?
     } else {
@@ -1610,6 +1728,39 @@ mod tests {
                 erases.iter().map(|(_, addr)| *addr).collect::<Vec<_>>(),
                 vec![Some(8), Some(16)]
             );
+        }
+    }
+
+    #[test]
+    fn exact_planned_opcode_survives_spi_and_hybrid_dispatch() {
+        use crate::flash::{FlashDevice, HybridFlashDevice, SpiFlashDevice};
+        use futures_lite::future::block_on;
+        for hybrid in [false, true] {
+            let mut ctx = nonuniform_context();
+            ctx.chip.erase_blocks = vec![
+                EraseBlock::with_count(0x20, 16, 3),
+                EraseBlock::new(0xc7, 48),
+            ];
+            let op = OptimalEraseOp {
+                start: 0,
+                size: 48,
+                erase_block: ctx.chip.erase_blocks[0].clone(),
+            };
+            let master = EraseMaster {
+                commands: vec![],
+                fail_erase: false,
+            };
+            let commands = if hybrid {
+                let mut device = HybridFlashDevice::new(master, ctx);
+                block_on(device.erase_operation(&op)).unwrap();
+                device.into_parts().0.commands
+            } else {
+                let mut device = SpiFlashDevice::new(master, ctx);
+                block_on(device.erase_operation(&op)).unwrap();
+                device.into_parts().0.commands
+            };
+            assert_eq!(commands.iter().filter(|(code, _)| *code == 0x20).count(), 3);
+            assert!(!commands.iter().any(|(code, _)| *code == 0xc7));
         }
     }
 
