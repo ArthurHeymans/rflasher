@@ -23,17 +23,19 @@
 //! # Example
 //!
 //! ```ignore
-//! use rflasher_core::flash::{FlashDevice, SpiFlashDevice, OpaqueFlashDevice};
+//! use rflasher_core::flash::{FlashDevice, MutationPolicy, OpaqueFlashDevice, SpiFlashDevice};
 //! use rflasher_core::flash::unified;
+//!
+//! let mut policy = MutationPolicy { allow_full_chip: true, ..Default::default() };
 //!
 //! // Using SPI programmer
 //! let ctx = flash::probe(master, &db)?;
 //! let mut device = SpiFlashDevice::new(master, ctx);
-//! unified::smart_write(&mut device, &data, &mut progress)?;
+//! unified::smart_write_with_policy(&mut device, &data, &mut progress, &mut policy)?;
 //!
 //! // Using opaque programmer  
 //! let mut device = OpaqueFlashDevice::new(master);
-//! unified::smart_write(&mut device, &data, &mut progress)?;
+//! unified::smart_write_with_policy(&mut device, &data, &mut progress, &mut policy)?;
 //! ```
 
 mod context;

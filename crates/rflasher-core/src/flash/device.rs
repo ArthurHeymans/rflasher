@@ -240,14 +240,7 @@ pub trait FlashDeviceExt: FlashDevice {
         Ok(buf)
     }
 
-    /// Erase the entire flash chip, enforcing safe-default policy.
-    /// Use `erase_all_with_policy` to explicitly authorize full-chip intent.
-    async fn erase_all(&mut self) -> Result<()> {
-        self.erase_all_with_policy(&mut super::MutationPolicy::default())
-            .await
-    }
-
-    /// Erase the entire flash chip with independent region/full-chip acknowledgements.
+    /// Erase the entire flash chip. `policy.allow_full_chip` must be set.
     async fn erase_all_with_policy(
         &mut self,
         policy: &mut super::MutationPolicy<'_>,

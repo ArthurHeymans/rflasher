@@ -19,7 +19,28 @@ use crate::flash::operations::{
 };
 use crate::layout::{Layout, LayoutError, Region};
 
-/// Full-chip write with explicit mutation authorizations.
+/// Perform a smart write operation that minimizes flash operations
+///
+/// This function compares the current flash contents with the desired contents
+/// and only erases/writes the regions that actually need to change.
+///
+/// # Algorithm
+/// 1. Read current flash contents
+/// 2. Use optimal erase algorithm to plan erase operations (minimizes operations
+///    by using larger erase blocks when >50% of sub-blocks need erasing)
+/// 3. Erase only the blocks that need erasing
+/// 4. Write only the bytes that are different
+///
+/// # Arguments
+/// * `device` - Flash device to write to
+/// * `data` - Desired flash contents (must match device size)
+/// * `progress` - Progress callback
+/// * `policy` - Mutation authorizations
+///
+/// # Returns
+/// Statistics about the operations performed
+///
+/// This always covers the whole chip, so `policy.allow_full_chip` must be set.
 pub async fn smart_write_with_policy<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     data: &[u8],
@@ -193,39 +214,6 @@ pub async fn read_with_progress<D: FlashDevice, P: WriteProgress>(
     }
 
     Ok(())
-}
-
-/// Perform a smart write operation that minimizes flash operations
-///
-/// This function compares the current flash contents with the desired contents
-/// and only erases/writes the regions that actually need to change.
-///
-/// # Algorithm
-/// 1. Read current flash contents
-/// 2. Use optimal erase algorithm to plan erase operations (minimizes operations
-///    by using larger erase blocks when >50% of sub-blocks need erasing)
-/// 3. Erase only the blocks that need erasing
-/// 4. Write only the bytes that are different
-///
-/// # Arguments
-/// * `device` - Flash device to write to
-/// * `data` - Desired flash contents (must match device size)
-/// * `progress` - Progress callback
-///
-/// # Returns
-/// Statistics about the operations performed
-pub async fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
-    device: &mut D,
-    data: &[u8],
-    progress: &mut P,
-) -> Result<WriteStats> {
-    let flash_size = device.size();
-
-    if data.len() != flash_size as usize {
-        return Err(Error::BufferTooSmall);
-    }
-
-    smart_write_with_policy(device, data, progress, &mut MutationPolicy::default()).await
 }
 
 /// Perform a smart write operation for a specific region
