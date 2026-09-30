@@ -9,7 +9,7 @@
             name: "P25Q05H",
             device_id: 0x6010,
             total_size: KiB(64),
-            features: (otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 256)]),
@@ -24,7 +24,7 @@
             name: "P25Q06H",
             device_id: 0x4010,
             total_size: KiB(64),
-            features: (otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 256)]),
@@ -39,7 +39,7 @@
             name: "P25Q10H",
             device_id: 0x6011,
             total_size: KiB(128),
-            features: (otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 512)]),
@@ -54,7 +54,7 @@
             name: "P25Q11H",
             device_id: 0x4011,
             total_size: KiB(128),
-            features: (otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 512)]),
@@ -69,7 +69,7 @@
             name: "P25Q20H",
             device_id: 0x6012,
             total_size: KiB(256),
-            features: (otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 1024)]),
@@ -84,7 +84,7 @@
             name: "P25Q21H",
             device_id: 0x4012,
             total_size: KiB(256),
-            features: (otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 1024)]),
@@ -99,7 +99,7 @@
             name: "P25Q40H",
             device_id: 0x6013,
             total_size: KiB(512),
-            features: (otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 2048)]),
@@ -114,7 +114,7 @@
             name: "P25Q40SH",
             device_id: 0x6013,
             total_size: KiB(512),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 2048)]),
@@ -129,7 +129,7 @@
             name: "P25Q80H",
             device_id: 0x6014,
             total_size: MiB(1),
-            features: (otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 4096)]),
@@ -144,7 +144,7 @@
             name: "P25Q80SH",
             device_id: 0x6014,
             total_size: MiB(1),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 4096)]),
@@ -159,7 +159,7 @@
             name: "P25Q16H",
             device_id: 0x6015,
             total_size: MiB(2),
-            features: (otp: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 8192)]),
@@ -174,7 +174,7 @@
             name: "P25Q16SH",
             device_id: 0x6015,
             total_size: MiB(2),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 8192)]),
@@ -189,7 +189,7 @@
             name: "P25Q32H",
             device_id: 0x6016,
             total_size: MiB(4),
-            features: (otp: true, qpi: true),
+            features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 16384)]),
@@ -204,7 +204,7 @@
             name: "P25Q32SH",
             device_id: 0x6016,
             total_size: MiB(4),
-            features: (otp: true, qpi: true),
+            features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 16384)]),
@@ -219,7 +219,7 @@
             name: "P25Q64H",
             device_id: 0x6017,
             total_size: MiB(8),
-            features: (otp: true, qpi: true),
+            features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 32768)]),
@@ -234,7 +234,7 @@
             name: "P25Q64SH",
             device_id: 0x6017,
             total_size: MiB(8),
-            features: (otp: true, qpi: true),
+            features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 32768)]),
@@ -249,7 +249,7 @@
             name: "P25Q128H",
             device_id: 0x6018,
             total_size: MiB(16),
-            features: (otp: true, qpi: true),
+            features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x81, regions: [(size: B(256), count: 65536)]),
@@ -264,7 +264,7 @@
             name: "PY25Q40HB",
             device_id: 0x2013,
             total_size: KiB(512),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -278,7 +278,7 @@
             name: "PY25Q80HB",
             device_id: 0x2014,
             total_size: MiB(1),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -292,7 +292,7 @@
             name: "PY25Q16HB",
             device_id: 0x2015,
             total_size: MiB(2),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -306,7 +306,7 @@
             name: "PY25Q32HB",
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -320,7 +320,7 @@
             name: "PY25Q64HA",
             device_id: 0x2017,
             total_size: MiB(8),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -334,7 +334,7 @@
             name: "PY25F64HA",
             device_id: 0x2317,
             total_size: MiB(8),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -348,7 +348,7 @@
             name: "PY25Q128HA",
             device_id: 0x2018,
             total_size: MiB(16),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -362,7 +362,7 @@
             name: "PY25F128HA/PY25R128HA",
             device_id: 0x2318,
             total_size: MiB(16),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -376,7 +376,7 @@
             name: "PY25Q256HB",
             device_id: 0x2019,
             total_size: MiB(32),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 8192)]),
@@ -390,7 +390,7 @@
             name: "PY25F256HB",
             device_id: 0x2319,
             total_size: MiB(32),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 8192)]),
@@ -404,7 +404,7 @@
             name: "PY25Q512HB",
             device_id: 0x201A,
             total_size: MiB(64),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 16384)]),
@@ -418,7 +418,7 @@
             name: "PY25F512HB",
             device_id: 0x231A,
             total_size: MiB(64),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 16384)]),
@@ -432,7 +432,7 @@
             name: "PY25Q01GHB",
             device_id: 0x201B,
             total_size: MiB(128),
-            features: (otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
+            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 32768)]),

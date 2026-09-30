@@ -403,7 +403,7 @@
             name: "W25Q16JV_M",
             device_id: 0x7015,
             total_size: MiB(2),
-            features: (otp: true, qpi: true, status_reg_2: true),
+            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
