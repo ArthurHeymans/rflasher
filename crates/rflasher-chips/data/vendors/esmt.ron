@@ -13,7 +13,7 @@
             // Byte program (0x02) or AAI word program (0xAD), no page program;
             // WRSR accepts EWSR or WREN.
             write_granularity: Byte,
-            features: (wrsr_wren: true, wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -27,7 +27,7 @@
             device_id: 0x2014,
             total_size: MiB(1),
             write_granularity: Byte,
-            features: (wrsr_wren: true, wrsr_ewsr: true),
+            features: (wrsr_wren: true, wrsr_persistent_ewsr: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -43,7 +43,7 @@
             // Byte program (0x02) or AAI word program (0xAD), no page program;
             // WRSR accepts EWSR or WREN.
             write_granularity: Byte,
-            features: (wrsr_wren: true, wrsr_ewsr: true, aai_word: true),
+            features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -85,7 +85,7 @@
             // status-register/OTP capabilities differ and probing is ambiguous.
             device_id: 0x2016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, wrsr_ewsr: true, otp: true),
+            features: (wrsr_wren: true, wrsr_persistent_ewsr: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
