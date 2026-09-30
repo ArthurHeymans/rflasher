@@ -106,7 +106,7 @@ If the selected definition contradicts the chip's SFDP data on size, or on a pag
 Authorizations are independent:
 
 - `--allow-full-chip` acknowledges an operation covering the entire flash.
-- `--allow-dangerous-regions` acknowledges modifying ME/TXE/IE, the flash descriptor, or PTT. The shared core preflight detects IFD regions on the device even without `--ifd` or a supplied layout. Prefer selecting only BIOS instead.
+- `--allow-dangerous-regions` acknowledges modifying ME/TXE/IE, the flash descriptor, or PTT. The shared core preflight detects IFD regions on the device even without `--ifd` or a supplied layout; if the on-device descriptor is unusable (damaged, or describing a second chip), only this flag lets the operation proceed. Prefer selecting only BIOS instead.
 - `--force` overrides contradictory chip/SFDP size or page geometry; it does **not** authorize dangerous regions or execute disputed erase opcodes. Opaque hwseq/MTD devices reject irrelevant `--chip`/`--force` options.
 
 Erase blocks can straddle selected region boundaries. Such operations require `--recovery-backup FILE`, which writes and synchronizes a full-device recovery image before any mutation and refuses to overwrite an existing file. Neighbor restoration is verified; keep the image after any failure. To recover, use it as the input image with the required full-chip/dangerous-region acknowledgements. Library users supply a durable `RecoveryBackup` through `MutationPolicy`; RAM alone is not a recovery backup.

@@ -34,11 +34,17 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         .validate(device.size())
         .map_err(|_| Error::LayoutError)?;
     let regions: alloc::vec::Vec<_> = layout.included_regions().collect();
-    if regions
+    if let Some(r) = regions.iter().find(|r| r.readonly) {
+        return Err(refuse(format_args!("region '{}' is read-only", r.name)));
+    }
+    if let Some(r) = regions
         .iter()
-        .any(|r| r.readonly || (r.dangerous && !policy.allow_dangerous))
+        .find(|r| r.dangerous && !policy.allow_dangerous)
     {
-        return Err(Error::RegionProtected);
+        return Err(refuse(format_args!(
+            "region '{}' is dangerous; {}",
+            r.name, DANGEROUS_HINT
+        )));
     }
     if regions
         .iter()
@@ -47,8 +53,10 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         == device.size() as u64
         && !policy.allow_full_chip
     {
-        log::error!("Full-chip mutation requires explicit authorization");
-        return Err(Error::RegionProtected);
+        return Err(refuse(format_args!(
+            "the operation covers the whole chip; authorize it explicitly \
+             (--allow-full-chip)"
+        )));
     }
 
     // Identify the descriptor on the device itself, not just in a caller's
@@ -58,18 +66,35 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         let mut header = vec![0; (device.size() as usize).min(4096)];
         device.read(0, &mut header).await?;
         if crate::layout::has_ifd(&header) {
-            let actual = crate::layout::parse_ifd(&header).map_err(|_| Error::LayoutError)?;
-            actual
-                .validate(device.size())
-                .map_err(|_| Error::LayoutError)?;
-            if !policy.allow_dangerous
-                && actual.regions.iter().any(|protected| {
-                    protected.dangerous && regions.iter().any(|r| overlaps(r, protected))
-                })
+            match crate::layout::parse_ifd(&header)
+                .and_then(|ifd| ifd.validate(device.size()).map(|()| ifd))
             {
-                return Err(Error::RegionProtected);
+                Ok(actual) => {
+                    if !policy.allow_dangerous
+                        && let Some(p) = actual.regions.iter().find(|p| {
+                            p.dangerous && regions.iter().any(|r| overlaps(r, p))
+                        })
+                    {
+                        return Err(refuse(format_args!(
+                            "the flash descriptor on the chip marks '{}' as dangerous; {}",
+                            p.name, DANGEROUS_HINT
+                        )));
+                    }
+                    protected_regions.extend(actual.regions);
+                }
+                // A damaged descriptor must not prevent reflashing the chip,
+                // but without it dangerous regions cannot be located.
+                Err(e) if policy.allow_dangerous => {
+                    log::warn!("Ignoring unusable flash descriptor on the chip: {:?}", e);
+                }
+                Err(e) => {
+                    return Err(refuse(format_args!(
+                        "the chip has an unusable flash descriptor ({:?}), so dangerous \
+                         regions cannot be located; {}",
+                        e, DANGEROUS_HINT
+                    )));
+                }
             }
-            protected_regions.extend(actual.regions);
         }
     }
 
@@ -87,21 +112,22 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
                 cross_boundary = true;
                 // An erase/restore still temporarily destroys neighboring
                 // protected data. Its footprint needs the same authorization.
-                if !policy.allow_dangerous
-                    && protected_regions.iter().any(|r| {
-                        r.dangerous
-                            && (r.start as u64) < op.start as u64 + op.size as u64
-                            && r.end >= op.start
-                    })
-                {
-                    return Err(Error::RegionProtected);
+                let touched = |r: &&Region| {
+                    (r.start as u64) < op.start as u64 + op.size as u64 && r.end >= op.start
+                };
+                if let Some(r) = protected_regions.iter().filter(touched).find(|r| r.readonly) {
+                    return Err(refuse(format_args!(
+                        "erasing {:#x}+{:#x} would temporarily erase read-only region '{}'",
+                        op.start, op.size, r.name
+                    )));
                 }
-                if protected_regions.iter().any(|r| {
-                    r.readonly
-                        && (r.start as u64) < op.start as u64 + op.size as u64
-                        && r.end >= op.start
-                }) {
-                    return Err(Error::RegionProtected);
+                if !policy.allow_dangerous
+                    && let Some(r) = protected_regions.iter().filter(touched).find(|r| r.dangerous)
+                {
+                    return Err(refuse(format_args!(
+                        "erasing {:#x}+{:#x} would temporarily erase dangerous region '{}'; {}",
+                        op.start, op.size, r.name, DANGEROUS_HINT
+                    )));
                 }
             }
         }
@@ -118,6 +144,15 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         sink.persist(&image)?;
     }
     Ok(())
+}
+
+const DANGEROUS_HINT: &str =
+    "exclude it or authorize dangerous regions (--allow-dangerous-regions)";
+
+/// Log why a mutation is refused; the error value alone cannot say.
+fn refuse(reason: core::fmt::Arguments<'_>) -> Error {
+    log::error!("Refusing to modify flash: {}", reason);
+    Error::RegionProtected
 }
 
 fn overlaps(a: &Region, b: &Region) -> bool {

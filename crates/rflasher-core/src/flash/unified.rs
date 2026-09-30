@@ -855,6 +855,41 @@ mod tests {
     }
 
     #[test]
+    fn unusable_on_device_ifd_needs_dangerous_authorization_but_not_more() {
+        // A descriptor whose BIOS region lies beyond this chip, as on a
+        // damaged image or on the first chip of a two-chip board.
+        let mut flash = FakeFlash::new(16384);
+        flash.bytes[..4].copy_from_slice(&0x0ff0_a55au32.to_le_bytes());
+        flash.bytes[4..8].copy_from_slice(&((2u32 << 24) | (4 << 16)).to_le_bytes());
+        flash.bytes[0x44..0x48].copy_from_slice(&((0x7ffu32 << 16) | 0x10).to_le_bytes());
+        let image = vec![0xff; 16384];
+        let mut policy = MutationPolicy {
+            allow_full_chip: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            block_on(smart_write_with_policy(
+                &mut flash,
+                &image,
+                &mut NoProgress,
+                &mut policy
+            ))
+            .unwrap_err(),
+            Error::RegionProtected
+        );
+        assert_eq!(flash.mutations, 0);
+        policy.allow_dangerous = true;
+        block_on(smart_write_with_policy(
+            &mut flash,
+            &image,
+            &mut NoProgress,
+            &mut policy,
+        ))
+        .unwrap();
+        assert_eq!(flash.bytes, image);
+    }
+
+    #[test]
     fn missing_or_failed_recovery_is_refused_before_mutation() {
         let mut flash = FakeFlash::new(64);
         let region = Region::new("partial", 4, 11);
