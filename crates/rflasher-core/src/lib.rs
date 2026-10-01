@@ -49,4 +49,4 @@ pub mod sfdp;
 pub mod spi;
 pub mod wp;
 
-pub use error::{Error, Result};
+pub use error::{Error, Refusal, Result};

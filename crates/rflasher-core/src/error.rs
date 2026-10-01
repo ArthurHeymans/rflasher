@@ -24,6 +24,24 @@ pub enum EraseFailure {
     Unknown,
 }
 
+/// Why the mutation preflight refused to touch the flash
+///
+/// Each reason names the authorization that is missing; the affected region
+/// is logged when the refusal happens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The operation would modify a read-only region (no override exists)
+    ReadOnlyRegion,
+    /// The operation would modify a dangerous region (ME/TXE/IE, descriptor,
+    /// PTT) without authorization
+    DangerousRegion,
+    /// The operation covers the whole chip without authorization
+    FullChip,
+    /// The flash descriptor on the chip is unusable, so dangerous regions
+    /// cannot be located without authorizing dangerous-region changes
+    UnusableDescriptor,
+}
+
 /// Core error type - no_std compatible, Copy for efficiency
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -79,6 +97,8 @@ pub enum Error {
     WriteProtected,
     /// Specific region is protected
     RegionProtected,
+    /// The mutation preflight refused the operation
+    MutationRefused(Refusal),
 
     // Programmer errors
     /// Programmer is not ready (not initialized or busy)
@@ -120,6 +140,23 @@ impl fmt::Display for EraseFailure {
     }
 }
 
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::ReadOnlyRegion => "it would modify a read-only region",
+            Self::DangerousRegion => {
+                "it would modify a dangerous region (ME/TXE/IE, descriptor or PTT), \
+                 which was not authorized"
+            }
+            Self::FullChip => "it covers the whole chip, which was not authorized",
+            Self::UnusableDescriptor => {
+                "the flash descriptor on the chip is unusable, so dangerous regions cannot \
+                 be located unless dangerous-region changes are authorized"
+            }
+        })
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -150,6 +187,7 @@ impl fmt::Display for Error {
             Self::BufferTooSmall => write!(f, "buffer too small"),
             Self::WriteProtected => write!(f, "flash chip is write protected"),
             Self::RegionProtected => write!(f, "region is protected"),
+            Self::MutationRefused(refusal) => write!(f, "refusing to modify flash: {refusal}"),
             Self::ProgrammerNotReady => write!(f, "programmer not ready"),
             Self::ProgrammerError => write!(f, "programmer error"),
             Self::IoModeNotSupported => write!(f, "I/O mode not supported by programmer"),

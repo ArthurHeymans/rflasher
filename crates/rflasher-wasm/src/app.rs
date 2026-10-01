@@ -950,26 +950,10 @@ impl RflasherApp {
                                 .push(AsyncMessage::ProbeComplete(Box::new(result)));
                         }
                         Err(e) => {
-                            let message = match e {
-                                rflasher_core::Error::ChipAmbiguous => {
-                                    "Several chip definitions match this chip's JEDEC ID and \
-                                     differ in how they erase or program. Select the exact \
-                                     part in the chip selector, then probe again."
-                                        .to_string()
-                                }
-                                rflasher_core::Error::ChipMismatch => {
-                                    "The chip definition contradicts the chip's own SFDP data \
-                                     (size or page size), so operating on it could corrupt \
-                                     data. Select the correct chip or explicitly acknowledge \
-                                     the separate SFDP override before probing again."
-                                        .to_string()
-                                }
-                                e => format!("{:?}", e),
-                            };
                             shared
                                 .borrow_mut()
                                 .messages
-                                .push(AsyncMessage::ProbeFailed(message));
+                                .push(AsyncMessage::ProbeFailed(error_message(e)));
                         }
                     }
                 });
@@ -1069,7 +1053,7 @@ impl RflasherApp {
                             shared
                                 .borrow_mut()
                                 .messages
-                                .push(AsyncMessage::ReadFailed(format!("{:?}", e)));
+                                .push(AsyncMessage::ReadFailed(error_message(e)));
                         }
                     }
                 });
@@ -1154,7 +1138,7 @@ impl RflasherApp {
                             shared
                                 .borrow_mut()
                                 .messages
-                                .push(AsyncMessage::WriteFailed(format!("{:?}", e)));
+                                .push(AsyncMessage::WriteFailed(error_message(e)));
                         }
                     }
                 });
@@ -1221,7 +1205,7 @@ impl RflasherApp {
                             shared
                                 .borrow_mut()
                                 .messages
-                                .push(AsyncMessage::EraseFailed(format!("{:?}", e)));
+                                .push(AsyncMessage::EraseFailed(error_message(e)));
                         }
                     }
                 });
@@ -1375,6 +1359,32 @@ impl RflasherApp {
 
 /// Placeholder shown for an unset option that falls back to the backend default.
 const UNSET_LABEL: &str = "(default)";
+
+/// Explain a core error, pointing at the web UI control that resolves it
+fn error_message(error: rflasher_core::Error) -> String {
+    use rflasher_core::{Error, Refusal};
+    match error {
+        Error::ChipAmbiguous => "Several chip definitions match this chip's JEDEC ID and \
+                                 differ in how they erase or program. Select the exact part \
+                                 in the chip selector, then probe again."
+            .to_string(),
+        Error::ChipMismatch => "The chip definition contradicts the chip's own SFDP data (size \
+                                or page size), so operating on it could corrupt data. Select \
+                                the correct chip or explicitly acknowledge the separate SFDP \
+                                override before probing again."
+            .to_string(),
+        Error::MutationRefused(Refusal::FullChip) => {
+            format!("{error}. Tick \"Authorize one full-chip mutation\" to proceed.")
+        }
+        Error::MutationRefused(Refusal::DangerousRegion | Refusal::UnusableDescriptor) => {
+            format!(
+                "{error}. Tick \"Authorize ME/TXE/IE, descriptor and PTT changes\" only if \
+                 you are sure; the browser console names the region."
+            )
+        }
+        error => error.to_string(),
+    }
+}
 
 /// Render one form field as a `label | widget` grid row, choosing the widget
 /// from the option kind. The value stays a raw string so the backend parser

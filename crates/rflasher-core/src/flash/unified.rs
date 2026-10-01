@@ -835,14 +835,14 @@ mod tests {
                 &mut NoProgress,
                 &mut whole
             )),
-            Err(Error::RegionProtected)
+            Err(Error::MutationRefused(crate::Refusal::DangerousRegion))
         ));
         assert_eq!(
             block_on(erase_region(
                 &mut flash,
                 &Region::new("innocent", 4096, 8191)
             )),
-            Err(Error::RegionProtected)
+            Err(Error::MutationRefused(crate::Refusal::DangerousRegion))
         );
         assert_eq!(flash.mutations, 0);
         block_on(erase_region(&mut flash, &Region::new("bios", 8192, 16383))).unwrap();
@@ -870,7 +870,7 @@ mod tests {
                 &mut policy
             ))
             .unwrap_err(),
-            Error::RegionProtected
+            Error::MutationRefused(crate::Refusal::UnusableDescriptor)
         );
         assert_eq!(flash.mutations, 0);
         policy.allow_dangerous = true;
@@ -930,7 +930,7 @@ mod tests {
                     ..Default::default()
                 }
             )),
-            Err(Error::RegionProtected)
+            Err(Error::MutationRefused(crate::Refusal::DangerousRegion))
         );
         assert_eq!(
             block_on(erase_region_with_policy(
@@ -941,7 +941,7 @@ mod tests {
                     ..Default::default()
                 }
             )),
-            Err(Error::RegionProtected)
+            Err(Error::MutationRefused(crate::Refusal::FullChip))
         );
         assert_eq!(flash.mutations, 0);
     }
@@ -1129,12 +1129,12 @@ mod tests {
                 &[0xff; 64],
                 &mut NoProgress
             )),
-            Err(Error::RegionProtected)
+            Err(Error::MutationRefused(crate::Refusal::ReadOnlyRegion))
         ));
         assert_eq!(device.mutations, 0);
         assert_eq!(
             block_on(erase_by_layout(&mut device, &layout)),
-            Err(Error::RegionProtected)
+            Err(Error::MutationRefused(crate::Refusal::ReadOnlyRegion))
         );
         assert_eq!(device.mutations, 0);
         assert!(device.bytes.iter().all(|byte| *byte == 0));

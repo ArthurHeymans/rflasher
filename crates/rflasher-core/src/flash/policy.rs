@@ -2,7 +2,7 @@
 
 use super::{FlashDevice, operations::plan_optimal_erase_region};
 use crate::layout::{Layout, Region};
-use crate::{Error, Result};
+use crate::{Error, Refusal, Result};
 use alloc::vec;
 
 /// Store a full-device image before the first mutation, so an interrupted
@@ -36,16 +36,19 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         .map_err(|_| Error::LayoutError)?;
     let regions: alloc::vec::Vec<_> = layout.included_regions().collect();
     if let Some(r) = regions.iter().find(|r| r.readonly) {
-        return Err(refuse(format_args!("region '{}' is read-only", r.name)));
+        return Err(refuse(
+            Refusal::ReadOnlyRegion,
+            format_args!("region '{}' is read-only", r.name),
+        ));
     }
     if let Some(r) = regions
         .iter()
         .find(|r| r.dangerous && !policy.allow_dangerous)
     {
-        return Err(refuse(format_args!(
-            "region '{}' is dangerous; {}",
-            r.name, DANGEROUS_HINT
-        )));
+        return Err(refuse(
+            Refusal::DangerousRegion,
+            format_args!("region '{}' is dangerous; {}", r.name, DANGEROUS_HINT),
+        ));
     }
     if regions
         .iter()
@@ -54,10 +57,13 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         == device.size() as u64
         && !policy.allow_full_chip
     {
-        return Err(refuse(format_args!(
-            "the operation covers the whole chip; authorize it explicitly \
-             (--allow-full-chip)"
-        )));
+        return Err(refuse(
+            Refusal::FullChip,
+            format_args!(
+                "the operation covers the whole chip; authorize it explicitly \
+                 (--allow-full-chip)"
+            ),
+        ));
     }
 
     // Identify the descriptor on the device itself, not just in a caller's
@@ -77,10 +83,13 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
                             .iter()
                             .find(|p| p.dangerous && regions.iter().any(|r| overlaps(r, p)))
                     {
-                        return Err(refuse(format_args!(
-                            "the flash descriptor on the chip marks '{}' as dangerous; {}",
-                            p.name, DANGEROUS_HINT
-                        )));
+                        return Err(refuse(
+                            Refusal::DangerousRegion,
+                            format_args!(
+                                "the flash descriptor on the chip marks '{}' as dangerous; {}",
+                                p.name, DANGEROUS_HINT
+                            ),
+                        ));
                     }
                     protected_regions.extend(actual.regions);
                 }
@@ -90,11 +99,14 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
                     log::warn!("Ignoring unusable flash descriptor on the chip: {:?}", e);
                 }
                 Err(e) => {
-                    return Err(refuse(format_args!(
-                        "the chip has an unusable flash descriptor ({:?}), so dangerous \
-                         regions cannot be located; {}",
-                        e, DANGEROUS_HINT
-                    )));
+                    return Err(refuse(
+                        Refusal::UnusableDescriptor,
+                        format_args!(
+                            "the chip has an unusable flash descriptor ({:?}), so dangerous \
+                             regions cannot be located; {}",
+                            e, DANGEROUS_HINT
+                        ),
+                    ));
                 }
             }
         }
@@ -120,10 +132,13 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
                     .filter(touched)
                     .find(|r| r.readonly)
                 {
-                    return Err(refuse(format_args!(
-                        "erasing {:#x}+{:#x} would temporarily erase read-only region '{}'",
-                        op.start, op.size, r.name
-                    )));
+                    return Err(refuse(
+                        Refusal::ReadOnlyRegion,
+                        format_args!(
+                            "erasing {:#x}+{:#x} would temporarily erase read-only region '{}'",
+                            op.start, op.size, r.name
+                        ),
+                    ));
                 }
                 if !policy.allow_dangerous
                     && let Some(r) = protected_regions
@@ -131,10 +146,13 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
                         .filter(touched)
                         .find(|r| r.dangerous)
                 {
-                    return Err(refuse(format_args!(
-                        "erasing {:#x}+{:#x} would temporarily erase dangerous region '{}'; {}",
-                        op.start, op.size, r.name, DANGEROUS_HINT
-                    )));
+                    return Err(refuse(
+                        Refusal::DangerousRegion,
+                        format_args!(
+                            "erasing {:#x}+{:#x} would temporarily erase dangerous region '{}'; {}",
+                            op.start, op.size, r.name, DANGEROUS_HINT
+                        ),
+                    ));
                 }
             }
         }
@@ -152,10 +170,11 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
 const DANGEROUS_HINT: &str =
     "exclude it or authorize dangerous regions (--allow-dangerous-regions)";
 
-/// Log why a mutation is refused; the error value alone cannot say.
-fn refuse(reason: core::fmt::Arguments<'_>) -> Error {
-    log::error!("Refusing to modify flash: {}", reason);
-    Error::RegionProtected
+/// Log the details of a refusal (region names, addresses) and return the
+/// error naming the missing authorization.
+fn refuse(refusal: Refusal, details: core::fmt::Arguments<'_>) -> Error {
+    log::error!("Refusing to modify flash: {}", details);
+    Error::MutationRefused(refusal)
 }
 
 fn overlaps(a: &Region, b: &Region) -> bool {
