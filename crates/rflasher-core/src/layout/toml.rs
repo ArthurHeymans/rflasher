@@ -25,7 +25,7 @@ use std::path::Path;
 use std::string::{String, ToString};
 use std::vec::Vec;
 
-use super::{Layout, LayoutError, LayoutSource, Region};
+use super::{Layout, LayoutError, LayoutSource, Region, parse_size};
 
 /// TOML layout file structure
 #[derive(Debug, serde::Deserialize)]
@@ -85,9 +85,6 @@ fn parse_number(s: &str) -> Result<u32, String> {
         s.parse().map_err(|e| format!("invalid number: {}", e))
     }
 }
-
-/// Parse a size string like "16 MiB" or "4096"
-use super::parse_size;
 
 impl Layout {
     /// Load a layout from a TOML file

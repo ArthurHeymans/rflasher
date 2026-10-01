@@ -1,6 +1,6 @@
 //! Layout command implementations
 
-use rflasher_core::layout::{Layout, LayoutSource, has_fmap, has_ifd};
+use rflasher_core::layout::{Layout, LayoutSource, has_fmap, has_ifd, parse_size};
 use std::fs;
 use std::path::Path;
 
@@ -78,7 +78,10 @@ pub fn cmd_fmap(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::
 
 /// Create a new layout file template
 pub fn cmd_create(output: &Path, size: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let chip_size = parse_size(size)?;
+    let chip_size = parse_size(size).map_err(|e| format!("{e}: {size:?}"))?;
+    if chip_size == 0 {
+        return Err("chip size must not be zero".into());
+    }
 
     let mut layout = Layout::new();
     layout.name = Some("New Layout".to_string());
@@ -95,9 +98,6 @@ pub fn cmd_create(output: &Path, size: &str) -> Result<(), Box<dyn std::error::E
 
     Ok(())
 }
-
-/// Parse a size string like "16 MiB" or "0x1000000"
-use rflasher_core::layout::parse_size;
 
 /// Print layout information
 pub fn print_layout(layout: &Layout) {
