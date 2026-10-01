@@ -245,6 +245,9 @@
             features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
+                // Sector erase (0x20) is 64 KiB on this early part, unlike its
+                // successors with the same JEDEC ID.
+                (opcode: 0x20, regions: [(size: KiB(64), count: 128)]),
                 (opcode: 0xD8, regions: [(size: KiB(64), count: 128)]),
                 (opcode: 0x60, regions: [(size: MiB(8), count: 1)]),
                 (opcode: 0xC7, regions: [(size: MiB(8), count: 1)]),
