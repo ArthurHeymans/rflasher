@@ -34,9 +34,9 @@ pub struct Cli {
     ///
     /// Needed when several definitions share the probed JEDEC ID and differ in
     /// how they erase or program (the error lists the candidates). Matching
-    /// ignores case and understands the database's name patterns, so the part
+    /// understands the database's flashprog-style name patterns, so the part
     /// number printed on the chip works: "A/B" alternatives, optional "(B)"
-    /// suffixes and "." wildcards, as in flashprog.
+    /// suffixes and "." wildcards. Unlike flashprog, case is ignored.
     #[arg(short = 'c', long, global = true, value_name = "NAME")]
     pub chip: Option<String>,
 
