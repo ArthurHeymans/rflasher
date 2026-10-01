@@ -1127,6 +1127,21 @@ where
             }
         }
     }
+
+    // Like flashprog, leave out erasers this programmer cannot issue (e.g. a
+    // locked Intel opcode menu without chip erase), so that erases are
+    // planned with smaller ones it can send instead of being refused.
+    let (features, four_byte) = (result.chip.features, result.chip.requires_4byte_addr());
+    result.chip.erase_blocks.retain(|block| {
+        let usable = check_spi_eraser(&*master, features, four_byte, block).is_ok();
+        if !usable {
+            log::info!(
+                "Programmer cannot send erase opcode {:#04x}; not using it",
+                block.opcode
+            );
+        }
+        usable
+    });
     Ok(result)
 }
 
@@ -1372,11 +1387,7 @@ pub(crate) fn validate_spi_erase_operation<M: SpiMaster + ?Sized>(
         if op.start != 0 || op.size != ctx.chip.total_size || block.total_size() != op.size {
             return Err(Error::InvalidAlignment);
         }
-        return if master.probe_opcode(block.opcode) {
-            Ok(())
-        } else {
-            Err(Error::OpcodeNotSupported)
-        };
+        return check_spi_eraser(master, ctx.chip.features, false, block);
     }
     let end = op
         .start
@@ -1393,15 +1404,32 @@ pub(crate) fn validate_spi_erase_operation<M: SpiMaster + ?Sized>(
             return Err(Error::InvalidAlignment);
         }
     }
-    let native = ctx.address_mode == AddressMode::FourByte
+    let four_byte = ctx.address_mode == AddressMode::FourByte;
+    check_spi_eraser(master, ctx.chip.features, four_byte, block)
+}
+
+/// Check that `master` can issue `block`.
+///
+/// Some programmers only send an allowed set of opcodes (e.g. Intel software
+/// sequencing with a locked opcode menu). With 4-byte addressing a native
+/// opcode is preferred when the programmer can send it; otherwise the
+/// three-byte opcode needs a usable 4-byte addressing procedure.
+fn check_spi_eraser<M: SpiMaster + ?Sized>(
+    master: &M,
+    chip_features: Features,
+    four_byte: bool,
+    block: &EraseBlock,
+) -> Result<()> {
+    let four_byte = four_byte && !block.is_chip_erase();
+    let native = four_byte
         && block.opcode_4b.is_some_and(|opcode| {
             master.features().contains(SpiFeatures::FOUR_BYTE_ADDR) && master.probe_opcode(opcode)
         });
     if !master.probe_opcode(block.opcode_for_address_width(native)) {
         return Err(Error::OpcodeNotSupported);
     }
-    if ctx.address_mode == AddressMode::FourByte {
-        addressing_for_4byte_operation(native, ctx.chip.features, master.features())?;
+    if four_byte {
+        addressing_for_4byte_operation(native, chip_features, master.features())?;
     }
     Ok(())
 }

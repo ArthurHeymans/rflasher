@@ -11,7 +11,8 @@
 //! - data outside the region survives the erase-restore dance;
 //! - 4-byte addressing reaches beyond 16 MiB and leaves the chip in 3-byte
 //!   mode afterwards;
-//! - a protected chip is reported instead of pretending to have erased.
+//! - a protected chip is reported instead of pretending to have erased;
+//! - erasers the programmer cannot send are planned around.
 
 #![cfg(feature = "dummy")]
 
@@ -270,4 +271,128 @@ fn erase_of_a_protected_chip_is_reported() {
         );
     }
     assert!(device.master().data().iter().all(|&b| b == 0x00));
+}
+
+/// A programmer that, like Intel software sequencing with a locked opcode
+/// menu, cannot send some opcodes. It records the erase opcodes it does send.
+struct RestrictedMaster {
+    chip: DummyFlash,
+    refused: &'static [u8],
+    erases: Vec<u8>,
+}
+
+impl rflasher_core::programmer::SpiMaster for RestrictedMaster {
+    fn features(&self) -> rflasher_core::programmer::SpiFeatures {
+        self.chip.features()
+    }
+    fn max_read_len(&self) -> usize {
+        self.chip.max_read_len()
+    }
+    fn max_write_len(&self) -> usize {
+        self.chip.max_write_len()
+    }
+    async fn execute(
+        &mut self,
+        cmd: &mut rflasher_core::spi::SpiCommand<'_>,
+    ) -> rflasher_core::Result<()> {
+        if self.refused.contains(&cmd.opcode) {
+            return Err(Error::OpcodeNotSupported);
+        }
+        if matches!(
+            cmd.opcode,
+            opcodes::SE_20 | opcodes::BE_52 | opcodes::BE_D8 | opcodes::CE_60 | opcodes::CE_C7
+        ) {
+            self.erases.push(cmd.opcode);
+        }
+        self.chip.execute(cmd).await
+    }
+    fn probe_opcode(&self, opcode: u8) -> bool {
+        !self.refused.contains(&opcode)
+    }
+    async fn delay_us(&mut self, us: u32) {
+        self.chip.delay_us(us).await
+    }
+}
+
+/// A database holding just one chip definition
+struct SingleChip(FlashChip);
+
+impl rflasher_core::chip::ChipProvider for SingleChip {
+    fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
+        Some(&self.0).filter(|c| c.matches_jedec_id(manufacturer, device))
+    }
+}
+
+/// Probing leaves out erasers the programmer cannot send, so smaller ones it
+/// can send do the job instead of the operation being refused.
+#[test]
+fn erase_plans_avoid_opcodes_the_programmer_cannot_send() {
+    use rflasher_core::flash::{MutationPolicy, ProbeOptions, probe_with_options};
+    use rflasher_core::layout::Region;
+
+    const SIZE: u32 = 128 * KIB;
+    let refused: &[u8] = &[opcodes::CE_60, opcodes::CE_C7, opcodes::BE_D8];
+    let mut master = RestrictedMaster {
+        chip: emulator(SIZE, 2, &vec![0x00; SIZE as usize]),
+        refused,
+        erases: Vec::new(),
+    };
+    let db = SingleChip(chip(SIZE, Features::empty(), false));
+    let probed = block_on(probe_with_options(
+        &mut master,
+        &db,
+        &ProbeOptions::default(),
+    ))
+    .expect("probe");
+    assert!(
+        probed
+            .chip
+            .erase_blocks
+            .iter()
+            .all(|b| !refused.contains(&b.opcode))
+    );
+    let mut device = SpiFlashDevice::new(master, probed.into_context());
+    let mut policy = MutationPolicy {
+        allow_full_chip: true,
+        ..Default::default()
+    };
+
+    // A whole-chip erase would pick chip erase; a 64 KiB region, block erase.
+    block_on(unified::erase_region_with_policy(
+        &mut device,
+        &Region::new("whole chip", 0, SIZE - 1),
+        &mut policy,
+    ))
+    .expect("whole-chip erase");
+    assert!(device.master().chip.data().iter().all(|&b| b == 0xFF));
+
+    let image = vec![0x5A; SIZE as usize];
+    block_on(unified::smart_write_with_policy(
+        &mut device,
+        &image,
+        &mut NoProgress,
+        &mut policy,
+    ))
+    .expect("whole-chip write");
+    block_on(unified::erase_region_with_policy(
+        &mut device,
+        &Region::new("block", 64 * KIB, 128 * KIB - 1),
+        &mut MutationPolicy::default(),
+    ))
+    .expect("64 KiB erase");
+    assert!(
+        device.master().chip.data()[64 * KIB as usize..]
+            .iter()
+            .all(|&b| b == 0xFF)
+    );
+
+    // The direct erase path picks among the same usable erasers.
+    block_on(device.erase(0, SIZE)).expect("direct whole-chip erase");
+
+    let erases = &device.master().erases;
+    assert!(!erases.is_empty());
+    assert!(
+        erases.iter().all(|opcode| !refused.contains(opcode)),
+        "{erases:02x?}"
+    );
 }
