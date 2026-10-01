@@ -773,9 +773,10 @@ pub struct ProbeOptions<'a> {
 ///
 /// JEDEC IDs are not unique, so several entries may match. Alias entries that
 /// behave identically are interchangeable and the first is used. Otherwise the
-/// chip's own SFDP size/page data eliminates contradictory geometries. Any
-/// remaining aliases use a safe common operation profile; conflicting essential
-/// procedures require explicit selection, never a mismatch-count heuristic.
+/// chip's own SFDP data eliminates entries that contradict it on size, page
+/// size or the block size of an erase opcode. Any remaining aliases use a safe
+/// common operation profile; conflicting essential procedures require explicit
+/// selection.
 #[cfg(feature = "std")]
 fn select_database_chip<P>(
     provider: &P,
@@ -853,11 +854,15 @@ where
     }
 
     if let Some(sfdp) = sfdp {
+        // Missing optional capabilities are not evidence of chip identity, but
+        // facts SFDP states are: size and page size first, then erase opcodes
+        // SFDP assigns a different block size than the entry does.
         let score = |c: &crate::chip::FlashChip| {
             let mismatches = crate::sfdp::compare_with_chip(sfdp, c);
-            // Missing optional capabilities are not evidence of chip identity.
-            // Only size/page facts can eliminate an unsafe geometry here.
-            mismatches.iter().filter(|m| m.is_critical()).count()
+            (
+                mismatches.iter().filter(|m| m.is_critical()).count(),
+                sfdp_erase_conflicts(sfdp, c),
+            )
         };
         let best = candidates.iter().map(|c| score(c)).min();
         let best_matches: Vec<_> = candidates
@@ -897,6 +902,23 @@ where
         names(&candidates)
     );
     Err(Error::ChipAmbiguous)
+}
+
+/// Number of the entry's uniform erase opcodes for which SFDP gives a different
+/// block size (e.g. `0x20` erasing 64 KiB on old Macronix parts and 4 KiB on
+/// their successors). Such an entry describes a different chip.
+#[cfg(feature = "std")]
+fn sfdp_erase_conflicts(sfdp: &crate::sfdp::SfdpInfo, chip: &crate::chip::FlashChip) -> usize {
+    chip.erase_blocks()
+        .iter()
+        .filter(|b| !b.is_chip_erase() && b.is_uniform())
+        .filter(|b| {
+            sfdp.basic_params
+                .erase_types
+                .iter()
+                .any(|e| e.is_valid() && e.opcode == b.opcode && e.size != b.min_block_size())
+        })
+        .count()
 }
 
 /// Build a conservative operational profile, not an arbitrary database row.
