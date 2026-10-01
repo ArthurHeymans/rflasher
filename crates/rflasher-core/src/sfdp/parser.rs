@@ -1339,6 +1339,39 @@ mod tests {
     }
 
     #[test]
+    fn sfdp_erase_opcodes_rule_out_older_aliases() {
+        // C2:2017 is shared by MX25L6405, on which 0x20 erases 64 KiB, and its
+        // successors, on which it erases 4 KiB. Without SFDP only their common
+        // erasers are safe; the MX25L6436E's SFDP rules out the old part.
+        let db = rflasher_chips::ChipDatabase::new();
+        let probe = |mut mock: MockSfdpFlash| {
+            futures_lite::future::block_on(probe_with_options(
+                &mut mock,
+                &db,
+                &ProbeOptions::default(),
+            ))
+            .unwrap()
+        };
+        let sector = |r: &crate::flash::ProbeResult| {
+            r.chip
+                .erase_blocks
+                .iter()
+                .any(|b| b.opcode == 0x20 && b.min_block_size() == 4096)
+        };
+
+        let without_sfdp = probe(MockSfdpFlash::without_sfdp());
+        assert!(!sector(&without_sfdp));
+
+        let with_sfdp = probe(MockSfdpFlash::new());
+        assert!(sector(&with_sfdp), "{:?}", with_sfdp.chip.erase_blocks);
+        assert!(
+            with_sfdp.chip.name.split(" / ").all(|n| n != "MX25L6405"),
+            "{}",
+            with_sfdp.chip.name
+        );
+    }
+
+    #[test]
     fn sfdp_breaks_ties_between_colliding_entries() {
         // The wrong entry is listed first: first-match would have picked it.
         let mut wrong = sfdp_described_chip("wrong size");
