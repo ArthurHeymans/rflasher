@@ -56,6 +56,9 @@ fn features_to_tokens(def: FeaturesDef) -> TokenStream {
     if def.wrsr_ewsr {
         flags.push(quote!(Features::WRSR_EWSR));
     }
+    if def.wrsr_persistent_ewsr {
+        flags.push(quote!(Features::WRSR_PERSISTENT_EWSR));
+    }
     if def.wrsr_ext {
         flags.push(quote!(Features::WRSR_EXT));
     }

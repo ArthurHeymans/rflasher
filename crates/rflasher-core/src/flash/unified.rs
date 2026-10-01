@@ -11,12 +11,144 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::error::{Error, Result};
+use super::policy::{MutationPolicy, preflight, region_layout};
+use crate::error::{EraseFailure, Error, Result};
 use crate::flash::device::FlashDevice;
 use crate::flash::operations::{
     coalesce_write_ranges, plan_optimal_erase, plan_optimal_erase_region,
 };
 use crate::layout::{Layout, LayoutError, Region};
+
+/// Perform a smart write operation that minimizes flash operations
+///
+/// This function compares the current flash contents with the desired contents
+/// and only erases/writes the regions that actually need to change.
+///
+/// # Algorithm
+/// 1. Read current flash contents
+/// 2. Use optimal erase algorithm to plan erase operations (minimizes operations
+///    by using larger erase blocks when >50% of sub-blocks need erasing)
+/// 3. Erase only the blocks that need erasing
+/// 4. Write only the bytes that are different
+///
+/// # Arguments
+/// * `device` - Flash device to write to
+/// * `data` - Desired flash contents (must match device size)
+/// * `progress` - Progress callback
+/// * `policy` - Mutation authorizations
+///
+/// # Returns
+/// Statistics about the operations performed
+///
+/// This always covers the whole chip, so `policy.allow_full_chip` must be set.
+pub async fn smart_write_with_policy<D: FlashDevice + ?Sized, P: WriteProgress>(
+    device: &mut D,
+    data: &[u8],
+    progress: &mut P,
+    policy: &mut MutationPolicy<'_>,
+) -> Result<WriteStats> {
+    if data.len() != device.size() as usize {
+        return Err(Error::BufferTooSmall);
+    }
+    let layout = region_layout(0, device.size())?;
+    preflight(device, &layout, policy).await?;
+    smart_write_region_prepared(device, 0, data, progress).await
+}
+
+/// Write a region after shared policy and erase-footprint preflight.
+pub async fn smart_write_region_with_policy<D: FlashDevice + ?Sized, P: WriteProgress>(
+    device: &mut D,
+    addr: u32,
+    data: &[u8],
+    progress: &mut P,
+    policy: &mut MutationPolicy<'_>,
+) -> Result<WriteStats> {
+    if !data.is_empty() {
+        let len = u32::try_from(data.len()).map_err(|_| Error::AddressOutOfBounds)?;
+        preflight(device, &region_layout(addr, len)?, policy).await?;
+    }
+    smart_write_region_prepared(device, addr, data, progress).await
+}
+
+/// Preflight all included regions before writing any of them.
+pub async fn smart_write_by_layout_with_policy<D: FlashDevice + ?Sized, P: WriteProgress>(
+    device: &mut D,
+    layout: &Layout,
+    image: &[u8],
+    progress: &mut P,
+    policy: &mut MutationPolicy<'_>,
+) -> Result<WriteStats> {
+    if image.len() < device.size() as usize {
+        return Err(Error::BufferTooSmall);
+    }
+    preflight(device, layout, policy).await?;
+    smart_write_by_layout_prepared(device, layout, image, progress).await
+}
+
+/// Preflight all included regions before the first erase.
+pub async fn erase_by_layout_with_policy<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    layout: &Layout,
+    policy: &mut MutationPolicy<'_>,
+) -> Result<()> {
+    preflight(device, layout, policy).await?;
+    erase_by_layout_prepared(device, layout).await
+}
+
+/// Erase a region with explicit policy and verified neighbor restoration.
+pub async fn erase_region_with_policy<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    region: &Region,
+    policy: &mut MutationPolicy<'_>,
+) -> Result<()> {
+    let mut layout = Layout::new();
+    let mut requested = region.clone();
+    requested.included = true;
+    layout.add_region(requested);
+    preflight(device, &layout, policy).await?;
+    erase_region_prepared(device, region).await
+}
+
+/// Write a region with safe defaults (no full-chip or dangerous-region authorization).
+pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
+    device: &mut D,
+    addr: u32,
+    data: &[u8],
+    progress: &mut P,
+) -> Result<WriteStats> {
+    smart_write_region_with_policy(device, addr, data, progress, &mut MutationPolicy::default())
+        .await
+}
+
+/// Write included layout regions with safe-default authorization.
+pub async fn smart_write_by_layout<D: FlashDevice + ?Sized, P: WriteProgress>(
+    device: &mut D,
+    layout: &Layout,
+    image: &[u8],
+    progress: &mut P,
+) -> Result<WriteStats> {
+    smart_write_by_layout_with_policy(
+        device,
+        layout,
+        image,
+        progress,
+        &mut MutationPolicy::default(),
+    )
+    .await
+}
+
+/// Erase included layout regions with safe-default authorization.
+pub async fn erase_by_layout<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    layout: &Layout,
+) -> Result<()> {
+    erase_by_layout_with_policy(device, layout, &mut MutationPolicy::default()).await
+}
+
+/// Erase one region with safe defaults (no full-chip or dangerous-region authorization).
+pub async fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Region) -> Result<()> {
+    erase_region_with_policy(device, region, &mut MutationPolicy::default()).await
+}
 
 // =============================================================================
 // Re-exports from operations.rs
@@ -84,44 +216,11 @@ pub async fn read_with_progress<D: FlashDevice, P: WriteProgress>(
     Ok(())
 }
 
-/// Perform a smart write operation that minimizes flash operations
-///
-/// This function compares the current flash contents with the desired contents
-/// and only erases/writes the regions that actually need to change.
-///
-/// # Algorithm
-/// 1. Read current flash contents
-/// 2. Use optimal erase algorithm to plan erase operations (minimizes operations
-///    by using larger erase blocks when >50% of sub-blocks need erasing)
-/// 3. Erase only the blocks that need erasing
-/// 4. Write only the bytes that are different
-///
-/// # Arguments
-/// * `device` - Flash device to write to
-/// * `data` - Desired flash contents (must match device size)
-/// * `progress` - Progress callback
-///
-/// # Returns
-/// Statistics about the operations performed
-pub async fn smart_write<D: FlashDevice + ?Sized, P: WriteProgress>(
-    device: &mut D,
-    data: &[u8],
-    progress: &mut P,
-) -> Result<WriteStats> {
-    let flash_size = device.size();
-
-    if data.len() != flash_size as usize {
-        return Err(Error::BufferTooSmall);
-    }
-
-    smart_write_region(device, 0, data, progress).await
-}
-
 /// Perform a smart write operation for a specific region
 ///
 /// Similar to `smart_write` but only operates on a specific region of flash.
 /// Uses the optimal erase algorithm to minimize erase operations.
-pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
+async fn smart_write_region_prepared<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     addr: u32,
     data: &[u8],
@@ -188,6 +287,12 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
         granularity,
     )?;
 
+    // Validate the executable plan before the first erase, not one command
+    // at a time after earlier blocks have already been destroyed.
+    for op in &erase_ops {
+        device.validate_erase_operation(op)?;
+    }
+
     // Step 3: Erase blocks that need it
     if !erase_ops.is_empty() {
         let bytes_to_erase: usize = erase_ops.iter().map(|op| op.size as usize).sum();
@@ -224,7 +329,8 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
             };
 
             // Erase the block
-            device.erase(op.start, op.size).await?;
+            device.erase_operation(op).await?;
+            verify_erased(device, op.start, op.size).await?;
 
             // Restore preserved data
             if let Some(ref buf) = pre_data
@@ -248,6 +354,13 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
                     e
                 );
                 return Err(e);
+            }
+
+            if let Some(ref buf) = pre_data {
+                verify(device, buf, op.start).await?;
+            }
+            if let Some(ref buf) = post_data {
+                verify(device, buf, region_end_addr).await?;
             }
 
             // Update our view of current contents
@@ -310,7 +423,7 @@ pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
 ///
 /// # Returns
 /// Combined statistics about all operations performed
-pub async fn smart_write_by_layout<D: FlashDevice + ?Sized, P: WriteProgress>(
+async fn smart_write_by_layout_prepared<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     layout: &Layout,
     image: &[u8],
@@ -386,7 +499,8 @@ pub async fn smart_write_by_layout<D: FlashDevice + ?Sized, P: WriteProgress>(
         };
 
         let stats =
-            smart_write_region(device, region.start, region_data, &mut offset_progress).await?;
+            smart_write_region_prepared(device, region.start, region_data, &mut offset_progress)
+                .await?;
 
         // Accumulate stats
         combined_stats.bytes_changed += stats.bytes_changed;
@@ -434,7 +548,7 @@ pub async fn read_by_layout<D: FlashDevice>(
 }
 
 /// Erase all included regions in a layout
-pub async fn erase_by_layout<D: FlashDevice + ?Sized>(
+async fn erase_by_layout_prepared<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
 ) -> Result<()> {
@@ -452,7 +566,7 @@ pub async fn erase_by_layout<D: FlashDevice + ?Sized>(
     }
 
     for region in layout.included_regions() {
-        erase_region(device, region).await?;
+        erase_region_prepared(device, region).await?;
     }
 
     Ok(())
@@ -463,7 +577,10 @@ pub async fn erase_by_layout<D: FlashDevice + ?Sized>(
 /// This uses the optimal erase algorithm to minimize the number of erase operations.
 /// It handles region boundaries that don't align with erase block boundaries
 /// by preserving data outside the region.
-pub async fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Region) -> Result<()> {
+async fn erase_region_prepared<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    region: &Region,
+) -> Result<()> {
     if !device.is_valid_range(region.start, region.size() as usize) {
         return Err(Error::AddressOutOfBounds);
     }
@@ -500,7 +617,8 @@ pub async fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Regi
             }
 
             // Erase the block
-            device.erase(op.start, op.size).await?;
+            device.erase_operation(op).await?;
+            verify_erased(device, op.start, op.size).await?;
 
             // Write back preserved data
             if region.start > op.start {
@@ -515,12 +633,49 @@ pub async fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Regi
                     .write(start, &backup[rel_start..rel_start + len])
                     .await?;
             }
+            if region.start > op.start {
+                verify(
+                    device,
+                    &backup[..(region.start - op.start) as usize],
+                    op.start,
+                )
+                .await?;
+            }
+            if block_end > region.end {
+                let start = region.end + 1;
+                let offset = (start - op.start) as usize;
+                verify(device, &backup[offset..], start).await?;
+            }
         } else {
             // Block is aligned with region, just erase it
-            device.erase(op.start, op.size).await?;
+            device.erase_operation(op).await?;
+            verify_erased(device, op.start, op.size).await?;
         }
     }
 
+    Ok(())
+}
+
+/// The single post-erase check for every device type; `erase_operation`
+/// implementations do not read the range back themselves.
+async fn verify_erased<D: FlashDevice + ?Sized>(device: &mut D, addr: u32, len: u32) -> Result<()> {
+    let mut buf = vec![0; READ_CHUNK_SIZE.min(len as usize)];
+    let mut offset = 0;
+    while offset < len {
+        let count = (len - offset).min(buf.len() as u32) as usize;
+        device.read(addr + offset, &mut buf[..count]).await?;
+        if let Some((index, &found)) = buf[..count]
+            .iter()
+            .enumerate()
+            .find(|&(_, b)| *b != ERASED_VALUE)
+        {
+            return Err(Error::EraseError(EraseFailure::VerifyFailed {
+                addr: addr + offset + index as u32,
+                found,
+            }));
+        }
+        offset += count as u32;
+    }
     Ok(())
 }
 
@@ -533,7 +688,11 @@ pub async fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Regi
 ///
 /// # Returns
 /// `Ok(())` if verification passes, `Err(VerifyError)` if mismatch detected
-pub async fn verify<D: FlashDevice>(device: &mut D, expected: &[u8], addr: u32) -> Result<()> {
+pub async fn verify<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    expected: &[u8],
+    addr: u32,
+) -> Result<()> {
     if !device.is_valid_range(addr, expected.len()) {
         return Err(Error::AddressOutOfBounds);
     }
@@ -643,6 +802,151 @@ mod tests {
     }
 
     #[derive(Default)]
+    struct TestBackup {
+        image: Vec<u8>,
+        fail: bool,
+    }
+    impl super::super::RecoveryBackup for TestBackup {
+        fn persist(&mut self, image: &[u8]) -> Result<()> {
+            if self.fail {
+                return Err(Error::IoError);
+            }
+            self.image = image.to_vec();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn on_device_ifd_cannot_be_hidden_by_a_renamed_or_full_chip_layout() {
+        let mut flash = FakeFlash::new(16384);
+        flash.bytes[..4].copy_from_slice(&0x0ff0_a55au32.to_le_bytes());
+        flash.bytes[4..8].copy_from_slice(&((2u32 << 24) | (4 << 16)).to_le_bytes());
+        flash.bytes[0x40..0x44].copy_from_slice(&0u32.to_le_bytes());
+        flash.bytes[0x44..0x48].copy_from_slice(&((3u32 << 16) | 2).to_le_bytes()); // BIOS 8..16K
+        flash.bytes[0x48..0x4c].copy_from_slice(&((1u32 << 16) | 1).to_le_bytes()); // ME 4..8K
+        let mut whole = MutationPolicy {
+            allow_full_chip: true,
+            ..Default::default()
+        };
+        assert!(matches!(
+            block_on(smart_write_with_policy(
+                &mut flash,
+                &vec![0xff; 16384],
+                &mut NoProgress,
+                &mut whole
+            )),
+            Err(Error::MutationRefused(crate::Refusal::DangerousRegion))
+        ));
+        assert_eq!(
+            block_on(erase_region(
+                &mut flash,
+                &Region::new("innocent", 4096, 8191)
+            )),
+            Err(Error::MutationRefused(crate::Refusal::DangerousRegion))
+        );
+        assert_eq!(flash.mutations, 0);
+        block_on(erase_region(&mut flash, &Region::new("bios", 8192, 16383))).unwrap();
+        assert!(flash.mutations > 0);
+    }
+
+    #[test]
+    fn unusable_on_device_ifd_needs_dangerous_authorization_but_not_more() {
+        // A descriptor whose BIOS region lies beyond this chip, as on a
+        // damaged image or on the first chip of a two-chip board.
+        let mut flash = FakeFlash::new(16384);
+        flash.bytes[..4].copy_from_slice(&0x0ff0_a55au32.to_le_bytes());
+        flash.bytes[4..8].copy_from_slice(&((2u32 << 24) | (4 << 16)).to_le_bytes());
+        flash.bytes[0x44..0x48].copy_from_slice(&((0x7ffu32 << 16) | 0x10).to_le_bytes());
+        let image = vec![0xff; 16384];
+        let mut policy = MutationPolicy {
+            allow_full_chip: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            block_on(smart_write_with_policy(
+                &mut flash,
+                &image,
+                &mut NoProgress,
+                &mut policy
+            ))
+            .unwrap_err(),
+            Error::MutationRefused(crate::Refusal::UnusableDescriptor)
+        );
+        assert_eq!(flash.mutations, 0);
+        policy.allow_dangerous = true;
+        block_on(smart_write_with_policy(
+            &mut flash,
+            &image,
+            &mut NoProgress,
+            &mut policy,
+        ))
+        .unwrap();
+        assert_eq!(flash.bytes, image);
+    }
+
+    #[test]
+    fn failed_recovery_is_refused_before_mutation() {
+        let mut flash = FakeFlash::new(64);
+        let region = Region::new("partial", 4, 11);
+        let mut sink = TestBackup {
+            fail: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            block_on(erase_region_with_policy(
+                &mut flash,
+                &region,
+                &mut MutationPolicy {
+                    recovery: Some(&mut sink),
+                    ..Default::default()
+                }
+            )),
+            Err(Error::IoError)
+        );
+        assert_eq!(flash.mutations, 0);
+    }
+
+    #[test]
+    fn cross_boundary_erase_restores_neighbors_without_a_recovery_image() {
+        let mut flash = FakeFlash::new(64);
+        block_on(erase_region(&mut flash, &Region::new("partial", 4, 11))).unwrap();
+        assert!(flash.mutations > 0);
+        assert_eq!(&flash.bytes[..4], &[0; 4]);
+        assert_eq!(&flash.bytes[4..12], &[0xff; 8]);
+        assert_eq!(&flash.bytes[12..16], &[0; 4]);
+    }
+
+    #[test]
+    fn whole_chip_and_dangerous_acknowledgements_are_independent() {
+        let mut flash = FakeFlash::new(64);
+        let mut region = Region::new("whole", 0, 63);
+        region.dangerous = true;
+        assert_eq!(
+            block_on(erase_region_with_policy(
+                &mut flash,
+                &region,
+                &mut MutationPolicy {
+                    allow_full_chip: true,
+                    ..Default::default()
+                }
+            )),
+            Err(Error::MutationRefused(crate::Refusal::DangerousRegion))
+        );
+        assert_eq!(
+            block_on(erase_region_with_policy(
+                &mut flash,
+                &region,
+                &mut MutationPolicy {
+                    allow_dangerous: true,
+                    ..Default::default()
+                }
+            )),
+            Err(Error::MutationRefused(crate::Refusal::FullChip))
+        );
+        assert_eq!(flash.mutations, 0);
+    }
+
+    #[derive(Default)]
     struct TraceProgress {
         reading: Vec<usize>,
         read_progress: Vec<usize>,
@@ -681,7 +985,16 @@ mod tests {
     fn full_and_partial_smart_write_share_stats_and_progress_engine() {
         let mut full = FakeFlash::new(64);
         let mut full_progress = TraceProgress::default();
-        let full_stats = block_on(smart_write(&mut full, &[0xff; 64], &mut full_progress)).unwrap();
+        let full_stats = block_on(smart_write_with_policy(
+            &mut full,
+            &[0xff; 64],
+            &mut full_progress,
+            &mut MutationPolicy {
+                allow_full_chip: true,
+                ..Default::default()
+            },
+        ))
+        .unwrap();
         assert_eq!(full_stats.bytes_changed, 64);
         assert_eq!(full_stats.bytes_erased, 64);
         assert_eq!(full_stats.erases_performed, 4);
@@ -695,13 +1008,19 @@ mod tests {
 
         let mut partial = FakeFlash::new(64);
         let mut partial_progress = TraceProgress::default();
-        let stats = block_on(smart_write_region(
+        let mut backup = TestBackup::default();
+        let stats = block_on(smart_write_region_with_policy(
             &mut partial,
             4,
             &[0xff; 8],
             &mut partial_progress,
+            &mut MutationPolicy {
+                recovery: Some(&mut backup),
+                ..Default::default()
+            },
         ))
         .unwrap();
+        assert_eq!(backup.image, vec![0; 64]);
         assert_eq!(stats.bytes_changed, 8);
         assert_eq!(stats.bytes_erased, 16);
         assert_eq!(stats.erases_performed, 1);
@@ -722,7 +1041,16 @@ mod tests {
         let mut data = vec![0xff; 64];
         data[7] = 0x12;
         let mut progress = TraceProgress::default();
-        let stats = block_on(smart_write(&mut device, &data, &mut progress)).unwrap();
+        let stats = block_on(smart_write_with_policy(
+            &mut device,
+            &data,
+            &mut progress,
+            &mut MutationPolicy {
+                allow_full_chip: true,
+                ..Default::default()
+            },
+        ))
+        .unwrap();
         assert_eq!(stats.bytes_changed, 1);
         assert_eq!(stats.bytes_erased, 0);
         assert_eq!(stats.bytes_written, 1);
@@ -765,7 +1093,15 @@ mod tests {
     fn chip_erase_only_full_region_is_not_a_noop() {
         let mut device = FakeFlash::new(64);
         device.blocks = vec![EraseBlock::new(0xc7, 64)];
-        block_on(erase_region(&mut device, &Region::new("full", 0, 63))).unwrap();
+        block_on(erase_region_with_policy(
+            &mut device,
+            &Region::new("full", 0, 63),
+            &mut MutationPolicy {
+                allow_full_chip: true,
+                ..Default::default()
+            },
+        ))
+        .unwrap();
         assert_eq!(device.mutations, 1);
         assert!(device.bytes.iter().all(|byte| *byte == 0xff));
         assert_eq!(
@@ -793,12 +1129,12 @@ mod tests {
                 &[0xff; 64],
                 &mut NoProgress
             )),
-            Err(Error::RegionProtected)
+            Err(Error::MutationRefused(crate::Refusal::ReadOnlyRegion))
         ));
         assert_eq!(device.mutations, 0);
         assert_eq!(
             block_on(erase_by_layout(&mut device, &layout)),
-            Err(Error::RegionProtected)
+            Err(Error::MutationRefused(crate::Refusal::ReadOnlyRegion))
         );
         assert_eq!(device.mutations, 0);
         assert!(device.bytes.iter().all(|byte| *byte == 0));

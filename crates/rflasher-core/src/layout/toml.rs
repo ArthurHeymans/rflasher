@@ -25,7 +25,7 @@ use std::path::Path;
 use std::string::{String, ToString};
 use std::vec::Vec;
 
-use super::{Layout, LayoutError, LayoutSource, Region};
+use super::{Layout, LayoutError, LayoutSource, Region, parse_size};
 
 /// TOML layout file structure
 #[derive(Debug, serde::Deserialize)]
@@ -84,44 +84,6 @@ fn parse_number(s: &str) -> Result<u32, String> {
     } else {
         s.parse().map_err(|e| format!("invalid number: {}", e))
     }
-}
-
-/// Parse a size string like "16 MiB" or "4096"
-fn parse_size(s: &str) -> Result<u32, String> {
-    let s = s.trim();
-
-    // Try plain number first
-    if let Ok(n) = s.parse::<u32>() {
-        return Ok(n);
-    }
-
-    // Try hex
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
-        && let Ok(n) = u32::from_str_radix(hex.trim(), 16)
-    {
-        return Ok(n);
-    }
-
-    // Try with suffix
-    let s_lower = s.to_lowercase();
-    let (num_str, multiplier) = if let Some(n) = s_lower.strip_suffix("mib") {
-        (n.trim(), 1024 * 1024)
-    } else if let Some(n) = s_lower.strip_suffix("mb") {
-        (n.trim(), 1024 * 1024)
-    } else if let Some(n) = s_lower.strip_suffix("kib") {
-        (n.trim(), 1024)
-    } else if let Some(n) = s_lower.strip_suffix("kb") {
-        (n.trim(), 1024)
-    } else if let Some(n) = s_lower.strip_suffix("b") {
-        (n.trim(), 1)
-    } else {
-        return Err(format!("invalid size: {}", s));
-    };
-
-    let num: u32 = num_str
-        .parse()
-        .map_err(|_| format!("invalid size: {}", s))?;
-    Ok(num * multiplier)
 }
 
 impl Layout {

@@ -39,6 +39,16 @@ pub trait Controller {
     /// For AMD: delegates to SpiMaster
     fn controller_erase(&mut self, addr: u32, len: u32) -> CoreResult<()>;
 
+    /// Erase block size the flash must be planned with, for a flash of
+    /// `flash_size` bytes, if the controller fixes it.
+    ///
+    /// Only controllers that erase by address (Intel hardware sequencing)
+    /// decide the block size themselves; everything else erases through raw
+    /// SPI commands whose geometry comes from the chip, and returns `None`.
+    fn erase_block_size(&self, _flash_size: u32) -> Result<Option<u32>, InternalError> {
+        Ok(None)
+    }
+
     /// Get a human-readable name for this controller type
     fn controller_name(&self) -> &'static str;
 

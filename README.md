@@ -58,14 +58,14 @@ man -l man/rflasher.1
 rflasher probe -p ch341a                # detect the flash chip
 rflasher info -p ch341a                 # detailed chip information
 rflasher read -p ch341a backup.bin      # read flash to a file
-rflasher write -p ch341a firmware.bin   # erase, write and verify
-rflasher erase -p ch341a
+rflasher write -p ch341a firmware.bin --allow-full-chip # erase, write and verify
+rflasher erase -p ch341a --allow-full-chip
 rflasher verify -p ch341a firmware.bin
 rflasher list-chips                     # supported chips
 rflasher list-programmers               # available programmers
 ```
 
-Short aliases exist (`r`/`w`/`v`, `E` for erase), the programmer can be set with the `RFLASHER_PROGRAMMER` environment variable, and `-v`/`-vv` increase log verbosity. `rflasher write -p ch341a firmware.bin --no-verify` skips verification.
+Short aliases exist (`r`/`w`/`v`, `E` for erase), the programmer can be set with the `RFLASHER_PROGRAMMER` environment variable, and `-v`/`-vv` increase log verbosity. `rflasher write -p ch341a firmware.bin --allow-full-chip --no-verify` skips verification.
 
 ### Programmers
 
@@ -92,6 +92,26 @@ The `internal` programmer uses the chipset's SPI controller on Linux via PCI sys
 ### Chip database
 
 Chips are defined as RON files in `crates/rflasher-chips/data/vendors/` and compiled into the CLI by default, so installed binaries work without the source tree or separate data files. `--chip-db <path>` replaces the bundled database with a RON file or a directory of RON files.
+
+JEDEC IDs are not unique, so a probed chip can match several definitions. Identical operational definitions are interchangeable. Otherwise validated SFDP data narrows the candidates, and unresolved aliases use only their common erase/program/read capabilities. Contradictory sizes or essential program/addressing procedures still require explicit selection with `-c`/`--chip NAME`. A synthesized common profile disables write protection when candidates disagree on its register layout. Names use flashprog's pattern syntax but, unlike flashprog, match regardless of case, so type the part number printed on the chip: database names may contain alternatives (`A/B`), optional parts (`GD25Q64(B)`) and `.` wildcards (`W25Q128.V` matches `W25Q128FV`):
+
+```bash
+rflasher probe -p ch341a -c EN25P40
+```
+
+If the selected definition contradicts the chip's SFDP data on size, or on a page size larger than the chip's, rflasher refuses to operate on it. Pick the right definition with `--chip`, or override with `--force` if the SFDP data is known to be wrong.
+
+### Safety overrides
+
+Authorizations are independent:
+
+- `--allow-full-chip` acknowledges an operation covering the entire flash.
+- `--allow-dangerous-regions` acknowledges modifying ME/TXE/IE, the flash descriptor, or PTT. The shared core preflight detects IFD regions on the device even without `--ifd` or a supplied layout; if the on-device descriptor is unusable (damaged, or describing a second chip), only this flag lets the operation proceed. Prefer selecting only BIOS instead.
+- `--force` overrides contradictory chip/SFDP size or page geometry; it does **not** authorize dangerous regions or execute disputed erase opcodes. Opaque hwseq/MTD devices reject irrelevant `--chip`/`--force` options.
+
+Erase blocks can straddle selected region boundaries. The neighboring data is then read first, restored after the erase and verified; erasing into a dangerous or read-only region is refused as above. `--recovery-backup FILE` additionally writes and synchronizes a full-device image before any mutation (it refuses to overwrite an existing file), which covers power loss in the middle of such an operation. To recover, use it as the input image with the required full-chip/dangerous-region acknowledgements. Library users supply a `RecoveryBackup` through `MutationPolicy`.
+
+The web UI offers chip selection and separate SFDP/region acknowledgements, with one-operation full-chip authorization. SFDP-only chips have no documented protection-register layout, so WP mutation is unavailable rather than guessed.
 
 ### Layouts and regions
 
@@ -128,7 +148,10 @@ rflasher wp enable -p ch341a                       # hardware protection (WP# pi
 rflasher wp disable -p ch341a
 rflasher wp range -p ch341a 0,0x100000             # protect start,length
 rflasher wp region -p ch341a --ifd bios            # protect a named region
+rflasher wp disable -p ch341a --temporary          # until the next power cycle only
 ```
+
+Changes are persistent by default. `--temporary` uses the chip's volatile status register write (EWSR, `0x50`) and fails on chips without one.
 
 ## Web interface
 

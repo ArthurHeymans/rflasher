@@ -53,6 +53,7 @@ fn features_from(def: FeaturesDef) -> Features {
     [
         (def.wrsr_wren, Features::WRSR_WREN),
         (def.wrsr_ewsr, Features::WRSR_EWSR),
+        (def.wrsr_persistent_ewsr, Features::WRSR_PERSISTENT_EWSR),
         (def.wrsr_ext, Features::WRSR_EXT),
         (def.fast_read, Features::FAST_READ),
         (def.dual_io, Features::DUAL_IO),
@@ -151,6 +152,18 @@ pub struct ChipDatabase {
 impl ChipProvider for ChipDatabase {
     fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
         ChipDatabase::find_by_jedec_id(self, manufacturer, device)
+    }
+
+    fn find_nth_by_jedec_id(
+        &self,
+        manufacturer: u8,
+        device: u16,
+        index: usize,
+    ) -> Option<&FlashChip> {
+        self.chips
+            .iter()
+            .filter(|c| c.matches_jedec_id(manufacturer, device))
+            .nth(index)
     }
 }
 
@@ -394,6 +407,43 @@ mod tests {
 
         assert_eq!(db.len(), runtime_db.len());
         assert!(provider.find_by_jedec_id(0xEF, 0x4018).is_some());
+    }
+
+    /// All database entries for one JEDEC ID, in database order
+    fn candidates(db: &ChipDatabase, manufacturer: u8, device: u16) -> Vec<&FlashChip> {
+        (0..)
+            .map_while(|i| ChipProvider::find_nth_by_jedec_id(db, manufacturer, device, i))
+            .collect()
+    }
+
+    #[test]
+    fn colliding_jedec_ids_are_enumerable_without_claiming_identical_capabilities() {
+        let db = ChipDatabase::from_dir(&vendors_dir()).unwrap();
+
+        // Enumeration starts with the first-match entry and covers every entry.
+        let all = candidates(&db, 0xEF, 0x4017);
+        assert_eq!(
+            all.first().map(|c| c.name.as_str()),
+            db.find_by_jedec_id(0xEF, 0x4017).map(|c| c.name.as_str())
+        );
+        assert_eq!(
+            all.len(),
+            db.chips()
+                .iter()
+                .filter(|c| c.matches_jedec_id(0xEF, 0x4017))
+                .count()
+        );
+
+        // Revisions differ in capabilities: probing builds a conservative
+        // common profile rather than claiming that any row is interchangeable.
+        assert!(all.len() > 1);
+        assert!(all.iter().any(|c| !c.is_equivalent_to(all[0])));
+
+        // ... whereas boot-block EN25B and uniform-sector EN25P parts erase
+        // differently and share an ID: guessing would be unsafe.
+        let en25 = candidates(&db, 0x1C, 0x2010);
+        assert!(en25.len() > 1);
+        assert!(!en25.iter().all(|c| c.is_equivalent_to(en25[0])));
     }
 
     #[test]

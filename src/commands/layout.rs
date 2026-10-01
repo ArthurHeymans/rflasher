@@ -1,6 +1,6 @@
 //! Layout command implementations
 
-use rflasher_core::layout::{Layout, LayoutSource, has_fmap, has_ifd};
+use rflasher_core::layout::{Layout, LayoutSource, has_fmap, has_ifd, parse_size};
 use std::fs;
 use std::path::Path;
 
@@ -78,7 +78,10 @@ pub fn cmd_fmap(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::
 
 /// Create a new layout file template
 pub fn cmd_create(output: &Path, size: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let chip_size = parse_size(size)?;
+    let chip_size = parse_size(size).map_err(|e| format!("{e}: {size:?}"))?;
+    if chip_size == 0 {
+        return Err("chip size must not be zero".into());
+    }
 
     let mut layout = Layout::new();
     layout.name = Some("New Layout".to_string());
@@ -94,44 +97,6 @@ pub fn cmd_create(output: &Path, size: &str) -> Result<(), Box<dyn std::error::E
     println!("Edit the file to define your regions.");
 
     Ok(())
-}
-
-/// Parse a size string like "16 MiB" or "0x1000000"
-fn parse_size(s: &str) -> Result<u32, String> {
-    let s = s.trim();
-
-    // Try plain number first
-    if let Ok(n) = s.parse::<u32>() {
-        return Ok(n);
-    }
-
-    // Try hex
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
-        && let Ok(n) = u32::from_str_radix(hex.trim(), 16)
-    {
-        return Ok(n);
-    }
-
-    // Try with suffix
-    let s_lower = s.to_lowercase();
-    let (num_str, multiplier) = if let Some(n) = s_lower.strip_suffix("mib") {
-        (n.trim(), 1024 * 1024)
-    } else if let Some(n) = s_lower.strip_suffix("mb") {
-        (n.trim(), 1024 * 1024)
-    } else if let Some(n) = s_lower.strip_suffix("kib") {
-        (n.trim(), 1024)
-    } else if let Some(n) = s_lower.strip_suffix("kb") {
-        (n.trim(), 1024)
-    } else if let Some(n) = s_lower.strip_suffix('b') {
-        (n.trim(), 1)
-    } else {
-        return Err(format!("invalid size: {}", s));
-    };
-
-    let num: u32 = num_str
-        .parse()
-        .map_err(|_| format!("invalid size: {}", s))?;
-    Ok(num * multiplier)
 }
 
 /// Print layout information

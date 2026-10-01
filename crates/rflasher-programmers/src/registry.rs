@@ -14,7 +14,7 @@ use rflasher_core::flash::FlashDevice;
 use rflasher_core::flash::HybridFlashDevice;
 #[cfg(any(feature = "linux-mtd", feature = "internal"))]
 use rflasher_core::flash::OpaqueFlashDevice;
-use rflasher_core::flash::{ProbeResult, SpiFlashDevice, probe_detailed};
+use rflasher_core::flash::{ProbeOptions, ProbeResult, SpiFlashDevice, probe_with_options};
 #[cfg(feature = "internal")]
 use rflasher_core::layout::parse_ifd;
 #[cfg(feature = "internal")]
@@ -35,27 +35,13 @@ fn log_sfdp_mismatches(mismatches: &[SfdpMismatch], chip_name: &str) {
     );
 
     for mismatch in mismatches {
-        // Critical mismatches (size, page size) get ERROR level
-        match mismatch {
-            SfdpMismatch::TotalSize { sfdp, database } => {
-                log::error!("  CRITICAL: {}", mismatch);
-                log::error!(
-                    "    This may cause data corruption! SFDP says {} bytes, DB says {} bytes",
-                    sfdp,
-                    database
-                );
-            }
-            SfdpMismatch::PageSize { sfdp, database } => {
-                log::error!("  CRITICAL: {}", mismatch);
-                log::error!(
-                    "    This may cause write failures! SFDP says {} bytes, DB says {} bytes",
-                    sfdp,
-                    database
-                );
-            }
-            _ => {
-                log::warn!("  {}", mismatch);
-            }
+        if mismatch.is_critical() {
+            // Only reachable when the user forced past the refusal in
+            // `probe_with_options`.
+            log::error!("  CRITICAL: {}", mismatch);
+            log::error!("    Operating on this chip may corrupt data (forced by --force)");
+        } else {
+            log::warn!("  {}", mismatch);
         }
     }
 }
@@ -87,16 +73,46 @@ fn log_probe_result(result: &ProbeResult) {
     log_sfdp_mismatches(&result.mismatches, &result.chip.name);
 }
 
+/// User choices that steer how a probed chip is matched to a database entry
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpenOptions<'a> {
+    /// Name of the chip definition to use when several share the probed JEDEC ID
+    /// (`--chip`). See [`ProbeOptions::chip`].
+    pub chip: Option<&'a str>,
+    /// Proceed despite a database entry that contradicts the chip's SFDP data
+    /// (`--force`). See [`ProbeOptions::force`].
+    pub force: bool,
+}
+
+/// The chip database together with the user's probing choices
+///
+/// Threaded through the per-programmer openers so that every probe path
+/// (raw SPI, hybrid, opaque) applies the same selection and safety policy.
+struct Probing<'a> {
+    db: &'a dyn ChipProvider,
+    options: ProbeOptions<'a>,
+}
+
+impl Probing<'_> {
+    /// Probe `master` and resolve the chip against the database
+    async fn probe<M>(&self, master: &mut M) -> Result<ProbeResult, rflasher_core::error::Error>
+    where
+        M: rflasher_core::programmer::SpiMaster + ?Sized,
+    {
+        probe_with_options(master, self.db, &self.options).await
+    }
+}
+
 /// Common probe and create handle logic for SPI programmers
 async fn probe_and_create_handle<M>(
     master: M,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>>
 where
     M: rflasher_core::programmer::SpiMaster + Send + 'static,
 {
     let mut master = master;
-    let result = probe_detailed(&mut master, db).await?;
+    let result = db.probe(&mut master).await?;
 
     log_probe_result(&result);
 
@@ -237,11 +253,37 @@ pub async fn open_flash(
     programmer: &str,
     db: &dyn ChipProvider,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    open_flash_with_options(programmer, db, &OpenOptions::default()).await
+}
+
+/// Like [`open_flash`], with control over chip selection and safety overrides
+///
+/// See [`OpenOptions`]. Fails when several database entries match the probed
+/// chip and `options.chip` does not settle it, and when the chosen entry
+/// contradicts the chip's SFDP data on size or page size unless
+/// `options.force` is set.
+pub async fn open_flash_with_options(
+    programmer: &str,
+    db: &dyn ChipProvider,
+    options: &OpenOptions<'_>,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    let db = &Probing {
+        db,
+        options: ProbeOptions {
+            chip: options.chip,
+            force: options.force,
+        },
+    };
     // Not every compiled programmer arm uses the database (e.g. linux-mtd);
     // in feature combinations where none does, this suppresses the unused
     // `db` parameter warning.
     let _ = db;
     let params = parse_programmer_params(programmer)?;
+    if matches!(params.name.as_str(), "linux_mtd" | "linux-mtd" | "mtd")
+        && (options.chip.is_some() || options.force)
+    {
+        return Err("--chip and --force have no effect for an opaque MTD device".into());
+    }
 
     match params.name.as_str() {
         #[cfg(feature = "dummy")]
@@ -326,7 +368,7 @@ async fn open_dummy_master(
 #[cfg(feature = "dummy")]
 async fn open_dummy(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     probe_and_create_handle(open_dummy_master(params).await?, db).await
 }
@@ -350,7 +392,7 @@ async fn open_ch341a_master(
 #[cfg(feature = "ch341a")]
 async fn open_ch341a(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     probe_and_create_handle(open_ch341a_master(params).await?, db).await
 }
@@ -380,7 +422,7 @@ async fn open_ch347_master(
 #[cfg(feature = "ch347")]
 async fn open_ch347(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     probe_and_create_handle(open_ch347_master(params).await?, db).await
 }
@@ -418,12 +460,12 @@ async fn open_dediprog_master(
 #[cfg(feature = "dediprog")]
 async fn open_dediprog(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     let mut master = open_dediprog_master(params).await?;
 
     // Probe the flash chip via SpiMaster
-    let result = probe_detailed(&mut master, db).await?;
+    let result = db.probe(&mut master).await?;
     log_probe_result(&result);
     let chip_info = ChipInfo::from(result);
     let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
@@ -496,7 +538,7 @@ async fn open_serprog_tcp(
 #[cfg(feature = "serprog-native")]
 async fn open_serprog(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use crate::serprog::SerprogConnection;
 
@@ -540,7 +582,7 @@ async fn open_ftdi_master(
 #[cfg(feature = "ftdi")]
 async fn open_ftdi(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     probe_and_create_handle(open_ftdi_master(params).await?, db).await
 }
@@ -577,7 +619,7 @@ async fn open_ft4222_master(
 #[cfg(feature = "ft4222")]
 async fn open_ft4222(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     probe_and_create_handle(open_ft4222_master(params).await?, db).await
 }
@@ -610,7 +652,7 @@ async fn open_linux_spi_master(
 #[cfg(feature = "linux-spi")]
 async fn open_linux_spi(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     probe_and_create_handle(open_linux_spi_master(params).await?, db).await
 }
@@ -682,7 +724,7 @@ async fn open_linux_gpio_spi_master(
 #[cfg(feature = "linux-gpio")]
 async fn open_linux_gpio_spi(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     probe_and_create_handle(open_linux_gpio_spi_master(params).await?, db).await
 }
@@ -785,7 +827,7 @@ mod internal_error_tests {
 #[cfg(feature = "internal")]
 async fn open_internal(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use rflasher_internal::{InternalOptions, InternalProgrammer, SpiMode};
 
@@ -809,11 +851,24 @@ async fn open_internal(
         log::info!("Using SPI mode (swseq allows chip probing)");
         probe_and_create_handle(programmer, db).await
     } else {
+        if db.options.chip.is_some() || db.options.force {
+            return Err("--chip and --force apply to SPI probing, not opaque hardware sequencing; use ich_spi_mode=swseq or remove them".into());
+        }
         log::info!("Using opaque mode (hwseq - no chip probing available)");
         let flash_size = get_flash_size_from_ifd(&mut programmer).await?;
         log::info!("Flash size: {} bytes (from IFD)", flash_size);
 
-        let device = OpaqueFlashDevice::new(programmer, flash_size);
+        // The controller erases whole hardware blocks (BERASE), so erases must
+        // be planned with the block size it reports, not an assumed 4 KiB.
+        let erase_size = programmer
+            .erase_block_size(flash_size)
+            .map_err(|e| format!("Cannot determine the hardware erase block size: {}", e))?;
+
+        let mut device = OpaqueFlashDevice::new(programmer, flash_size);
+        if let Some(size) = erase_size {
+            log::info!("Hardware sequencing erase block size: {} bytes", size);
+            device.set_erase_block_size(size);
+        }
         Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(
             device,
         )))
@@ -850,7 +905,7 @@ async fn open_raiden_master(
 #[cfg(feature = "raiden")]
 async fn open_raiden(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     probe_and_create_handle(open_raiden_master(params).await?, db).await
 }
@@ -878,12 +933,12 @@ async fn open_sunxi_fel_master(
 #[cfg(feature = "sunxi-fel")]
 async fn open_sunxi_fel(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     let mut master = open_sunxi_fel_master(params).await?;
 
     // Probe the flash chip via SpiMaster
-    let result = probe_detailed(&mut master, db).await?;
+    let result = db.probe(&mut master).await?;
     log_probe_result(&result);
     let chip_info = ChipInfo::from(result);
     let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
@@ -933,6 +988,86 @@ mod dispatch_tests {
             assert!(matches!(
                 error.downcast_ref::<rflasher_core::error::Error>(),
                 Some(rflasher_core::error::Error::ChipNotFound)
+            ));
+        });
+    }
+}
+
+#[cfg(all(test, feature = "dummy"))]
+mod chip_selection_tests {
+    use super::{OpenOptions, open_flash, open_flash_with_options};
+    use rflasher_core::chip::{ChipProvider, ChipTestStatus, EraseBlock, Features, FlashChip};
+    use rflasher_core::error::Error;
+
+    /// Two definitions for the dummy's JEDEC ID (EF:4018) that erase differently
+    struct CollidingChips(Vec<FlashChip>);
+
+    impl CollidingChips {
+        fn new() -> Self {
+            let chip = |name: &str, blocks: Vec<EraseBlock>| FlashChip {
+                vendor: "Test".into(),
+                name: name.into(),
+                jedec_manufacturer: 0xEF,
+                jedec_device: 0x4018,
+                total_size: 16 * 1024 * 1024,
+                page_size: 256,
+                features: Features::WRSR_WREN,
+                voltage_min_mv: 2700,
+                voltage_max_mv: 3600,
+                write_granularity: rflasher_core::chip::WriteGranularity::Page,
+                erase_blocks: blocks,
+                tested: ChipTestStatus::default(),
+            };
+            Self(vec![
+                chip("UNIFORM", vec![EraseBlock::with_count(0x20, 4096, 4096)]),
+                chip("BIGBLOCK", vec![EraseBlock::with_count(0xD8, 65536, 256)]),
+            ])
+        }
+    }
+
+    impl ChipProvider for CollidingChips {
+        fn find_by_jedec_id(&self, m: u8, d: u16) -> Option<&FlashChip> {
+            self.find_nth_by_jedec_id(m, d, 0)
+        }
+        fn find_nth_by_jedec_id(&self, m: u8, d: u16, index: usize) -> Option<&FlashChip> {
+            self.0
+                .iter()
+                .filter(|c| c.matches_jedec_id(m, d))
+                .nth(index)
+        }
+    }
+
+    #[test]
+    fn ambiguous_chip_needs_an_explicit_choice() {
+        futures_lite::future::block_on(async {
+            let db = CollidingChips::new();
+
+            let error = open_flash("dummy", &db).await.err().unwrap();
+            assert!(matches!(
+                error.downcast_ref::<Error>(),
+                Some(Error::ChipAmbiguous)
+            ));
+
+            let options = OpenOptions {
+                chip: Some("bigblock"),
+                ..OpenOptions::default()
+            };
+            let handle = open_flash_with_options("dummy", &db, &options)
+                .await
+                .unwrap();
+            assert_eq!(handle.chip_info().unwrap().name, "BIGBLOCK");
+
+            let options = OpenOptions {
+                chip: Some("UNKNOWN"),
+                ..OpenOptions::default()
+            };
+            let error = open_flash_with_options("dummy", &db, &options)
+                .await
+                .err()
+                .unwrap();
+            assert!(matches!(
+                error.downcast_ref::<Error>(),
+                Some(Error::ChipNotFound)
             ));
         });
     }

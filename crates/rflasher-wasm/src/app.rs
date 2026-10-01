@@ -7,7 +7,10 @@ use std::rc::Rc;
 
 use rflasher_chips::ChipDatabase;
 use rflasher_core::chip::FlashChip;
-use rflasher_core::flash::unified::{WriteProgress, WriteStats, smart_write};
+use rflasher_core::flash::MutationPolicy;
+use rflasher_core::flash::unified::{
+    WriteProgress, WriteStats, erase_region_with_policy, smart_write_with_policy,
+};
 use rflasher_core::flash::{
     FlashContext, FlashDevice, HybridFlashDevice, ProbeResult, SpiFlashDevice,
 };
@@ -503,6 +506,11 @@ pub struct RflasherApp {
     chip_info: Option<ChipInfo>,
     /// egui context for requesting repaints
     ctx: Option<egui::Context>,
+    /// Explicit chip/profile selection; empty means automatic resolution.
+    selected_chip: String,
+    override_sfdp: bool,
+    allow_full_chip: bool,
+    allow_dangerous: bool,
     /// Whether the udev rules window is open
     show_udev_window: bool,
 }
@@ -629,6 +637,10 @@ impl Default for RflasherApp {
             chip_db: ChipDatabase::new(),
             chip_info: None,
             ctx: None,
+            selected_chip: String::new(),
+            override_sfdp: false,
+            allow_full_chip: false,
+            allow_dangerous: false,
             show_udev_window: false,
         }
     }
@@ -910,6 +922,9 @@ impl RflasherApp {
         let shared = self.shared.clone();
         let ctx = self.ctx.clone();
         let chip_db = self.chip_db.clone();
+        let selected_chip = self.selected_chip.clone();
+        let force = self.override_sfdp;
+        self.chip_info = None;
 
         self.operation = OperationState::Probing;
         self.status.info("Probing chip...");
@@ -920,10 +935,14 @@ impl RflasherApp {
             let programmer = shared.borrow_mut().programmer.take();
 
             if let Some(programmer) = programmer {
-                use rflasher_core::flash::probe_detailed;
+                use rflasher_core::flash::{ProbeOptions, probe_with_options};
+                let options = ProbeOptions {
+                    chip: (!selected_chip.is_empty()).then_some(selected_chip.as_str()),
+                    force,
+                };
 
                 with_programmer!(shared, programmer, master, {
-                    match probe_detailed(&mut master, &chip_db).await {
+                    match probe_with_options(&mut master, &chip_db, &options).await {
                         Ok(result) => {
                             shared
                                 .borrow_mut()
@@ -934,7 +953,7 @@ impl RflasherApp {
                             shared
                                 .borrow_mut()
                                 .messages
-                                .push(AsyncMessage::ProbeFailed(format!("{:?}", e)));
+                                .push(AsyncMessage::ProbeFailed(error_message(e)));
                         }
                     }
                 });
@@ -1034,7 +1053,7 @@ impl RflasherApp {
                             shared
                                 .borrow_mut()
                                 .messages
-                                .push(AsyncMessage::ReadFailed(format!("{:?}", e)));
+                                .push(AsyncMessage::ReadFailed(error_message(e)));
                         }
                     }
                 });
@@ -1077,6 +1096,10 @@ impl RflasherApp {
         let ctx = self.ctx.clone();
         let chip = chip_info.chip.clone();
         let data = data.clone();
+        let allow_full_chip = self.allow_full_chip;
+        let allow_dangerous = self.allow_dangerous;
+        self.allow_full_chip = false;
+        self.allow_dangerous = false;
 
         self.operation = OperationState::Writing {
             bytes_done: 0,
@@ -1095,7 +1118,14 @@ impl RflasherApp {
                 let mut progress = SharedProgress::new(shared.clone(), ctx.clone());
 
                 with_flash_device!(shared, programmer, ctx_flash, device, {
-                    let result = smart_write(&mut device, &data, &mut progress).await;
+                    let mut policy = MutationPolicy {
+                        allow_full_chip,
+                        allow_dangerous,
+                        recovery: None,
+                    };
+                    let result =
+                        smart_write_with_policy(&mut device, &data, &mut progress, &mut policy)
+                            .await;
 
                     match result {
                         Ok(stats) => {
@@ -1108,7 +1138,7 @@ impl RflasherApp {
                             shared
                                 .borrow_mut()
                                 .messages
-                                .push(AsyncMessage::WriteFailed(format!("{:?}", e)));
+                                .push(AsyncMessage::WriteFailed(error_message(e)));
                         }
                     }
                 });
@@ -1136,6 +1166,10 @@ impl RflasherApp {
         let ctx = self.ctx.clone();
         let chip = chip_info.chip.clone();
         let size = chip_info.size;
+        let allow_full_chip = self.allow_full_chip;
+        let allow_dangerous = self.allow_dangerous;
+        self.allow_full_chip = false;
+        self.allow_dangerous = false;
 
         self.operation = OperationState::Erasing {
             bytes_done: 0,
@@ -1152,7 +1186,13 @@ impl RflasherApp {
                 let ctx_flash = FlashContext::new(chip);
 
                 with_flash_device!(shared, programmer, ctx_flash, device, {
-                    let result = device.erase(0, size).await;
+                    let mut policy = MutationPolicy {
+                        allow_full_chip,
+                        allow_dangerous,
+                        recovery: None,
+                    };
+                    let region = rflasher_core::layout::Region::new("full chip", 0, size - 1);
+                    let result = erase_region_with_policy(&mut device, &region, &mut policy).await;
 
                     match result {
                         Ok(()) => {
@@ -1165,7 +1205,7 @@ impl RflasherApp {
                             shared
                                 .borrow_mut()
                                 .messages
-                                .push(AsyncMessage::EraseFailed(format!("{:?}", e)));
+                                .push(AsyncMessage::EraseFailed(error_message(e)));
                         }
                     }
                 });
@@ -1319,6 +1359,32 @@ impl RflasherApp {
 
 /// Placeholder shown for an unset option that falls back to the backend default.
 const UNSET_LABEL: &str = "(default)";
+
+/// Explain a core error, pointing at the web UI control that resolves it
+fn error_message(error: rflasher_core::Error) -> String {
+    use rflasher_core::{Error, Refusal};
+    match error {
+        Error::ChipAmbiguous => "Several chip definitions match this chip's JEDEC ID and \
+                                 differ in how they erase or program. Select the exact part \
+                                 in the chip selector, then probe again."
+            .to_string(),
+        Error::ChipMismatch => "The chip definition contradicts the chip's own SFDP data (size \
+                                or page size), so operating on it could corrupt data. Select \
+                                the correct chip or explicitly acknowledge the separate SFDP \
+                                override before probing again."
+            .to_string(),
+        Error::MutationRefused(Refusal::FullChip) => {
+            format!("{error}. Tick \"Authorize one full-chip mutation\" to proceed.")
+        }
+        Error::MutationRefused(Refusal::DangerousRegion | Refusal::UnusableDescriptor) => {
+            format!(
+                "{error}. Tick \"Authorize ME/TXE/IE, descriptor and PTT changes\" only if \
+                 you are sure; the browser console names the region."
+            )
+        }
+        error => error.to_string(),
+    }
+}
 
 /// Render one form field as a `label | widget` grid row, choosing the widget
 /// from the option kind. The value stays a raw string so the backend parser
@@ -1600,8 +1666,28 @@ impl RflasherApp {
         let busy = self.is_busy();
         let has_chip = self.chip_detected();
 
-        // Probe button
+        // Changing a selection invalidates the previously probed profile.
         ui.add_enabled_ui(connected && !busy, |ui| {
+            let before = (self.selected_chip.clone(), self.override_sfdp);
+            egui::ComboBox::from_id_salt("chip_definition")
+                .selected_text(if self.selected_chip.is_empty() {
+                    "Automatic"
+                } else {
+                    &self.selected_chip
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.selected_chip, String::new(), "Automatic");
+                    for chip in self.chip_db.iter() {
+                        ui.selectable_value(&mut self.selected_chip, chip.name.clone(), &chip.name);
+                    }
+                });
+            ui.checkbox(
+                &mut self.override_sfdp,
+                "Override contradictory SFDP geometry (unsafe)",
+            );
+            if before != (self.selected_chip.clone(), self.override_sfdp) {
+                self.chip_info = None;
+            }
             if ui.button("Probe Chip").clicked() {
                 self.spawn_probe();
             }
@@ -1609,25 +1695,44 @@ impl RflasherApp {
 
         ui.add_space(5.0);
 
-        // Read/Write/Erase/Verify buttons
-        ui.add_enabled_ui(connected && has_chip && !busy, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("Read").clicked() {
-                    self.spawn_read();
-                }
-                if ui.button("Write").clicked() {
-                    self.spawn_write();
-                }
-            });
-            ui.horizontal(|ui| {
-                if ui.button("Erase").clicked() {
-                    self.spawn_erase();
-                }
-                if ui.button("Verify").clicked() {
-                    self.spawn_verify();
-                }
-            });
+        ui.add_enabled_ui(!busy, |ui| {
+            ui.checkbox(
+                &mut self.allow_full_chip,
+                "Authorize one full-chip mutation",
+            );
+            ui.checkbox(
+                &mut self.allow_dangerous,
+                "Authorize ME/TXE/IE, descriptor and PTT changes (may brick system)",
+            );
         });
+        // Read/Write/Erase/Verify buttons
+        ui.add_enabled_ui(
+            connected && has_chip && self.chip_detected() && !busy,
+            |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Read").clicked() {
+                        self.spawn_read();
+                    }
+                    if ui
+                        .add_enabled(self.allow_full_chip, egui::Button::new("Write"))
+                        .clicked()
+                    {
+                        self.spawn_write();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(self.allow_full_chip, egui::Button::new("Erase"))
+                        .clicked()
+                    {
+                        self.spawn_erase();
+                    }
+                    if ui.button("Verify").clicked() {
+                        self.spawn_verify();
+                    }
+                });
+            },
+        );
 
         // Progress display
         match &self.operation {

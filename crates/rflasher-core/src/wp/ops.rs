@@ -31,6 +31,11 @@ pub enum WpError {
     RangeListUnavailable,
     /// Write Protect Selection (WPS) bit is set, indicating per-sector mode
     UnsupportedState,
+    /// A volatile (temporary) status register write was requested but the
+    /// chip has no volatile write-enable (EWSR) according to its definition
+    VolatileUnsupported,
+    /// No documented persistent status-register write procedure.
+    PersistentUnsupported,
     /// SPI communication error
     SpiError(Error),
 }
@@ -53,6 +58,15 @@ impl core::fmt::Display for WpError {
             WpError::RangeListUnavailable => write!(f, "cannot enumerate available ranges"),
             WpError::UnsupportedState => {
                 write!(f, "WPS bit set, per-sector protection mode not supported")
+            }
+            WpError::VolatileUnsupported => {
+                write!(f, "chip does not support volatile status register writes")
+            }
+            WpError::PersistentUnsupported => {
+                write!(
+                    f,
+                    "chip has no documented persistent status register write procedure"
+                )
             }
             WpError::SpiError(e) => write!(f, "SPI error: {}", e),
         }
@@ -244,20 +258,75 @@ fn build_register_masks(bit_map: &WpRegBitMap, bits: &WpBits) -> (u8, u8, u8) {
     (mask1, mask2, mask3)
 }
 
-/// Write protection configuration options
+/// The caller's persistence requirement, independent of wire commands.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WriteOptions {
-    /// Use volatile write (currently ignored; see note below)
-    ///
-    /// NOTE: currently ignored — all status register writes use the
-    /// non-volatile path. Volatile writes require a separate SR copy on
-    /// some chips and are not implemented yet.
+    /// Temporary protection, lost at the next power cycle.
     pub volatile: bool,
-    /// Use EWSR (0x50) instead of WREN (0x06) before status register writes.
-    ///
-    /// Required for legacy SST25 chips. Set automatically by `SpiFlashDevice`
-    /// when the chip has the `WRSR_EWSR` feature flag.
-    pub use_ewsr: bool,
+}
+
+/// Documented status-register enable mechanisms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegisterWriteEnable {
+    /// Write enable (0x06).
+    Wren,
+    /// Enable status-register write (0x50).
+    Ewsr,
+}
+
+/// A chip's persistent and volatile write procedures are separate capabilities.
+#[derive(Debug, Clone, Copy)]
+pub struct StatusWriteMethods {
+    /// Documented procedure that survives power loss.
+    pub persistent: Option<RegisterWriteEnable>,
+    /// Documented temporary procedure, lost at power-off.
+    pub volatile: Option<RegisterWriteEnable>,
+}
+
+impl StatusWriteMethods {
+    /// Convert explicit database/SFDP capabilities without inferring persistence.
+    pub fn from_features(features: crate::chip::Features) -> Self {
+        use crate::chip::Features;
+        Self {
+            persistent: if features.contains(Features::WRSR_WREN) {
+                Some(RegisterWriteEnable::Wren)
+            } else if features.contains(Features::WRSR_PERSISTENT_EWSR) {
+                Some(RegisterWriteEnable::Ewsr)
+            } else {
+                None
+            },
+            volatile: if features.contains(Features::WRSR_VOLATILE_WREN) {
+                Some(RegisterWriteEnable::Wren)
+            } else if features.contains(Features::WRSR_EWSR) {
+                Some(RegisterWriteEnable::Ewsr)
+            } else {
+                None
+            },
+        }
+    }
+
+    /// Resolve the requested persistence or fail before any register write.
+    pub fn resolve(self, options: WriteOptions) -> WpResult<ResolvedWriteOptions> {
+        let enable = if options.volatile {
+            self.volatile.ok_or(WpError::VolatileUnsupported)?
+        } else {
+            self.persistent.ok_or(WpError::PersistentUnsupported)?
+        };
+        Ok(ResolvedWriteOptions { enable })
+    }
+}
+
+/// A checked procedure. Construct with [`StatusWriteMethods::resolve`].
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedWriteOptions {
+    enable: RegisterWriteEnable,
+}
+
+impl WriteOptions {
+    /// Resolve the request using independently documented enable mechanisms.
+    pub fn for_features(self, features: crate::chip::Features) -> WpResult<ResolvedWriteOptions> {
+        StatusWriteMethods::from_features(features).resolve(self)
+    }
 }
 
 /// Write WP bits to the chip
@@ -265,7 +334,7 @@ pub async fn write_wp_bits<M: SpiMaster + ?Sized>(
     master: &mut M,
     bits: &WpBits,
     bit_map: &WpRegBitMap,
-    options: WriteOptions,
+    options: ResolvedWriteOptions,
 ) -> WpResult<()> {
     // Read current values
     let (curr_sr1, curr_sr2, _curr_sr3) = read_current_registers(master).await?;
@@ -287,18 +356,14 @@ pub async fn write_wp_bits<M: SpiMaster + ?Sized>(
         return Ok(());
     }
 
-    // Perform the write, selecting EWSR vs WREN based on chip requirements.
-    // SST25 chips need EWSR (0x50) before WRSR rather than standard WREN (0x06).
-    // TODO: Implement separate volatile/non-volatile paths: volatile writes on
-    // some chips require a separate SR copy that resets on power cycle.
-    let _ = options.volatile;
+    // Only a resolved, documented procedure reaches the wire.
     if need_sr2 {
-        if options.use_ewsr {
+        if options.enable == RegisterWriteEnable::Ewsr {
             protocol::write_status12_ewsr(master, final_sr1, final_sr2).await?;
         } else {
             protocol::write_status12(master, final_sr1, final_sr2).await?;
         }
-    } else if options.use_ewsr {
+    } else if options.enable == RegisterWriteEnable::Ewsr {
         protocol::write_status1_ewsr(master, final_sr1).await?;
     } else {
         protocol::write_status1(master, final_sr1).await?;
@@ -321,7 +386,7 @@ pub async fn set_wp_mode<M: SpiMaster + ?Sized>(
     master: &mut M,
     mode: WpMode,
     bit_map: &WpRegBitMap,
-    options: WriteOptions,
+    options: ResolvedWriteOptions,
 ) -> WpResult<()> {
     // Only Disabled and Hardware modes can be set programmatically
     let (srp, srl) = match mode {
@@ -356,7 +421,7 @@ pub async fn set_wp_range<M: SpiMaster + ?Sized>(
     bit_map: &WpRegBitMap,
     total_size: u32,
     decoder: RangeDecoder,
-    options: WriteOptions,
+    options: ResolvedWriteOptions,
 ) -> WpResult<()> {
     // Read current bits to use as template
     let current_bits = read_wp_bits(master, bit_map).await?;
@@ -393,7 +458,7 @@ pub async fn write_wp_config<M: SpiMaster + ?Sized>(
     bit_map: &WpRegBitMap,
     total_size: u32,
     decoder: RangeDecoder,
-    options: WriteOptions,
+    options: ResolvedWriteOptions,
 ) -> WpResult<()> {
     // First set the range
     set_wp_range(master, &config.range, bit_map, total_size, decoder, options).await?;
@@ -406,7 +471,7 @@ pub async fn write_wp_config<M: SpiMaster + ?Sized>(
 pub async fn disable_wp<M: SpiMaster + ?Sized>(
     master: &mut M,
     bit_map: &WpRegBitMap,
-    options: WriteOptions,
+    options: ResolvedWriteOptions,
 ) -> WpResult<()> {
     let mut bits = WpBits::empty();
 
@@ -464,6 +529,44 @@ pub fn get_available_ranges(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_enable_command_follows_chip_features_and_volatility() {
+        use crate::chip::Features;
+        let resolve = |features, volatile| {
+            WriteOptions { volatile }
+                .for_features(features)
+                .map(|o| o.enable == RegisterWriteEnable::Ewsr)
+        };
+        let wren = Features::WRSR_WREN;
+        let ewsr = Features::WRSR_EWSR;
+
+        // Ordinary chip: non-volatile via WREN, no volatile write available.
+        assert_eq!(resolve(wren, false), Ok(false));
+        assert_eq!(resolve(wren, true), Err(WpError::VolatileUnsupported));
+        // Chips that can do both must not silently turn a normal (persistent)
+        // write into a volatile one just because they also know EWSR.
+        assert_eq!(resolve(wren | ewsr, false), Ok(false));
+        assert_eq!(resolve(wren | ewsr, true), Ok(true));
+        // EWSR alone is not evidence that protection survives a power cycle.
+        assert_eq!(resolve(ewsr, false), Err(WpError::PersistentUnsupported));
+        assert_eq!(resolve(ewsr, true), Ok(true));
+        assert_eq!(resolve(Features::WRSR_PERSISTENT_EWSR, false), Ok(true));
+        assert_eq!(
+            resolve(Features::WRSR_PERSISTENT_EWSR, true),
+            Err(WpError::VolatileUnsupported)
+        );
+        assert_eq!(resolve(Features::WRSR_VOLATILE_WREN, true), Ok(false));
+        // Undocumented chip: never guess a persistent-write mechanism.
+        assert_eq!(
+            resolve(Features::empty(), false),
+            Err(WpError::PersistentUnsupported)
+        );
+        assert_eq!(
+            resolve(Features::empty(), true),
+            Err(WpError::VolatileUnsupported)
+        );
+    }
 
     #[test]
     fn test_mode_from_bits() {

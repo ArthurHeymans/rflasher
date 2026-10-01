@@ -23,17 +23,19 @@
 //! # Example
 //!
 //! ```ignore
-//! use rflasher_core::flash::{FlashDevice, SpiFlashDevice, OpaqueFlashDevice};
+//! use rflasher_core::flash::{FlashDevice, MutationPolicy, OpaqueFlashDevice, SpiFlashDevice};
 //! use rflasher_core::flash::unified;
+//!
+//! let mut policy = MutationPolicy { allow_full_chip: true, ..Default::default() };
 //!
 //! // Using SPI programmer
 //! let ctx = flash::probe(master, &db)?;
 //! let mut device = SpiFlashDevice::new(master, ctx);
-//! unified::smart_write(&mut device, &data, &mut progress)?;
+//! unified::smart_write_with_policy(&mut device, &data, &mut progress, &mut policy)?;
 //!
 //! // Using opaque programmer  
 //! let mut device = OpaqueFlashDevice::new(master);
-//! unified::smart_write(&mut device, &data, &mut progress)?;
+//! unified::smart_write_with_policy(&mut device, &data, &mut progress, &mut policy)?;
 //! ```
 
 mod context;
@@ -41,9 +43,13 @@ mod device;
 mod hybrid_device;
 mod opaque_device;
 mod operations;
+#[cfg(feature = "alloc")]
+mod policy;
 mod spi_device;
 #[cfg(feature = "alloc")]
 pub mod unified;
+#[cfg(feature = "alloc")]
+pub use policy::{MutationPolicy, RecoveryBackup};
 
 pub use context::FlashContext;
 pub use device::FlashDevice;
@@ -55,8 +61,8 @@ pub use spi_device::SpiFlashDevice;
 
 // Re-export low-level SPI operations (work with SpiMaster directly)
 // For high-level operations that work with any FlashDevice, use the `unified` module
-pub use operations::{read, select_erase_block, write};
+pub use operations::{OptimalEraseOp, read, select_erase_block, write};
 
 // Re-export detailed probe result
 #[cfg(feature = "std")]
-pub use operations::{ProbeResult, probe_detailed};
+pub use operations::{ProbeOptions, ProbeResult, probe_detailed, probe_with_options};

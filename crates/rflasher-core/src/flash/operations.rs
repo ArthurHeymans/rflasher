@@ -297,7 +297,6 @@ struct EraserLayout {
 }
 
 /// Selected erase operation in the optimal erase plan
-#[cfg(feature = "alloc")]
 #[derive(Debug, Clone)]
 pub struct OptimalEraseOp {
     /// Start address of the erase block
@@ -305,7 +304,6 @@ pub struct OptimalEraseOp {
     /// Size of the erase block
     pub size: u32,
     /// The erase block definition (opcode and size)
-    #[allow(dead_code)]
     pub erase_block: EraseBlock,
 }
 
@@ -325,6 +323,8 @@ fn create_erase_layout(erase_blocks: &[EraseBlock], flash_size: u32) -> Vec<Eras
                 && !eb.is_chip_erase()
                 && eb.min_block_size() > 0
                 && eb.min_block_size() <= flash_size
+                && eb.total_size() == flash_size
+                && flash_size.is_multiple_of(eb.min_block_size())
         })
         .cloned()
         .collect();
@@ -332,6 +332,18 @@ fn create_erase_layout(erase_blocks: &[EraseBlock], flash_size: u32) -> Vec<Eras
 
     // Remove duplicates (same size, different opcode)
     sorted_erasers.dedup_by_key(|eb| eb.min_block_size());
+    // A hierarchy needs exact subdivision; otherwise upper blocks can hide
+    // trailing smaller sectors. Keep a compatible subset, never guess.
+    let mut previous = 0;
+    sorted_erasers.retain(|eb| {
+        let size = eb.min_block_size();
+        if previous == 0 || size.is_multiple_of(previous) {
+            previous = size;
+            true
+        } else {
+            false
+        }
+    });
 
     if sorted_erasers.is_empty() {
         return Vec::new();
@@ -546,6 +558,19 @@ pub fn plan_optimal_erase(
     region_end: u32,
     granularity: WriteGranularity,
 ) -> Result<Vec<OptimalEraseOp>> {
+    if flash_size == 0 || region_start > region_end || region_end >= flash_size {
+        return Err(Error::AddressOutOfBounds);
+    }
+    if let (Some(have), Some(want)) = (have, want) {
+        let region_len = (region_end - region_start + 1) as usize;
+        if have.len() != want.len()
+            || (have.len() != region_len && have.len() != flash_size as usize)
+        {
+            return Err(Error::BufferTooSmall);
+        }
+    } else if have.is_some() || want.is_some() {
+        return Err(Error::BufferTooSmall);
+    }
     let mut layouts = create_erase_layout(erase_blocks, flash_size);
 
     if layouts.is_empty() {
@@ -607,7 +632,10 @@ pub fn plan_optimal_erase(
 
     if covers_full_chip && more_than_half {
         // Find chip erase block if available
-        if let Some(chip_erase_block) = erase_blocks.iter().find(|eb| eb.is_chip_erase()) {
+        if let Some(chip_erase_block) = erase_blocks
+            .iter()
+            .find(|eb| eb.is_chip_erase() && eb.total_size() == flash_size)
+        {
             // Use chip erase instead of individual blocks
             return Ok(vec![OptimalEraseOp {
                 start: 0,
@@ -709,15 +737,13 @@ impl ProbeResult {
         !self.mismatches.is_empty()
     }
 
-    /// Check if there are critical mismatches (size/page size)
+    /// Check if there are critical mismatches (see [`SfdpMismatch::is_critical`])
+    ///
+    /// [`SfdpMismatch::is_critical`]: crate::sfdp::SfdpMismatch::is_critical
     pub fn has_critical_mismatches(&self) -> bool {
-        self.mismatches.iter().any(|m| {
-            matches!(
-                m,
-                crate::sfdp::SfdpMismatch::TotalSize { .. }
-                    | crate::sfdp::SfdpMismatch::PageSize { .. }
-            )
-        })
+        self.mismatches
+            .iter()
+            .any(crate::sfdp::SfdpMismatch::is_critical)
     }
 
     /// Create a FlashContext from this probe result
@@ -726,18 +752,251 @@ impl ProbeResult {
     }
 }
 
+/// How a probed chip is matched against the chip database
+#[cfg(feature = "std")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProbeOptions<'a> {
+    /// Select the database entry with this name instead of deciding by ID.
+    ///
+    /// Needed when several entries share the probed JEDEC ID and cannot be
+    /// told apart automatically. Matched against entry names with
+    /// [`name_matches`](crate::chip::name_matches), i.e. ignoring case and
+    /// honouring the database's `A/B`, `(B)` and `.` name patterns.
+    pub chip: Option<&'a str>,
+    /// Proceed although the database entry contradicts the chip's SFDP data
+    /// in a way that makes operating on it unsafe (see
+    /// [`SfdpMismatch::is_critical`](crate::sfdp::SfdpMismatch::is_critical)).
+    pub force: bool,
+}
+
+/// Pick the database entry for a probed JEDEC ID.
+///
+/// JEDEC IDs are not unique, so several entries may match. Alias entries that
+/// behave identically are interchangeable and the first is used. Otherwise the
+/// chip's own SFDP size/page data eliminates contradictory geometries. Any
+/// remaining aliases use a safe common operation profile; conflicting essential
+/// procedures require explicit selection, never a mismatch-count heuristic.
+#[cfg(feature = "std")]
+fn select_database_chip<P>(
+    provider: &P,
+    manufacturer: u8,
+    device: u16,
+    sfdp: Option<&crate::sfdp::SfdpInfo>,
+    wanted: Option<&str>,
+) -> Result<Option<crate::chip::FlashChip>>
+where
+    P: ChipProvider + ?Sized,
+{
+    let mut candidates: Vec<&crate::chip::FlashChip> = (0..)
+        .map_while(|i| provider.find_nth_by_jedec_id(manufacturer, device, i))
+        .collect();
+    let names = |chips: &[&crate::chip::FlashChip]| -> std::string::String {
+        chips
+            .iter()
+            .map(|c| c.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    if let Some(wanted) = wanted {
+        let matching: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|c| {
+                c.name().eq_ignore_ascii_case(wanted) || crate::chip::name_matches(c.name(), wanted)
+            })
+            .collect();
+        if matching.is_empty() {
+            log::error!(
+                "No chip definition named \"{}\" matches JEDEC ID {:02X}:{:04X}{}",
+                wanted,
+                manufacturer,
+                device,
+                if candidates.is_empty() {
+                    std::string::String::new()
+                } else {
+                    std::format!(" (candidates: {})", names(&candidates))
+                }
+            );
+            return Err(Error::ChipNotFound);
+        }
+        // Exact database names (including slash/optional patterns) are
+        // selectable by the web UI. A loose pattern is not authorization to
+        // choose an arbitrary, conflicting procedure.
+        if let Some(chosen) = matching
+            .iter()
+            .find(|c| c.name().eq_ignore_ascii_case(wanted))
+        {
+            return Ok(Some((*chosen).clone()));
+        }
+        if matching.len() == 1 || matching.iter().all(|c| c.is_equivalent_to(matching[0])) {
+            return Ok(Some(matching[0].clone()));
+        }
+        return common_operation_profile(&matching)
+            .map(Some)
+            .ok_or(Error::ChipAmbiguous);
+    }
+
+    let Some(&first) = candidates.first() else {
+        return Ok(None);
+    };
+    if candidates.iter().all(|c| c.is_equivalent_to(first)) {
+        if candidates.len() > 1 {
+            log::debug!(
+                "Interchangeable chip definitions for {:02X}:{:04X}: {}",
+                manufacturer,
+                device,
+                names(&candidates)
+            );
+        }
+        return Ok(Some(first.clone()));
+    }
+
+    if let Some(sfdp) = sfdp {
+        let score = |c: &crate::chip::FlashChip| {
+            let mismatches = crate::sfdp::compare_with_chip(sfdp, c);
+            // Missing optional capabilities are not evidence of chip identity.
+            // Only size/page facts can eliminate an unsafe geometry here.
+            mismatches.iter().filter(|m| m.is_critical()).count()
+        };
+        let best = candidates.iter().map(|c| score(c)).min();
+        let best_matches: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|c| Some(score(c)) == best)
+            .collect();
+        if best_matches
+            .iter()
+            .all(|c| c.is_equivalent_to(best_matches[0]))
+        {
+            log::info!(
+                "Several chip definitions match {:02X}:{:04X} ({}); chose {} by its SFDP data",
+                manufacturer,
+                device,
+                names(&candidates),
+                best_matches[0].name()
+            );
+            return Ok(Some(best_matches[0].clone()));
+        }
+        candidates = best_matches;
+    }
+
+    if let Some(profile) = common_operation_profile(&candidates) {
+        log::warn!(
+            "Unresolved aliases {}; using only their common operations",
+            names(&candidates)
+        );
+        return Ok(Some(profile));
+    }
+
+    log::error!(
+        "Multiple chip definitions match JEDEC ID {:02X}:{:04X} and differ in erase \
+         geometry or features: {}. Select one explicitly with --chip.",
+        manufacturer,
+        device,
+        names(&candidates)
+    );
+    Err(Error::ChipAmbiguous)
+}
+
+/// Build a conservative operational profile, not an arbitrary database row.
+/// Only shared commands survive. Missing optional flags do not prove that two
+/// aliases require conflicting procedures; essential program/address modes do.
+#[cfg(feature = "std")]
+fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::chip::FlashChip> {
+    let first = *chips.first()?;
+    let required = Features::AAI_WORD | Features::WRITE_BYTE | Features::SST26_BPR;
+    let addressing = Features::PROCEDURE
+        - (Features::WRSR_WREN
+            | Features::WRSR_EWSR
+            | Features::WRSR_EXT
+            | Features::WP_BP3
+            | Features::WRSR_VOLATILE_WREN
+            | Features::WRSR_PERSISTENT_EWSR);
+    if chips.iter().any(|c| {
+        c.total_size != first.total_size
+            || c.write_granularity != first.write_granularity
+            || c.features & required != first.features & required
+            || (first.requires_4byte_addr()
+                && c.features & addressing != first.features & addressing)
+    }) {
+        return None;
+    }
+    let mut profile = first.clone();
+    // A synthesized profile has not itself been hardware-tested.
+    profile.tested = crate::chip::ChipTestStatus::default();
+    profile.name = chips
+        .iter()
+        .map(|c| c.name())
+        .collect::<Vec<_>>()
+        .join(" / ");
+    profile.page_size = chips.iter().map(|c| c.page_size).min()?;
+    if profile.page_size == 0 {
+        return None;
+    }
+    profile.features = chips.iter().fold(first.features, |f, c| f & c.features);
+    // Only flags that change the WP register bit map count (see
+    // `SpiFlashDevice::wp_bit_map`); SST26_BPR is already required to match.
+    // Descriptive flags such as STATUS_REG_2 or WP_TB are not used by WP
+    // access, so differences there must not disable it.
+    if chips
+        .iter()
+        .any(|c| c.features & Features::WP_BP3 != first.features & Features::WP_BP3)
+    {
+        profile.features |= Features::WP_UNRESOLVED;
+    }
+    profile
+        .erase_blocks
+        .retain(|block| chips.iter().all(|c| c.erase_blocks().contains(block)));
+    // Do not substitute an addressless chip erase for missing addressed geometry.
+    if !profile.erase_blocks.iter().any(|b| !b.is_chip_erase()) {
+        return None;
+    }
+    profile.voltage_min_mv = chips.iter().map(|c| c.voltage_min_mv).max()?;
+    profile.voltage_max_mv = chips.iter().map(|c| c.voltage_max_mv).min()?;
+    if profile.voltage_min_mv > profile.voltage_max_mv {
+        return None;
+    }
+    if chips.iter().any(|c| {
+        c.tested.write == crate::chip::TestStatus::Bad
+            || c.tested.erase == crate::chip::TestStatus::Bad
+    }) {
+        return None;
+    }
+    Some(profile)
+}
+
+/// Probe for a flash chip with detailed results
+///
+/// Equivalent to [`probe_with_options`] with default options.
+#[cfg(feature = "std")]
+pub async fn probe_detailed<M, P>(master: &mut M, provider: &P) -> Result<ProbeResult>
+where
+    M: SpiMaster + ?Sized,
+    P: ChipProvider + ?Sized,
+{
+    probe_with_options(master, provider, &ProbeOptions::default()).await
+}
+
 /// Probe for a flash chip with detailed results
 ///
 /// This function performs comprehensive probing:
 /// 1. Reads JEDEC ID
 /// 2. Probes SFDP (if supported)
-/// 3. Looks up in database
-/// 4. Compares SFDP with database (if both available)
+/// 3. Looks up in database, resolving JEDEC ID collisions (see
+///    [`ProbeOptions::chip`])
+/// 4. Compares SFDP with database (if both available) and refuses a database
+///    entry that contradicts SFDP on size or page size unless
+///    [`ProbeOptions::force`] is set
 ///
 /// Returns detailed information about what was found, allowing the caller
 /// to decide how to handle mismatches or unknown chips.
 #[cfg(feature = "std")]
-pub async fn probe_detailed<M, P>(master: &mut M, provider: &P) -> Result<ProbeResult>
+pub async fn probe_with_options<M, P>(
+    master: &mut M,
+    provider: &P,
+    options: &ProbeOptions<'_>,
+) -> Result<ProbeResult>
 where
     M: SpiMaster + ?Sized,
     P: ChipProvider + ?Sized,
@@ -769,7 +1028,13 @@ where
     };
 
     // Look up in database
-    let db_chip = provider.find_by_jedec_id(jedec_manufacturer, jedec_device);
+    let db_chip = select_database_chip(
+        provider,
+        jedec_manufacturer,
+        jedec_device,
+        sfdp.as_ref(),
+        options.chip,
+    )?;
     if db_chip.is_some() {
         log::debug!("Chip found in database");
     } else {
@@ -794,14 +1059,53 @@ where
         (None, None) => return Err(Error::ChipNotFound),
     };
 
-    Ok(ProbeResult {
+    let mut result = ProbeResult {
         jedec_manufacturer,
         jedec_device,
         chip,
         from_database,
         sfdp,
         mismatches,
-    })
+    };
+
+    if result.has_critical_mismatches() && !options.force {
+        for mismatch in result.mismatches.iter().filter(|m| m.is_critical()) {
+            log::error!("{}: {}", result.chip.name(), mismatch);
+        }
+        log::error!(
+            "The database entry contradicts the chip's SFDP data, so operating on it could \
+             corrupt data. Select the right entry with --chip, or override with --force."
+        );
+        return Err(Error::ChipMismatch);
+    }
+
+    if let Some(info) = &result.sfdp {
+        // BFPT can disprove an addressed erase opcode but does not advertise
+        // addressless chip erase. Never execute a disputed database eraser.
+        result.chip.erase_blocks.retain(|block| {
+            block.is_chip_erase()
+                || (block.is_uniform()
+                    && info.basic_params.erase_types.iter().any(|e| {
+                        e.is_valid() && e.size == block.min_block_size() && e.opcode == block.opcode
+                    }))
+        });
+        if info.four_byte_addr_table.is_some() {
+            let validated = crate::sfdp::to_flash_chip(info, jedec_manufacturer, jedec_device);
+            for block in &mut result.chip.erase_blocks {
+                if !block.is_chip_erase() {
+                    let known = validated.erase_blocks.iter().find(|b| {
+                        b.opcode == block.opcode && b.min_block_size() == block.min_block_size()
+                    });
+                    if block.opcode_4b != known.and_then(|b| b.opcode_4b) {
+                        // Keep the validated three-byte opcode, but do not
+                        // execute an unadvertised native four-byte command.
+                        block.opcode_4b = None;
+                    }
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Read flash contents
@@ -1006,22 +1310,113 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
     addr: u32,
     len: u32,
 ) -> Result<()> {
-    let block = select_erase_block(ctx.chip.erase_blocks(), addr, len);
-    if block.is_none()
-        && addr == 0
-        && len == ctx.total_size() as u32
-        && let Some(chip_erase) = ctx
-            .chip
+    let block = if addr == 0 && len == ctx.chip.total_size {
+        ctx.chip
             .erase_blocks()
             .iter()
             .find(|eb| eb.is_chip_erase() && eb.total_size() == len)
+            .cloned()
+            .or_else(|| select_erase_block(ctx.chip.erase_blocks(), addr, len))
+    } else {
+        select_erase_block(ctx.chip.erase_blocks(), addr, len)
+    }
+    .ok_or(Error::InvalidAlignment)?;
+    erase_spi_operation(
+        master,
+        ctx,
+        &OptimalEraseOp {
+            start: addr,
+            size: len,
+            erase_block: block,
+        },
+    )
+    .await
+}
+
+/// Check all planned-command prerequisites without issuing any SPI command.
+pub(crate) fn validate_spi_erase_operation<M: SpiMaster + ?Sized>(
+    master: &M,
+    ctx: &FlashContext,
+    op: &OptimalEraseOp,
+) -> Result<()> {
+    if op.size == 0
+        || !ctx.is_valid_range(op.start, op.size as usize)
+        || !ctx.chip.erase_blocks().contains(&op.erase_block)
     {
+        return Err(Error::InvalidAlignment);
+    }
+    let block = &op.erase_block;
+    if block.is_chip_erase() {
+        if op.start != 0 || op.size != ctx.chip.total_size || block.total_size() != op.size {
+            return Err(Error::InvalidAlignment);
+        }
+        return if master.probe_opcode(block.opcode) {
+            Ok(())
+        } else {
+            Err(Error::OpcodeNotSupported)
+        };
+    }
+    let end = op
+        .start
+        .checked_add(op.size)
+        .ok_or(Error::AddressOutOfBounds)?;
+    let mut addr = op.start;
+    while addr < end {
+        let size = block
+            .block_size_at_boundary(addr)
+            .filter(|s| *s > 0)
+            .ok_or(Error::InvalidAlignment)?;
+        addr = addr.checked_add(size).ok_or(Error::AddressOutOfBounds)?;
+        if addr > end {
+            return Err(Error::InvalidAlignment);
+        }
+    }
+    let native = ctx.address_mode == AddressMode::FourByte
+        && block.opcode_4b.is_some_and(|opcode| {
+            master.features().contains(SpiFeatures::FOUR_BYTE_ADDR) && master.probe_opcode(opcode)
+        });
+    if !master.probe_opcode(block.opcode_for_address_width(native)) {
+        return Err(Error::OpcodeNotSupported);
+    }
+    if ctx.address_mode == AddressMode::FourByte {
+        addressing_for_4byte_operation(native, ctx.chip.features, master.features())?;
+    }
+    Ok(())
+}
+
+/// Execute exactly the validated eraser selected by the planner.
+pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    op: &OptimalEraseOp,
+) -> Result<()> {
+    validate_spi_erase_operation(master, ctx, op)?;
+    let addr = op.start;
+    let len = op.size;
+    if len == 0
+        || !ctx.is_valid_range(addr, len as usize)
+        || !ctx.chip.erase_blocks().contains(&op.erase_block)
+    {
+        return Err(Error::InvalidAlignment);
+    }
+    let block = &op.erase_block;
+    // A request for the whole chip uses the addressless chip-erase opcode when
+    // the chip has one. This is what the erase planner selects for a full-chip
+    // erase; walking every sector instead is correct but far slower. Chips
+    // without one (e.g. stacked-die parts that only offer per-die erase) fall
+    // through to the addressed blocks below.
+    if block.is_chip_erase() {
+        if addr != 0 || len != ctx.chip.total_size || block.total_size() != len {
+            return Err(Error::InvalidAlignment);
+        }
+        if !master.probe_opcode(block.opcode) {
+            return Err(Error::OpcodeNotSupported);
+        }
         if ctx.chip.features.contains(Features::SST26_BPR) {
             protocol::sst26_global_unprotect(master).await?;
         }
-        return protocol::chip_erase_with_opcode(master, chip_erase.opcode).await;
+        return protocol::chip_erase_with_opcode(master, block.opcode).await;
     }
-    let block = block.ok_or(Error::InvalidAlignment)?;
     let features = ctx.chip.features;
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
     let master_features = master.features();
@@ -1030,6 +1425,9 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
             master_features.contains(SpiFeatures::FOUR_BYTE_ADDR) && master.probe_opcode(opcode)
         });
     let opcode = block.opcode_for_address_width(use_native);
+    if !master.probe_opcode(opcode) {
+        return Err(Error::OpcodeNotSupported);
+    }
     let (addressing, enter_exit_4byte) = if use_4byte {
         addressing_for_4byte_operation(use_native, features, master_features)?
     } else {
@@ -1054,12 +1452,7 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
     if enter_exit_4byte {
         protocol::enter_4byte_mode_with_features(master, features).await?;
     }
-    let max_size = block.max_block_size();
-    let (poll_delay_us, timeout_us) = match max_size {
-        s if s <= 4096 => (10_000, 1_000_000),
-        s if s <= 65536 => (100_000, 4_000_000),
-        _ => (500_000, 60_000_000),
-    };
+    let (poll_delay_us, timeout_us) = protocol::erase_timing(block.max_block_size());
     let mut current = addr;
     let mut result = Ok(());
     while current < end {
@@ -1207,6 +1600,41 @@ mod tests {
     use crate::chip::{EraseBlock, Features, WriteGranularity};
     use crate::spi::opcodes;
 
+    #[test]
+    fn bundled_common_jedec_collisions_resolve_to_safe_profiles() {
+        let db = rflasher_chips::ChipDatabase::new();
+        for (manufacturer, device) in [
+            (0xc8, 0x4018),
+            (0x0b, 0x4018),
+            (0xc2, 0x2017),
+            (0xc2, 0x2018),
+            (0xef, 0x4017),
+        ] {
+            let profile = select_database_chip(&db, manufacturer, device, None, None)
+                .unwrap()
+                .unwrap();
+            let candidates: Vec<_> = (0..)
+                .map_while(|n| db.find_nth_by_jedec_id(manufacturer, device, n))
+                .collect();
+            assert!(candidates.len() > 1);
+            assert!(
+                profile
+                    .erase_blocks
+                    .iter()
+                    .all(|b| candidates.iter().all(|c| c.erase_blocks().contains(b)))
+            );
+            assert!(profile.erase_blocks.iter().any(|b| !b.is_chip_erase()));
+            // Popular aliases must keep persistent write protection.
+            assert!(
+                crate::wp::WriteOptions::default()
+                    .for_features(profile.features)
+                    .is_ok(),
+                "{manufacturer:02x}:{device:04x}"
+            );
+            assert!(!profile.features.contains(Features::WP_UNRESOLVED));
+        }
+    }
+
     struct EraseMaster {
         commands: Vec<(u8, Option<u32>)>,
         fail_erase: bool,
@@ -1304,6 +1732,39 @@ mod tests {
     }
 
     #[test]
+    fn exact_planned_opcode_survives_spi_and_hybrid_dispatch() {
+        use crate::flash::{FlashDevice, HybridFlashDevice, SpiFlashDevice};
+        use futures_lite::future::block_on;
+        for hybrid in [false, true] {
+            let mut ctx = nonuniform_context();
+            ctx.chip.erase_blocks = vec![
+                EraseBlock::with_count(0x20, 16, 3),
+                EraseBlock::new(0xc7, 48),
+            ];
+            let op = OptimalEraseOp {
+                start: 0,
+                size: 48,
+                erase_block: ctx.chip.erase_blocks[0].clone(),
+            };
+            let master = EraseMaster {
+                commands: vec![],
+                fail_erase: false,
+            };
+            let commands = if hybrid {
+                let mut device = HybridFlashDevice::new(master, ctx);
+                block_on(device.erase_operation(&op)).unwrap();
+                device.into_parts().0.commands
+            } else {
+                let mut device = SpiFlashDevice::new(master, ctx);
+                block_on(device.erase_operation(&op)).unwrap();
+                device.into_parts().0.commands
+            };
+            assert_eq!(commands.iter().filter(|(code, _)| *code == 0x20).count(), 3);
+            assert!(!commands.iter().any(|(code, _)| *code == 0xc7));
+        }
+    }
+
+    #[test]
     fn nonuniform_erase_rejects_mid_block_before_spi_commands() {
         use futures_lite::future::block_on;
         let mut ctx = nonuniform_context();
@@ -1375,6 +1836,41 @@ mod tests {
                 Err(Error::InvalidAlignment)
             );
         }
+    }
+
+    #[test]
+    fn full_chip_erase_uses_chip_erase_opcode_even_with_sector_erase_available() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.chip.erase_blocks = vec![
+            EraseBlock::with_count(0x20, 16, 3),
+            EraseBlock::new(0xC7, 48),
+        ];
+        let mut master = EraseMaster {
+            commands: vec![],
+            fail_erase: false,
+        };
+        block_on(erase_spi_range(&mut master, &ctx, 0, 48)).unwrap();
+        assert!(master.commands.contains(&(0xC7, None)));
+        assert!(master.commands.iter().all(|(opcode, _)| *opcode != 0x20));
+
+        // Anything short of the whole chip still walks addressed sectors.
+        master.commands.clear();
+        block_on(erase_spi_range(&mut master, &ctx, 16, 16)).unwrap();
+        assert!(master.commands.contains(&(0x20, Some(16))));
+        assert!(master.commands.iter().all(|(opcode, _)| *opcode != 0xC7));
+    }
+
+    #[test]
+    fn erase_timing_scales_from_sector_to_die_erase() {
+        let (sector_poll, sector_timeout) = protocol::erase_timing(4096);
+        let (block_poll, block_timeout) = protocol::erase_timing(64 * 1024);
+        let (die_poll, die_timeout) = protocol::erase_timing(32 * 1024 * 1024);
+        assert!(sector_poll < block_poll && block_poll < die_poll);
+        assert!(sector_timeout < block_timeout && block_timeout < die_timeout);
+        // Micron die erase takes up to ~480 s; block erase up to ~4 s.
+        assert!(die_timeout >= 480_000_000);
+        assert!(block_timeout >= 4_000_000 && sector_timeout >= 800_000);
     }
 
     /// Create test erase blocks for a chip of given size

@@ -165,6 +165,17 @@ impl InternalProgrammer {
         self.flash_size = size;
     }
 
+    /// Erase block size erases must be planned with, if the controller
+    /// decides it (Intel hardware sequencing; see
+    /// [`Controller::erase_block_size`]).
+    ///
+    /// Erasing through such a controller wipes whole hardware blocks
+    /// whatever range was requested, so callers must plan with this size
+    /// rather than assume one.
+    pub fn erase_block_size(&self, flash_size: u32) -> Result<Option<u32>, InternalError> {
+        self.controller.erase_block_size(flash_size)
+    }
+
     /// Get the operating mode (Intel only)
     ///
     /// Returns SoftwareSequencing for AMD controllers

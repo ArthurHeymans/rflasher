@@ -5,7 +5,36 @@
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rflasher_core::flash::unified::{WriteProgress, WriteStats};
-use rflasher_core::flash::{FlashDevice, unified};
+use rflasher_core::flash::{FlashDevice, MutationPolicy, RecoveryBackup, unified};
+
+/// A durable, non-overwriting recovery snapshot. Keep it after failures.
+pub struct FileRecovery(pub PathBuf);
+
+impl RecoveryBackup for FileRecovery {
+    fn persist(&mut self, image: &[u8]) -> rflasher_core::Result<()> {
+        let save = || -> std::io::Result<()> {
+            let mut file = File::options().write(true).create_new(true).open(&self.0)?;
+            file.write_all(image)?;
+            file.sync_all()?;
+            let parent = self
+                .0
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            File::open(parent)?.sync_all()?;
+            Ok(())
+        };
+        save().map_err(|e| {
+            log::error!("Cannot save recovery image {:?}: {}", self.0, e);
+            rflasher_core::Error::IoError
+        })?;
+        log::warn!(
+            "Recovery image saved to {:?}; retain it until verification succeeds",
+            self.0
+        );
+        Ok(())
+    }
+}
 use rflasher_core::layout::{Layout, LayoutError};
 use std::collections::HashSet;
 use std::fs::File;
@@ -523,14 +552,48 @@ pub async fn run_read_with_layout<D: FlashDevice + ?Sized>(
 // Write operations
 // =============================================================================
 
+/// Refuse to modify regions flagged dangerous (Intel ME, descriptor, PTT, ...)
+/// unless the user passed `--allow-dangerous-regions`.
+///
+/// Writing a wrong image to these can leave the machine unbootable, and unlike
+/// a mistyped region name the request looks perfectly valid, so it needs an
+/// explicit acknowledgement. `action` is "write to" or "erase".
+fn check_dangerous_regions(
+    layout: &Layout,
+    action: &str,
+    force: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dangerous = layout.dangerous_included();
+    if dangerous.is_empty() {
+        return Ok(());
+    }
+    let names = dangerous
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if force {
+        log::warn!("Forced to {} dangerous region(s): {}", action, names);
+        return Ok(());
+    }
+    Err(format!(
+        "Refusing to {} dangerous region(s): {}. A wrong image here can leave the \
+         machine unbootable. Leave them out with --exclude, or pass --allow-dangerous-regions if you \
+         are sure.",
+        action, names
+    )
+    .into())
+}
+
 /// Run the unified write command
 pub async fn run_write<D: FlashDevice + ?Sized>(
     device: &mut D,
     input: &Path,
     do_verify: bool,
+    policy: &mut MutationPolicy<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut layout = full_flash_layout(device.size());
-    run_write_with_layout(device, Some(input), &mut layout, &[], do_verify).await
+    run_write_with_layout(device, Some(input), &mut layout, &[], do_verify, policy).await
 }
 
 /// Run the unified write command with layout
@@ -545,6 +608,7 @@ pub async fn run_write_with_layout<D: FlashDevice + ?Sized>(
     layout: &mut Layout,
     region_files: &RegionFiles,
     do_verify: bool,
+    policy: &mut MutationPolicy<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
 
@@ -568,14 +632,21 @@ pub async fn run_write_with_layout<D: FlashDevice + ?Sized>(
         let names: Vec<_> = readonly.iter().map(|r| r.name.as_str()).collect();
         return Err(format!("Cannot write to readonly region(s): {}", names.join(", ")).into());
     }
+    check_dangerous_regions(layout, "write to", policy.allow_dangerous)?;
 
     let (image, effective_layout, effective_write_size) =
         build_image(input, layout, region_files, &included, flash_size)?;
 
     // Smart write using layout
     let mut progress = IndicatifProgress::new();
-    let stats =
-        unified::smart_write_by_layout(device, &effective_layout, &image, &mut progress).await?;
+    let stats = unified::smart_write_by_layout_with_policy(
+        device,
+        &effective_layout,
+        &image,
+        &mut progress,
+        policy,
+    )
+    .await?;
 
     // Verify if requested
     if do_verify {
@@ -601,15 +672,17 @@ pub async fn run_write_with_layout<D: FlashDevice + ?Sized>(
 /// Run the unified erase command
 pub async fn run_erase<D: FlashDevice + ?Sized>(
     device: &mut D,
+    policy: &mut MutationPolicy<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let layout = full_flash_layout(device.size());
-    run_erase_with_layout(device, &layout).await
+    run_erase_with_layout(device, &layout, policy).await
 }
 
 /// Run the unified erase command with layout
 pub async fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
+    policy: &mut MutationPolicy<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     validate_layout(layout, device.size())?;
 
@@ -618,6 +691,7 @@ pub async fn run_erase_with_layout<D: FlashDevice + ?Sized>(
         let names: Vec<_> = readonly.iter().map(|r| r.name.as_str()).collect();
         return Err(format!("Cannot erase readonly region(s): {}", names.join(", ")).into());
     }
+    check_dangerous_regions(layout, "erase", policy.allow_dangerous)?;
 
     print_flash_size(device.size());
 
@@ -647,10 +721,8 @@ pub async fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     pb.set_style(create_spinner_style()?);
     pb.enable_steady_tick(Duration::from_millis(100));
 
-    for region in &included {
-        pb.set_message(format!("Erasing {}...", region.name));
-        unified::erase_region(device, region).await?;
-    }
+    // One preflight checks all regions (and saves any backup) before any erase.
+    unified::erase_by_layout_with_policy(device, layout, policy).await?;
 
     pb.finish_with_message("Erase complete");
 
@@ -870,6 +942,18 @@ mod tests {
         path
     }
 
+    #[test]
+    fn recovery_file_is_persisted_and_never_overwritten() {
+        let path = temp_file("recovery.bin", &[]);
+        std::fs::remove_file(&path).unwrap();
+        let mut sink = FileRecovery(path.clone());
+        sink.persist(&[0x12, 0x34]).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), [0x12, 0x34]);
+        assert!(sink.persist(&[0xff]).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), [0x12, 0x34]);
+        std::fs::remove_file(path).unwrap();
+    }
+
     struct TestFlash {
         mutations: usize,
         blocks: Vec<rflasher_core::chip::EraseBlock>,
@@ -901,8 +985,9 @@ mod tests {
         fn erase_blocks(&self) -> &[rflasher_core::chip::EraseBlock] {
             &self.blocks
         }
-        async fn read(&mut self, _: u32, _: &mut [u8]) -> rflasher_core::Result<()> {
-            panic!("unexpected read")
+        async fn read(&mut self, _: u32, buf: &mut [u8]) -> rflasher_core::Result<()> {
+            buf.fill(0xff);
+            Ok(())
         }
         async fn write(&mut self, _: u32, _: &[u8]) -> rflasher_core::Result<()> {
             self.mutations += 1;
@@ -930,9 +1015,76 @@ mod tests {
         let mut device = TestFlash::new();
         let mut layout = two_region_layout();
         layout.find_region_mut("b").unwrap().readonly = true;
-        let err = futures_lite::future::block_on(run_erase_with_layout(&mut device, &layout))
-            .unwrap_err();
+        let err = futures_lite::future::block_on(run_erase_with_layout(
+            &mut device,
+            &layout,
+            &mut MutationPolicy::default(),
+        ))
+        .unwrap_err();
         assert!(err.to_string().contains("readonly region(s): b"));
+        assert_eq!(device.mutations, 0);
+    }
+
+    #[test]
+    fn dangerous_regions_need_region_acknowledgement_before_mutation() {
+        let mut layout = two_region_layout();
+        layout.find_region_mut("b").unwrap().dangerous = true;
+
+        let mut device = TestFlash::new();
+        let err = futures_lite::future::block_on(run_erase_with_layout(
+            &mut device,
+            &layout,
+            &mut MutationPolicy::default(),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("dangerous region(s): b"));
+        assert_eq!(device.mutations, 0);
+
+        // Excluding the dangerous region makes the request acceptable again.
+        layout.exclude_region("b").unwrap();
+        futures_lite::future::block_on(run_erase_with_layout(
+            &mut device,
+            &layout,
+            &mut MutationPolicy::default(),
+        ))
+        .unwrap();
+        assert!(device.mutations > 0);
+
+        // Only the dangerous-region acknowledgement overrides.
+        let mut layout = two_region_layout();
+        layout.find_region_mut("b").unwrap().dangerous = true;
+        let mut device = TestFlash::new();
+        futures_lite::future::block_on(run_erase_with_layout(
+            &mut device,
+            &layout,
+            &mut MutationPolicy {
+                allow_dangerous: true,
+                allow_full_chip: true,
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+        assert!(device.mutations > 0);
+    }
+
+    #[test]
+    fn write_refuses_dangerous_regions_before_reading_the_input() {
+        let mut layout = two_region_layout();
+        layout.find_region_mut("a").unwrap().dangerous = true;
+        let mut device = TestFlash::new();
+        // A nonexistent input file: the refusal must come first, without
+        // touching the file or the device.
+        let missing = Path::new("/nonexistent/rflasher-image.bin");
+        let err = futures_lite::future::block_on(run_write_with_layout(
+            &mut device,
+            Some(missing),
+            &mut layout,
+            &[],
+            true,
+            &mut MutationPolicy::default(),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("dangerous region(s): a"));
         assert_eq!(device.mutations, 0);
     }
 
@@ -941,8 +1093,12 @@ mod tests {
         let mut device = TestFlash::new();
         let mut layout = two_region_layout();
         layout.find_region_mut("b").unwrap().end = FLASH_SIZE;
-        let err = futures_lite::future::block_on(run_erase_with_layout(&mut device, &layout))
-            .unwrap_err();
+        let err = futures_lite::future::block_on(run_erase_with_layout(
+            &mut device,
+            &layout,
+            &mut MutationPolicy::default(),
+        ))
+        .unwrap_err();
         assert!(err.to_string().contains("beyond flash size"));
         assert_eq!(device.mutations, 0);
     }

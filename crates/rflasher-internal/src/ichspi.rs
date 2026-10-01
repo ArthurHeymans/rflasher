@@ -237,6 +237,32 @@ struct HwseqData {
     size_comp1: u32,
 }
 
+/// Erase size of every PCH100+ hardware-sequencing cycle
+const HWSEQ_ONLY_4K_ERASE_SIZE: u32 = 4 * 1024;
+
+/// Erase block sizes selectable through HSFS.BERASE (bits 4:3)
+const HWSEQ_BERASE_SIZES: [u32; 4] = [256, 4 * 1024, 8 * 1024, 64 * 1024];
+
+/// Decode the erase block size from an HSFS value
+fn berase_block_size(hsfs: u16) -> u32 {
+    HWSEQ_BERASE_SIZES[usize::from((hsfs & HSFS_BERASE) >> HSFS_BERASE_OFF)]
+}
+
+/// The single erase block size to plan erases with, given the sizes the
+/// controller uses below (`low`) and from (`high`) the flash partition
+/// `boundary` (0 = one partition).
+///
+/// With two different sizes the larger one is used, since erasing a multiple
+/// of the smaller size is always possible, but only if the partitions meet on
+/// a boundary of it. Otherwise no uniform size exists and `None` is returned.
+fn uniform_erase_size(low: u32, high: u32, boundary: u32) -> Option<u32> {
+    if low == high {
+        return Some(low);
+    }
+    let larger = low.max(high);
+    boundary.is_multiple_of(larger).then_some(larger)
+}
+
 /// Opcode entry for software sequencing
 #[derive(Debug, Clone, Copy, Default)]
 struct Opcode {
@@ -865,9 +891,28 @@ impl<H: HostAccess> IchSpiController<H> {
         };
 
         for i in 0..num_pr {
-            // Try to clear protection if not locked
+            // Try to clear protection if not locked (as flashprog does). This
+            // changes chipset state even for read-only operations, so say so.
             if !self.locked {
+                let before = self.spibar.read32(reg_pr0 + i * 4);
                 self.set_pr(reg_pr0, i, false, false);
+                if (before >> PR_RP_OFF) & 1 != 0 || (before >> PR_WP_OFF) & 1 != 0 {
+                    log::info!(
+                        "PR{}: {:#010x}-{:#010x} had {}protection set; cleared it \
+                         (controller is not locked down)",
+                        i,
+                        freg_base(before),
+                        freg_limit(before),
+                        match (
+                            (before >> PR_RP_OFF) & 1 != 0,
+                            (before >> PR_WP_OFF) & 1 != 0
+                        ) {
+                            (true, true) => "read and write ",
+                            (true, false) => "read ",
+                            _ => "write ",
+                        }
+                    );
+                }
             }
 
             let pr = self.spibar.read32(reg_pr0 + i * 4);
@@ -1408,31 +1453,73 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Erase a block using hardware sequencing
-    pub fn hwseq_erase(&self, addr: u32, len: u32) -> Result<(), InternalError> {
-        // Verify alignment (hwseq always uses 4KB blocks on PCH100+)
-        let erase_size: u32 = if self.hwseq.only_4k {
-            4096
-        } else {
-            // TODO: Read actual erase size from BERASE bits
-            4096
-        };
-
-        if addr & (erase_size - 1) != 0 || len & (erase_size - 1) != 0 {
-            return Err(InternalError::Io(
-                "Erase address/length not aligned to erase block size",
-            ));
+    /// Size of the erase block the sequencer will erase at `addr`.
+    ///
+    /// PCH100 and later always erase 4 KiB. Older controllers erase whatever
+    /// HSFS.BERASE says, and BERASE depends on the flash partition FADDR
+    /// points into (see `hwseq_erase_geometry`), so FADDR is loaded first;
+    /// this mirrors flashprog's `ich_hwseq_get_erase_block_size`.
+    fn hwseq_erase_block_size(&self, addr: u32) -> u32 {
+        if self.hwseq.only_4k {
+            return HWSEQ_ONLY_4K_ERASE_SIZE;
         }
+        self.hwseq_set_addr(addr);
+        berase_block_size(self.spibar.read16(ICH9_REG_HSFS))
+    }
 
+    /// Uniform erase block size to plan erases with, for a flash of `flash_size` bytes.
+    ///
+    /// Erase cycles always erase the *whole* block containing FADDR, and the
+    /// block size is a property of the hardware (BERASE, per flash
+    /// partition), not of the request. Planning with any other size would
+    /// erase data next to the requested range, so it is read here instead of
+    /// assumed.
+    pub fn hwseq_erase_geometry(&self, flash_size: u32) -> Result<u32, InternalError> {
+        let boundary = if self.hwseq.only_4k {
+            0
+        } else {
+            (self.spibar.read32(ICH9_REG_FPB) & FPB_FPBA) << 12
+        };
+        let low = self.hwseq_erase_block_size(0);
+        let high = if boundary != 0 && boundary < flash_size {
+            self.hwseq_erase_block_size(boundary)
+        } else {
+            low
+        };
+        uniform_erase_size(low, high, boundary).ok_or(InternalError::NotSupported(
+            "Hardware sequencing reports different erase block sizes for the two flash partitions",
+        ))
+    }
+
+    /// Erase blocks using hardware sequencing
+    ///
+    /// `addr` and `len` must consist of whole hardware erase blocks. This is
+    /// verified for the entire range before the first cycle is started.
+    pub fn hwseq_erase(&self, addr: u32, len: u32) -> Result<(), InternalError> {
         self.hwseq_check_range(addr, len as usize)?;
+
+        let end_addr = addr as u64 + len as u64;
+
+        // Each cycle erases the block containing FADDR whatever we asked for,
+        // so refuse anything that is not exactly a sequence of whole blocks.
         let mut current_addr = addr as u64;
-        let end_addr = current_addr + len as u64;
+        while current_addr < end_addr {
+            let erase_size = self.hwseq_erase_block_size(current_addr as u32) as u64;
+            if !current_addr.is_multiple_of(erase_size) || current_addr + erase_size > end_addr {
+                return Err(InternalError::Io(
+                    "Erase address/length not aligned to the controller's erase block size",
+                ));
+            }
+            current_addr += erase_size;
+        }
 
         // Clear FDONE, FCERR, AEL by writing 1s to them (do once at start)
         self.spibar
             .write16(ICH9_REG_HSFS, self.spibar.read16(ICH9_REG_HSFS));
 
+        let mut current_addr = addr as u64;
         while current_addr < end_addr {
+            let erase_size = self.hwseq_erase_block_size(current_addr as u32) as u64;
             self.hwseq_set_addr(current_addr as u32);
 
             // Set up erase cycle using read-modify-write to preserve reserved bits
@@ -1445,7 +1532,7 @@ impl<H: HostAccess> IchSpiController<H> {
             // Wait for completion (60 second timeout for erase)
             self.hwseq_wait_for_cycle(60_000_000)?;
 
-            current_addr += erase_size as u64;
+            current_addr += erase_size;
         }
 
         Ok(())
@@ -2500,6 +2587,14 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         "Intel ICH/PCH"
     }
 
+    fn erase_block_size(&self, flash_size: u32) -> Result<Option<u32>, InternalError> {
+        if self.mode == SpiMode::HardwareSequencing {
+            self.hwseq_erase_geometry(flash_size).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     fn spi_mode(&self) -> SpiMode {
         self.mode
     }
@@ -2640,7 +2735,7 @@ mod tests {
     fn test_controller() -> IchSpiController<FakeHost> {
         IchSpiController {
             host: FakeHost::default(),
-            spibar: FakeMmio,
+            spibar: FakeMmio::default(),
             generation: IchChipset::Series100SunrisePoint,
             lpc_segment: 0,
             lpc_bus: 0,
@@ -2699,6 +2794,123 @@ mod tests {
         assert!(controller.hwseq_check_range(u32::MAX, 2).is_err());
         assert!(controller.hwseq_check_range(2, usize::MAX).is_err());
         assert!(controller.hwseq_check_range(0xffff_f000, 4096).is_ok());
+    }
+
+    #[test]
+    fn berase_decodes_every_hardware_erase_size() {
+        for (encoding, size) in [(0u16, 256u32), (1, 4096), (2, 8192), (3, 65536)] {
+            // Other HSFS bits (status flags, FDOPSS, ...) must not disturb the decode.
+            let hsfs = (encoding << HSFS_BERASE_OFF) | HSFS_FDONE | HSFS_SCIP | (1 << 13);
+            assert_eq!(berase_block_size(hsfs), size);
+        }
+    }
+
+    #[test]
+    fn uniform_erase_size_handles_partitions() {
+        const K: u32 = 1024;
+        // One size everywhere, with or without a partition boundary.
+        assert_eq!(uniform_erase_size(4 * K, 4 * K, 0), Some(4 * K));
+        assert_eq!(uniform_erase_size(64 * K, 64 * K, 0x10_0000), Some(64 * K));
+        // Different sizes: plan with the larger one if the partitions meet on
+        // one of its blocks ...
+        assert_eq!(uniform_erase_size(4 * K, 64 * K, 0x10_0000), Some(64 * K));
+        assert_eq!(uniform_erase_size(64 * K, 4 * K, 0x10_0000), Some(64 * K));
+        // ... and refuse when a block would straddle the boundary.
+        assert_eq!(uniform_erase_size(4 * K, 64 * K, 0x10_1000), None);
+    }
+
+    /// An ICH9-style controller (BERASE-selected erase size) over a simulated
+    /// sequencer whose partitions report `low`/`high` BERASE encodings.
+    fn ich9_controller(low: u16, high: u16, fpb: u32) -> IchSpiController<FakeHost> {
+        let mut controller = test_controller();
+        controller.generation = IchChipset::Ich9;
+        controller.hwseq = HwseqData {
+            addr_mask: ICH9_FADDR_FLA,
+            only_4k: false,
+            hsfc_fcycle: HSFC_FCYCLE,
+            size_comp0: 0,
+            size_comp1: 0,
+        };
+        controller.spibar.set_berase(low, high);
+        controller.spibar.set32(ICH9_REG_FPB, fpb);
+        controller
+    }
+
+    #[test]
+    fn ich9_erase_follows_berase_instead_of_assuming_4k() {
+        // BERASE = 3: every cycle erases 64 KiB.
+        let controller = ich9_controller(3, 3, 0);
+        assert_eq!(
+            controller.hwseq_erase_geometry(16 << 20).unwrap(),
+            64 * 1024
+        );
+
+        // A 4 KiB request would wipe 60 KiB of neighbouring data: refuse it,
+        // and start no cycle.
+        for (addr, len) in [
+            (0x1000, 0x1000),
+            (0, 0x1000),
+            (0x10000, 0x8000),
+            (0x8000, 0x10000),
+        ] {
+            assert!(
+                controller.hwseq_erase(addr, len).is_err(),
+                "erase({addr:#x}, {len:#x}) must be refused"
+            );
+        }
+        assert!(controller.spibar.erase_cycles().is_empty());
+
+        // Whole blocks are erased one cycle per block.
+        controller.hwseq_erase(0x10000, 0x20000).unwrap();
+        assert_eq!(controller.spibar.erase_cycles(), vec![0x10000, 0x20000]);
+    }
+
+    #[test]
+    fn ich9_4k_erase_walks_every_block() {
+        let controller = ich9_controller(1, 1, 0);
+        assert_eq!(controller.hwseq_erase_geometry(8 << 20).unwrap(), 4096);
+        controller.hwseq_erase(0x2000, 0x3000).unwrap();
+        assert_eq!(
+            controller.spibar.erase_cycles(),
+            vec![0x2000, 0x3000, 0x4000]
+        );
+    }
+
+    #[test]
+    fn ich9_partitions_with_different_erase_sizes() {
+        // FPB = 0x100 puts the boundary at 1 MiB: 4 KiB blocks below, 64 KiB above.
+        let controller = ich9_controller(1, 3, 0x100);
+        assert_eq!(controller.hwseq_erase_geometry(8 << 20).unwrap(), 64 * 1024);
+
+        // Each partition erases in its own block size ...
+        controller.hwseq_erase(0xF_F000, 0x1000).unwrap();
+        controller.hwseq_erase(0x10_0000, 0x1_0000).unwrap();
+        assert_eq!(controller.spibar.erase_cycles(), vec![0xF_F000, 0x10_0000]);
+        // ... and a 4 KiB request in the 64 KiB partition is refused.
+        assert!(controller.hwseq_erase(0x11_0000, 0x1000).is_err());
+
+        // A boundary that does not fall on a 64 KiB block has no uniform plan.
+        let controller = ich9_controller(1, 3, 0x101);
+        assert!(controller.hwseq_erase_geometry(8 << 20).is_err());
+    }
+
+    #[test]
+    fn pch100_erase_geometry_is_4k_without_touching_registers() {
+        let controller = test_controller();
+        assert_eq!(controller.hwseq_erase_geometry(16 << 20).unwrap(), 4096);
+        assert_eq!(controller.hwseq_erase_block_size(0x12345), 4096);
+    }
+
+    #[test]
+    fn hwseq_erase_rejects_partial_blocks_before_any_cycle() {
+        let controller = test_controller();
+        // PCH100+: 4 KiB blocks. None of these is a sequence of whole blocks.
+        for (addr, len) in [(1, 4096), (0, 4095), (4096, 100), (2048, 4096)] {
+            assert!(
+                matches!(controller.hwseq_erase(addr, len), Err(InternalError::Io(_))),
+                "erase({addr:#x}, {len:#x}) must be refused"
+            );
+        }
     }
 
     #[test]

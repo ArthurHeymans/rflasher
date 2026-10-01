@@ -30,6 +30,33 @@ pub struct Cli {
     )]
     pub programmer: Option<String>,
 
+    /// Use the chip definition with this name
+    ///
+    /// Needed when several definitions share the probed JEDEC ID and differ in
+    /// how they erase or program (the error lists the candidates). Matching
+    /// understands the database's flashprog-style name patterns, so the part
+    /// number printed on the chip works: "A/B" alternatives, optional "(B)"
+    /// suffixes and "." wildcards. Unlike flashprog, case is ignored.
+    #[arg(short = 'c', long, global = true, value_name = "NAME")]
+    pub chip: Option<String>,
+
+    /// Override contradictory chip/SFDP geometry (does not authorize regions)
+    #[arg(long, global = true)]
+    pub force: bool,
+
+    /// Authorize modifying dangerous regions (ME/TXE/IE, descriptor, PTT)
+    #[arg(long, global = true)]
+    pub allow_dangerous_regions: bool,
+
+    /// Explicitly authorize an operation covering the whole chip
+    #[arg(long, global = true)]
+    pub allow_full_chip: bool,
+
+    /// Save a full-chip backup to FILE before modifying the flash
+    /// (refuses to overwrite an existing file)
+    #[arg(long, global = true, value_name = "FILE")]
+    pub recovery_backup: Option<PathBuf>,
+
     /// Path to chip database directory (contains .ron files)
     /// Replaces the bundled chip database when specified.
     #[arg(long, global = true)]
@@ -222,6 +249,17 @@ pub enum Commands {
     },
 }
 
+/// Options shared by the write-protection subcommands that change the chip
+#[derive(clap::Args, Debug, Clone, Copy, Default)]
+pub struct WpWriteArgs {
+    /// Change the protection only until the next power cycle
+    ///
+    /// Uses the volatile status register write (EWSR, 0x50). Fails on chips
+    /// that do not support it. Without this flag the change is persistent.
+    #[arg(long)]
+    pub temporary: bool,
+}
+
 /// Write protection subcommands
 #[derive(Subcommand)]
 pub enum WpCommands {
@@ -232,15 +270,24 @@ pub enum WpCommands {
     List,
 
     /// Enable hardware write protection
-    Enable,
+    Enable {
+        #[command(flatten)]
+        write: WpWriteArgs,
+    },
 
     /// Disable hardware write protection
-    Disable,
+    Disable {
+        #[command(flatten)]
+        write: WpWriteArgs,
+    },
 
     /// Set protection range by address
     Range {
         /// Protection range as "start,length" (e.g., "0,0x100000" or "0x10000,65536")
         range: String,
+
+        #[command(flatten)]
+        write: WpWriteArgs,
     },
 
     /// Set protection range by region name (requires layout)
@@ -250,6 +297,9 @@ pub enum WpCommands {
 
         /// Region name to protect
         region_name: String,
+
+        #[command(flatten)]
+        write: WpWriteArgs,
     },
 }
 

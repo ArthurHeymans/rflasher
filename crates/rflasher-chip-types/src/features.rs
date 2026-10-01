@@ -13,7 +13,7 @@ bitflags! {
         // Write enable behavior
         /// Use WREN (0x06) before WRSR
         const WRSR_WREN       = 1 << 0;
-        /// Use EWSR (0x50) before WRSR (legacy SST)
+        /// EWSR (0x50) enables volatile status-register writes
         const WRSR_EWSR       = 1 << 1;
         /// WRSR writes both SR1 and SR2 with one command
         const WRSR_EXT        = 1 << 2;
@@ -109,10 +109,43 @@ bitflags! {
         const FOUR_BYTE_QUAD_OUT_READ = 1 << 39;
         /// Native 4BA quad-I/O read instruction 0xEC
         const FOUR_BYTE_QUAD_IO_READ  = 1 << 40;
+        /// WREN writes a volatile-only status register (SFDP DWORD1 bits 3/4).
+        const WRSR_VOLATILE_WREN      = 1 << 41;
+        /// EWSR enables persistent status-register writes (legacy SST25).
+        const WRSR_PERSISTENT_EWSR    = 1 << 42;
+        /// Synthesized profile has no unambiguous WP register layout.
+        const WP_UNRESOLVED           = 1 << 43;
     }
 }
 
 impl Features {
+    /// Flags that change how erase, program, addressing and status-register
+    /// writes are issued.
+    ///
+    /// Includes addressing needed for read/restore and write-protection layout.
+    /// Unrelated read-speed and OTP capabilities do not affect the procedure. See
+    /// [`FlashChip::is_equivalent_to`](crate::FlashChip::is_equivalent_to).
+    pub const PROCEDURE: Self = Self::WRSR_WREN
+        .union(Self::WRSR_EWSR)
+        .union(Self::WRSR_EXT)
+        .union(Self::FOUR_BYTE_ADDR)
+        .union(Self::FOUR_BYTE_ENTER)
+        .union(Self::FOUR_BYTE_NATIVE)
+        .union(Self::EXT_ADDR_REG)
+        .union(Self::WRITE_BYTE)
+        .union(Self::AAI_WORD)
+        .union(Self::SST26_BPR)
+        .union(Self::FOUR_BYTE_ENTER_WREN)
+        .union(Self::EXT_ADDR_REG_C5C8)
+        .union(Self::FOUR_BYTE_ENTER_EAR7)
+        .union(Self::EXT_ADDR_REG_1716)
+        .union(Self::FOUR_BYTE_READ)
+        .union(Self::FOUR_BYTE_FAST_READ)
+        .union(Self::FOUR_BYTE_PROGRAM)
+        .union(Self::WP_BP3)
+        .union(Self::WRSR_VOLATILE_WREN)
+        .union(Self::WRSR_PERSISTENT_EWSR);
+
     /// Whether any 4-byte mode enter/exit mechanism is supported.
     pub fn supports_4ba_mode_switch(self) -> bool {
         self.intersects(

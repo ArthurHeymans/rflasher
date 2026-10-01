@@ -11,6 +11,17 @@ use crate::programmer::SpiMaster;
 use crate::protocol;
 
 use super::types::*;
+use zerocopy::{
+    FromBytes,
+    byteorder::{LittleEndian, U32},
+};
+
+fn read_dword(data: &[u8], byte_offset: usize) -> Option<u32> {
+    let end = byte_offset.checked_add(4)?;
+    U32::<LittleEndian>::ref_from_bytes(data.get(byte_offset..end)?)
+        .ok()
+        .map(|v| v.get())
+}
 
 /// Read raw SFDP data from flash
 ///
@@ -135,14 +146,23 @@ fn parse_bfpt_dword2(dword: u32, params: &mut BasicFlashParams) {
         let bits = dword & 0x7FFFFFFF;
         params.density_bytes = ((bits as u64) + 1) / 8;
     } else {
-        // 2^N format
+        // 2^N format. Densities that do not fit the 32-bit flash address space
+        // (and nonsensical exponents below one byte) are left at zero so that
+        // the table is rejected rather than misread; shifting by an
+        // unchecked, chip-supplied exponent would wrap in release builds.
         let n = dword & 0x7FFFFFFF;
-        if n >= 3 {
-            // Divide by 8 to convert bits to bytes (subtract 3 from exponent)
-            params.density_bytes = 1u64 << (n - 3);
-        }
+        params.density_bytes = n
+            .checked_sub(3)
+            .filter(|&exp| exp <= MAX_DENSITY_EXP_BYTES)
+            .map_or(0, |exp| 1u64 << exp);
     }
 }
+
+/// Largest supported flash density, as a power of two in bytes (2 GiB).
+///
+/// Flash addresses are 32-bit, and a 4 GiB device cannot even be expressed as
+/// a `u32` size. flashprog stops earlier (it refuses any 2^N-format density).
+const MAX_DENSITY_EXP_BYTES: u32 = 31;
 
 /// Parse Basic Flash Parameter Table DWORD 3
 ///
@@ -287,19 +307,7 @@ async fn parse_bfpt<M: SpiMaster + ?Sized>(
         ..Default::default()
     };
 
-    // Helper to read a DWORD from the buffer
-    let get_dword = |offset: usize| -> u32 {
-        if offset + 4 <= read_len {
-            u32::from_le_bytes([
-                buf[offset],
-                buf[offset + 1],
-                buf[offset + 2],
-                buf[offset + 3],
-            ])
-        } else {
-            0
-        }
-    };
+    let get_dword = |offset| read_dword(&buf[..read_len], offset).unwrap_or(0);
 
     // Parse mandatory DWORDs (JESD216, 9 DWORDs minimum)
     parse_bfpt_dword1(get_dword(0), &mut params); // DWORD 1
@@ -323,8 +331,8 @@ async fn parse_bfpt<M: SpiMaster + ?Sized>(
         parse_bfpt_dword16(get_dword(60), &mut params); // DWORD 16
     }
 
-    // Validate density
-    if params.density_bytes == 0 {
+    // Validate density (zero means missing, malformed, or beyond 32-bit flash addressing)
+    if params.density_bytes == 0 || params.density_bytes > u64::from(u32::MAX) {
         return Err(Error::ChipNotSupported);
     }
 
@@ -352,18 +360,7 @@ async fn parse_4byte_addr_table<M: SpiMaster + ?Sized>(
     let read_len = core::cmp::min(len, buf.len());
     read_sfdp(master, header.table_pointer, &mut buf[..read_len]).await?;
 
-    let get_dword = |offset: usize| -> u32 {
-        if offset + 4 <= read_len {
-            u32::from_le_bytes([
-                buf[offset],
-                buf[offset + 1],
-                buf[offset + 2],
-                buf[offset + 3],
-            ])
-        } else {
-            0
-        }
-    };
+    let get_dword = |offset| read_dword(&buf[..read_len], offset).unwrap_or(0);
 
     let table = FourByteAddrTable {
         revision: header.revision,
@@ -550,11 +547,17 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     if params.soft_reset.supports_66_99() {
         // Mark that soft reset is supported (could add a feature flag)
     }
-    if params.volatile_sr_write_enable == WriteEnableForVolatileSr::Wren {
+    // Bit 4 describes the enable mechanism for a volatile status register,
+    // not whether persistent writes are possible. Bit 3 determines volatility.
+    if !params.status_reg_volatile {
         features |= Features::WRSR_WREN;
+    } else if params.volatile_sr_write_enable == WriteEnableForVolatileSr::Wren {
+        features |= Features::WRSR_VOLATILE_WREN;
     } else {
         features |= Features::WRSR_EWSR;
     }
+    // BFPT does not define the BP/TB/SEC/CMP protection-register layout.
+    features |= Features::WP_UNRESOLVED;
     if params.quad_enable.is_needed() {
         features |= Features::QE_SR2;
     }
@@ -567,7 +570,7 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         .erase_types
         .iter()
         .enumerate()
-        .filter(|(_, et)| et.is_valid())
+        .filter(|(_, et)| et.is_valid() && et.size <= total_size)
         .map(|(type_index, et)| {
             let opcode_4b = info
                 .four_byte_addr_table
@@ -594,6 +597,10 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     let write_granularity = if params.write_granularity_64 {
         WriteGranularity::Page
     } else {
+        log::warn!(
+            "SFDP reports 1-byte write granularity: every byte is programmed by its own \
+             command, so writes to this chip will be very slow"
+        );
         WriteGranularity::Byte
     };
 
@@ -665,6 +672,25 @@ pub enum SfdpMismatch {
         /// Whether database says 4-byte addressing is required
         db_requires_4byte: bool,
     },
+}
+
+#[cfg(feature = "alloc")]
+impl SfdpMismatch {
+    /// Whether operating on the chip with the database entry would be unsafe.
+    ///
+    /// A wrong size makes reads, erases and writes hit the wrong addresses. A
+    /// database page size *larger* than the chip's makes page programs wrap
+    /// inside the chip's real page and corrupt data; a smaller one only costs
+    /// speed. Erase disagreements are reported separately: probing removes
+    /// disputed erasers from the executable profile, even under an override.
+    #[must_use]
+    pub fn is_critical(&self) -> bool {
+        match self {
+            Self::TotalSize { .. } => true,
+            Self::PageSize { sfdp, database } => u32::from(*database) > *sfdp,
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "alloc")]
@@ -851,15 +877,10 @@ impl SfdpProbeResult {
 
     /// Check if there are any concerning mismatches
     ///
-    /// Size and page size mismatches are considered critical.
+    /// See [`SfdpMismatch::is_critical`].
     #[cfg(feature = "alloc")]
     pub fn has_critical_mismatches(&self) -> bool {
-        self.mismatches.iter().any(|m| {
-            matches!(
-                m,
-                SfdpMismatch::TotalSize { .. } | SfdpMismatch::PageSize { .. }
-            )
-        })
+        self.mismatches.iter().any(SfdpMismatch::is_critical)
     }
 }
 
@@ -952,6 +973,38 @@ mod tests {
     }
 
     #[test]
+    fn density_from_untrusted_exponent_never_overflows() {
+        // 2^N format with a chip-supplied N: only exponents that fit the 32-bit
+        // flash address space are accepted; everything else reads as "missing".
+        for (dword, expected) in [
+            (0x8000_0022u32, 1u64 << 31), // 2^34 bits = 2 GiB, the largest accepted
+            (0x8000_0023, 0),             // 2^35 bits = 4 GiB: not addressable
+            (0x8000_0040, 0),             // would overflow a 64-bit shift
+            (0x8000_00FF, 0),
+            (0xFFFF_FFFF, 0),
+            (0x8000_0003, 1), // 2^3 bits = 1 byte
+            (0x8000_0002, 0), // below one byte
+            (0x8000_0000, 0),
+        ] {
+            let mut params = BasicFlashParams::default();
+            parse_bfpt_dword2(dword, &mut params);
+            assert_eq!(params.density_bytes, expected, "dword {dword:#010x}");
+        }
+    }
+
+    #[test]
+    fn oversized_erase_exponents_are_ignored() {
+        // Exponents >= 31 (and unused 0 / opcode 0xFF entries) must not become
+        // erase blocks; in release builds `1u32 << 32` would have wrapped to 1.
+        for exp in [31u8, 32, 33, 64, 255] {
+            assert!(!SfdpEraseType::from_raw(exp, 0x20).is_valid(), "exp {exp}");
+        }
+        assert!(SfdpEraseType::from_raw(30, 0x20).is_valid());
+        assert!(!SfdpEraseType::from_raw(0, 0x20).is_valid());
+        assert!(!SfdpEraseType::from_raw(12, 0xFF).is_valid());
+    }
+
+    #[test]
     fn test_erase_type_parsing() {
         let mut params = BasicFlashParams::default();
 
@@ -1032,6 +1085,11 @@ mod tests {
                 sfdp_data: &MX25L6436E_SFDP,
             }
         }
+
+        /// A chip with the MX25L6436E JEDEC ID but no SFDP support
+        fn without_sfdp() -> Self {
+            Self { sfdp_data: &[] }
+        }
     }
 
     impl crate::programmer::SpiMaster for MockSfdpFlash {
@@ -1054,6 +1112,11 @@ mod tests {
             use crate::spi::opcodes;
 
             match cmd.opcode {
+                opcodes::RDID => {
+                    // Macronix MX25L6436E: C2 20 17
+                    cmd.read_buf[..3].copy_from_slice(&[0xC2, 0x20, 0x17]);
+                    Ok(())
+                }
                 opcodes::RDSFDP => {
                     // SFDP read: address is in cmd.address, dummy cycles expected
                     if let Some(addr) = cmd.address {
@@ -1085,6 +1148,254 @@ mod tests {
         }
 
         async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    // ------------------------------------------------------------------
+    // Database selection and mismatch policy (probe_with_options)
+    // ------------------------------------------------------------------
+
+    use crate::chip::{ChipProvider, EraseBlock, FlashChip};
+    use crate::flash::{ProbeOptions, probe_with_options};
+    use std::vec;
+    use std::vec::Vec;
+
+    /// Chip database with (deliberately colliding) entries for JEDEC C2:2017
+    struct CollidingDb(Vec<FlashChip>);
+
+    impl ChipProvider for CollidingDb {
+        fn find_by_jedec_id(&self, m: u8, d: u16) -> Option<&FlashChip> {
+            self.find_nth_by_jedec_id(m, d, 0)
+        }
+        fn find_nth_by_jedec_id(&self, m: u8, d: u16, index: usize) -> Option<&FlashChip> {
+            self.0
+                .iter()
+                .filter(|c| c.matches_jedec_id(m, d))
+                .nth(index)
+        }
+    }
+
+    /// The MX25L6436E as SFDP describes it, under a different name
+    fn sfdp_described_chip(name: &str) -> FlashChip {
+        let mut mock = MockSfdpFlash::new();
+        let info = futures_lite::future::block_on(probe(&mut mock)).unwrap();
+        let mut chip = to_flash_chip(&info, 0xC2, 0x2017);
+        chip.name = name.into();
+        chip
+    }
+
+    fn with_erase_blocks(mut chip: FlashChip, blocks: Vec<EraseBlock>) -> FlashChip {
+        chip.erase_blocks = blocks;
+        chip
+    }
+
+    fn probe_db(
+        mut mock: MockSfdpFlash,
+        db: &CollidingDb,
+        options: &ProbeOptions<'_>,
+    ) -> crate::error::Result<crate::flash::ProbeResult> {
+        futures_lite::future::block_on(probe_with_options(&mut mock, db, options))
+    }
+
+    #[test]
+    fn disputed_erase_opcode_is_removed_even_under_override() {
+        let mut chip = sfdp_described_chip("wrong eraser");
+        let size = chip.erase_blocks[0].min_block_size();
+        let wrong = 0x81;
+        chip.erase_blocks[0].opcode = wrong;
+        let db = CollidingDb(vec![chip]);
+        for force in [false, true] {
+            let result = probe_db(
+                MockSfdpFlash::new(),
+                &db,
+                &ProbeOptions {
+                    force,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert!(result.mismatches.iter().any(|m| matches!(m, SfdpMismatch::EraseBlockOpcode { size: s, db_opcode, .. } if *s == size && *db_opcode == wrong)));
+            assert!(result.chip.erase_blocks.iter().all(|b| b.opcode != wrong));
+            assert!(!result.chip.erase_blocks.is_empty());
+        }
+    }
+
+    #[test]
+    fn sfdp_volatile_enable_never_becomes_a_persistent_method() {
+        use crate::{
+            chip::Features,
+            wp::{WpError, WriteOptions},
+        };
+        let mut mock = MockSfdpFlash::new();
+        let mut info = futures_lite::future::block_on(probe(&mut mock)).unwrap();
+        info.basic_params.status_reg_volatile = true;
+        for (enable, feature) in [
+            (WriteEnableForVolatileSr::Ewsr, Features::WRSR_EWSR),
+            (WriteEnableForVolatileSr::Wren, Features::WRSR_VOLATILE_WREN),
+        ] {
+            info.basic_params.volatile_sr_write_enable = enable;
+            let chip = to_flash_chip(&info, 0xc2, 0x2017);
+            assert!(chip.features.contains(feature));
+            assert!(
+                !chip
+                    .features
+                    .intersects(Features::WRSR_WREN | Features::WRSR_PERSISTENT_EWSR)
+            );
+            assert!(matches!(
+                WriteOptions::default().for_features(chip.features),
+                Err(WpError::PersistentUnsupported)
+            ));
+        }
+    }
+
+    #[test]
+    fn interchangeable_entries_are_not_ambiguous() {
+        let db = CollidingDb(vec![
+            sfdp_described_chip("MX25L6406E"),
+            sfdp_described_chip("MX25L6436E"),
+        ]);
+        let result =
+            probe_db(MockSfdpFlash::without_sfdp(), &db, &ProbeOptions::default()).unwrap();
+        assert_eq!(result.chip.name, "MX25L6406E");
+    }
+
+    #[test]
+    fn unresolved_aliases_use_only_common_erasers_until_named() {
+        let uniform = sfdp_described_chip("MX25L6406E");
+        let boot_block = with_erase_blocks(
+            sfdp_described_chip("MX25L6436E/MX25L6473E"),
+            vec![EraseBlock::with_count(0xD8, 65536, 128)],
+        );
+        let db = CollidingDb(vec![uniform, boot_block]);
+        let no_sfdp = MockSfdpFlash::without_sfdp;
+
+        let common = probe_db(no_sfdp(), &db, &ProbeOptions::default()).unwrap();
+        assert_eq!(
+            common.chip.erase_blocks,
+            vec![EraseBlock::with_count(0xD8, 65536, 128)]
+        );
+
+        let pick = |name| ProbeOptions {
+            chip: Some(name),
+            ..Default::default()
+        };
+        // Case-insensitive, and one alias of an "A/B" entry is enough.
+        let result = probe_db(no_sfdp(), &db, &pick("mx25l6436e")).unwrap();
+        assert_eq!(result.chip.erase_blocks.len(), 1);
+        // The web selector supplies the exact database row name, patterns included.
+        let exact = probe_db(no_sfdp(), &db, &pick("MX25L6436E/MX25L6473E")).unwrap();
+        assert_eq!(exact.chip.name, "MX25L6436E/MX25L6473E");
+        let result = probe_db(no_sfdp(), &db, &pick("MX25L6406E")).unwrap();
+        assert_eq!(result.chip.name, "MX25L6406E");
+        assert_eq!(
+            probe_db(no_sfdp(), &db, &pick("W25Q64FV")).unwrap_err(),
+            Error::ChipNotFound
+        );
+    }
+
+    #[test]
+    fn chip_names_select_through_database_name_patterns() {
+        // Entries are named with patterns ("." wildcard, optional "(B)"), while
+        // users type the part number printed on the chip.
+        let plain = with_erase_blocks(
+            sfdp_described_chip("MX25L64.6E"),
+            vec![EraseBlock::with_count(0xD8, 65536, 128)],
+        );
+        let suffixed = sfdp_described_chip("MX25L6473(F)");
+        let db = CollidingDb(vec![plain, suffixed]);
+        let pick = |name| ProbeOptions {
+            chip: Some(name),
+            ..Default::default()
+        };
+        let chosen = |name| {
+            probe_db(MockSfdpFlash::without_sfdp(), &db, &pick(name)).map(|r| r.chip.name.clone())
+        };
+
+        assert_eq!(chosen("MX25L6406E").unwrap(), "MX25L64.6E");
+        assert_eq!(chosen("MX25L6436E").unwrap(), "MX25L64.6E");
+        assert_eq!(chosen("MX25L6473F").unwrap(), "MX25L6473(F)");
+        // The optional letter may be left out.
+        assert_eq!(chosen("MX25L6473").unwrap(), "MX25L6473(F)");
+        assert_eq!(chosen("MX25L6473G"), Err(Error::ChipNotFound));
+    }
+
+    #[test]
+    fn an_exact_chip_name_beats_a_looser_pattern_match() {
+        let base = with_erase_blocks(
+            sfdp_described_chip("GD25Q64"),
+            vec![EraseBlock::with_count(0xD8, 65536, 128)],
+        );
+        let variant = sfdp_described_chip("GD25Q64(B)");
+        // The variant is listed first, and its pattern also matches "GD25Q64".
+        let db = CollidingDb(vec![variant, base]);
+        let pick = |name| ProbeOptions {
+            chip: Some(name),
+            ..Default::default()
+        };
+        let chosen = |name| {
+            probe_db(MockSfdpFlash::without_sfdp(), &db, &pick(name)).map(|r| r.chip.name.clone())
+        };
+        assert_eq!(chosen("GD25Q64").unwrap(), "GD25Q64");
+        assert_eq!(chosen("GD25Q64B").unwrap(), "GD25Q64(B)");
+    }
+
+    #[test]
+    fn sfdp_breaks_ties_between_colliding_entries() {
+        // The wrong entry is listed first: first-match would have picked it.
+        let mut wrong = sfdp_described_chip("wrong size");
+        wrong.total_size *= 2;
+        let right = sfdp_described_chip("right");
+        let db = CollidingDb(vec![wrong, right]);
+        let result = probe_db(MockSfdpFlash::new(), &db, &ProbeOptions::default()).unwrap();
+        assert_eq!(result.chip.name, "right");
+        assert!(result.from_database);
+    }
+
+    #[test]
+    fn erase_capability_counts_do_not_identify_a_program_procedure() {
+        let incomplete = with_erase_blocks(
+            sfdp_described_chip("incomplete"),
+            vec![EraseBlock::with_count(0x20, 4096, 2048)],
+        );
+        let mut aai = sfdp_described_chip("AAI procedure");
+        aai.features |= crate::chip::Features::AAI_WORD;
+        let db = CollidingDb(vec![incomplete, aai]);
+        assert_eq!(
+            probe_db(MockSfdpFlash::new(), &db, &ProbeOptions::default()).unwrap_err(),
+            Error::ChipAmbiguous
+        );
+    }
+
+    #[test]
+    fn critical_sfdp_mismatch_is_refused_unless_forced() {
+        let mut oversized = sfdp_described_chip("oversized");
+        oversized.total_size *= 2;
+        let db = CollidingDb(vec![oversized]);
+
+        assert_eq!(
+            probe_db(MockSfdpFlash::new(), &db, &ProbeOptions::default()).unwrap_err(),
+            Error::ChipMismatch
+        );
+        let forced = ProbeOptions {
+            force: true,
+            ..Default::default()
+        };
+        let result = probe_db(MockSfdpFlash::new(), &db, &forced).unwrap();
+        assert!(result.has_critical_mismatches());
+    }
+
+    #[test]
+    fn page_size_mismatch_is_critical_only_when_database_page_is_larger() {
+        let page = |sfdp, database| SfdpMismatch::PageSize { sfdp, database };
+        assert!(page(256, 512).is_critical());
+        assert!(!page(256, 128).is_critical());
+        assert!(!page(256, 256).is_critical());
+        assert!(
+            SfdpMismatch::TotalSize {
+                sfdp: 8,
+                database: 4
+            }
+            .is_critical()
+        );
     }
 
     #[test]

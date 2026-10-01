@@ -1,5 +1,6 @@
 //! Write protection command implementations
 
+use crate::cli::WpWriteArgs;
 use rflasher_core::wp::{WpMode, WpRange, WriteOptions};
 use rflasher_programmers::FlashHandle;
 use std::error::Error;
@@ -86,6 +87,22 @@ fn parse_number(s: &str) -> Result<u32, Box<dyn Error>> {
     }
 }
 
+/// Status register write options selected on the command line
+fn write_options(args: WpWriteArgs) -> WriteOptions {
+    WriteOptions {
+        volatile: args.temporary,
+    }
+}
+
+/// Confirmation suffix reflecting whether the change survives a power cycle
+fn persistence_note(args: WpWriteArgs) -> &'static str {
+    if args.temporary {
+        " (temporary: lost at the next power cycle)"
+    } else {
+        ""
+    }
+}
+
 /// Show current write protection status
 pub async fn cmd_status(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
@@ -137,37 +154,47 @@ pub async fn cmd_list(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
 }
 
 /// Enable hardware write protection
-pub async fn cmd_enable(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_enable(handle: &mut FlashHandle, args: WpWriteArgs) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
 
     handle
-        .set_wp_mode(WpMode::Hardware, WriteOptions::default())
+        .set_wp_mode(WpMode::Hardware, write_options(args))
         .await
         .map_err(|e| format!("Failed to enable write protection: {}", e))?;
 
-    println!("Hardware write protection enabled.");
+    println!(
+        "Hardware write protection enabled{}.",
+        persistence_note(args)
+    );
     Ok(())
 }
 
 /// Disable write protection
-pub async fn cmd_disable(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_disable(
+    handle: &mut FlashHandle,
+    args: WpWriteArgs,
+) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
 
     handle
-        .disable_wp(WriteOptions::default())
+        .disable_wp(write_options(args))
         .await
         .map_err(|e| format!("Failed to disable write protection: {}", e))?;
 
-    println!("Write protection disabled.");
+    println!("Write protection disabled{}.", persistence_note(args));
     Ok(())
 }
 
 /// Set protection range
-pub async fn cmd_range(handle: &mut FlashHandle, range_spec: &str) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_range(
+    handle: &mut FlashHandle,
+    range_spec: &str,
+    args: WpWriteArgs,
+) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
@@ -185,15 +212,16 @@ pub async fn cmd_range(handle: &mut FlashHandle, range_spec: &str) -> Result<(),
     }
 
     handle
-        .set_wp_range(&range, WriteOptions::default())
+        .set_wp_range(&range, write_options(args))
         .await
         .map_err(|e| format!("Failed to set protection range: {}", e))?;
 
     println!(
-        "Protection range set to start=0x{:08x} length=0x{:08x} ({}).",
+        "Protection range set to start=0x{:08x} length=0x{:08x} ({}){}.",
         range.start,
         range.len,
-        format_range(&range, total_size)
+        format_range(&range, total_size),
+        persistence_note(args)
     );
     Ok(())
 }
@@ -203,6 +231,7 @@ pub async fn cmd_region(
     handle: &mut FlashHandle,
     layout: &rflasher_core::layout::Layout,
     region_name: &str,
+    args: WpWriteArgs,
 ) -> Result<(), Box<dyn Error>> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
@@ -219,7 +248,7 @@ pub async fn cmd_region(
     let total_size = handle.size();
 
     handle
-        .set_wp_range(&range, WriteOptions::default())
+        .set_wp_range(&range, write_options(args))
         .await
         .map_err(|e| {
             format!(
@@ -229,11 +258,12 @@ pub async fn cmd_region(
         })?;
 
     println!(
-        "Protection set for region '{}': start=0x{:08x} length=0x{:08x} ({}).",
+        "Protection set for region '{}': start=0x{:08x} length=0x{:08x} ({}){}.",
         region_name,
         range.start,
         range.len,
-        format_range(&range, total_size)
+        format_range(&range, total_size),
+        persistence_note(args)
     );
     Ok(())
 }

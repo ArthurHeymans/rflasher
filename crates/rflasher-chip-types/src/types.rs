@@ -355,6 +355,27 @@ impl FlashChip {
         self.jedec_manufacturer == manufacturer && self.jedec_device == device
     }
 
+    /// Check whether two definitions modify flash in the same way.
+    ///
+    /// Only identity fields are ignored. In particular addressless erase
+    /// opcodes, read/restore capabilities, voltage and test status must match;
+    /// verification cannot make an undocumented command safe.
+    ///
+    /// Used to tell alias entries, which are interchangeable for erase and
+    /// write, from entries that merely share a JEDEC ID and would erase or
+    /// program differently.
+    #[must_use]
+    pub fn is_equivalent_to(&self, other: &Self) -> bool {
+        self.total_size == other.total_size
+            && self.page_size == other.page_size
+            && self.features == other.features
+            && self.voltage_min_mv == other.voltage_min_mv
+            && self.voltage_max_mv == other.voltage_max_mv
+            && self.tested == other.tested
+            && self.write_granularity == other.write_granularity
+            && self.erase_blocks() == other.erase_blocks()
+    }
+
     /// Maximum addressable size with 3-byte addresses (16 MiB)
     const MAX_3BYTE_ADDR_SIZE: u32 = 16 * 1024 * 1024;
 

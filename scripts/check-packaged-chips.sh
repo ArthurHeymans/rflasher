@@ -12,9 +12,11 @@ package_version=$(
 )
 archive="$workspace_root/target/package/rflasher-chips-$package_version.crate"
 
+# Every vendor database file in the source tree must be in the package.
+expected_count=$(find crates/rflasher-chips/data/vendors -maxdepth 1 -name '*.ron' | wc -l)
 vendor_count=$(tar -tzf "$archive" | grep -cE '/data/vendors/[^/]+\.ron$')
-if [[ "$vendor_count" -ne 24 ]]; then
-  echo "expected 24 vendor database files in $archive, found $vendor_count" >&2
+if [[ "$expected_count" -eq 0 || "$vendor_count" -ne "$expected_count" ]]; then
+  echo "expected $expected_count vendor database files in $archive, found $vendor_count" >&2
   exit 1
 fi
 

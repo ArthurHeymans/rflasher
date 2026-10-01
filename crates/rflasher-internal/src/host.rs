@@ -283,28 +283,100 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) struct FakeMmio;
+    /// Register-backed fake controller window.
+    ///
+    /// Plain registers read back what was written (32-bit accesses share
+    /// storage with the narrower ones by offset, which is all the tests
+    /// need). On top of that it models the ICH9-style hardware sequencer just
+    /// enough to observe erases: an erase cycle started through HSFC is
+    /// recorded with the current FADDR and completes at once, and HSFS.BERASE
+    /// reads back a per-partition value chosen through [`FakeMmio::set_berase`]
+    /// (partitions split at the FPB boundary).
+    #[derive(Default)]
+    pub(crate) struct FakeMmio {
+        regs: RefCell<BTreeMap<usize, u32>>,
+        berase: RefCell<[u16; 2]>,
+        erase_cycles: RefCell<Vec<u32>>,
+    }
+
+    impl FakeMmio {
+        /// Set the BERASE encodings reported below and from the FPB boundary
+        pub(crate) fn set_berase(&self, low: u16, high: u16) {
+            *self.berase.borrow_mut() = [low, high];
+        }
+
+        pub(crate) fn set32(&self, offset: usize, value: u32) {
+            self.regs.borrow_mut().insert(offset, value);
+        }
+
+        /// FADDR of every erase cycle started so far
+        pub(crate) fn erase_cycles(&self) -> Vec<u32> {
+            self.erase_cycles.borrow().clone()
+        }
+
+        fn reg(&self, offset: usize) -> u32 {
+            self.regs.borrow().get(&offset).copied().unwrap_or(0)
+        }
+    }
 
     impl MmioAccess for FakeMmio {
-        fn read8(&self, _offset: usize) -> u8 {
-            0
+        fn read8(&self, offset: usize) -> u8 {
+            self.reg(offset) as u8
         }
-        fn read16(&self, _offset: usize) -> u16 {
-            0
+        fn read16(&self, offset: usize) -> u16 {
+            let value = self.reg(offset) as u16;
+            if offset != crate::ich_regs::ICH9_REG_HSFS {
+                return value;
+            }
+            let boundary =
+                (self.reg(crate::ich_regs::ICH9_REG_FPB) & crate::ich_regs::FPB_FPBA) << 12;
+            let fla = self.reg(crate::ich_regs::ICH9_REG_FADDR) & crate::ich_regs::ICH9_FADDR_FLA;
+            let partition = usize::from(boundary != 0 && fla >= boundary);
+            (value & !crate::ich_regs::HSFS_BERASE)
+                | (self.berase.borrow()[partition] << crate::ich_regs::HSFS_BERASE_OFF)
         }
-        fn read32(&self, _offset: usize) -> u32 {
-            0
+        fn read32(&self, offset: usize) -> u32 {
+            self.reg(offset)
         }
-        fn write8(&self, _offset: usize, _value: u8) {}
-        fn write16(&self, _offset: usize, _value: u16) {}
-        fn write32(&self, _offset: usize, _value: u32) {}
+        fn write8(&self, offset: usize, value: u8) {
+            self.set32(offset, value as u32);
+        }
+        fn write16(&self, offset: usize, value: u16) {
+            use crate::ich_regs::*;
+            match offset {
+                // Status bits are write-1-to-clear.
+                ICH9_REG_HSFS => {
+                    let w1c = HSFS_FDONE | HSFS_FCERR | HSFS_AEL;
+                    self.set32(offset, self.reg(offset) & !u32::from(value & w1c));
+                }
+                ICH9_REG_HSFC => {
+                    self.set32(offset, u32::from(value & !HSFC_FGO));
+                    let fcycle = (value & HSFC_FCYCLE) >> HSFC_FCYCLE_OFF;
+                    if value & HSFC_FGO != 0 {
+                        if fcycle == 0x3 {
+                            self.erase_cycles
+                                .borrow_mut()
+                                .push(self.reg(ICH9_REG_FADDR) & ICH9_FADDR_FLA);
+                        }
+                        self.set32(
+                            ICH9_REG_HSFS,
+                            self.reg(ICH9_REG_HSFS) | u32::from(HSFS_FDONE),
+                        );
+                    }
+                }
+                _ => self.set32(offset, value as u32),
+            }
+        }
+        fn write32(&self, offset: usize, value: u32) {
+            self.set32(offset, value);
+        }
     }
 
     impl HostAccess for FakeHost {
         type MmioRegion = FakeMmio;
 
         unsafe fn map_mmio(&self, _phys_addr: u64, _size: usize) -> Result<Self::MmioRegion> {
-            Ok(FakeMmio)
+            Ok(FakeMmio::default())
         }
 
         fn delay_us(&self, us: u32) {

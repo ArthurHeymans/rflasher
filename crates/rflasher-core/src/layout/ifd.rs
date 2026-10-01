@@ -5,7 +5,7 @@
 //!
 //! Reference: flashprog/ich_descriptors.c
 
-use std::string::ToString;
+use alloc::string::ToString;
 
 use zerocopy::byteorder::little_endian::U32 as U32LE;
 use zerocopy::{FromBytes, Immutable, KnownLayout, Unaligned};
@@ -135,7 +135,7 @@ const LUNAR_PANTHER_REGION_NAMES: [&str; MAX_IFD_REGIONS] = [
 ];
 
 /// Dangerous regions that can brick the system
-const DANGEROUS_REGIONS: [&str; 3] = ["me", "descriptor", "ptt"];
+const DANGEROUS_REGIONS: [&str; 5] = ["me", "txe", "ie", "descriptor", "ptt"];
 
 /// Read-only regions (descriptor should never be written)
 const READONLY_REGIONS: [&str; 1] = ["descriptor"];
@@ -316,13 +316,14 @@ impl Layout {
     }
 
     /// Parse layout from Intel Flash Descriptor in a file
+    #[cfg(feature = "std")]
     pub fn from_ifd_file(path: impl AsRef<std::path::Path>) -> Result<Self, LayoutError> {
         let data = std::fs::read(path).map_err(|e| LayoutError::IoError(e.to_string()))?;
         parse_ifd(&data)
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use std::vec;
