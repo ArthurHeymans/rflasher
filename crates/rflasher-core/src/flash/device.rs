@@ -170,8 +170,9 @@ pub trait FlashDevice {
 
     /// Read the chip's unique ID, if supported
     ///
-    /// Returns the factory-programmed unique identifier, e.g. the 8-byte
-    /// serial read via RDUID (0x4B) on supported SPI chips.
+    /// Returns the complete factory-programmed unique identifier. Currently,
+    /// SPI implementations support 8-byte RDUID (0x4B) reads on known Winbond
+    /// W25Q80 through W25Q128 profiles; other formats are unsupported.
     ///
     /// Opaque programmers and unsupported chips return
     /// `Error::ChipNotSupported`.

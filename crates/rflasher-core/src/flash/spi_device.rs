@@ -167,9 +167,10 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         operations::erase_spi_operation(&mut self.master, &self.ctx, op).await
     }
 
+    /// Read the complete UID using the identified chip's supported SPI format.
     #[cfg(feature = "alloc")]
     async fn read_unique_id(&mut self) -> Result<alloc::vec::Vec<u8>> {
-        let id = crate::protocol::read_unique_id(&mut self.master).await?;
+        let id = crate::protocol::read_unique_id(&mut self.master, &self.ctx.chip).await?;
         Ok(id.to_vec())
     }
 }

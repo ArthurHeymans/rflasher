@@ -155,9 +155,9 @@ impl FlashHandle {
 
     /// Read the chip's unique ID, if supported
     ///
-    /// Returns the factory-programmed unique identifier (e.g., the 8-byte
-    /// serial read via RDUID on supported SPI chips). Opaque programmers and
-    /// unsupported chips return an error.
+    /// Returns the complete factory-programmed unique identifier. Currently,
+    /// known Winbond W25Q80 through W25Q128 profiles support 8-byte RDUID reads.
+    /// Opaque programmers and unsupported chip formats return an error.
     pub async fn read_unique_id(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         self.device.read_unique_id().await.map_err(Into::into)
     }

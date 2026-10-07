@@ -206,9 +206,10 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
     // opaque path cannot express.
     // =========================================================================
 
+    /// Read the complete UID through SPI, not the opaque firmware interface.
     #[cfg(feature = "alloc")]
     async fn read_unique_id(&mut self) -> Result<alloc::vec::Vec<u8>> {
-        let id = crate::protocol::read_unique_id(&mut self.master).await?;
+        let id = crate::protocol::read_unique_id(&mut self.master, &self.ctx.chip).await?;
         Ok(id.to_vec())
     }
 }
