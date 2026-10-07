@@ -253,7 +253,11 @@ The largest remaining gap is the SPI programmers not yet ported from flashprog.
 
 ## License
 
-GPL-2.0-or-later, the same license as flashprog. See [LICENSE](LICENSE).
+Licensed under either the [MIT license](LICENSE-MIT) or the
+[Apache License, Version 2.0](LICENSE-APACHE), at your option.
+
+Third-party components retain their own licenses and notices, including the
+MIT-licensed [xfel payloads](crates/rflasher-programmers/src/backends/sunxi_fel/payloads/README.md).
 
 ## Acknowledgments
 
