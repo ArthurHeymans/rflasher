@@ -168,6 +168,19 @@ pub trait FlashDevice {
         self.erase(op.start, op.size).await
     }
 
+    /// Read the chip's unique ID, if supported
+    ///
+    /// Returns the complete factory-programmed unique identifier. Currently,
+    /// SPI implementations support 8-byte RDUID (0x4B) reads on known Winbond
+    /// W25Q80 through W25Q128 profiles; other formats are unsupported.
+    ///
+    /// Opaque programmers and unsupported chips return
+    /// `Error::ChipNotSupported`.
+    #[cfg(feature = "alloc")]
+    async fn read_unique_id(&mut self) -> Result<alloc::vec::Vec<u8>> {
+        Err(crate::error::Error::ChipNotSupported)
+    }
+
     /// Check if a range is valid for this device
     ///
     /// Uses u64 arithmetic to avoid truncation when `len > u32::MAX`.

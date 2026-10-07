@@ -107,6 +107,45 @@ pub async fn read_jedec_id<M: SpiMaster + ?Sized>(master: &mut M) -> Result<(u8,
     Ok((manufacturer, device))
 }
 
+/// Read the complete 64-bit unique ID of a supported Winbond W25Q chip.
+///
+/// Supported JEDEC profiles are W25Q80 through W25Q128 in the 0x40, 0x60,
+/// and 0x70 families. They use RDUID (0x4B) with 32 dummy clocks and eight
+/// response bytes. Other chips return [`Error::ChipNotSupported`] without
+/// sending a command, as neither the UID length nor framing is universal.
+/// In particular, GigaDevice parts can have 128-bit IDs, and larger Winbond
+/// parts can require an extra dummy byte in persistent 4-byte address mode.
+///
+/// An all-0xFF response is also treated as unsupported. Transfer errors
+/// are propagated to the caller.
+pub async fn read_unique_id<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    chip: &crate::chip::FlashChip,
+) -> Result<[u8; 8]> {
+    if !matches!(
+        (chip.jedec_manufacturer, chip.jedec_device),
+        (crate::chip::manufacturer::WINBOND, 0x4014..=0x4018 | 0x6014..=0x6018 | 0x7014..=0x7018)
+    ) {
+        return Err(Error::ChipNotSupported);
+    }
+
+    let mut id = [0u8; 8];
+    let mut cmd = SpiCommand {
+        opcode: opcodes::RDUID,
+        address: None,
+        address_width: AddressWidth::None,
+        io_mode: IoMode::Single,
+        dummy_cycles: 32, // RDUID uses 4 dummy bytes before the ID
+        write_data: &[],
+        read_buf: &mut id,
+    };
+    master.execute(&mut cmd).await?;
+    if id == [0xFF; 8] {
+        return Err(Error::ChipNotSupported);
+    }
+    Ok(id)
+}
+
 /// Read the status register 1
 pub async fn read_status1<M: SpiMaster + ?Sized>(master: &mut M) -> Result<u8> {
     let mut buf = [0u8; 1];
@@ -1092,3 +1131,6 @@ pub fn select_read_mode(
 
     (IoMode::Single, opcodes::READ, false)
 }
+
+#[cfg(all(test, feature = "alloc"))]
+mod unique_id_tests;

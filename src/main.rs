@@ -328,8 +328,19 @@ fn apply_region_filters(
     Ok(region_files)
 }
 
+/// Print chip metadata and attempt to read the factory-programmed unique ID.
 async fn print_chip_info(handle: &mut FlashHandle) {
     use rflasher_core::layout::parse_ifd;
+
+    // Read the unique ID before borrowing the chip info below (the read
+    // needs mutable access to the handle). Only SPI programmers support it.
+    let unique_id = match handle.read_unique_id().await {
+        Ok(id) => id.iter().map(|b| format!("{b:02X}")).collect::<String>(),
+        Err(err) => match err.downcast_ref::<rflasher_core::Error>() {
+            Some(rflasher_core::Error::ChipNotSupported) => "Not supported".to_owned(),
+            _ => format!("Read failed ({err})"),
+        },
+    };
 
     if let Some(info) = handle.chip_info() {
         // SPI device - we have chip information
@@ -350,6 +361,7 @@ async fn print_chip_info(handle: &mut FlashHandle) {
             "JEDEC ID:        {:02X} {:04X}",
             info.jedec_manufacturer, info.jedec_device
         );
+        println!("Unique ID:       {unique_id}");
         println!(
             "Size:            {} bytes ({})",
             info.total_size,
