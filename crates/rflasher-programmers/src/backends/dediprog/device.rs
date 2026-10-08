@@ -1297,7 +1297,10 @@ impl OpaqueMaster for Dediprog {
         if head_residue > 0 {
             self.slow_write(addr, &data[..head_residue])
                 .await
-                .map_err(|_| CoreError::WriteError { addr })?;
+                .map_err(|error| {
+                    log::error!("Dediprog slow write at 0x{addr:08x} failed: {error}");
+                    CoreError::WriteError { addr }
+                })?;
         }
 
         // Aligned bulk portion
@@ -1321,7 +1324,12 @@ impl OpaqueMaster for Dediprog {
                 let write_addr = bulk_start + bulk_offset as u32;
                 self.bulk_write_flash(write_addr, &data[data_start..data_start + this_len])
                     .await
-                    .map_err(|_| CoreError::WriteError { addr: write_addr })?;
+                    .map_err(|error| {
+                        log::error!(
+                            "Dediprog bulk write at 0x{write_addr:08x} ({this_len} bytes) failed: {error}"
+                        );
+                        CoreError::WriteError { addr: write_addr }
+                    })?;
                 bulk_offset += this_len;
             }
         }
@@ -1332,7 +1340,10 @@ impl OpaqueMaster for Dediprog {
             let tail_addr = addr + tail_start as u32;
             self.slow_write(tail_addr, &data[tail_start..])
                 .await
-                .map_err(|_| CoreError::WriteError { addr: tail_addr })?;
+                .map_err(|error| {
+                    log::error!("Dediprog slow write at 0x{tail_addr:08x} failed: {error}");
+                    CoreError::WriteError { addr: tail_addr }
+                })?;
         }
 
         Ok(())
@@ -1415,7 +1426,16 @@ impl SpiMaster for Dediprog {
         let result = self
             .spi_transceive(&write_data, read_len)
             .await
-            .map_err(|_e| CoreError::ProgrammerError)?;
+            .map_err(|error| {
+                log::error!(
+                    "Dediprog SPI command 0x{:02x} (address {:?}, write {} bytes, read {} bytes) failed: {error}",
+                    cmd.opcode,
+                    cmd.address,
+                    cmd.write_data.len(),
+                    read_len,
+                );
+                CoreError::ProgrammerError
+            })?;
 
         cmd.read_buf
             .copy_from_slice(&result[..read_len.min(result.len())]);

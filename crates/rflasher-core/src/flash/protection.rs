@@ -253,6 +253,9 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
     }
     .await;
     if let Err(error) = result {
+        log::error!(
+            "Protection preparation failed before array mutation: {error}; attempting restoration"
+        );
         return finish(
             master,
             ctx,
@@ -376,7 +379,7 @@ pub(crate) async fn finish<M: SpiMaster + ?Sized>(
     ready_timing: (u32, u32),
 ) -> Result<()> {
     if let Err(error) = restore(master, ctx, saved, ready_timing).await {
-        log::error!("Protection restoration failed: {error}; mutation result: {result:?}");
+        log::error!("Protection restoration failed: {error}; operation result: {result:?}");
         return Err(Error::ProtectionRestoreFailed);
     }
     result
