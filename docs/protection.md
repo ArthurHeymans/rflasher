@@ -26,6 +26,16 @@ JEDEC aliases with different procedures are not interchangeable.
 
 Each primitive mutation is responsible for its own restoration, so the free SPI
 helpers, `FlashDevice` adapters and type-erased devices all retain this behavior.
+
+Dediprog bulk USB completion is not a flash-worker readiness barrier. In
+particular, Dedibridge can still be programming buffered pages or settling when
+USB delivery completes, and rejects control SPI access with STALL until the bus
+is released. The Dediprog backend retries only an exact one-byte RDSR (`05`)
+on a typed control-transfer STALL, polling every 10 ms for at most five seconds.
+This lets result checks and restoration wait for ownership before reading flash
+WIP; it does not treat USB completion or STALL as proof of a successful mutation.
+Other transport errors and short responses are reported immediately. Erase,
+program, WREN and status-write commands are never automatically replayed.
 Futures must be driven to completion: cancellation, process termination, loss of
 power or a disconnected programmer can prevent cleanup. Software protection may
 be temporarily removed outside the selected data region, but data mutation

@@ -23,7 +23,7 @@ wasm = [
 dummy = ["alloc"]
 ch341a = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
 ch347 = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
-dediprog = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
+dediprog = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer", "dep:web-time"]
 ft4222 = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
 raiden = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer", "dep:zerocopy"]
 sunxi-fel = ["std", "dep:nusb"]
@@ -72,6 +72,7 @@ embedded-io = { workspace = true, optional = true }
 embedded-io-async = { workspace = true, optional = true }
 
 nusb = { workspace = true, optional = true }
+web-time = { version = "1", optional = true }
 futures-lite = { version = "2", optional = true }
 
 ftdi-nusb = { version = "0.3.0", default-features = false, optional = true }
