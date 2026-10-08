@@ -131,6 +131,9 @@ pub struct FeaturesDef {
     pub wp_cmp: bool,
     /// Audited Winbond map/range decoder and combined SR1/SR2 write procedure.
     pub wp_winbond: bool,
+
+    /// Device ID uses legacy Atmel opcode 0x15 instead of JEDEC RDID.
+    pub at25f_id: bool,
 }
 
 // ============================================================================
@@ -214,7 +217,8 @@ impl Default for VoltageDef {
 pub struct ChipDef {
     /// Chip model name (e.g., "W25Q128FV")
     pub name: String,
-    /// JEDEC device ID (2 bytes, e.g., 0x4018)
+    /// JEDEC device ID (2 bytes, e.g., 0x4018), or the legacy 0x15 ID
+    /// when `features.at25f_id` is set.
     pub device_id: u16,
     /// Total flash size
     pub total_size: Size,

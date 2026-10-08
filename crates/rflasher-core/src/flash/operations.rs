@@ -1230,18 +1230,23 @@ pub async fn write<M: SpiMaster + ?Sized>(
         addressing_for_4byte_operation(native, ctx.chip.features, master.features())?;
     }
     let aai = ctx.chip.features.contains(Features::AAI_WORD) && master.max_write_len() >= 2;
-    let opcode = if aai {
-        0xad
-    } else if native {
+    if aai {
+        let leading_byte = usize::from(!addr.is_multiple_of(2));
+        let remaining = data.len() - leading_byte;
+        let has_words = remaining >= 2;
+        let has_bytes = leading_byte != 0 || !remaining.is_multiple_of(2);
+        if (has_words
+            && (!master.probe_opcode(crate::spi::opcodes::AAI_WP)
+                || !master.probe_opcode(crate::spi::opcodes::WRDI)))
+            || (has_bytes && !master.probe_opcode(crate::spi::opcodes::PP))
+        {
+            return Err(Error::OpcodeNotSupported);
+        }
+    } else if !master.probe_opcode(if native {
         crate::spi::opcodes::PP_4B
     } else {
         crate::spi::opcodes::PP
-    };
-    if !master.probe_opcode(opcode)
-        || (aai
-            && (!addr.is_multiple_of(2) || !data.len().is_multiple_of(2))
-            && !master.probe_opcode(crate::spi::opcodes::PP))
-    {
+    }) {
         return Err(Error::OpcodeNotSupported);
     }
     let saved = super::protection::prepare(master, ctx).await?;
@@ -1249,7 +1254,14 @@ pub async fn write<M: SpiMaster + ?Sized>(
         Ok(()) => super::protection::check_result(master, ctx, addr, false).await,
         Err(error) => Err(error),
     };
-    super::protection::finish(master, ctx, saved, result).await
+    super::protection::finish(
+        master,
+        ctx,
+        saved,
+        result,
+        (protocol::WRSR_POLL_US, protocol::WRSR_TIMEOUT_US),
+    )
+    .await
 }
 
 async fn write_unprotected<M: SpiMaster + ?Sized>(
@@ -1492,7 +1504,15 @@ pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
         Ok(()) => super::protection::check_result(master, ctx, op.start, true).await,
         Err(error) => Err(error),
     };
-    super::protection::finish(master, ctx, saved, result).await
+    let ready_timing = if op.erase_block.is_chip_erase() {
+        (
+            protocol::CHIP_ERASE_POLL_US,
+            protocol::CHIP_ERASE_TIMEOUT_US,
+        )
+    } else {
+        protocol::erase_timing(op.erase_block.max_block_size())
+    };
+    super::protection::finish(master, ctx, saved, result, ready_timing).await
 }
 
 async fn erase_spi_unprotected<M: SpiMaster + ?Sized>(

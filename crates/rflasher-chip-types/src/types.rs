@@ -354,10 +354,13 @@ impl FlashChip {
         ((self.jedec_manufacturer as u32) << 16) | (self.jedec_device as u32)
     }
 
-    /// Check if this chip matches the given JEDEC ID
+    /// Check if this chip matches the given RDID manufacturer and device IDs.
+    /// Legacy Atmel opcode-0x15 identities must not enter RDID candidate lookup.
     #[must_use]
     pub fn matches_jedec_id(&self, manufacturer: u8, device: u16) -> bool {
-        self.jedec_manufacturer == manufacturer && self.jedec_device == device
+        !self.features.contains(Features::AT25F_ID)
+            && self.jedec_manufacturer == manufacturer
+            && self.jedec_device == device
     }
 
     /// Check whether two definitions modify flash in the same way.

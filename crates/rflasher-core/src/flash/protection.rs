@@ -241,9 +241,15 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
     }
     .await;
     if let Err(error) = result {
-        return finish(master, ctx, saved, Err(error))
-            .await
-            .map(|()| SavedProtection::Unchanged);
+        return finish(
+            master,
+            ctx,
+            saved,
+            Err(error),
+            (protocol::WRSR_POLL_US, protocol::WRSR_TIMEOUT_US),
+        )
+        .await
+        .map(|()| SavedProtection::Unchanged);
     }
     Ok(saved)
 }
@@ -252,11 +258,14 @@ async fn restore<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     saved: SavedProtection,
+    ready_timing: (u32, u32),
 ) -> Result<()> {
     if matches!(saved, SavedProtection::Unchanged) {
         return Ok(());
     }
-    protocol::wait_ready(master, 10_000, 5_000_000).await?;
+    // A failed transfer/poll can leave an accepted mutation running. Wait with
+    // that operation's budget, not the much shorter status-write timeout.
+    protocol::wait_ready(master, ready_timing.0, ready_timing.1).await?;
     match saved {
         SavedProtection::Unchanged => Ok(()),
         SavedProtection::Status { sr1, sr2 } => {
@@ -352,8 +361,9 @@ pub(crate) async fn finish<M: SpiMaster + ?Sized>(
     ctx: &FlashContext,
     saved: SavedProtection,
     result: Result<()>,
+    ready_timing: (u32, u32),
 ) -> Result<()> {
-    if let Err(error) = restore(master, ctx, saved).await {
+    if let Err(error) = restore(master, ctx, saved, ready_timing).await {
         log::error!("Protection restoration failed: {error}; mutation result: {result:?}");
         return Err(Error::ProtectionRestoreFailed);
     }

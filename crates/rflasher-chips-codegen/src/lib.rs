@@ -59,6 +59,9 @@ fn features_to_tokens(def: FeaturesDef) -> TokenStream {
     if def.wp_winbond {
         flags.push(quote!(Features::WP_WINBOND));
     }
+    if def.at25f_id {
+        flags.push(quote!(Features::AT25F_ID));
+    }
     if def.wrsr_persistent_ewsr {
         flags.push(quote!(Features::WRSR_PERSISTENT_EWSR));
     }

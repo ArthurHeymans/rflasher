@@ -185,7 +185,17 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
             }
             Err(error) => Err(error),
         };
-        super::protection::finish(&mut self.master, &self.ctx, saved, result).await
+        super::protection::finish(
+            &mut self.master,
+            &self.ctx,
+            saved,
+            result,
+            (
+                crate::protocol::WRSR_POLL_US,
+                crate::protocol::WRSR_TIMEOUT_US,
+            ),
+        )
+        .await
     }
 
     // =========================================================================

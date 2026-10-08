@@ -117,6 +117,9 @@ bitflags! {
         const WP_UNRESOLVED           = 1 << 43;
         /// Audited Winbond SR1/SR2 map, SPI25 range decoder and combined WRSR.
         const WP_WINBOND              = 1 << 44;
+        /// Legacy Atmel ID from opcode 0x15, not JEDEC RDID (0x9F).
+        /// Excluded from RDID lookup; legacy probing is not yet implemented.
+        const AT25F_ID                = 1 << 45;
     }
 }
 

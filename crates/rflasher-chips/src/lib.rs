@@ -55,6 +55,7 @@ fn features_from(def: FeaturesDef) -> Features {
         (def.wrsr_ewsr, Features::WRSR_EWSR),
         (def.wrsr_persistent_ewsr, Features::WRSR_PERSISTENT_EWSR),
         (def.wp_winbond, Features::WP_WINBOND),
+        (def.at25f_id, Features::AT25F_ID),
         (def.wrsr_ext, Features::WRSR_EXT),
         (def.fast_read, Features::FAST_READ),
         (def.dual_io, Features::DUAL_IO),
@@ -460,6 +461,30 @@ mod tests {
         (0..)
             .map_while(|i| ChipProvider::find_nth_by_jedec_id(db, manufacturer, device, i))
             .collect()
+    }
+
+    #[test]
+    fn legacy_at25f_ids_do_not_collide_with_rdid_candidates() {
+        let databases = [ChipDatabase::from_dir(&vendors_dir()).unwrap()];
+        #[cfg(feature = "static-chips")]
+        let databases = [databases[0].clone(), ChipDatabase::new()];
+        for db in databases {
+            let chips = candidates(&db, 0x1f, 0x6500);
+            assert_eq!(chips.len(), 1);
+            assert_eq!(chips[0].name, "AT25F512B");
+            assert_eq!(chips[0].unlock, Unlock::At25f512b);
+            for (name, id) in [
+                ("AT25F512", 0x60),
+                ("AT25F512A", 0x65),
+                ("AT25F1024(A)", 0x60),
+                ("AT25F2048", 0x63),
+                ("AT25F4096", 0x64),
+            ] {
+                let chip = db.iter().find(|chip| chip.name == name).unwrap();
+                assert_eq!(chip.jedec_device, id);
+                assert!(!chip.matches_jedec_id(0x1f, id));
+            }
+        }
     }
 
     #[test]

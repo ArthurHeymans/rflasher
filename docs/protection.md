@@ -16,7 +16,10 @@ JEDEC aliases with different procedures are not interchangeable.
 3. Erase/program. Check documented SR1 erase/program failure flags, and retain
    the existing array readback verification. WIP clearing alone does not prove
    an erase was accepted.
-4. Restore saved protection on success and on command/verification failure.
+4. Exit AAI programming mode with best-effort WRDI, including after transfer
+   failures, before issuing restorative status writes. If an erase may still be
+   running, wait with its sector/block/die/chip readiness budget before restoring
+   saved protection on success and on command/verification failure.
    Restoration failure is explicitly reported as `ProtectionRestoreFailed`,
    with the original operation result logged. Do not continue flashing until
    protection has been inspected.
@@ -32,8 +35,10 @@ policy and verification still apply to the requested region.
 
 Catalog assignments follow flashprog's exact chip identity (manufacturer ID,
 device ID and capacity); consistent aliases share the same procedure. Legacy
-Atmel F parts also have explicit, name-specific assignments. Unmatched and
-conflicting identities remain `Unknown` rather than receiving a vendor default.
+Atmel F parts also have explicit, name-specific assignments. Their legacy
+opcode-`15` identities are marked `AT25F_ID` and excluded from RDID (`9f`)
+candidate lookup; legacy probing is not yet implemented. AT25F512B uses RDID
+and remains independently detectable. Unmatched and conflicting identities remain `Unknown` rather than receiving a vendor default.
 
 | Procedure | SR1 protection / lock / WP indication / preserved bits |
 |---|---|

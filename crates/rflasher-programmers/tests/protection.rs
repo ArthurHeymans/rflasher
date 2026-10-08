@@ -31,6 +31,11 @@ struct State {
     fail_restore: bool,
     error_flag: u8,
     bulk_writes: usize,
+    aai_next: Option<usize>,
+    fail_aai_at: Option<usize>,
+    erase_busy_us: u32,
+    busy_us: u32,
+    fail_busy_read: bool,
 }
 
 impl State {
@@ -47,7 +52,7 @@ impl State {
         } else {
             self.sr1
         };
-        protection | if self.wel { 2 } else { 0 }
+        protection | if self.wel { 2 } else { 0 } | if self.busy_us > 0 { 1 } else { 0 }
     }
     fn protected(&self, addr: usize, len: usize) -> bool {
         if self.unlock == Unlock::At2x {
@@ -89,16 +94,34 @@ impl SpiMaster for Master {
     fn probe_opcode(&self, opcode: u8) -> bool {
         self.0.lock().unwrap().deny_opcode != Some(opcode)
     }
-    async fn delay_us(&mut self, _: u32) {}
+    async fn delay_us(&mut self, us: u32) {
+        let mut s = self.0.lock().unwrap();
+        s.busy_us = s.busy_us.saturating_sub(us);
+    }
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
         let mut s = self.0.lock().unwrap();
         s.commands.push((cmd.opcode, cmd.write_data.to_vec()));
         let addr = cmd.address.unwrap_or(0) as usize;
+        // AAI mode accepts only AAI, RDSR and WRDI. Busy erases accept RDSR only.
+        if (s.aai_next.is_some() && !matches!(cmd.opcode, 0xad | 0x05 | 0x04))
+            || (s.busy_us > 0 && cmd.opcode != 0x05)
+        {
+            return Err(Error::SpiTransferFailed);
+        }
         match cmd.opcode {
             0x06 => s.wel = true,
             0x50 => s.ewsr = true,
-            0x04 => s.wel = false,
-            0x05 => cmd.read_buf.fill(s.status()),
+            0x04 => {
+                s.wel = false;
+                s.aai_next = None;
+            }
+            0x05 => {
+                if s.busy_us > 0 && s.fail_busy_read {
+                    s.fail_busy_read = false;
+                    return Err(Error::SpiTransferFailed);
+                }
+                cmd.read_buf.fill(s.status());
+            }
             0x35 => cmd.read_buf.fill(s.sr2),
             0x01 => {
                 if !s.wel && !s.ewsr {
@@ -163,20 +186,38 @@ impl SpiMaster for Master {
                 }
                 s.wel = false;
             }
-            0x20 | 0xc7 => {
+            0xad => {
+                let addr = if let Some(next) = s.aai_next {
+                    assert!(cmd.address.is_none());
+                    next
+                } else {
+                    assert!(s.wel);
+                    assert!(cmd.address.is_some());
+                    addr
+                };
+                s.program(addr, cmd.write_data)?;
+                s.aai_next = Some(addr + 2);
+                // Simulate a command accepted by the chip but lost on transport.
+                if s.fail_aai_at == Some(addr) {
+                    return Err(Error::SpiTransferFailed);
+                }
+            }
+            0x20 | 0x52 | 0xc4 | 0xc7 => {
                 if s.fail_mutation {
                     return Err(Error::SpiTransferFailed);
                 }
-                let len = if cmd.opcode == 0x20 {
-                    4096
-                } else {
-                    s.data.len()
+                let len = match cmd.opcode {
+                    0x20 => 4096,
+                    0x52 => 8192,
+                    0xc4 => s.data.len() / 2,
+                    _ => s.data.len(),
                 };
                 if s.wel && !s.ignore_erase && !s.protected(addr, len) {
                     s.data[addr..addr + len].fill(0xff);
                 }
                 s.wel = false;
                 s.sr1 |= s.error_flag;
+                s.busy_us = s.erase_busy_us;
             }
             _ => return Err(Error::OpcodeNotSupported),
         }
@@ -231,6 +272,11 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
         fail_restore: false,
         error_flag: 0,
         bulk_writes: 0,
+        aai_next: None,
+        fail_aai_at: None,
+        erase_busy_us: 0,
+        busy_us: 0,
+        fail_busy_read: false,
     })));
     let ctx = FlashContext::new(FlashChip {
         vendor: "Test".into(),
@@ -618,6 +664,112 @@ fn undocumented_read_locks_and_winbond_complement_protection_are_not_cleared() {
                 .iter()
                 .any(|(op, _)| *op == 0x20)
         );
+    });
+}
+
+#[test]
+fn aai_transfer_failures_exit_mode_before_restoring_protection() {
+    block_on(async {
+        for fail_at in [0, 2] {
+            let features = Features::WRSR_WREN | Features::AAI_WORD;
+            let (master, ctx) = fixture(Unlock::Status, 0x3c, features, 8192);
+            let state = master.0.clone();
+            {
+                let mut s = state.lock().unwrap();
+                s.data.fill(0xff);
+                s.fail_aai_at = Some(fail_at);
+            }
+            let mut device = SpiFlashDevice::new(master, ctx);
+            assert_eq!(
+                device.write(0, &[0x55; 4]).await,
+                Err(Error::SpiTransferFailed)
+            );
+            let s = state.lock().unwrap();
+            assert_eq!(s.aai_next, None);
+            assert_eq!(s.sr1, 0x3c);
+            let aai = s.commands.iter().rposition(|(op, _)| *op == 0xad).unwrap();
+            let wrdi = s.commands.iter().rposition(|(op, _)| *op == 0x04).unwrap();
+            let restore = s.commands.iter().rposition(|(op, _)| *op == 0x01).unwrap();
+            assert!(aai < wrdi && wrdi < restore);
+        }
+    });
+}
+
+#[test]
+fn aai_preflight_checks_only_opcodes_used_by_each_segment() {
+    block_on(async {
+        for (addr, data, denied, accepted) in [
+            (0, vec![0x55], 0xad, true),
+            (1, vec![0x55], 0xad, true),
+            (1, vec![0x55; 2], 0xad, true),
+            (0, vec![0x55; 2], 0x02, true),
+            (0, vec![0x55; 3], 0x02, false),
+            (1, vec![0x55; 3], 0xad, false),
+            (1, vec![0x55; 4], 0x02, false),
+        ] {
+            let features = Features::WRSR_WREN | Features::AAI_WORD;
+            let (master, ctx) = fixture(Unlock::Status, 0x3c, features, 8192);
+            let state = master.0.clone();
+            {
+                let mut s = state.lock().unwrap();
+                s.data.fill(0xff);
+                s.deny_opcode = Some(denied);
+            }
+            let mut device = SpiFlashDevice::new(master, ctx);
+            assert_eq!(
+                device.write(addr, &data).await,
+                if accepted {
+                    Ok(())
+                } else {
+                    Err(Error::OpcodeNotSupported)
+                }
+            );
+            let s = state.lock().unwrap();
+            assert_eq!(s.sr1, 0x3c);
+            if accepted {
+                assert_eq!(&s.data[addr as usize..addr as usize + data.len()], data);
+                assert!(!s.commands.iter().any(|(op, _)| *op == denied));
+            } else {
+                assert!(s.commands.is_empty());
+            }
+        }
+    });
+}
+
+#[test]
+fn erase_poll_error_waits_for_the_erase_budget_before_restoring_protection() {
+    block_on(async {
+        // Exercise sector, block, addressed die and addressless chip erase timing.
+        for (opcode, block_size, count, busy_us) in [
+            (0x20, 4096, 2, 6_000_000),
+            (0x52, 8192, 2, 20_000_000),
+            (0xc4, 512 * 1024, 2, 300_000_000),
+            (0xc7, 8192, 1, 60_000_000),
+        ] {
+            let (master, mut ctx) = fixture(
+                Unlock::Bp2Srwd,
+                0x9c,
+                Features::WRSR_WREN,
+                (block_size * count) as usize,
+            );
+            ctx.chip.erase_blocks = vec![EraseBlock::with_count(opcode, block_size, count)];
+            let state = master.0.clone();
+            {
+                let mut s = state.lock().unwrap();
+                s.erase_busy_us = busy_us;
+                s.fail_busy_read = true;
+            }
+            let mut device = SpiFlashDevice::new(master, ctx);
+            assert_eq!(
+                device.erase(0, block_size).await,
+                Err(Error::SpiTransferFailed)
+            );
+            let s = state.lock().unwrap();
+            assert_eq!(s.busy_us, 0);
+            assert_eq!(s.sr1, 0x9c);
+            assert!(s.data[..block_size as usize].iter().all(|b| *b == 0xff));
+            assert!(s.data[block_size as usize..].iter().all(|b| *b == 0));
+        }
     });
 }
 

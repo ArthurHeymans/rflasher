@@ -176,13 +176,14 @@
                 (opcode: 0xC7, regions: [(size: MiB(2), count: 1)]),
             ],
         ),
-        // AT25F series
+        // Legacy AT25F parts use opcode 0x15 and a one-byte device ID,
+        // not RDID (0x9F). Keep them out of RDID candidate lookup.
         (
             name: "AT25F512",
             unlock: Some(At25f),
-            device_id: 0x6500,
+            device_id: 0x60,
             total_size: KiB(64),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, at25f_id: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x52, regions: [(size: KiB(32), count: 2)]),
@@ -192,9 +193,9 @@
         (
             name: "AT25F512A",
             unlock: Some(At25f512a),
-            device_id: 0x6501,
+            device_id: 0x65,
             total_size: KiB(64),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, at25f_id: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x52, regions: [(size: KiB(32), count: 2)]),
@@ -219,9 +220,9 @@
         (
             name: "AT25F1024(A)",
             unlock: Some(At25f),
-            device_id: 0x6600,
+            device_id: 0x60,
             total_size: KiB(128),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, at25f_id: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x52, regions: [(size: KiB(32), count: 4)]),
@@ -231,9 +232,9 @@
         (
             name: "AT25F2048",
             unlock: Some(At25f),
-            device_id: 0x6700,
+            device_id: 0x63,
             total_size: KiB(256),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, at25f_id: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x52, regions: [(size: KiB(64), count: 4)]),
@@ -243,9 +244,9 @@
         (
             name: "AT25F4096",
             unlock: Some(Bp2Srwd),
-            device_id: 0x6800,
+            device_id: 0x64,
             total_size: KiB(512),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, at25f_id: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x52, regions: [(size: KiB(64), count: 8)]),
