@@ -56,7 +56,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -71,7 +71,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -86,7 +86,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -101,7 +101,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -116,7 +116,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -131,7 +131,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -146,7 +146,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -161,7 +161,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),

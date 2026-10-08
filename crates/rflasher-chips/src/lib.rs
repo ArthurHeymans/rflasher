@@ -98,6 +98,7 @@ fn features_from(def: FeaturesDef) -> Features {
         (def.wp_tb, Features::WP_TB),
         (def.wp_sec, Features::WP_SEC),
         (def.wp_cmp, Features::WP_CMP),
+        (def.wp_cmp_sr2, Features::WP_CMP_SR2),
     ]
     .into_iter()
     .fold(
@@ -454,6 +455,46 @@ mod tests {
         assert!(!atmel.features.contains(Features::WP_WINBOND));
         let sst = db.iter().find(|chip| chip.name == "SST26VF080A").unwrap();
         assert!(!sst.features.contains(Features::SST26_BPR));
+    }
+
+    #[test]
+    fn complement_checks_have_explicit_layouts_in_runtime_and_compiled_catalogs() {
+        let databases = [ChipDatabase::from_dir(&vendors_dir()).unwrap()];
+        #[cfg(feature = "static-chips")]
+        let databases = [databases[0].clone(), ChipDatabase::new()];
+        for db in databases {
+            let flags = Features::WP_CMP | Features::WP_CMP_SR2;
+            for (manufacturer, device) in [(0xef, 0x4017), (0xc8, 0x4018), (0x0b, 0x4018)] {
+                let chips = candidates(&db, manufacturer, device);
+                assert!(!chips.is_empty());
+                assert!(chips.iter().all(|chip| chip.features.contains(flags)));
+            }
+            for name in [
+                "W25Q256JV_Q",
+                "AT25SL128A",
+                "FM25Q32",
+                "P25Q128H",
+                "XM25QH128C",
+                "ZD25LQ128",
+            ] {
+                let chip = db.iter().find(|chip| chip.name == name).unwrap();
+                assert!(chip.features.contains(flags), "{name}");
+            }
+            for name in [
+                "FM25Q02",
+                "FM25Q08A",
+                "FM25Q128",
+                "GD25B512MF/GD25R512MF",
+                "GD25WQ80E",
+            ] {
+                let chip = db.iter().find(|chip| chip.name == name).unwrap();
+                assert!(chip.features.contains(Features::WP_CMP), "{name}");
+                assert!(!chip.features.contains(Features::WP_CMP_SR2), "{name}");
+            }
+            // Manufacturer identity and SR2 availability do not establish CMP.
+            let chip = db.iter().find(|chip| chip.name == "W25Q16.V").unwrap();
+            assert!(!chip.features.intersects(flags));
+        }
     }
 
     /// All database entries for one JEDEC ID, in database order

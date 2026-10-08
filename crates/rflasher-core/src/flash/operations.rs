@@ -927,7 +927,11 @@ fn sfdp_erase_conflicts(sfdp: &crate::sfdp::SfdpInfo, chip: &crate::chip::FlashC
 #[cfg(feature = "std")]
 fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::chip::FlashChip> {
     let first = *chips.first()?;
-    let required = Features::AAI_WORD | Features::WRITE_BYTE | Features::SST26_BPR;
+    let required = Features::AAI_WORD
+        | Features::WRITE_BYTE
+        | Features::SST26_BPR
+        | Features::WP_CMP
+        | Features::WP_CMP_SR2;
     let addressing = Features::PROCEDURE
         - (Features::WRSR_WREN
             | Features::WRSR_EWSR
@@ -1759,6 +1763,23 @@ mod tests {
                 "{manufacturer:02x}:{device:04x}"
             );
             assert!(!profile.features.contains(Features::WP_UNRESOLVED));
+        }
+    }
+
+    #[test]
+    fn common_profiles_do_not_drop_cmp_checks_on_three_byte_chips() {
+        let db = rflasher_chips::ChipDatabase::new();
+        let chip = db.find_by_jedec_id(0xef, 0x4017).unwrap();
+        assert!(!chip.requires_4byte_addr());
+        let checks = Features::WP_CMP | Features::WP_CMP_SR2;
+        assert!(chip.features.contains(checks));
+        let profile = common_operation_profile(&[chip, chip]).unwrap();
+        assert!(profile.features.contains(checks));
+        for remove in [Features::WP_CMP, Features::WP_CMP_SR2, checks] {
+            let mut other = chip.clone();
+            other.features.remove(remove);
+            assert!(common_operation_profile(&[chip, &other]).is_none());
+            assert!(common_operation_profile(&[&other, chip]).is_none());
         }
     }
 

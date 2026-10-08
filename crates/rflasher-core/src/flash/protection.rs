@@ -117,11 +117,29 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
     } else {
         let (bp, lock, wp, _) = unlock.status_masks().ok_or(Error::ChipNotSupported)?;
         let sr1 = protocol::read_status1(master).await?;
-        if ctx.chip.features.contains(Features::WP_WINBOND)
-            && protocol::read_status2(master).await? & 0x41 != 0
+        let features = ctx.chip.features;
+        if features.contains(Features::WP_CMP)
+            && !features.intersects(Features::WP_CMP_SR2 | Features::WP_WINBOND)
         {
-            return Err(Error::WriteProtected);
+            // CMP availability alone does not identify its register/bit.
+            return Err(Error::ChipNotSupported);
         }
+        let sr2 = if features
+            .intersects(Features::WP_CMP_SR2 | Features::WP_WINBOND | Features::WRSR_EXT)
+        {
+            if !master.probe_opcode(0x35) {
+                return Err(Error::OpcodeNotSupported);
+            }
+            let value = protocol::read_status2(master).await?;
+            // Check even with BP=0: CMP can then protect the entire array.
+            // Never clear CMP/SRL, or reinterpret an unverified CMP layout.
+            if value & 0x41 != 0 {
+                return Err(Error::WriteProtected);
+            }
+            Some(value)
+        } else {
+            None
+        };
         if sr1 & bp == 0 {
             return Ok(SavedProtection::Unchanged);
         }
@@ -184,16 +202,10 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
             }
         } else {
             let sr2 = if ctx.chip.features.contains(Features::WRSR_EXT) {
-                let value = protocol::read_status2(master).await?;
-                // CMP/SRL and independent protection modes need their own
-                // procedure. Do not claim BP clearing can remove those locks.
-                if value & 0x41 != 0 {
-                    return Err(Error::WriteProtected);
-                }
                 if master.max_write_len() < 2 {
                     return Err(Error::ChipNotSupported);
                 }
-                Some(value)
+                sr2
             } else {
                 None
             };

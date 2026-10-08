@@ -105,7 +105,7 @@
             unlock: Some(Bp2Srwd),
             device_id: 0x6018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true, status_reg_3: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -120,7 +120,7 @@
             unlock: Some(Bp3Srwd),
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 8192)]),

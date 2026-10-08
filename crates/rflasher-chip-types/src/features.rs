@@ -120,6 +120,9 @@ bitflags! {
         /// Legacy Atmel ID from opcode 0x15, not JEDEC RDID (0x9F).
         /// Excluded from RDID lookup; legacy probing is not yet implemented.
         const AT25F_ID                = 1 << 45;
+        /// Audited CMP at SR2 bit 6 (read 0x35); bit 0 is SRL or reserved-zero.
+        /// Independent of the status-write protocol and WP range decoder.
+        const WP_CMP_SR2              = 1 << 46;
     }
 }
 
@@ -149,6 +152,8 @@ impl Features {
         .union(Self::FOUR_BYTE_PROGRAM)
         .union(Self::WP_BP3)
         .union(Self::WP_WINBOND)
+        .union(Self::WP_CMP)
+        .union(Self::WP_CMP_SR2)
         .union(Self::WRSR_VOLATILE_WREN)
         .union(Self::WRSR_PERSISTENT_EWSR);
 

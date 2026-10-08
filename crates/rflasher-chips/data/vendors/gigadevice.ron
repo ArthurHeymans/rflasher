@@ -123,7 +123,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -139,7 +139,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -155,7 +155,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -265,7 +265,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6012,
             total_size: KiB(256),
-            features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
+            features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -280,7 +280,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
+            features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -295,7 +295,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
+            features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -310,7 +310,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -325,7 +325,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -340,7 +340,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -355,7 +355,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -370,7 +370,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, qe_sr2: true, wrsr_ext: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, qe_sr2: true, wrsr_ext: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8192)]),
@@ -387,7 +387,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6314,
             total_size: MiB(1),
-            features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
+            features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -402,7 +402,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6315,
             total_size: MiB(2),
-            features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
+            features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -417,7 +417,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6316,
             total_size: MiB(4),
-            features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
+            features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -432,7 +432,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6317,
             total_size: MiB(8),
-            features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
+            features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -447,7 +447,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6318,
             total_size: MiB(16),
-            features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
+            features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -479,7 +479,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -495,7 +495,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, wrsr_ext: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, wrsr_ext: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8192)]),
@@ -510,7 +510,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 8192)]),
@@ -555,7 +555,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x6017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -587,7 +587,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x601A,
             total_size: MiB(64),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 16384)]),
@@ -658,7 +658,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -674,7 +674,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -690,7 +690,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, qpi: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -706,7 +706,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -799,7 +799,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -831,7 +831,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -878,7 +878,7 @@
             unlock: Some(Bp4Srwd),
             device_id: 0x401A,
             total_size: MiB(64),
-            features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
+            features: (wp_cmp: true, wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 16384)]),

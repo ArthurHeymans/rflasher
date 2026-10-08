@@ -164,6 +164,9 @@ fn features_to_tokens(def: FeaturesDef) -> TokenStream {
     if def.wp_cmp {
         flags.push(quote!(Features::WP_CMP));
     }
+    if def.wp_cmp_sr2 {
+        flags.push(quote!(Features::WP_CMP_SR2));
+    }
 
     if flags.is_empty() {
         quote!(Features::empty())

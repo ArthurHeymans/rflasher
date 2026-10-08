@@ -129,6 +129,8 @@ pub struct FeaturesDef {
     pub wp_sec: bool,
     /// Complement (CMP) bit available
     pub wp_cmp: bool,
+    /// Audited CMP at SR2 bit 6 (read 0x35); bit 0 is SRL or reserved-zero.
+    pub wp_cmp_sr2: bool,
     /// Audited Winbond map/range decoder and combined SR1/SR2 write procedure.
     pub wp_winbond: bool,
 

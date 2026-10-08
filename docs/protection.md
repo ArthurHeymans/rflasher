@@ -59,6 +59,17 @@ WREN and persistent/volatile EWSR capabilities come from chip metadata; missing
 capabilities do not trigger flashprog's historical guessed-EWSR fallback.
 Combined WRSR preserves SR2 where the catalog specifies that protocol.
 
+Complement protection is checked before the BP-zero fast path: CMP=1 with BP=0
+can protect the entire array, and clearing BP with CMP=1 can protect a previously
+writable region. `WP_CMP_SR2` explicitly identifies CMP at bit 6 of the register
+read with `35`; CMP or bit 0 (SRL on these layouts) being set is refused before
+any status or array mutation. This check does not enable combined status writes
+or a WP range decoder. Catalog assignments use flashprog's per-chip register
+maps, not vendor defaults. Known CMP parts without this audited layout (including
+Fudan variants with CMP in SR1 or SR2 bit 4, and GigaDevice variants with CMP in
+SR3) carry only `WP_CMP` and are refused with `ChipNotSupported`. Aliases with
+different CMP checks cannot synthesize a common mutation profile.
+
 **AT25DF321 (`1f:4700`, 4 MiB):** unprotection writes SR1 `00`, including zeroes
 in bits 4 and 5. Clearing only bits 2 and 3 is insufficient. SPRL is cleared in a
 separate write that leaves sector protection alone. Fully protected chips can

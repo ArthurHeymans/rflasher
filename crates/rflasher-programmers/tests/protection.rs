@@ -668,6 +668,109 @@ fn undocumented_read_locks_and_winbond_complement_protection_are_not_cleared() {
 }
 
 #[test]
+fn audited_cmp_and_srl_are_refused_before_status_or_array_mutations() {
+    block_on(async {
+        for unlock in [Unlock::Status, Unlock::Bp4Srwd] {
+            for sr1 in [0, 0x1c] {
+                for sr2 in [0x40, 0x01, 0x41] {
+                    for hybrid in [false, true] {
+                        for erase in [false, true] {
+                            let features =
+                                Features::WRSR_WREN | Features::WP_CMP | Features::WP_CMP_SR2;
+                            let (master, ctx) = fixture(unlock, sr1, features, 8192);
+                            let state = master.0.clone();
+                            state.lock().unwrap().sr2 = sr2;
+                            let mut device = if hybrid {
+                                ErasedFlashDevice::new(HybridFlashDevice::new(master, ctx))
+                            } else {
+                                ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx))
+                            };
+                            let result = if erase {
+                                device.erase(0, 4096).await
+                            } else {
+                                device.write(0, &[0]).await
+                            };
+                            assert_eq!(result, Err(Error::WriteProtected));
+                            let s = state.lock().unwrap();
+                            assert_eq!((s.sr1, s.sr2), (sr1, sr2));
+                            assert!(s.data.iter().all(|b| *b == 0));
+                            assert_eq!(s.bulk_writes, 0);
+                            assert!(s.commands.iter().any(|(op, _)| *op == 0x35));
+                            assert!(s.commands.iter().all(|(op, _)| matches!(op, 0x05 | 0x35)));
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn cmp_register_read_does_not_change_status_write_width() {
+    block_on(async {
+        for extended in [false, true] {
+            let features = Features::WRSR_WREN | Features::WP_CMP | Features::WP_CMP_SR2;
+            let features = if extended {
+                features | Features::WRSR_EXT
+            } else {
+                features
+            };
+            let (master, ctx) = fixture(Unlock::Bp4Srwd, 0x1c, features, 8192);
+            let state = master.0.clone();
+            let mut device = HybridFlashDevice::new(master, ctx);
+            device.erase(0, 4096).await.unwrap();
+            device.write(0, &[0x5a]).await.unwrap();
+            let s = state.lock().unwrap();
+            assert_eq!((s.sr1, s.sr2), (0x1c, 0x02));
+            assert_eq!(s.data[0], 0x5a);
+            assert_eq!(s.bulk_writes, 1);
+            let writes: Vec<_> = s.commands.iter().filter(|(op, _)| *op == 0x01).collect();
+            assert!(!writes.is_empty());
+            assert!(
+                writes
+                    .iter()
+                    .all(|(_, bytes)| bytes.len() == if extended { 2 } else { 1 })
+            );
+        }
+    });
+}
+
+#[test]
+fn unknown_cmp_layouts_and_unavailable_sr2_reads_do_not_unlock() {
+    block_on(async {
+        for sr1 in [0, 0x1c] {
+            let features = Features::WRSR_WREN | Features::WP_CMP;
+            let (master, ctx) = fixture(Unlock::Bp2Srwd, sr1, features, 8192);
+            let state = master.0.clone();
+            let mut device = SpiFlashDevice::new(master, ctx);
+            assert_eq!(device.erase(0, 4096).await, Err(Error::ChipNotSupported));
+            assert!(
+                !state
+                    .lock()
+                    .unwrap()
+                    .commands
+                    .iter()
+                    .any(|(op, _)| *op == 0x01)
+            );
+
+            let (master, ctx) = fixture(Unlock::Status, sr1, features | Features::WP_CMP_SR2, 8192);
+            let state = master.0.clone();
+            state.lock().unwrap().deny_opcode = Some(0x35);
+            let mut device = SpiFlashDevice::new(master, ctx);
+            assert_eq!(device.write(0, &[0]).await, Err(Error::OpcodeNotSupported));
+            assert!(
+                !state
+                    .lock()
+                    .unwrap()
+                    .commands
+                    .iter()
+                    .any(|(op, _)| *op == 0x01)
+            );
+        }
+    });
+}
+
+#[test]
 fn aai_transfer_failures_exit_mode_before_restoring_protection() {
     block_on(async {
         for fail_at in [0, 2] {

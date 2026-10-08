@@ -366,7 +366,7 @@
             unlock: Some(Status),
             device_id: 0x4218,
             total_size: MiB(16),
-            features: (wrsr_wren: true, quad_io: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, quad_io: true),
             voltage: (min: 1700, max: 2000),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
