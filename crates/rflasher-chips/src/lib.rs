@@ -54,6 +54,8 @@ fn features_from(def: FeaturesDef) -> Features {
         (def.wrsr_wren, Features::WRSR_WREN),
         (def.wrsr_ewsr, Features::WRSR_EWSR),
         (def.wrsr_persistent_ewsr, Features::WRSR_PERSISTENT_EWSR),
+        (def.wp_winbond, Features::WP_WINBOND),
+        (def.at25f_id, Features::AT25F_ID),
         (def.wrsr_ext, Features::WRSR_EXT),
         (def.fast_read, Features::FAST_READ),
         (def.dual_io, Features::DUAL_IO),
@@ -96,6 +98,7 @@ fn features_from(def: FeaturesDef) -> Features {
         (def.wp_tb, Features::WP_TB),
         (def.wp_sec, Features::WP_SEC),
         (def.wp_cmp, Features::WP_CMP),
+        (def.wp_cmp_sr2, Features::WP_CMP_SR2),
     ]
     .into_iter()
     .fold(
@@ -223,6 +226,7 @@ impl ChipDatabase {
                 total_size: chip_def.total_size.to_bytes(),
                 page_size: chip_def.page_size,
                 features: features_from(chip_def.features),
+                unlock: chip_def.unlock.unwrap_or_default(),
                 voltage_min_mv: chip_def.voltage.min,
                 voltage_max_mv: chip_def.voltage.max,
                 write_granularity: granularity_from(chip_def.write_granularity),
@@ -406,7 +410,91 @@ mod tests {
         let provider: &dyn ChipProvider = &db;
 
         assert_eq!(db.len(), runtime_db.len());
+        for compiled in db.iter() {
+            let loaded = runtime_db
+                .iter()
+                .find(|chip| chip.vendor == compiled.vendor && chip.name == compiled.name)
+                .unwrap();
+            assert!(compiled.is_equivalent_to(loaded), "{}", compiled.name);
+        }
         assert!(provider.find_by_jedec_id(0xEF, 0x4018).is_some());
+    }
+
+    #[test]
+    fn audited_protection_procedures_are_not_vendor_defaults() {
+        let db = ChipDatabase::from_dir(&vendors_dir()).unwrap();
+        for (name, unlock) in [
+            ("AT25DF321", Unlock::At2x),
+            ("AT25F4096", Unlock::Bp2Srwd),
+            ("AT25F512A", Unlock::At25f512a),
+            ("AT26DF041", Unlock::None),
+            ("AT25SF128A", Unlock::Unknown),
+            ("N25Q128", Unlock::N25q),
+            ("MT25QL512", Unlock::N25q),
+            ("LE25FU106B", Unlock::Bp1Srwd),
+            ("GD25Q128", Unlock::Bp4Srwd),
+            ("MX25L12805D", Unlock::Bp3Srwd),
+            ("SST25VF016B", Unlock::Status),
+            ("25F160S33B8", Unlock::Bp2EpSrwd),
+            ("SST26VF016B(A)", Unlock::Sst26_6),
+            ("SST26VF032B(A)", Unlock::Sst26_10),
+            ("SST26VF064B(A)", Unlock::Sst26_18),
+            ("SST26VF080A", Unlock::Bp3Srwd),
+            ("SST26VF016", Unlock::Unsupported),
+            ("SST26VF032", Unlock::Unsupported),
+        ] {
+            assert_eq!(
+                db.iter().find(|chip| chip.name == name).unwrap().unlock,
+                unlock,
+                "{name}"
+            );
+        }
+        let atmel = db.iter().find(|chip| chip.name == "AT25DF321").unwrap();
+        assert!(atmel.matches_jedec_id(0x1f, 0x4700));
+        assert_eq!(atmel.total_size, 4 * 1024 * 1024);
+        assert!(!atmel.features.contains(Features::WP_WINBOND));
+        let sst = db.iter().find(|chip| chip.name == "SST26VF080A").unwrap();
+        assert!(!sst.features.contains(Features::SST26_BPR));
+    }
+
+    #[test]
+    fn complement_checks_have_explicit_layouts_in_runtime_and_compiled_catalogs() {
+        let databases = [ChipDatabase::from_dir(&vendors_dir()).unwrap()];
+        #[cfg(feature = "static-chips")]
+        let databases = [databases[0].clone(), ChipDatabase::new()];
+        for db in databases {
+            let flags = Features::WP_CMP | Features::WP_CMP_SR2;
+            for (manufacturer, device) in [(0xef, 0x4017), (0xc8, 0x4018), (0x0b, 0x4018)] {
+                let chips = candidates(&db, manufacturer, device);
+                assert!(!chips.is_empty());
+                assert!(chips.iter().all(|chip| chip.features.contains(flags)));
+            }
+            for name in [
+                "W25Q256JV_Q",
+                "AT25SL128A",
+                "FM25Q32",
+                "P25Q128H",
+                "XM25QH128C",
+                "ZD25LQ128",
+            ] {
+                let chip = db.iter().find(|chip| chip.name == name).unwrap();
+                assert!(chip.features.contains(flags), "{name}");
+            }
+            for name in [
+                "FM25Q02",
+                "FM25Q08A",
+                "FM25Q128",
+                "GD25B512MF/GD25R512MF",
+                "GD25WQ80E",
+            ] {
+                let chip = db.iter().find(|chip| chip.name == name).unwrap();
+                assert!(chip.features.contains(Features::WP_CMP), "{name}");
+                assert!(!chip.features.contains(Features::WP_CMP_SR2), "{name}");
+            }
+            // Manufacturer identity and SR2 availability do not establish CMP.
+            let chip = db.iter().find(|chip| chip.name == "W25Q16.V").unwrap();
+            assert!(!chip.features.intersects(flags));
+        }
     }
 
     /// All database entries for one JEDEC ID, in database order
@@ -414,6 +502,30 @@ mod tests {
         (0..)
             .map_while(|i| ChipProvider::find_nth_by_jedec_id(db, manufacturer, device, i))
             .collect()
+    }
+
+    #[test]
+    fn legacy_at25f_ids_do_not_collide_with_rdid_candidates() {
+        let databases = [ChipDatabase::from_dir(&vendors_dir()).unwrap()];
+        #[cfg(feature = "static-chips")]
+        let databases = [databases[0].clone(), ChipDatabase::new()];
+        for db in databases {
+            let chips = candidates(&db, 0x1f, 0x6500);
+            assert_eq!(chips.len(), 1);
+            assert_eq!(chips[0].name, "AT25F512B");
+            assert_eq!(chips[0].unlock, Unlock::At25f512b);
+            for (name, id) in [
+                ("AT25F512", 0x60),
+                ("AT25F512A", 0x65),
+                ("AT25F1024(A)", 0x60),
+                ("AT25F2048", 0x63),
+                ("AT25F4096", 0x64),
+            ] {
+                let chip = db.iter().find(|chip| chip.name == name).unwrap();
+                assert_eq!(chip.jedec_device, id);
+                assert!(!chip.matches_jedec_id(0x1f, id));
+            }
+        }
     }
 
     #[test]

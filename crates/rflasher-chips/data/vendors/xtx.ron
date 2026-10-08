@@ -8,6 +8,7 @@
         // XT25F series - Standard SPI flash
         (
             name: "XT25F02E",
+            unlock: Some(Status),
             device_id: 0x4012,
             total_size: KiB(256),
             features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, status_reg_2: true, qe_sr2: true),
@@ -22,6 +23,7 @@
         ),
         (
             name: "XT25F04D",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4013,
             total_size: KiB(512),
             features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, status_reg_2: true, qe_sr2: true),
@@ -36,6 +38,7 @@
         ),
         (
             name: "XT25F08B",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4014,
             total_size: MiB(1),
             features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, status_reg_2: true, qe_sr2: true),
@@ -50,9 +53,10 @@
         ),
         (
             name: "XT25F16B",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -64,9 +68,10 @@
         ),
         (
             name: "XT25F32B",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -78,9 +83,10 @@
         ),
         (
             name: "XT25F64B",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -92,9 +98,10 @@
         ),
         (
             name: "XT25F128B",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -106,9 +113,10 @@
         ),
         (
             name: "XT25F16F",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -120,9 +128,10 @@
         ),
         (
             name: "XT25F32F",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -134,9 +143,10 @@
         ),
         (
             name: "XT25F64F",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -148,9 +158,10 @@
         ),
         (
             name: "XT25F128F/XT25BF128F",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),

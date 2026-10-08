@@ -218,6 +218,7 @@
         // A25LQ032/A25LQ32A - Uniform 4KB sectors (4MB)
         (
             name: "A25LQ032/A25LQ32A",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4016,
             total_size: MiB(4),
             features: (wrsr_wren: true, quad_io: true),
@@ -233,6 +234,7 @@
         // A25LQ16 - Uniform 4KB sectors (2MB)
         (
             name: "A25LQ16",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4015,
             total_size: MiB(2),
             features: (wrsr_wren: true, quad_io: true),
@@ -248,6 +250,7 @@
         // A25LQ64 - Uniform 4KB sectors (8MB)
         (
             name: "A25LQ64",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4017,
             total_size: MiB(8),
             features: (wrsr_wren: true, quad_io: true),
@@ -262,6 +265,7 @@
         ),
         (
             name: "A25L010",
+            unlock: Some(Status),
             device_id: 0x3011,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -274,6 +278,7 @@
         ),
         (
             name: "A25L016",
+            unlock: Some(Status),
             device_id: 0x3015,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -286,6 +291,7 @@
         ),
         (
             name: "A25L020",
+            unlock: Some(Status),
             device_id: 0x3012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -298,6 +304,7 @@
         ),
         (
             name: "A25L032",
+            unlock: Some(Bp2Srwd),
             device_id: 0x3016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
@@ -313,6 +320,7 @@
         ),
         (
             name: "A25L040",
+            unlock: Some(Status),
             device_id: 0x3013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -325,6 +333,7 @@
         ),
         (
             name: "A25L080",
+            unlock: Some(Status),
             device_id: 0x3014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -337,6 +346,7 @@
         ),
         (
             name: "A25L512",
+            unlock: Some(Status),
             device_id: 0x3010,
             total_size: KiB(64),
             features: (wrsr_wren: true),

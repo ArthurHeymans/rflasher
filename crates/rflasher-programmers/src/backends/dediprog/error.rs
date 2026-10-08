@@ -18,6 +18,8 @@ pub enum DediprogError {
     ClaimFailed(String),
     /// USB transfer failed
     TransferFailed(String),
+    /// Typed USB transfer failure, preserving STALL for safe status-read retries.
+    UsbTransfer(nusb::transfer::TransferError),
     /// Invalid response from device
     InvalidResponse(String),
     /// Timeout during operation
@@ -44,6 +46,7 @@ impl fmt::Display for DediprogError {
             DediprogError::OpenFailed(msg) => write!(f, "Failed to open Dediprog: {}", msg),
             DediprogError::ClaimFailed(msg) => write!(f, "Failed to claim interface: {}", msg),
             DediprogError::TransferFailed(msg) => write!(f, "USB transfer failed: {}", msg),
+            DediprogError::UsbTransfer(error) => write!(f, "USB transfer failed: {error}"),
             DediprogError::InvalidResponse(msg) => {
                 write!(f, "Invalid response from Dediprog: {}", msg)
             }
@@ -61,6 +64,7 @@ impl std::error::Error for DediprogError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             DediprogError::Core(e) => Some(e),
+            DediprogError::UsbTransfer(error) => Some(error),
             _ => None,
         }
     }

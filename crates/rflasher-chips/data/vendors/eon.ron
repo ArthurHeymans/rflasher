@@ -8,6 +8,7 @@
         // EN25Q series - Standard 3.3V SPI flash
         (
             name: "EN25Q40",
+            unlock: Some(Status),
             device_id: 0x3013,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true),
@@ -22,6 +23,7 @@
 
         (
             name: "EN25Q16",
+            unlock: Some(Status),
             device_id: 0x3015,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
@@ -36,6 +38,7 @@
         ),
         (
             name: "EN25Q32",
+            unlock: Some(Status),
             device_id: 0x3016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
@@ -50,6 +53,7 @@
         ),
         (
             name: "EN25Q64",
+            unlock: Some(Status),
             device_id: 0x3017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true),
@@ -64,6 +68,7 @@
         ),
         (
             name: "EN25Q128",
+            unlock: Some(Status),
             device_id: 0x3018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
@@ -80,6 +85,7 @@
         // EN25QH series - High performance with QPI support
         (
             name: "EN25QH16",
+            unlock: Some(Bp3Srwd),
             device_id: 0x7015,
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true),
@@ -95,6 +101,7 @@
 
         (
             name: "EN25QH128",
+            unlock: Some(Bp3Srwd),
             device_id: 0x7018,
             total_size: MiB(16),
             features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true),
@@ -109,6 +116,7 @@
         ),
         (
             name: "EN25B05",
+            unlock: Some(Status),
             device_id: 0x2010,
             total_size: KiB(64),
             features: (wrsr_wren: true),
@@ -125,6 +133,7 @@
         ),
         (
             name: "EN25B05T",
+            unlock: Some(Status),
             device_id: 0x2010,
             total_size: KiB(64),
             features: (wrsr_wren: true),
@@ -141,6 +150,7 @@
         ),
         (
             name: "EN25B10",
+            unlock: Some(Status),
             device_id: 0x2011,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -157,6 +167,7 @@
         ),
         (
             name: "EN25B10T",
+            unlock: Some(Status),
             device_id: 0x2011,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -174,6 +185,7 @@
         ),
         (
             name: "EN25B20",
+            unlock: Some(Status),
             device_id: 0x2012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -191,6 +203,7 @@
         ),
         (
             name: "EN25B20T",
+            unlock: Some(Status),
             device_id: 0x2012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -208,6 +221,7 @@
         ),
         (
             name: "EN25B40",
+            unlock: Some(Status),
             device_id: 0x2013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -225,6 +239,7 @@
         ),
         (
             name: "EN25B40T",
+            unlock: Some(Status),
             device_id: 0x2013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -242,6 +257,7 @@
         ),
         (
             name: "EN25B80",
+            unlock: Some(Status),
             device_id: 0x2014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -259,6 +275,7 @@
         ),
         (
             name: "EN25B80T",
+            unlock: Some(Status),
             device_id: 0x2014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -276,6 +293,7 @@
         ),
         (
             name: "EN25B16",
+            unlock: Some(Status),
             device_id: 0x2015,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -293,6 +311,7 @@
         ),
         (
             name: "EN25B16T",
+            unlock: Some(Status),
             device_id: 0x2015,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -310,6 +329,7 @@
         ),
         (
             name: "EN25B32",
+            unlock: Some(Status),
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -327,6 +347,7 @@
         ),
         (
             name: "EN25B32T",
+            unlock: Some(Status),
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -344,6 +365,7 @@
         ),
         (
             name: "EN25B64",
+            unlock: Some(Status),
             device_id: 0x2017,
             total_size: MiB(8),
             features: (wrsr_wren: true),
@@ -361,6 +383,7 @@
         ),
         (
             name: "EN25B64T",
+            unlock: Some(Status),
             device_id: 0x2017,
             total_size: MiB(8),
             features: (wrsr_wren: true),
@@ -378,6 +401,7 @@
         ),
         (
             name: "EN25F05",
+            unlock: Some(Status),
             device_id: 0x3110,
             total_size: KiB(64),
             features: (wrsr_wren: true),
@@ -393,6 +417,7 @@
         ),
         (
             name: "EN25F10",
+            unlock: Some(Status),
             device_id: 0x3111,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -408,6 +433,7 @@
         ),
         (
             name: "EN25F16",
+            unlock: Some(Status),
             device_id: 0x3115,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -422,6 +448,7 @@
         ),
         (
             name: "EN25F20",
+            unlock: Some(Status),
             device_id: 0x3112,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -436,6 +463,7 @@
         ),
         (
             name: "EN25F32",
+            unlock: Some(Status),
             device_id: 0x3116,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -450,6 +478,7 @@
         ),
         (
             name: "EN25F40",
+            unlock: Some(Status),
             device_id: 0x3113,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -464,6 +493,7 @@
         ),
         (
             name: "EN25F64",
+            unlock: Some(Status),
             device_id: 0x3117,
             total_size: MiB(8),
             features: (wrsr_wren: true),
@@ -478,6 +508,7 @@
         ),
         (
             name: "EN25F80",
+            unlock: Some(Status),
             device_id: 0x3114,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -492,6 +523,7 @@
         ),
         (
             name: "EN25P05",
+            unlock: Some(Status),
             device_id: 0x2010,
             total_size: KiB(64),
             features: (wrsr_wren: true),
@@ -503,6 +535,7 @@
         ),
         (
             name: "EN25P10",
+            unlock: Some(Status),
             device_id: 0x2011,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -514,6 +547,7 @@
         ),
         (
             name: "EN25P16",
+            unlock: Some(Status),
             device_id: 0x2015,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -525,6 +559,7 @@
         ),
         (
             name: "EN25P20",
+            unlock: Some(Status),
             device_id: 0x2012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -536,6 +571,7 @@
         ),
         (
             name: "EN25P32",
+            unlock: Some(Status),
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
@@ -547,6 +583,7 @@
         ),
         (
             name: "EN25P40",
+            unlock: Some(Status),
             device_id: 0x2013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -558,6 +595,7 @@
         ),
         (
             name: "EN25P64",
+            unlock: Some(Status),
             device_id: 0x2017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true),
@@ -569,6 +607,7 @@
         ),
         (
             name: "EN25P80",
+            unlock: Some(Status),
             device_id: 0x2014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -580,6 +619,7 @@
         ),
         (
             name: "EN25Q32(A/B)",
+            unlock: Some(Status),
             device_id: 0x3016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
@@ -594,6 +634,7 @@
         ),
         (
             name: "EN25Q80(A)",
+            unlock: Some(Status),
             device_id: 0x3014,
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true),
@@ -607,6 +648,7 @@
         ),
         (
             name: "EN25Q80",
+            unlock: Some(Status),
             device_id: 0x3014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -620,6 +662,7 @@
         ),
         (
             name: "EN25QH32B",
+            unlock: Some(Bp3Srwd),
             device_id: 0x7016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -635,6 +678,7 @@
         ),
         (
             name: "EN25QH64A",
+            unlock: Some(Bp3Srwd),
             device_id: 0x7017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -650,6 +694,7 @@
         ),
         (
             name: "EN25QH32",
+            unlock: Some(Bp3Srwd),
             device_id: 0x7016,
             total_size: MiB(4),
             features: (wrsr_wren: true, qpi: true),
@@ -663,6 +708,7 @@
         ),
         (
             name: "EN25QH64",
+            unlock: Some(Bp3Srwd),
             device_id: 0x7017,
             total_size: MiB(8),
             features: (wrsr_wren: true, qpi: true),
@@ -676,6 +722,7 @@
         ),
         (
             name: "EN25S10",
+            unlock: Some(Status),
             device_id: 0x3811,
             total_size: KiB(128),
             features: (wrsr_wren: true, otp: true),
@@ -689,6 +736,7 @@
         ),
         (
             name: "EN25S16",
+            unlock: Some(Bp3Srwd),
             device_id: 0x3815,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -703,6 +751,7 @@
         ),
         (
             name: "EN25S20",
+            unlock: Some(Status),
             device_id: 0x3812,
             total_size: KiB(256),
             features: (wrsr_wren: true, otp: true),
@@ -716,6 +765,7 @@
         ),
         (
             name: "EN25S32",
+            unlock: Some(Bp3Srwd),
             device_id: 0x3816,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -730,6 +780,7 @@
         ),
         (
             name: "EN25S40",
+            unlock: Some(Status),
             device_id: 0x3813,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true),
@@ -744,6 +795,7 @@
         ),
         (
             name: "EN25S64",
+            unlock: Some(Bp3Srwd),
             device_id: 0x3817,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -758,6 +810,7 @@
         ),
         (
             name: "EN25S80",
+            unlock: Some(Status),
             device_id: 0x3814,
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true),

@@ -927,7 +927,11 @@ fn sfdp_erase_conflicts(sfdp: &crate::sfdp::SfdpInfo, chip: &crate::chip::FlashC
 #[cfg(feature = "std")]
 fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::chip::FlashChip> {
     let first = *chips.first()?;
-    let required = Features::AAI_WORD | Features::WRITE_BYTE | Features::SST26_BPR;
+    let required = Features::AAI_WORD
+        | Features::WRITE_BYTE
+        | Features::SST26_BPR
+        | Features::WP_CMP
+        | Features::WP_CMP_SR2;
     let addressing = Features::PROCEDURE
         - (Features::WRSR_WREN
             | Features::WRSR_EWSR
@@ -936,7 +940,8 @@ fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::
             | Features::WRSR_VOLATILE_WREN
             | Features::WRSR_PERSISTENT_EWSR);
     if chips.iter().any(|c| {
-        c.total_size != first.total_size
+        c.unlock != first.unlock
+            || c.total_size != first.total_size
             || c.write_granularity != first.write_granularity
             || c.features & required != first.features & required
             || (first.requires_4byte_addr()
@@ -1215,7 +1220,60 @@ pub async fn write<M: SpiMaster + ?Sized>(
     if !ctx.is_valid_range(addr, data.len()) {
         return Err(Error::AddressOutOfBounds);
     }
+    if data.is_empty() {
+        return Ok(());
+    }
+    if master.max_write_len() == 0 {
+        return Err(Error::ProgrammerError);
+    }
+    let native = ctx.address_mode == AddressMode::FourByte
+        && ctx.chip.features.supports_4ba_program()
+        && master.features().contains(SpiFeatures::FOUR_BYTE_ADDR)
+        && master.probe_opcode(crate::spi::opcodes::PP_4B);
+    if ctx.address_mode == AddressMode::FourByte {
+        addressing_for_4byte_operation(native, ctx.chip.features, master.features())?;
+    }
+    let aai = ctx.chip.features.contains(Features::AAI_WORD) && master.max_write_len() >= 2;
+    if aai {
+        let leading_byte = usize::from(!addr.is_multiple_of(2));
+        let remaining = data.len() - leading_byte;
+        let has_words = remaining >= 2;
+        let has_bytes = leading_byte != 0 || !remaining.is_multiple_of(2);
+        if (has_words
+            && (!master.probe_opcode(crate::spi::opcodes::AAI_WP)
+                || !master.probe_opcode(crate::spi::opcodes::WRDI)))
+            || (has_bytes && !master.probe_opcode(crate::spi::opcodes::PP))
+        {
+            return Err(Error::OpcodeNotSupported);
+        }
+    } else if !master.probe_opcode(if native {
+        crate::spi::opcodes::PP_4B
+    } else {
+        crate::spi::opcodes::PP
+    }) {
+        return Err(Error::OpcodeNotSupported);
+    }
+    let saved = super::protection::prepare(master, ctx).await?;
+    let result = match write_unprotected(master, ctx, addr, data).await {
+        Ok(()) => super::protection::check_result(master, ctx, addr, false).await,
+        Err(error) => Err(error),
+    };
+    super::protection::finish(
+        master,
+        ctx,
+        saved,
+        result,
+        (protocol::WRSR_POLL_US, protocol::WRSR_TIMEOUT_US),
+    )
+    .await
+}
 
+async fn write_unprotected<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    data: &[u8],
+) -> Result<()> {
     let features = ctx.chip.features;
     let write_granularity = ctx.chip.write_granularity;
     let page_size = ctx.page_size();
@@ -1284,6 +1342,10 @@ pub async fn write<M: SpiMaster + ?Sized>(
         let result =
             protocol::program_page_with_addressing(master, opcode, current_addr, chunk, addressing)
                 .await;
+        let result = match result {
+            Ok(()) => super::protection::check_result(master, ctx, current_addr, false).await,
+            Err(error) => Err(error),
+        };
 
         if result.is_err() {
             if enter_exit_4byte
@@ -1441,6 +1503,27 @@ pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
     op: &OptimalEraseOp,
 ) -> Result<()> {
     validate_spi_erase_operation(master, ctx, op)?;
+    let saved = super::protection::prepare(master, ctx).await?;
+    let result = match erase_spi_unprotected(master, ctx, op).await {
+        Ok(()) => super::protection::check_result(master, ctx, op.start, true).await,
+        Err(error) => Err(error),
+    };
+    let ready_timing = if op.erase_block.is_chip_erase() {
+        (
+            protocol::CHIP_ERASE_POLL_US,
+            protocol::CHIP_ERASE_TIMEOUT_US,
+        )
+    } else {
+        protocol::erase_timing(op.erase_block.max_block_size())
+    };
+    super::protection::finish(master, ctx, saved, result, ready_timing).await
+}
+
+async fn erase_spi_unprotected<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    op: &OptimalEraseOp,
+) -> Result<()> {
     let addr = op.start;
     let len = op.size;
     if len == 0
@@ -1461,9 +1544,6 @@ pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
         }
         if !master.probe_opcode(block.opcode) {
             return Err(Error::OpcodeNotSupported);
-        }
-        if ctx.chip.features.contains(Features::SST26_BPR) {
-            protocol::sst26_global_unprotect(master).await?;
         }
         return protocol::chip_erase_with_opcode(master, block.opcode).await;
     }
@@ -1496,9 +1576,6 @@ pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
         }
     }
 
-    if features.contains(Features::SST26_BPR) {
-        protocol::sst26_global_unprotect(master).await?;
-    }
     if enter_exit_4byte {
         protocol::enter_4byte_mode_with_features(master, features).await?;
     }
@@ -1520,6 +1597,10 @@ pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
         .await
         {
             result = Err(err);
+            break;
+        }
+        if let Err(error) = super::protection::check_result(master, ctx, current, true).await {
+            result = Err(error);
             break;
         }
         current += size;
@@ -1685,6 +1766,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn common_profiles_do_not_drop_cmp_checks_on_three_byte_chips() {
+        let db = rflasher_chips::ChipDatabase::new();
+        let chip = db.find_by_jedec_id(0xef, 0x4017).unwrap();
+        assert!(!chip.requires_4byte_addr());
+        let checks = Features::WP_CMP | Features::WP_CMP_SR2;
+        assert!(chip.features.contains(checks));
+        let profile = common_operation_profile(&[chip, chip]).unwrap();
+        assert!(profile.features.contains(checks));
+        for remove in [Features::WP_CMP, Features::WP_CMP_SR2, checks] {
+            let mut other = chip.clone();
+            other.features.remove(remove);
+            assert!(common_operation_profile(&[chip, &other]).is_none());
+            assert!(common_operation_profile(&[&other, chip]).is_none());
+        }
+    }
+
     struct EraseMaster {
         commands: Vec<(u8, Option<u32>)>,
         fail_erase: bool,
@@ -1741,6 +1839,7 @@ mod tests {
             total_size: 48,
             page_size: 16,
             features: Features::empty(),
+            unlock: Default::default(),
             voltage_min_mv: 2700,
             voltage_max_mv: 3600,
             write_granularity: WriteGranularity::Byte,
@@ -1831,7 +1930,7 @@ mod tests {
         assert!(master.commands.is_empty());
 
         block_on(erase_spi_range(&mut master, &ctx, 8, 24)).unwrap();
-        assert!(master.commands.contains(&(opcodes::ULBPR, None)));
+        assert!(master.commands.contains(&(opcodes::SE_20, Some(8))));
     }
 
     #[test]

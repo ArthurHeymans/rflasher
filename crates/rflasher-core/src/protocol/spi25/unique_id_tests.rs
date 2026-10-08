@@ -63,6 +63,7 @@ fn chip(manufacturer: u8, device: u16) -> FlashChip {
         total_size: 8 * 1024 * 1024,
         page_size: 256,
         features: Features::empty(),
+        unlock: Default::default(),
         voltage_min_mv: 2700,
         voltage_max_mv: 3600,
         write_granularity: WriteGranularity::Byte,

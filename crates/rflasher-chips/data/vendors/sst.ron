@@ -10,7 +10,7 @@
 //       WRSR requires EWSR (0x50).
 //   - SST25VF064C and all SST25WFxxxA/B variants: standard 256-byte page program.
 //
-// SST26 series:
+// SST26B series (SST26VF080A instead uses SR1 BP/BPL):
 //   - Standard 256-byte page program (FEATURE_WRSR_WREN).
 //   - Block protection uses a per-block register, not SR BP bits.
 //     Global unlock: WREN + ULBPR (0x98) — handled by sst26_global_unprotect().
@@ -95,6 +95,7 @@
         ),
         (
             name: "SST25VF020B",
+            unlock: Some(Status),
             device_id: 0x258C,
             total_size: KiB(256),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
@@ -111,6 +112,7 @@
         ),
         (
             name: "SST25VF040",
+            unlock: Some(Status),
             device_id: 0x258D,
             total_size: KiB(512),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
@@ -125,6 +127,7 @@
         ),
         (
             name: "SST25VF040B",
+            unlock: Some(Status),
             device_id: 0x258D,
             total_size: KiB(512),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
@@ -144,6 +147,7 @@
         ),
         (
             name: "SST25VF080B",
+            unlock: Some(Status),
             device_id: 0x258E,
             total_size: MiB(1),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
@@ -159,6 +163,7 @@
         ),
         (
             name: "SST25VF016B",
+            unlock: Some(Status),
             device_id: 0x2541,
             total_size: MiB(2),
             // AAI word program (0xAD); WRSR accepts both EWSR and WREN (flashprog: EITHER)
@@ -174,6 +179,7 @@
         ),
         (
             name: "SST25VF032B",
+            unlock: Some(Status),
             device_id: 0x254A,
             total_size: MiB(4),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
@@ -189,6 +195,7 @@
         ),
         (
             name: "SST25VF064C",
+            unlock: Some(Status),
             device_id: 0x254B,
             total_size: MiB(8),
             // Standard 256-byte page program (unlike older SST25 chips); WRSR needs EWSR
@@ -210,6 +217,7 @@
 
         (
             name: "SST25LF020A",
+            unlock: Some(Status),
             device_id: 0x0043,
             total_size: KiB(256),
             // EWSR required; AAI uses 0xAF (not standard 0xAD), fall back to byte PP
@@ -224,6 +232,7 @@
         ),
         (
             name: "SST25LF040A",
+            unlock: Some(Status),
             device_id: 0x0044,
             total_size: KiB(512),
             features: (wrsr_persistent_ewsr: true),
@@ -237,6 +246,7 @@
         ),
         (
             name: "SST25LF080(A)",
+            unlock: Some(Status),
             device_id: 0x0080,
             total_size: MiB(1),
             // Accepts both EWSR and WREN (flashprog: FEATURE_WRSR_EITHER)
@@ -250,6 +260,7 @@
         ),
         (
             name: "SST25VF010(A)",
+            unlock: Some(Status),
             device_id: 0x0049,
             total_size: KiB(128),
             features: (wrsr_persistent_ewsr: true),
@@ -267,6 +278,7 @@
             // REMS-probed SST25VF040B variant — same chip as 0x258D but
             // identified via REMS (0x90) command returning 0x008D
             name: "SST25VF040B.REMS",
+            unlock: Some(Status),
             device_id: 0x008D,
             total_size: KiB(512),
             features: (wrsr_persistent_ewsr: true, aai_word: true),
@@ -283,6 +295,7 @@
         ),
         (
             name: "SST25VF512(A)",
+            unlock: Some(Status),
             device_id: 0x0048,
             total_size: KiB(64),
             features: (wrsr_persistent_ewsr: true),
@@ -305,6 +318,7 @@
 
         (
             name: "SST25WF512",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2501,
             total_size: KiB(64),
             // AAI word program (0xAD); WRSR accepts both EWSR and WREN
@@ -320,6 +334,7 @@
         ),
         (
             name: "SST25WF010",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2502,
             total_size: KiB(128),
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
@@ -334,6 +349,7 @@
         ),
         (
             name: "SST25WF020",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2503,
             total_size: KiB(256),
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
@@ -349,6 +365,7 @@
         ),
         (
             name: "SST25WF040",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2504,
             total_size: KiB(512),
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
@@ -364,6 +381,7 @@
         ),
         (
             name: "SST25WF080",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2505,
             total_size: MiB(1),
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
@@ -381,7 +399,8 @@
 
         // ====================================================================
         // SST26 series — 256-byte page program, WRSR uses WREN
-        // Block protection: per-block register, unlock with WREN + ULBPR (0x98)
+        // B parts: per-block register, unlock with WREN + ULBPR (0x98).
+        // Legacy non-B parts need SQI commands and are unsupported for mutation.
         // Erase: uniform 4KB (0x20), non-uniform 64KB (0xD8), chip (0xC7)
         //
         // The 0xD8 layout is asymmetric:
@@ -393,7 +412,9 @@
         // ====================================================================
 
         (
+            // Legacy SQI part: no documented single-SPI ULBPR procedure.
             name: "SST26VF016",
+            unlock: Some(Unsupported),
             device_id: 0x2601,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, sst26_bpr: true),
@@ -412,6 +433,7 @@
         ),
         (
             name: "SST26VF016B(A)",
+            unlock: Some(Sst26_6),
             device_id: 0x2641,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, sst26_bpr: true),
@@ -430,7 +452,9 @@
             tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
         ),
         (
+            // Legacy SQI part: no documented single-SPI ULBPR procedure.
             name: "SST26VF032",
+            unlock: Some(Unsupported),
             device_id: 0x2602,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, sst26_bpr: true),
@@ -449,6 +473,7 @@
         ),
         (
             name: "SST26VF032B(A)",
+            unlock: Some(Sst26_10),
             device_id: 0x2642,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, sst26_bpr: true),
@@ -467,6 +492,7 @@
         ),
         (
             name: "SST26VF064B(A)",
+            unlock: Some(Sst26_18),
             device_id: 0x2643,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, sst26_bpr: true),
@@ -486,9 +512,10 @@
         ),
         (
             name: "SST26VF080A",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2618,
             total_size: MiB(1),
-            features: (wrsr_wren: true, otp: true, sst26_bpr: true),
+            features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -503,6 +530,7 @@
         // SST25WF SANYO_ID precedent above).
         (
             name: "XM25QU64A",
+            unlock: Some(Bp3Srwd),
             device_id: 0x3817,
             total_size: MiB(8),
             features: (wrsr_wren: true),

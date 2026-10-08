@@ -7,6 +7,7 @@
     chips: [
         (
             name: "FM25F005",
+            unlock: Some(Bp2Srwd),
             device_id: 0x3110,
             total_size: KiB(64),
             features: (wrsr_wren: true, otp: true),
@@ -21,6 +22,7 @@
         ),
         (
             name: "FM25F01",
+            unlock: Some(Bp2Srwd),
             device_id: 0x3111,
             total_size: KiB(128),
             features: (wrsr_wren: true, otp: true),
@@ -35,6 +37,7 @@
         ),
         (
             name: "FM25F02(A)",
+            unlock: Some(Bp2Srwd),
             device_id: 0x3112,
             total_size: KiB(256),
             features: (wrsr_wren: true, otp: true),
@@ -49,6 +52,7 @@
         ),
         (
             name: "FM25F04(A)",
+            unlock: Some(Bp2Srwd),
             device_id: 0x3113,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true),
@@ -63,9 +67,10 @@
         ),
         (
             name: "FM25Q02",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4012,
             total_size: KiB(256),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -77,9 +82,10 @@
         ),
         (
             name: "FM25Q04",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4013,
             total_size: KiB(512),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -91,9 +97,10 @@
         ),
         (
             name: "FM25Q08",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -105,9 +112,10 @@
         ),
         (
             name: "FM25Q08A",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4014,
             total_size: MiB(1),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -119,9 +127,10 @@
         ),
         (
             name: "FM25Q16",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4015,
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -133,9 +142,10 @@
         ),
         (
             name: "FM25Q32",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4016,
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -147,9 +157,10 @@
         ),
         (
             name: "FM25Q64",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4017,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -161,9 +172,10 @@
         ),
         (
             name: "FM25Q128",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, status_reg_2: true),
+            features: (wp_cmp: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -175,6 +187,7 @@
         ),
         (
             name: "FM25W128",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2818,
             total_size: MiB(16),
             features: (wrsr_wren: true, wrsr_ext: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true),

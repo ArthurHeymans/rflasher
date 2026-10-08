@@ -31,17 +31,17 @@ use crate::spi::{AddressWidth, IoMode, SpiCommand, opcodes};
 // status register writes 50-85 ms (flashprog waits up to 5 s).
 
 /// Poll interval for status register write completion (microseconds)
-const WRSR_POLL_US: u32 = 10_000;
+pub const WRSR_POLL_US: u32 = 10_000;
 /// Timeout for status register write completion (microseconds)
-const WRSR_TIMEOUT_US: u32 = 5_000_000;
+pub const WRSR_TIMEOUT_US: u32 = 5_000_000;
 /// Poll interval for page program completion (microseconds)
 const PAGE_PROGRAM_POLL_US: u32 = 10;
 /// Timeout for page program completion (microseconds)
 const PAGE_PROGRAM_TIMEOUT_US: u32 = 100_000;
 /// Poll interval for chip erase completion (microseconds)
-const CHIP_ERASE_POLL_US: u32 = 1_000_000;
+pub const CHIP_ERASE_POLL_US: u32 = 1_000_000;
 /// Timeout for chip erase completion (microseconds)
-const CHIP_ERASE_TIMEOUT_US: u32 = 600_000_000;
+pub const CHIP_ERASE_TIMEOUT_US: u32 = 600_000_000;
 /// Poll interval for block erase completion (microseconds)
 pub const BLOCK_ERASE_POLL_US: u32 = 10_000;
 /// Timeout for block erase completion (microseconds)
@@ -444,33 +444,35 @@ pub async fn aai_word_program<M: SpiMaster + ?Sized>(
 
     // AAI streaming: requires at least 2 bytes remaining
     if pos + 1 < data.len() {
-        // First AAI command: WREN then AAI_WP + 3-byte address + 2 data bytes
-        write_enable(master).await?;
-        let mut cmd = SpiCommand::write_3b(opcodes::AAI_WP, current_addr, &data[pos..pos + 2]);
-        master.execute(&mut cmd).await?;
-        if let Err(e) = wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await {
-            // Best-effort exit from AAI mode before propagating the error
-            let _ = write_disable(master).await;
-            return Err(e);
-        }
-        pos += 2;
-        current_addr += 2;
-
-        // Continuation: AAI_WP + 2 bytes only — no address, no WREN
-        while pos + 1 < data.len() {
-            let mut cmd = SpiCommand::write_reg(opcodes::AAI_WP, &data[pos..pos + 2]);
+        let result = async {
+            // First AAI command: WREN then AAI_WP + 3-byte address + 2 data bytes
+            write_enable(master).await?;
+            let mut cmd = SpiCommand::write_3b(opcodes::AAI_WP, current_addr, &data[pos..pos + 2]);
             master.execute(&mut cmd).await?;
-            if let Err(e) = wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await
-            {
-                let _ = write_disable(master).await;
-                return Err(e);
-            }
+            wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await?;
             pos += 2;
             current_addr += 2;
-        }
 
-        // Always exit AAI mode with WRDI before issuing any other command
-        write_disable(master).await?;
+            // Continuation: AAI_WP + 2 bytes only — no address, no WREN
+            while pos + 1 < data.len() {
+                let mut cmd = SpiCommand::write_reg(opcodes::AAI_WP, &data[pos..pos + 2]);
+                master.execute(&mut cmd).await?;
+                wait_ready(master, PAGE_PROGRAM_POLL_US, PAGE_PROGRAM_TIMEOUT_US).await?;
+                pos += 2;
+                current_addr += 2;
+            }
+            Ok(())
+        }
+        .await;
+
+        // A transfer error does not prove the chip rejected AAI entry. Always
+        // attempt WRDI before other commands, including protection restoration.
+        let exit_result = write_disable(master).await;
+        if let Err(error) = &exit_result {
+            log::warn!("Failed to exit AAI mode: {error}; program result: {result:?}");
+        }
+        result?;
+        exit_result?;
     }
 
     // Handle trailing odd byte (when original data length was odd)

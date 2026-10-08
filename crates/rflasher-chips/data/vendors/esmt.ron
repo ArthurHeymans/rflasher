@@ -24,6 +24,7 @@
         ),
         (
             name: "F25L008A",
+            unlock: Some(Status),
             device_id: 0x2014,
             total_size: MiB(1),
             write_granularity: Byte,
@@ -54,6 +55,7 @@
         ),
         (
             name: "F25L032A",
+            unlock: Some(Status),
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -81,6 +83,7 @@
         ),
         (
             name: "F25L32PA",
+            unlock: Some(Status),
             // F25L032A uses the same RDID. Keep both names because their
             // status-register/OTP capabilities differ and probing is ambiguous.
             device_id: 0x2016,

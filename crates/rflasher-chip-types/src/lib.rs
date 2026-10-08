@@ -14,8 +14,10 @@ mod features;
 mod name;
 mod provider;
 mod types;
+mod unlock;
 
 pub use features::Features;
 pub use name::name_matches;
 pub use provider::ChipProvider;
 pub use types::*;
+pub use unlock::Unlock;

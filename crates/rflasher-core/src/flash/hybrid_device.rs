@@ -114,11 +114,10 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
     // Write protection support (delegates to SpiMaster, same as SpiFlashDevice)
     #[cfg(feature = "alloc")]
     fn wp_supported(&self) -> bool {
-        !self
-            .ctx
-            .chip
-            .features
-            .intersects(crate::chip::Features::WP_UNRESOLVED | crate::chip::Features::SST26_BPR)
+        let features = self.ctx.chip.features;
+        features.contains(crate::chip::Features::WP_WINBOND)
+            && !features
+                .intersects(crate::chip::Features::WP_UNRESOLVED | crate::chip::Features::SST26_BPR)
     }
 
     #[cfg(feature = "alloc")]
@@ -171,8 +170,32 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
             return Err(Error::AddressOutOfBounds);
         }
 
-        // OpaqueMaster::write handles alignment splitting internally
-        OpaqueMaster::write(&mut self.master, addr, data).await
+        if data.is_empty() {
+            return Ok(());
+        }
+        let saved = super::protection::prepare(&mut self.master, &self.ctx).await?;
+        // Firmware bulk programming bypasses the raw SPI page-program helper.
+        let result = match OpaqueMaster::write(&mut self.master, addr, data).await {
+            Ok(()) => {
+                async {
+                    crate::protocol::wait_ready(&mut self.master, 10_000, 5_000_000).await?;
+                    super::protection::check_result(&mut self.master, &self.ctx, addr, false).await
+                }
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        super::protection::finish(
+            &mut self.master,
+            &self.ctx,
+            saved,
+            result,
+            (
+                crate::protocol::WRSR_POLL_US,
+                crate::protocol::WRSR_TIMEOUT_US,
+            ),
+        )
+        .await
     }
 
     // =========================================================================

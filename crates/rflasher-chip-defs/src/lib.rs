@@ -1,5 +1,6 @@
 //! Shared RON schema and validation for runtime and compiled chip databases.
 
+pub use rflasher_chip_types::Unlock;
 use serde::Deserialize;
 use std::collections::HashSet;
 
@@ -128,6 +129,13 @@ pub struct FeaturesDef {
     pub wp_sec: bool,
     /// Complement (CMP) bit available
     pub wp_cmp: bool,
+    /// Audited CMP at SR2 bit 6 (read 0x35); bit 0 is SRL or reserved-zero.
+    pub wp_cmp_sr2: bool,
+    /// Audited Winbond map/range decoder and combined SR1/SR2 write procedure.
+    pub wp_winbond: bool,
+
+    /// Device ID uses legacy Atmel opcode 0x15 instead of JEDEC RDID.
+    pub at25f_id: bool,
 }
 
 // ============================================================================
@@ -211,7 +219,8 @@ impl Default for VoltageDef {
 pub struct ChipDef {
     /// Chip model name (e.g., "W25Q128FV")
     pub name: String,
-    /// JEDEC device ID (2 bytes, e.g., 0x4018)
+    /// JEDEC device ID (2 bytes, e.g., 0x4018), or the legacy 0x15 ID
+    /// when `features.at25f_id` is set.
     pub device_id: u16,
     /// Total flash size
     pub total_size: Size,
@@ -221,6 +230,9 @@ pub struct ChipDef {
     /// Feature flags
     #[serde(default)]
     pub features: FeaturesDef,
+    /// Chip-specific software protection procedure; never inferred from JEDEC vendor.
+    #[serde(default)]
+    pub unlock: Option<Unlock>,
     /// Operating voltage range
     #[serde(default)]
     pub voltage: VoltageDef,

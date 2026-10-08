@@ -152,6 +152,7 @@
         ),
         (
             name: "Pm25LV010",
+            unlock: Some(Status),
             device_id: 0x007C,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -165,6 +166,7 @@
         ),
         (
             name: "Pm25LV010A",
+            unlock: Some(Status),
             device_id: 0x007C,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -231,6 +233,7 @@
         ),
         (
             name: "Pm25LV512(A)",
+            unlock: Some(Status),
             device_id: 0x007B,
             total_size: KiB(64),
             features: (wrsr_wren: true),

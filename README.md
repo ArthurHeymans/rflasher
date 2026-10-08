@@ -153,6 +153,10 @@ rflasher wp disable -p ch341a --temporary          # until the next power cycle 
 
 Changes are persistent by default. `--temporary` uses the chip's volatile status register write (EWSR, `0x50`) and fails on chips without one.
 
+Erase/write operations temporarily remove documented software protection and restore it on success or failure, including Dediprog bulk writes. Hardware and irreversible locks are not bypassed. Unknown/SFDP-only chips never receive guessed status-register writes, and erase verification remains mandatory. Do not interrupt a mutation: power loss or cancellation can prevent restoration.
+
+Automatic unlocking does **not** imply support for `wp` configuration. Those commands require an explicitly audited register map, range decoder and write procedure; other chips report unsupported rather than using Winbond's layout. See [chip protection procedures](docs/protection.md) for coverage and limitations.
+
 ## Web interface
 
 A browser-based UI (egui) can drive a programmer straight from the browser: serprog over WebSerial, and CH341A, CH347, FTDI, FT4222H, Dediprog, and Raiden over WebUSB. Both APIs require Chrome/Edge (or Opera); Firefox and Safari support neither, and a secure context (HTTPS or localhost) is mandatory.

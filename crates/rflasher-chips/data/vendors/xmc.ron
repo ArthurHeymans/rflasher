@@ -8,6 +8,7 @@
         // XM25QH series - 3.3V with QPI support
         (
             name: "XM25QH64C",
+            unlock: Some(Status),
             device_id: 0x4017,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
@@ -22,9 +23,10 @@
         ),
         (
             name: "XM25QH128C",
+            unlock: Some(Status),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -36,9 +38,10 @@
         ),
         (
             name: "XM25QH256C",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4019,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 8192)]),
@@ -52,6 +55,7 @@
         // XM25QU series - 1.8V with QPI support
         (
             name: "XM25QU64C",
+            unlock: Some(Status),
             device_id: 0x4117,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
@@ -66,6 +70,7 @@
         ),
         (
             name: "XM25QU128C",
+            unlock: Some(Status),
             device_id: 0x4118,
             total_size: MiB(16),
             features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
@@ -80,9 +85,10 @@
         ),
         (
             name: "XM25QU256C",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4119,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 8192)]),
@@ -96,9 +102,10 @@
         // XM25QH512C - 3.3V 512Mbit (64MiB) with QPI support
         (
             name: "XM25QH512C",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4020,
             total_size: MiB(64),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 16384)]),
@@ -112,9 +119,10 @@
         // XM25RH256C - 3.3V 256Mbit (32MiB)
         (
             name: "XM25RH256C",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4319,
             total_size: MiB(32),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 8192)]),
@@ -128,9 +136,10 @@
         // XM25RH512C - 3.3V 512Mbit (64MiB)
         (
             name: "XM25RH512C",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4320,
             total_size: MiB(64),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 16384)]),
@@ -144,9 +153,10 @@
         // XM25QU512C - 1.8V 512Mbit (64MiB)
         (
             name: "XM25QU512C",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4120,
             total_size: MiB(64),
-            features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 16384)]),

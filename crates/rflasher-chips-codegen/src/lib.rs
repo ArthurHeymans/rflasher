@@ -56,6 +56,12 @@ fn features_to_tokens(def: FeaturesDef) -> TokenStream {
     if def.wrsr_ewsr {
         flags.push(quote!(Features::WRSR_EWSR));
     }
+    if def.wp_winbond {
+        flags.push(quote!(Features::WP_WINBOND));
+    }
+    if def.at25f_id {
+        flags.push(quote!(Features::AT25F_ID));
+    }
     if def.wrsr_persistent_ewsr {
         flags.push(quote!(Features::WRSR_PERSISTENT_EWSR));
     }
@@ -157,6 +163,9 @@ fn features_to_tokens(def: FeaturesDef) -> TokenStream {
     }
     if def.wp_cmp {
         flags.push(quote!(Features::WP_CMP));
+    }
+    if def.wp_cmp_sr2 {
+        flags.push(quote!(Features::WP_CMP_SR2));
     }
 
     if flags.is_empty() {
@@ -298,6 +307,8 @@ impl ChipDatabase {
                 let total_size = Literal::u32_unsuffixed(chip.total_size.to_bytes());
                 let page_size = Literal::u16_unsuffixed(chip.page_size);
                 let features = features_to_tokens(chip.features);
+                let unlock =
+                    quote::format_ident!("{}", format!("{:?}", chip.unlock.unwrap_or_default()));
                 let voltage_min = Literal::u16_unsuffixed(chip.voltage.min);
                 let voltage_max = Literal::u16_unsuffixed(chip.voltage.max);
                 let write_gran = write_granularity_to_tokens(chip.write_granularity);
@@ -312,6 +323,7 @@ impl ChipDatabase {
                         total_size: #total_size,
                         page_size: #page_size,
                         features: #features,
+                        unlock: Unlock::#unlock,
                         voltage_min_mv: #voltage_min,
                         voltage_max_mv: #voltage_max,
                         write_granularity: #write_gran,

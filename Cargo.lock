@@ -3151,6 +3151,7 @@ dependencies = [
 name = "rflasher-chip-defs"
 version = "0.1.0"
 dependencies = [
+ "rflasher-chip-types",
  "ron",
  "serde",
 ]
@@ -3249,6 +3250,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "web-time",
  "zerocopy",
 ]
 

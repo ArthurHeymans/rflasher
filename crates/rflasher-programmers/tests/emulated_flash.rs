@@ -57,6 +57,7 @@ fn chip(size: u32, features: Features, four_byte_erase: bool) -> FlashChip {
         total_size: size,
         page_size: 256,
         features: Features::WRSR_WREN | features,
+        unlock: Default::default(),
         voltage_min_mv: 2700,
         voltage_max_mv: 3600,
         write_granularity: WriteGranularity::Page,

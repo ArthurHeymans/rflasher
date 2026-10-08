@@ -7,6 +7,7 @@
     chips: [
         (
             name: "ZD25D20",
+            unlock: Some(Status),
             device_id: 0x2012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -21,6 +22,7 @@
         ),
         (
             name: "ZD25D40",
+            unlock: Some(Status),
             device_id: 0x2013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -35,9 +37,10 @@
         ),
         (
             name: "ZD25LQ64",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4317,
             total_size: MiB(8),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 2048)]),
@@ -49,9 +52,10 @@
         ),
         (
             name: "ZD25LQ128",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4218,
             total_size: MiB(16),
-            features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
