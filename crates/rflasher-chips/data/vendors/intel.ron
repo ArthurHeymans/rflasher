@@ -7,6 +7,7 @@
     chips: [
         (
             name: "25F160S33B8",
+            unlock: Some(Bp2EpSrwd),
             device_id: 0x8911,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
@@ -18,6 +19,7 @@
         ),
         (
             name: "25F160S33T8",
+            unlock: Some(Bp2EpSrwd),
             device_id: 0x8915,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
@@ -29,6 +31,7 @@
         ),
         (
             name: "25F320S33B8",
+            unlock: Some(Bp2EpSrwd),
             device_id: 0x8912,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
@@ -40,6 +43,7 @@
         ),
         (
             name: "25F320S33T8",
+            unlock: Some(Bp2EpSrwd),
             device_id: 0x8916,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
@@ -51,6 +55,7 @@
         ),
         (
             name: "25F640S33B8",
+            unlock: Some(Bp2EpSrwd),
             device_id: 0x8913,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true),
@@ -63,6 +68,7 @@
         ),
         (
             name: "25F640S33T8",
+            unlock: Some(Bp2EpSrwd),
             device_id: 0x8917,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true),

@@ -12,6 +12,7 @@
         // MX25L series - 3.3V
         (
             name: "MX25L512",
+            unlock: Some(Status),
             device_id: 0x2010,
             total_size: KiB(64),
             features: (wrsr_wren: true, fast_read: true),
@@ -26,6 +27,7 @@
         ),
         (
             name: "MX25L1005",
+            unlock: Some(Status),
             device_id: 0x2011,
             total_size: KiB(128),
             features: (wrsr_wren: true, fast_read: true),
@@ -40,6 +42,7 @@
         ),
         (
             name: "MX25L2005",
+            unlock: Some(Status),
             device_id: 0x2012,
             total_size: KiB(256),
             features: (wrsr_wren: true, fast_read: true),
@@ -55,6 +58,7 @@
         ),
         (
             name: "MX25L4005",
+            unlock: Some(Status),
             device_id: 0x2013,
             total_size: KiB(512),
             features: (wrsr_wren: true, fast_read: true),
@@ -69,6 +73,7 @@
         ),
         (
             name: "MX25L8005",
+            unlock: Some(Status),
             device_id: 0x2014,
             total_size: MiB(1),
             features: (wrsr_wren: true, fast_read: true),
@@ -83,6 +88,7 @@
         ),
         (
             name: "MX25L1605",
+            unlock: Some(Status),
             device_id: 0x2015,
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true),
@@ -126,6 +132,7 @@
         ),
         (
             name: "MX25L1635D",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2415,
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true),
@@ -140,6 +147,7 @@
         ),
         (
             name: "MX25L1635E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2515,
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true),
@@ -153,6 +161,7 @@
         ),
         (
             name: "MX25L5121E",
+            unlock: Some(Status),
             device_id: 0x2210,
             total_size: KiB(64),
             features: (wrsr_wren: true, fast_read: true),
@@ -226,6 +235,7 @@
         ),
         (
             name: "MX25L3235D",
+            unlock: Some(Bp3Srwd),
             device_id: 0x5E16,
             total_size: MiB(4),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true),
@@ -240,6 +250,7 @@
         ),
         (
             name: "MX25L6405",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2017,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true),
@@ -256,6 +267,7 @@
         ),
         (
             name: "MX25L6405D",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2017,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true),
@@ -270,6 +282,7 @@
         ),
         (
             name: "MX25L6406E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2017,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, otp: true),
@@ -284,6 +297,7 @@
         ),
         (
             name: "MX25L6436E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2017,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true),
@@ -299,6 +313,7 @@
         ),
         (
             name: "MX25L6495F",
+            unlock: Some(Status),
             device_id: 0x9517,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true),
@@ -314,6 +329,7 @@
         ),
         (
             name: "MX25L12805D",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true, fast_read: true, otp: true),
@@ -328,6 +344,7 @@
         ),
         (
             name: "MX25L12833F",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true),
@@ -343,6 +360,7 @@
         ),
         (
             name: "MX25L25635F",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2019,
             total_size: MiB(32),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
@@ -358,6 +376,7 @@
         ),
         (
             name: "MX66L51235F",
+            unlock: Some(Bp3Srwd),
             device_id: 0x201A,
             total_size: MiB(64),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, ext_addr_reg_c5c8: true),
@@ -373,6 +392,7 @@
         ),
         (
             name: "MX66L1G45G",
+            unlock: Some(Bp3Srwd),
             device_id: 0x201B,
             total_size: MiB(128),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, ext_addr_reg_c5c8: true),
@@ -389,6 +409,7 @@
         // MX25U series - 1.8V
         (
             name: "MX25U8032E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2534,
             total_size: MiB(1),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
@@ -404,6 +425,7 @@
         ),
         (
             name: "MX25U1635E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2535,
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
@@ -419,6 +441,7 @@
         ),
         (
             name: "MX25U3235E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2536,
             total_size: MiB(4),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
@@ -434,6 +457,7 @@
         ),
         (
             name: "MX25U6435E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2537,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
@@ -449,6 +473,7 @@
         ),
         (
             name: "MX25U12835F",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2538,
             total_size: MiB(16),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
@@ -464,6 +489,7 @@
         ),
         (
             name: "MX25U25635F",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2539,
             total_size: MiB(32),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
@@ -479,6 +505,7 @@
         ),
         (
             name: "MX25U51245G",
+            unlock: Some(Bp3Srwd),
             device_id: 0x253A,
             total_size: MiB(64),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
@@ -496,6 +523,7 @@
         // MX25R series - Ultra low power (wide voltage range)
         (
             name: "MX25R3235F",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2816,
             total_size: MiB(4),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
@@ -511,6 +539,7 @@
         ),
         (
             name: "MX25R6435F",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2817,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
@@ -526,6 +555,7 @@
         ),
         (
             name: "MX25L1005(C)/MX25L1006E",
+            unlock: Some(Status),
             device_id: 0x2011,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -540,6 +570,7 @@
         ),
         (
             name: "MX25L12833F/MX25L12835F/MX25L12845E/MX25L12865E/MX25L12873F",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -555,6 +586,7 @@
         ),
         (
             name: "MX25L1605A/MX25L1606E/MX25L1608E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2015,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
@@ -570,6 +602,7 @@
         ),
         (
             name: "MX25L1605D/MX25L1608D/MX25L1673E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2015,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -584,6 +617,7 @@
         ),
         (
             name: "MX25L2005(C)/MX25L2006E",
+            unlock: Some(Status),
             device_id: 0x2012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -599,6 +633,7 @@
         ),
         (
             name: "MX25L25635F/MX25L25645G",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2019,
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, dual_io: true, quad_io: true),
@@ -614,6 +649,7 @@
         ),
         (
             name: "MX25L3205(A)",
+            unlock: Some(Status),
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -628,6 +664,7 @@
         ),
         (
             name: "MX25L3205D/MX25L3208D",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
@@ -642,6 +679,7 @@
         ),
         (
             name: "MX25L3206E/MX25L3208E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
@@ -657,6 +695,7 @@
         ),
         (
             name: "MX25L3233F/MX25L3273E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
@@ -672,6 +711,7 @@
         ),
         (
             name: "MX25L4005(A/C)/MX25L4006E",
+            unlock: Some(Status),
             device_id: 0x2013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -687,6 +727,7 @@
         ),
         (
             name: "MX25L512(E)/MX25V512(C)",
+            unlock: Some(Status),
             device_id: 0x2010,
             total_size: KiB(64),
             features: (wrsr_wren: true),
@@ -702,6 +743,7 @@
         ),
         (
             name: "MX25L6406E/MX25L6408E",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true),
@@ -717,6 +759,7 @@
         ),
         (
             name: "MX25L6436E/MX25L6445E/MX25L6465E/MX25L6473E/MX25L6473F",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true),
@@ -732,6 +775,7 @@
         ),
         (
             name: "MX25L8005/MX25L8006E/MX25L8008E/MX25V8005",
+            unlock: Some(Status),
             device_id: 0x2014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -747,6 +791,7 @@
         ),
         (
             name: "MX25U3235E/F",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2536,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -762,6 +807,7 @@
         ),
         (
             name: "MX25U6435E/F",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2537,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -777,6 +823,7 @@
         ),
         (
             name: "MX66L51235F/MX25L51245G",
+            unlock: Some(Bp3Srwd),
             device_id: 0x201A,
             total_size: MiB(64),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),

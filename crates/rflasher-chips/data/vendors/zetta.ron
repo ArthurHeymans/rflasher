@@ -7,6 +7,7 @@
     chips: [
         (
             name: "ZD25D20",
+            unlock: Some(Status),
             device_id: 0x2012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -21,6 +22,7 @@
         ),
         (
             name: "ZD25D40",
+            unlock: Some(Status),
             device_id: 0x2013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -35,6 +37,7 @@
         ),
         (
             name: "ZD25LQ64",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4317,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -49,6 +52,7 @@
         ),
         (
             name: "ZD25LQ128",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4218,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),

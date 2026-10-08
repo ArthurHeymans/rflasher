@@ -8,6 +8,7 @@
         // W25Q series - 3.3V variants
         (
             name: "W25Q16.V",
+            unlock: Some(Status),
             device_id: 0x4015,
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
@@ -23,6 +24,7 @@
         ),
         (
             name: "W25Q32.V",
+            unlock: Some(Status),
             device_id: 0x4016,
             total_size: MiB(4),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
@@ -38,6 +40,7 @@
         ),
         (
             name: "W25Q64.V",
+            unlock: Some(Status),
             device_id: 0x4017,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
@@ -53,9 +56,10 @@
         ),
         (
             name: "W25Q128.V",
+            unlock: Some(Status),
             device_id: 0x4018,
             total_size: MiB(16),
-            features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
+            features: (wrsr_wren: true, wrsr_ext: true, wp_winbond: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
@@ -68,6 +72,7 @@
         ),
         (
             name: "W25Q256JV_Q",
+            unlock: Some(Status),
             device_id: 0x4019,
             total_size: MiB(32),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
@@ -108,6 +113,7 @@
         // W25Q series - 1.8V variants
         (
             name: "W25Q16.W",
+            unlock: Some(Status),
             device_id: 0x6015,
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
@@ -123,6 +129,7 @@
         ),
         (
             name: "W25Q32.W",
+            unlock: Some(Status),
             device_id: 0x6016,
             total_size: MiB(4),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
@@ -138,6 +145,7 @@
         ),
         (
             name: "W25Q64.W",
+            unlock: Some(Status),
             device_id: 0x6017,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
@@ -153,6 +161,7 @@
         ),
         (
             name: "W25Q128.W",
+            unlock: Some(Status),
             device_id: 0x6018,
             total_size: MiB(16),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
@@ -168,6 +177,7 @@
         ),
         (
             name: "W25Q256JW",
+            unlock: Some(Status),
             device_id: 0x6019,
             total_size: MiB(32),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
@@ -185,6 +195,7 @@
         // W25Q JV-M series (QE=0 by default)
         (
             name: "W25Q32JV_M",
+            unlock: Some(Bp2Srwd),
             device_id: 0x7016,
             total_size: MiB(4),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
@@ -200,6 +211,7 @@
         ),
         (
             name: "W25Q64JV_M",
+            unlock: Some(Bp2Srwd),
             device_id: 0x7017,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
@@ -215,6 +227,7 @@
         ),
         (
             name: "W25Q128JV_M",
+            unlock: Some(Status),
             device_id: 0x7018,
             total_size: MiB(16),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
@@ -230,6 +243,7 @@
         ),
         (
             name: "W25Q256JV_M",
+            unlock: Some(Status),
             device_id: 0x7019,
             total_size: MiB(32),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
@@ -247,6 +261,7 @@
         // W25X series (older, no quad support)
         (
             name: "W25X10",
+            unlock: Some(Status),
             device_id: 0x3011,
             total_size: KiB(128),
             features: (wrsr_wren: true, fast_read: true),
@@ -260,6 +275,7 @@
         ),
         (
             name: "W25X20",
+            unlock: Some(Status),
             device_id: 0x3012,
             total_size: KiB(256),
             features: (wrsr_wren: true, fast_read: true),
@@ -273,6 +289,7 @@
         ),
         (
             name: "W25X40",
+            unlock: Some(Status),
             device_id: 0x3013,
             total_size: KiB(512),
             features: (wrsr_wren: true, fast_read: true),
@@ -286,6 +303,7 @@
         ),
         (
             name: "W25X80",
+            unlock: Some(Status),
             device_id: 0x3014,
             total_size: MiB(1),
             features: (wrsr_wren: true, fast_read: true),
@@ -299,6 +317,7 @@
         ),
         (
             name: "W25X16",
+            unlock: Some(Status),
             device_id: 0x3015,
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true),
@@ -312,6 +331,7 @@
         ),
         (
             name: "W25X32",
+            unlock: Some(Status),
             device_id: 0x3016,
             total_size: MiB(4),
             features: (wrsr_wren: true, fast_read: true),
@@ -325,6 +345,7 @@
         ),
         (
             name: "W25X64",
+            unlock: Some(Status),
             device_id: 0x3017,
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true),
@@ -338,6 +359,7 @@
         ),
         (
             name: "W25P16",
+            unlock: Some(Status),
             device_id: 0x2015,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -349,6 +371,7 @@
         ),
         (
             name: "W25P32",
+            unlock: Some(Status),
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -360,6 +383,7 @@
         ),
         (
             name: "W25P80",
+            unlock: Some(Status),
             device_id: 0x2014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -371,6 +395,7 @@
         ),
         (
             name: "W25Q128.V..M",
+            unlock: Some(Status),
             device_id: 0x7018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -386,6 +411,7 @@
         ),
         (
             name: "W25Q128.JW.DTR",
+            unlock: Some(Status),
             device_id: 0x8018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -401,6 +427,7 @@
         ),
         (
             name: "W25Q16JV_M",
+            unlock: Some(Bp4Srwd),
             device_id: 0x7015,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -415,6 +442,7 @@
         ),
         (
             name: "W25Q20.W",
+            unlock: Some(Status),
             device_id: 0x5012,
             total_size: KiB(256),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -429,6 +457,7 @@
         ),
         (
             name: "W25Q256FV",
+            unlock: Some(Status),
             device_id: 0x4019,
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true),
@@ -444,6 +473,7 @@
         ),
         (
             name: "W25Q256JW_DTR",
+            unlock: Some(Status),
             device_id: 0x8019,
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, status_reg_2: true, status_reg_3: true, dual_io: true, quad_io: true),
@@ -459,6 +489,7 @@
         ),
         (
             name: "W25Q32BV/W25Q32CV/W25Q32DV",
+            unlock: Some(Status),
             device_id: 0x4016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -474,6 +505,7 @@
         ),
         (
             name: "W25Q32FV",
+            unlock: Some(Status),
             device_id: 0x4016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -489,6 +521,7 @@
         ),
         (
             name: "W25Q32JV",
+            unlock: Some(Status),
             device_id: 0x4016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -504,6 +537,7 @@
         ),
         (
             name: "W25Q32JV-.M",
+            unlock: Some(Bp2Srwd),
             device_id: 0x7016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -519,6 +553,7 @@
         ),
         (
             name: "W25Q32BW/W25Q32CW/W25Q32DW",
+            unlock: Some(Status),
             device_id: 0x6016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -534,6 +569,7 @@
         ),
         (
             name: "W25Q32FW",
+            unlock: Some(Status),
             device_id: 0x6016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -549,6 +585,7 @@
         ),
         (
             name: "W25Q32JW...Q",
+            unlock: Some(Status),
             device_id: 0x6016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -564,6 +601,7 @@
         ),
         (
             name: "W25Q32JW...M",
+            unlock: Some(Bp2Srwd),
             device_id: 0x8016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -579,6 +617,7 @@
         ),
         (
             name: "W25Q40.V",
+            unlock: Some(Status),
             device_id: 0x4013,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -594,6 +633,7 @@
         ),
         (
             name: "W25Q40BW",
+            unlock: Some(Status),
             device_id: 0x5013,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -609,6 +649,7 @@
         ),
         (
             name: "W25Q40EW",
+            unlock: Some(Status),
             device_id: 0x6013,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -624,6 +665,7 @@
         ),
         (
             name: "W25R512NW/W74M51NW",
+            unlock: Some(Status),
             device_id: 0x6020,
             total_size: MiB(64),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -654,6 +696,7 @@
         ),
         (
             name: "W25Q64BV/W25Q64CV/W25Q64FV",
+            unlock: Some(Status),
             device_id: 0x4017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -669,6 +712,7 @@
         ),
         (
             name: "W25Q64JV-.Q",
+            unlock: Some(Status),
             device_id: 0x4017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -684,6 +728,7 @@
         ),
         (
             name: "W25Q64JV-.M",
+            unlock: Some(Bp2Srwd),
             device_id: 0x7017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -699,6 +744,7 @@
         ),
         (
             name: "W25Q64DW",
+            unlock: Some(Status),
             device_id: 0x6017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -714,6 +760,7 @@
         ),
         (
             name: "W25Q64FW/W25Q64JW...Q",
+            unlock: Some(Status),
             device_id: 0x6017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -729,6 +776,7 @@
         ),
         (
             name: "W25Q64JW...M",
+            unlock: Some(Status),
             device_id: 0x8017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -744,6 +792,7 @@
         ),
         (
             name: "W25Q80.V",
+            unlock: Some(Status),
             device_id: 0x4014,
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -759,6 +808,7 @@
         ),
         (
             name: "W25Q80BW",
+            unlock: Some(Status),
             device_id: 0x5014,
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -774,6 +824,7 @@
         ),
         (
             name: "W25Q80EW",
+            unlock: Some(Status),
             device_id: 0x6014,
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -789,6 +840,7 @@
         ),
         (
             name: "W25X05",
+            unlock: Some(Status),
             device_id: 0x3010,
             total_size: KiB(64),
             features: (wrsr_wren: true),

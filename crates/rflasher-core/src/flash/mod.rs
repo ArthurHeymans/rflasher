@@ -45,6 +45,7 @@ mod opaque_device;
 mod operations;
 #[cfg(feature = "alloc")]
 mod policy;
+mod protection;
 mod spi_device;
 #[cfg(feature = "alloc")]
 pub mod unified;

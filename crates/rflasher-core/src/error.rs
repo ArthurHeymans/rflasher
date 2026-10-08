@@ -95,6 +95,8 @@ pub enum Error {
     // Protection errors
     /// Flash chip is write protected
     WriteProtected,
+    /// Temporary unprotection could not be restored; inspect chip protection.
+    ProtectionRestoreFailed,
     /// Specific region is protected
     RegionProtected,
     /// The mutation preflight refused the operation
@@ -186,6 +188,10 @@ impl fmt::Display for Error {
             Self::InvalidAlignment => write!(f, "invalid alignment"),
             Self::BufferTooSmall => write!(f, "buffer too small"),
             Self::WriteProtected => write!(f, "flash chip is write protected"),
+            Self::ProtectionRestoreFailed => write!(
+                f,
+                "failed to restore flash protection; inspect chip protection before continuing"
+            ),
             Self::RegionProtected => write!(f, "region is protected"),
             Self::MutationRefused(refusal) => write!(f, "refusing to modify flash: {refusal}"),
             Self::ProgrammerNotReady => write!(f, "programmer not ready"),

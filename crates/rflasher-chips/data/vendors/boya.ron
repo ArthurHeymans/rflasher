@@ -7,6 +7,7 @@
     chips: [
         (
             name: "BY25Q128FS",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4118,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
@@ -21,6 +22,7 @@
         ),
         (
             name: "B.25D05AS",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4010,
             total_size: KiB(64),
             features: (wrsr_wren: true),
@@ -35,6 +37,7 @@
         ),
         (
             name: "B.25D10AS",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4011,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -49,6 +52,7 @@
         ),
         (
             name: "B.25D20AS",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -63,6 +67,7 @@
         ),
         (
             name: "B.25D40AS/BY25D40ES",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -77,6 +82,7 @@
         ),
         (
             name: "B.25D80AS/BY25Q80BS/BY25Q80ES",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -91,6 +97,7 @@
         ),
         (
             name: "B.25D16AS/BY25Q16BS/BY25Q16ES",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4015,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -105,6 +112,7 @@
         ),
         (
             name: "B.25Q32BS/BY25Q32CS/BY25Q32ES",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4016,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -119,6 +127,7 @@
         ),
         (
             name: "B.25Q64AS/BY25Q64ES",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4017,
             total_size: MiB(8),
             features: (wrsr_wren: true),
@@ -133,6 +142,7 @@
         ),
         (
             name: "B.25Q128AS/BY25Q128ES",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4018,
             total_size: MiB(16),
             features: (wrsr_wren: true),

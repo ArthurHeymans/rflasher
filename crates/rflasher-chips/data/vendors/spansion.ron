@@ -8,6 +8,7 @@
         // S25FL series - Standard SPI flash
         (
             name: "S25FL004A",
+            unlock: Some(Status),
             device_id: 0x0212,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -20,6 +21,7 @@
         ),
         (
             name: "S25FL008A",
+            unlock: Some(Status),
             device_id: 0x0213,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -32,6 +34,7 @@
         ),
         (
             name: "S25FL016A",
+            unlock: Some(Status),
             device_id: 0x0214,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -44,6 +47,7 @@
         ),
         (
             name: "S25FL032A",
+            unlock: Some(Status),
             device_id: 0x0215,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -56,6 +60,7 @@
         ),
         (
             name: "S25FL064A",
+            unlock: Some(Status),
             device_id: 0x0216,
             total_size: MiB(8),
             features: (wrsr_wren: true),
@@ -81,6 +86,7 @@
         ),
         (
             name: "S25FL256",
+            unlock: Some(Bp2Srwd),
             device_id: 0x0219,
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true),
@@ -96,6 +102,7 @@
         // S25FL-L series - Low power variants
         (
             name: "S25FL128L",
+            unlock: Some(Bp2Srwd),
             device_id: 0x6018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, status_reg_3: true),
@@ -110,6 +117,7 @@
         ),
         (
             name: "S25FL256L",
+            unlock: Some(Bp3Srwd),
             device_id: 0x6019,
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -127,6 +135,7 @@
         // S25FL-K series - Compact variants
         (
             name: "S25FL116K",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4015,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
@@ -141,6 +150,7 @@
         ),
         (
             name: "S25FL132K",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
@@ -155,6 +165,7 @@
         ),
         (
             name: "S25FL164K",
+            unlock: Some(Bp2Srwd),
             device_id: 0x4017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
@@ -169,6 +180,7 @@
         ),
         (
             name: "S25FL032A/P",
+            unlock: Some(Status),
             device_id: 0x0215,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -181,6 +193,7 @@
         ),
         (
             name: "S25FL064A/P",
+            unlock: Some(Status),
             device_id: 0x0216,
             total_size: MiB(8),
             features: (wrsr_wren: true),
@@ -193,6 +206,7 @@
         ),
         (
             name: "S25FL116K/S25FL216K",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4015,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
@@ -206,6 +220,7 @@
         ),
         (
             name: "S25FL127S-256kB",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
@@ -218,6 +233,7 @@
         ),
         (
             name: "S25FL127S-64kB",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
@@ -231,6 +247,7 @@
         ),
         (
             name: "S25FL128P......0",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true),
@@ -245,6 +262,7 @@
         ),
         (
             name: "S25FL128P......1",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true),
@@ -256,6 +274,7 @@
         ),
         (
             name: "S25FL128S......0",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
@@ -269,6 +288,7 @@
         ),
         (
             name: "S25FL128S......1",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
@@ -281,6 +301,7 @@
         ),
         (
             name: "S25FL129P......0",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
@@ -294,6 +315,7 @@
         ),
         (
             name: "S25FL129P......1",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
@@ -306,6 +328,7 @@
         ),
         (
             name: "S25FL204K",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -320,6 +343,7 @@
         ),
         (
             name: "S25FL208K",
+            unlock: Some(Bp3Srwd),
             device_id: 0x4014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -334,6 +358,7 @@
         ),
         (
             name: "S25FL256S......0",
+            unlock: Some(Bp2Srwd),
             device_id: 0x0219,
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_ear7: true, ext_addr_reg_1716: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -347,6 +372,7 @@
         ),
         (
             name: "S25FL512S",
+            unlock: Some(Bp2Srwd),
             device_id: 0x0220,
             total_size: MiB(64),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_ear7: true, ext_addr_reg_1716: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),

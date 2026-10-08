@@ -1,5 +1,6 @@
 //! Shared RON schema and validation for runtime and compiled chip databases.
 
+pub use rflasher_chip_types::Unlock;
 use serde::Deserialize;
 use std::collections::HashSet;
 
@@ -128,6 +129,8 @@ pub struct FeaturesDef {
     pub wp_sec: bool,
     /// Complement (CMP) bit available
     pub wp_cmp: bool,
+    /// Audited Winbond map/range decoder and combined SR1/SR2 write procedure.
+    pub wp_winbond: bool,
 }
 
 // ============================================================================
@@ -221,6 +224,9 @@ pub struct ChipDef {
     /// Feature flags
     #[serde(default)]
     pub features: FeaturesDef,
+    /// Chip-specific software protection procedure; never inferred from JEDEC vendor.
+    #[serde(default)]
+    pub unlock: Option<Unlock>,
     /// Operating voltage range
     #[serde(default)]
     pub voltage: VoltageDef,

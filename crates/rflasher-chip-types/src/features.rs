@@ -55,7 +55,7 @@ bitflags! {
         ///
         /// These chips require WREN + ULBPR (0x98) to globally unlock before
         /// any erase or write can succeed, rather than clearing BP bits in the
-        /// status register.  Set for all SST26VF/SST26WF series chips.
+        /// status register. Not applicable to SST26VF080A.
         const SST26_BPR       = 1 << 16;
 
         // Status register features
@@ -115,6 +115,8 @@ bitflags! {
         const WRSR_PERSISTENT_EWSR    = 1 << 42;
         /// Synthesized profile has no unambiguous WP register layout.
         const WP_UNRESOLVED           = 1 << 43;
+        /// Audited Winbond SR1/SR2 map, SPI25 range decoder and combined WRSR.
+        const WP_WINBOND              = 1 << 44;
     }
 }
 
@@ -143,6 +145,7 @@ impl Features {
         .union(Self::FOUR_BYTE_FAST_READ)
         .union(Self::FOUR_BYTE_PROGRAM)
         .union(Self::WP_BP3)
+        .union(Self::WP_WINBOND)
         .union(Self::WRSR_VOLATILE_WREN)
         .union(Self::WRSR_PERSISTENT_EWSR);
 

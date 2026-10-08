@@ -284,6 +284,9 @@ pub struct FlashChip {
     /// Feature flags
     #[cfg_attr(feature = "serde", serde(default))]
     pub features: Features,
+    /// Chip-specific software protection procedure.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub unlock: crate::Unlock,
     /// Minimum operating voltage in millivolts
     #[cfg_attr(feature = "serde", serde(default = "default_voltage_min"))]
     pub voltage_min_mv: u16,
@@ -330,6 +333,8 @@ pub struct FlashChip {
     pub page_size: u16,
     /// Feature flags
     pub features: Features,
+    /// Chip-specific software protection procedure.
+    pub unlock: crate::Unlock,
     /// Minimum operating voltage in millivolts
     pub voltage_min_mv: u16,
     /// Maximum operating voltage in millivolts
@@ -369,6 +374,7 @@ impl FlashChip {
         self.total_size == other.total_size
             && self.page_size == other.page_size
             && self.features == other.features
+            && self.unlock == other.unlock
             && self.voltage_min_mv == other.voltage_min_mv
             && self.voltage_max_mv == other.voltage_max_mv
             && self.tested == other.tested
@@ -520,6 +526,7 @@ mod tests {
             total_size: 16 * 1024 * 1024,
             page_size: 256,
             features: Features::WRSR_WREN | Features::FAST_READ,
+            unlock: Default::default(),
             voltage_min_mv: 2700,
             voltage_max_mv: 3600,
             write_granularity: WriteGranularity::Page,

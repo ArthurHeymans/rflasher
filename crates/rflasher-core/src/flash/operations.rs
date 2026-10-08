@@ -936,7 +936,8 @@ fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::
             | Features::WRSR_VOLATILE_WREN
             | Features::WRSR_PERSISTENT_EWSR);
     if chips.iter().any(|c| {
-        c.total_size != first.total_size
+        c.unlock != first.unlock
+            || c.total_size != first.total_size
             || c.write_granularity != first.write_granularity
             || c.features & required != first.features & required
             || (first.requires_4byte_addr()
@@ -1215,7 +1216,48 @@ pub async fn write<M: SpiMaster + ?Sized>(
     if !ctx.is_valid_range(addr, data.len()) {
         return Err(Error::AddressOutOfBounds);
     }
+    if data.is_empty() {
+        return Ok(());
+    }
+    if master.max_write_len() == 0 {
+        return Err(Error::ProgrammerError);
+    }
+    let native = ctx.address_mode == AddressMode::FourByte
+        && ctx.chip.features.supports_4ba_program()
+        && master.features().contains(SpiFeatures::FOUR_BYTE_ADDR)
+        && master.probe_opcode(crate::spi::opcodes::PP_4B);
+    if ctx.address_mode == AddressMode::FourByte {
+        addressing_for_4byte_operation(native, ctx.chip.features, master.features())?;
+    }
+    let aai = ctx.chip.features.contains(Features::AAI_WORD) && master.max_write_len() >= 2;
+    let opcode = if aai {
+        0xad
+    } else if native {
+        crate::spi::opcodes::PP_4B
+    } else {
+        crate::spi::opcodes::PP
+    };
+    if !master.probe_opcode(opcode)
+        || (aai
+            && (!addr.is_multiple_of(2) || !data.len().is_multiple_of(2))
+            && !master.probe_opcode(crate::spi::opcodes::PP))
+    {
+        return Err(Error::OpcodeNotSupported);
+    }
+    let saved = super::protection::prepare(master, ctx).await?;
+    let result = match write_unprotected(master, ctx, addr, data).await {
+        Ok(()) => super::protection::check_result(master, ctx, addr, false).await,
+        Err(error) => Err(error),
+    };
+    super::protection::finish(master, ctx, saved, result).await
+}
 
+async fn write_unprotected<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    data: &[u8],
+) -> Result<()> {
     let features = ctx.chip.features;
     let write_granularity = ctx.chip.write_granularity;
     let page_size = ctx.page_size();
@@ -1284,6 +1326,10 @@ pub async fn write<M: SpiMaster + ?Sized>(
         let result =
             protocol::program_page_with_addressing(master, opcode, current_addr, chunk, addressing)
                 .await;
+        let result = match result {
+            Ok(()) => super::protection::check_result(master, ctx, current_addr, false).await,
+            Err(error) => Err(error),
+        };
 
         if result.is_err() {
             if enter_exit_4byte
@@ -1441,6 +1487,19 @@ pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
     op: &OptimalEraseOp,
 ) -> Result<()> {
     validate_spi_erase_operation(master, ctx, op)?;
+    let saved = super::protection::prepare(master, ctx).await?;
+    let result = match erase_spi_unprotected(master, ctx, op).await {
+        Ok(()) => super::protection::check_result(master, ctx, op.start, true).await,
+        Err(error) => Err(error),
+    };
+    super::protection::finish(master, ctx, saved, result).await
+}
+
+async fn erase_spi_unprotected<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    op: &OptimalEraseOp,
+) -> Result<()> {
     let addr = op.start;
     let len = op.size;
     if len == 0
@@ -1461,9 +1520,6 @@ pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
         }
         if !master.probe_opcode(block.opcode) {
             return Err(Error::OpcodeNotSupported);
-        }
-        if ctx.chip.features.contains(Features::SST26_BPR) {
-            protocol::sst26_global_unprotect(master).await?;
         }
         return protocol::chip_erase_with_opcode(master, block.opcode).await;
     }
@@ -1496,9 +1552,6 @@ pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
         }
     }
 
-    if features.contains(Features::SST26_BPR) {
-        protocol::sst26_global_unprotect(master).await?;
-    }
     if enter_exit_4byte {
         protocol::enter_4byte_mode_with_features(master, features).await?;
     }
@@ -1520,6 +1573,10 @@ pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
         .await
         {
             result = Err(err);
+            break;
+        }
+        if let Err(error) = super::protection::check_result(master, ctx, current, true).await {
+            result = Err(error);
             break;
         }
         current += size;
@@ -1741,6 +1798,7 @@ mod tests {
             total_size: 48,
             page_size: 16,
             features: Features::empty(),
+            unlock: Default::default(),
             voltage_min_mv: 2700,
             voltage_max_mv: 3600,
             write_granularity: WriteGranularity::Byte,
@@ -1831,7 +1889,7 @@ mod tests {
         assert!(master.commands.is_empty());
 
         block_on(erase_spi_range(&mut master, &ctx, 8, 24)).unwrap();
-        assert!(master.commands.contains(&(opcodes::ULBPR, None)));
+        assert!(master.commands.contains(&(opcodes::SE_20, Some(8))));
     }
 
     #[test]

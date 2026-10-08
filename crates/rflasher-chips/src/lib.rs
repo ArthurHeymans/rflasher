@@ -54,6 +54,7 @@ fn features_from(def: FeaturesDef) -> Features {
         (def.wrsr_wren, Features::WRSR_WREN),
         (def.wrsr_ewsr, Features::WRSR_EWSR),
         (def.wrsr_persistent_ewsr, Features::WRSR_PERSISTENT_EWSR),
+        (def.wp_winbond, Features::WP_WINBOND),
         (def.wrsr_ext, Features::WRSR_EXT),
         (def.fast_read, Features::FAST_READ),
         (def.dual_io, Features::DUAL_IO),
@@ -223,6 +224,7 @@ impl ChipDatabase {
                 total_size: chip_def.total_size.to_bytes(),
                 page_size: chip_def.page_size,
                 features: features_from(chip_def.features),
+                unlock: chip_def.unlock.unwrap_or_default(),
                 voltage_min_mv: chip_def.voltage.min,
                 voltage_max_mv: chip_def.voltage.max,
                 write_granularity: granularity_from(chip_def.write_granularity),
@@ -406,7 +408,51 @@ mod tests {
         let provider: &dyn ChipProvider = &db;
 
         assert_eq!(db.len(), runtime_db.len());
+        for compiled in db.iter() {
+            let loaded = runtime_db
+                .iter()
+                .find(|chip| chip.vendor == compiled.vendor && chip.name == compiled.name)
+                .unwrap();
+            assert!(compiled.is_equivalent_to(loaded), "{}", compiled.name);
+        }
         assert!(provider.find_by_jedec_id(0xEF, 0x4018).is_some());
+    }
+
+    #[test]
+    fn audited_protection_procedures_are_not_vendor_defaults() {
+        let db = ChipDatabase::from_dir(&vendors_dir()).unwrap();
+        for (name, unlock) in [
+            ("AT25DF321", Unlock::At2x),
+            ("AT25F4096", Unlock::Bp2Srwd),
+            ("AT25F512A", Unlock::At25f512a),
+            ("AT26DF041", Unlock::None),
+            ("AT25SF128A", Unlock::Unknown),
+            ("N25Q128", Unlock::N25q),
+            ("MT25QL512", Unlock::N25q),
+            ("LE25FU106B", Unlock::Bp1Srwd),
+            ("GD25Q128", Unlock::Bp4Srwd),
+            ("MX25L12805D", Unlock::Bp3Srwd),
+            ("SST25VF016B", Unlock::Status),
+            ("25F160S33B8", Unlock::Bp2EpSrwd),
+            ("SST26VF016B(A)", Unlock::Sst26_6),
+            ("SST26VF032B(A)", Unlock::Sst26_10),
+            ("SST26VF064B(A)", Unlock::Sst26_18),
+            ("SST26VF080A", Unlock::Bp3Srwd),
+            ("SST26VF016", Unlock::Unsupported),
+            ("SST26VF032", Unlock::Unsupported),
+        ] {
+            assert_eq!(
+                db.iter().find(|chip| chip.name == name).unwrap().unlock,
+                unlock,
+                "{name}"
+            );
+        }
+        let atmel = db.iter().find(|chip| chip.name == "AT25DF321").unwrap();
+        assert!(atmel.matches_jedec_id(0x1f, 0x4700));
+        assert_eq!(atmel.total_size, 4 * 1024 * 1024);
+        assert!(!atmel.features.contains(Features::WP_WINBOND));
+        let sst = db.iter().find(|chip| chip.name == "SST26VF080A").unwrap();
+        assert!(!sst.features.contains(Features::SST26_BPR));
     }
 
     /// All database entries for one JEDEC ID, in database order

@@ -7,6 +7,7 @@
     chips: [
         (
             name: "N25S10",
+            unlock: Some(Bp3Srwd),
             device_id: 0x3011,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -22,6 +23,7 @@
         ),
         (
             name: "N25S16",
+            unlock: Some(Bp3Srwd),
             device_id: 0x3015,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -35,6 +37,7 @@
         ),
         (
             name: "N25S20",
+            unlock: Some(Bp3Srwd),
             device_id: 0x3012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -50,6 +53,7 @@
         ),
         (
             name: "N25S40",
+            unlock: Some(Bp3Srwd),
             device_id: 0x3013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -65,6 +69,7 @@
         ),
         (
             name: "N25S80",
+            unlock: Some(Bp3Srwd),
             device_id: 0x3014,
             total_size: MiB(1),
             features: (wrsr_wren: true),

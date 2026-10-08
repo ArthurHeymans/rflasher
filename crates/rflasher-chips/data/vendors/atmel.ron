@@ -12,6 +12,7 @@
         // AT25 series - Standard SPI flash
         (
             name: "AT25DF021",
+            unlock: Some(At2x),
             device_id: 0x4300,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -26,6 +27,7 @@
         ),
         (
             name: "AT25DF021A",
+            unlock: Some(At2x),
             device_id: 0x4301,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -40,6 +42,7 @@
         ),
         (
             name: "AT25DF041A",
+            unlock: Some(At2x),
             device_id: 0x4401,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -54,6 +57,7 @@
         ),
         (
             name: "AT25DF081",
+            unlock: Some(At2x),
             device_id: 0x4502,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -68,6 +72,7 @@
         ),
         (
             name: "AT25DF081A",
+            unlock: Some(At2x),
             device_id: 0x4501,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -82,6 +87,7 @@
         ),
         (
             name: "AT25DF161",
+            unlock: Some(At2x),
             device_id: 0x4602,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -96,6 +102,7 @@
         ),
         (
             name: "AT25DF321",
+            unlock: Some(At2x),
             device_id: 0x4700,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -110,6 +117,7 @@
         ),
         (
             name: "AT25DF321A",
+            unlock: Some(At2x),
             device_id: 0x4701,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -124,6 +132,7 @@
         ),
         (
             name: "AT25DF641(A)",
+            unlock: Some(At2x),
             device_id: 0x4800,
             total_size: MiB(8),
             features: (wrsr_wren: true),
@@ -139,6 +148,7 @@
         // Same JEDEC id as AT25DF081 (told apart only by EDI 0x0100), so probing returns AT25DF081; this entry is reachable by name only.
         (
             name: "AT25DL081",
+            unlock: Some(At2x),
             device_id: 0x4502,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -153,6 +163,7 @@
         ),
         (
             name: "AT25DL161",
+            unlock: Some(At2x),
             device_id: 0x4603,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -168,6 +179,7 @@
         // AT25F series
         (
             name: "AT25F512",
+            unlock: Some(At25f),
             device_id: 0x6500,
             total_size: KiB(64),
             features: (wrsr_wren: true),
@@ -179,6 +191,7 @@
         ),
         (
             name: "AT25F512A",
+            unlock: Some(At25f512a),
             device_id: 0x6501,
             total_size: KiB(64),
             features: (wrsr_wren: true),
@@ -190,6 +203,7 @@
         ),
         (
             name: "AT25F512B",
+            unlock: Some(At25f512b),
             device_id: 0x6500,
             total_size: KiB(64),
             features: (wrsr_wren: true, otp: true),
@@ -204,6 +218,7 @@
         ),
         (
             name: "AT25F1024(A)",
+            unlock: Some(At25f),
             device_id: 0x6600,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -215,6 +230,7 @@
         ),
         (
             name: "AT25F2048",
+            unlock: Some(At25f),
             device_id: 0x6700,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -226,6 +242,7 @@
         ),
         (
             name: "AT25F4096",
+            unlock: Some(Bp2Srwd),
             device_id: 0x6800,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -238,6 +255,7 @@
         // AT25FS series
         (
             name: "AT25FS010",
+            unlock: Some(At25fs010),
             device_id: 0x6601,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -253,6 +271,7 @@
         ),
         (
             name: "AT25FS040",
+            unlock: Some(At25fs040),
             device_id: 0x6604,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -268,6 +287,7 @@
         // AT25SF series
         (
             name: "AT25SF041",
+            unlock: Some(Status),
             device_id: 0x8401,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -282,6 +302,7 @@
         ),
         (
             name: "AT25SF081",
+            unlock: Some(Status),
             device_id: 0x8501,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -310,6 +331,7 @@
         ),
         (
             name: "AT25SF161",
+            unlock: Some(Status),
             device_id: 0x8601,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -324,6 +346,7 @@
         ),
         (
             name: "AT25SF321",
+            unlock: Some(Status),
             device_id: 0x8701,
             total_size: MiB(4),
             features: (wrsr_wren: true, quad_io: true),
@@ -339,6 +362,7 @@
         // AT25SL series
         (
             name: "AT25SL128A",
+            unlock: Some(Status),
             device_id: 0x4218,
             total_size: MiB(16),
             features: (wrsr_wren: true, quad_io: true),
@@ -353,6 +377,7 @@
         ),
         (
             name: "AT25DQ161",
+            unlock: Some(At2x),
             device_id: 0x8600,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
@@ -367,6 +392,7 @@
         ),
         (
             name: "AT26DF041",
+            unlock: Some(None),
             device_id: 0x4400,
             total_size: KiB(512),
             features: (),
@@ -381,6 +407,7 @@
         ),
         (
             name: "AT26DF081A",
+            unlock: Some(At2x),
             device_id: 0x4501,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -396,6 +423,7 @@
         ),
         (
             name: "AT26DF161",
+            unlock: Some(At2x),
             device_id: 0x4600,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -411,6 +439,7 @@
         ),
         (
             name: "AT26DF161A",
+            unlock: Some(At2x),
             device_id: 0x4601,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -426,6 +455,7 @@
         ),
         (
             name: "AT26F004",
+            unlock: Some(None),
             device_id: 0x0400,
             total_size: KiB(512),
             features: (wrsr_wren: true),

@@ -612,6 +612,7 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         total_size: params.density_bytes as u32,
         page_size: params.page_size as u16,
         features,
+        unlock: Default::default(),
         voltage_min_mv: 2700, // Default, SFDP doesn't specify voltage
         voltage_max_mv: 3600,
         write_granularity,

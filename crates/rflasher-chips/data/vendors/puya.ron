@@ -7,6 +7,7 @@
     chips: [
         (
             name: "P25Q05H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6010,
             total_size: KiB(64),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -22,6 +23,7 @@
         ),
         (
             name: "P25Q06H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4010,
             total_size: KiB(64),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -37,6 +39,7 @@
         ),
         (
             name: "P25Q10H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6011,
             total_size: KiB(128),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -52,6 +55,7 @@
         ),
         (
             name: "P25Q11H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4011,
             total_size: KiB(128),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -67,6 +71,7 @@
         ),
         (
             name: "P25Q20H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6012,
             total_size: KiB(256),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -82,6 +87,7 @@
         ),
         (
             name: "P25Q21H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x4012,
             total_size: KiB(256),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -97,6 +103,7 @@
         ),
         (
             name: "P25Q40H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6013,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -112,6 +119,7 @@
         ),
         (
             name: "P25Q40SH",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6013,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -127,6 +135,7 @@
         ),
         (
             name: "P25Q80H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6014,
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -142,6 +151,7 @@
         ),
         (
             name: "P25Q80SH",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6014,
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -157,6 +167,7 @@
         ),
         (
             name: "P25Q16H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6015,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
@@ -172,6 +183,7 @@
         ),
         (
             name: "P25Q16SH",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6015,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -187,6 +199,7 @@
         ),
         (
             name: "P25Q32H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -202,6 +215,7 @@
         ),
         (
             name: "P25Q32SH",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -217,6 +231,7 @@
         ),
         (
             name: "P25Q64H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -232,6 +247,7 @@
         ),
         (
             name: "P25Q64SH",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -247,6 +263,7 @@
         ),
         (
             name: "P25Q128H",
+            unlock: Some(Bp4Srwd),
             device_id: 0x6018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true, qpi: true),
@@ -262,6 +279,7 @@
         ),
         (
             name: "PY25Q40HB",
+            unlock: Some(Bp4Srwd),
             device_id: 0x2013,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -276,6 +294,7 @@
         ),
         (
             name: "PY25Q80HB",
+            unlock: Some(Bp4Srwd),
             device_id: 0x2014,
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -290,6 +309,7 @@
         ),
         (
             name: "PY25Q16HB",
+            unlock: Some(Bp4Srwd),
             device_id: 0x2015,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -304,6 +324,7 @@
         ),
         (
             name: "PY25Q32HB",
+            unlock: Some(Bp4Srwd),
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -318,6 +339,7 @@
         ),
         (
             name: "PY25Q64HA",
+            unlock: Some(Bp4Srwd),
             device_id: 0x2017,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -332,6 +354,7 @@
         ),
         (
             name: "PY25F64HA",
+            unlock: Some(Bp4Srwd),
             device_id: 0x2317,
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -346,6 +369,7 @@
         ),
         (
             name: "PY25Q128HA",
+            unlock: Some(Bp4Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -360,6 +384,7 @@
         ),
         (
             name: "PY25F128HA/PY25R128HA",
+            unlock: Some(Bp4Srwd),
             device_id: 0x2318,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
@@ -374,6 +399,7 @@
         ),
         (
             name: "PY25Q256HB",
+            unlock: Some(Bp4Srwd),
             device_id: 0x2019,
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
@@ -388,6 +414,7 @@
         ),
         (
             name: "PY25F256HB",
+            unlock: Some(Bp4Srwd),
             device_id: 0x2319,
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
@@ -402,6 +429,7 @@
         ),
         (
             name: "PY25Q512HB",
+            unlock: Some(Bp4Srwd),
             device_id: 0x201A,
             total_size: MiB(64),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
@@ -416,6 +444,7 @@
         ),
         (
             name: "PY25F512HB",
+            unlock: Some(Bp4Srwd),
             device_id: 0x231A,
             total_size: MiB(64),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),

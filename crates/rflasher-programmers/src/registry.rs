@@ -1012,6 +1012,7 @@ mod chip_selection_tests {
                 total_size: 16 * 1024 * 1024,
                 page_size: 256,
                 features: Features::WRSR_WREN,
+                unlock: Default::default(),
                 voltage_min_mv: 2700,
                 voltage_max_mv: 3600,
                 write_granularity: rflasher_core::chip::WriteGranularity::Page,

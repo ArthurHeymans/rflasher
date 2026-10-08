@@ -188,17 +188,15 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
 
 impl<M: SpiMaster> SpiFlashDevice<M> {
     fn has_wp_layout(&self) -> bool {
-        !self
-            .ctx
-            .chip
-            .features
-            .intersects(crate::chip::Features::WP_UNRESOLVED | crate::chip::Features::SST26_BPR)
+        let features = self.ctx.chip.features;
+        features.contains(crate::chip::Features::WP_WINBOND)
+            && !features
+                .intersects(crate::chip::Features::WP_UNRESOLVED | crate::chip::Features::SST26_BPR)
     }
 
     /// Get the WP register bit map for this chip
     ///
-    /// Returns a standard Winbond-style bit map. In the future, this could
-    /// be made chip-specific based on the chip database.
+    /// Only used for catalog entries with a positively established Winbond map.
     fn wp_bit_map(&self) -> WpRegBitMap {
         // Check if chip has BP3 (4 BP bits)
         let features = self.ctx.chip.features;

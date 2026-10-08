@@ -18,6 +18,7 @@
         ),
         (
             name: "ES25P40",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -29,6 +30,7 @@
         ),
         (
             name: "ES25P80",
+            unlock: Some(Bp2Srwd),
             device_id: 0x2014,
             total_size: MiB(1),
             features: (wrsr_wren: true),

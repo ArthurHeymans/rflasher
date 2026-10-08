@@ -8,6 +8,7 @@
         // M25P series - Standard SPI flash
         (
             name: "M25P05",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2010,
             total_size: KiB(64),
             features: (wrsr_wren: true),
@@ -19,6 +20,7 @@
         ),
         (
             name: "M25P10",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2011,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -30,6 +32,7 @@
         ),
         (
             name: "M25P20",
+            unlock: Some(Status),
             device_id: 0x2012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -41,6 +44,7 @@
         ),
         (
             name: "M25P40",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -52,6 +56,7 @@
         ),
         (
             name: "M25P80",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -63,6 +68,7 @@
         ),
         (
             name: "M25P16",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2015,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -74,6 +80,7 @@
         ),
         (
             name: "M25P32",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2016,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -85,6 +92,7 @@
         ),
         (
             name: "M25P64",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2017,
             total_size: MiB(8),
             features: (wrsr_wren: true),
@@ -96,6 +104,7 @@
         ),
         (
             name: "M25P128",
+            unlock: Some(Bp3Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
             features: (wrsr_wren: true),
@@ -108,6 +117,7 @@
         // M25PE series - Page erasable
         (
             name: "M25PE10",
+            unlock: Some(Status),
             device_id: 0x8011,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -120,6 +130,7 @@
         ),
         (
             name: "M25PE20",
+            unlock: Some(Status),
             device_id: 0x8012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -132,6 +143,7 @@
         ),
         (
             name: "M25PE40",
+            unlock: Some(Status),
             device_id: 0x8013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -144,6 +156,7 @@
         ),
         (
             name: "M25PE80",
+            unlock: Some(Status),
             device_id: 0x8014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -156,6 +169,7 @@
         ),
         (
             name: "M25PE16",
+            unlock: Some(Status),
             device_id: 0x8015,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -169,6 +183,7 @@
         // M25PX series - with 4KB sector erase
         (
             name: "M25PX80",
+            unlock: Some(Bp2Srwd),
             device_id: 0x7114,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -181,6 +196,7 @@
         ),
         (
             name: "M25PX16",
+            unlock: Some(Bp2Srwd),
             device_id: 0x7115,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -193,6 +209,7 @@
         ),
         (
             name: "M25PX32",
+            unlock: Some(Bp2Srwd),
             device_id: 0x7116,
             total_size: MiB(4),
             features: (wrsr_wren: true),
@@ -205,6 +222,7 @@
         ),
         (
             name: "M25PX64",
+            unlock: Some(Bp2Srwd),
             device_id: 0x7117,
             total_size: MiB(8),
             features: (wrsr_wren: true),
@@ -218,6 +236,7 @@
         // M45PE series - page erase only (no 4KB sector erase), uses 0xDB page erase
         (
             name: "M45PE10",
+            unlock: Some(Unsupported),
             device_id: 0x4011,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -229,6 +248,7 @@
         ),
         (
             name: "M45PE16",
+            unlock: Some(Unsupported),
             device_id: 0x4015,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -240,6 +260,7 @@
         ),
         (
             name: "M45PE20",
+            unlock: Some(Unsupported),
             device_id: 0x4012,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -251,6 +272,7 @@
         ),
         (
             name: "M45PE40",
+            unlock: Some(Unsupported),
             device_id: 0x4013,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -262,6 +284,7 @@
         ),
         (
             name: "M45PE80",
+            unlock: Some(Unsupported),
             device_id: 0x4014,
             total_size: MiB(1),
             features: (wrsr_wren: true),
@@ -275,6 +298,7 @@
         // N25Q016: device_id 0xBB15 → 1.8V (BB prefix)
         (
             name: "N25Q016",
+            unlock: Some(N25q),
             device_id: 0xBB15,
             total_size: MiB(2),
             features: (wrsr_wren: true, quad_io: true),
@@ -287,6 +311,7 @@
         ),
         (
             name: "N25Q032",
+            unlock: Some(N25q),
             device_id: 0xBA16,
             total_size: MiB(4),
             features: (wrsr_wren: true, quad_io: true),
@@ -300,6 +325,7 @@
         // N25Q032..1E: 1.8V variant (BB prefix)
         (
             name: "N25Q032..1E",
+            unlock: Some(N25q),
             device_id: 0xBB16,
             total_size: MiB(4),
             features: (wrsr_wren: true, quad_io: true),
@@ -312,6 +338,7 @@
         ),
         (
             name: "N25Q064",
+            unlock: Some(N25q),
             device_id: 0xBA17,
             total_size: MiB(8),
             features: (wrsr_wren: true, quad_io: true),
@@ -325,6 +352,7 @@
         // N25Q064..1E: 1.8V variant (BB prefix)
         (
             name: "N25Q064..1E",
+            unlock: Some(N25q),
             device_id: 0xBB17,
             total_size: MiB(8),
             features: (wrsr_wren: true, quad_io: true),
@@ -337,6 +365,7 @@
         ),
         (
             name: "N25Q128",
+            unlock: Some(N25q),
             device_id: 0xBA18,
             total_size: MiB(16),
             features: (wrsr_wren: true, quad_io: true),
@@ -350,6 +379,7 @@
         // N25Q128..1E: 1.8V variant (BB prefix)
         (
             name: "N25Q128..1E",
+            unlock: Some(N25q),
             device_id: 0xBB18,
             total_size: MiB(16),
             features: (wrsr_wren: true, quad_io: true),
@@ -362,6 +392,7 @@
         ),
         (
             name: "N25Q256",
+            unlock: Some(N25q),
             device_id: 0xBA19,
             total_size: MiB(32),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -375,6 +406,7 @@
         // N25Q256..1E: 1.8V variant (BB prefix)
         (
             name: "N25Q256..1E",
+            unlock: Some(N25q),
             device_id: 0xBB19,
             total_size: MiB(32),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -387,6 +419,7 @@
         ),
         (
             name: "N25Q512",
+            unlock: Some(N25q),
             device_id: 0xBA20,
             total_size: MiB(64),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -400,6 +433,7 @@
         // N25Q512..1G: 1.8V variant (BB prefix)
         (
             name: "N25Q512..1G",
+            unlock: Some(N25q),
             device_id: 0xBB20,
             total_size: MiB(64),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -413,6 +447,7 @@
         // MT25Q series - Newer Quad SPI
         (
             name: "MT25QL128",
+            unlock: Some(N25q),
             device_id: 0xBA18,
             total_size: MiB(16),
             features: (wrsr_wren: true, quad_io: true),
@@ -426,6 +461,7 @@
         ),
         (
             name: "MT25QL256",
+            unlock: Some(N25q),
             device_id: 0xBA19,
             total_size: MiB(32),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -440,6 +476,7 @@
         ),
         (
             name: "MT25QL512",
+            unlock: Some(N25q),
             device_id: 0xBA20,
             total_size: MiB(64),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -454,6 +491,7 @@
         ),
         (
             name: "MT25QL01G",
+            unlock: Some(N25q),
             device_id: 0xBA21,
             total_size: MiB(128),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -468,6 +506,7 @@
         ),
         (
             name: "MT25QU01G",
+            unlock: Some(N25q),
             device_id: 0xBB21,
             total_size: MiB(128),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -481,6 +520,7 @@
         ),
         (
             name: "MT25QL02G",
+            unlock: Some(N25q),
             device_id: 0xBA22,
             total_size: MiB(256),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -494,6 +534,7 @@
         ),
         (
             name: "MT25QU02G",
+            unlock: Some(N25q),
             device_id: 0xBB22,
             total_size: MiB(256),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -507,6 +548,7 @@
         ),
         (
             name: "MT25QU128",
+            unlock: Some(N25q),
             device_id: 0xBB18,
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
@@ -521,6 +563,7 @@
         ),
         (
             name: "MT25QU256",
+            unlock: Some(N25q),
             device_id: 0xBB19,
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -536,6 +579,7 @@
         ),
         (
             name: "MT25QU512",
+            unlock: Some(N25q),
             device_id: 0xBB20,
             total_size: MiB(64),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -555,6 +599,7 @@
         // active MT25 erase profile.
         (
             name: "N25Q00A..1G",
+            unlock: Some(N25q),
             device_id: 0xBB21,
             total_size: MiB(128),
             features: (wrsr_wren: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
@@ -567,6 +612,7 @@
         ),
         (
             name: "N25Q00A..3G",
+            unlock: Some(N25q),
             device_id: 0xBA21,
             total_size: MiB(128),
             features: (wrsr_wren: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
