@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use nusb::Endpoint;
-use nusb::transfer::{Buffer, Bulk, In, Out, TransferError};
+use nusb::transfer::{Buffer, Bulk, In, Out};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
 use rflasher_core::spi::{SpiCommand, check_io_mode_supported, opcodes};
@@ -68,48 +68,6 @@ macro_rules! platform_sleep {
             let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
         }
     }};
-}
-
-// Bulk OUT completion acknowledges USB delivery, not completion of the flash
-// worker. Dedibridge stalls control SPI while it drains its page buffers and
-// settles. Only an exact one-byte RDSR is safe to replay: never retry mutation
-// commands, disconnected devices, timeouts or unclassified transport failures.
-const STATUS_ACCESS_TIMEOUT: Duration = Duration::from_secs(5);
-const STATUS_ACCESS_POLL: Duration = Duration::from_millis(10);
-
-async fn transceive_with_status_retry<F, Fut>(
-    write_data: &[u8],
-    read_len: usize,
-    timeout: Duration,
-    mut transfer: F,
-) -> Result<Vec<u8>>
-where
-    F: FnMut() -> Fut,
-    Fut: core::future::Future<Output = Result<Vec<u8>>>,
-{
-    let status_read = write_data == [opcodes::RDSR] && read_len == 1;
-    let deadline = web_time::Instant::now() + timeout;
-    loop {
-        match transfer().await {
-            Err(DediprogError::UsbTransfer(TransferError::Stall)) if status_read => {
-                let remaining = deadline.saturating_duration_since(web_time::Instant::now());
-                if remaining.is_zero() {
-                    return Err(DediprogError::Timeout);
-                }
-                platform_sleep!(remaining.min(STATUS_ACCESS_POLL));
-                if web_time::Instant::now() >= deadline {
-                    return Err(DediprogError::Timeout);
-                }
-            }
-            Ok(data) if data.len() != read_len => {
-                return Err(DediprogError::InvalidResponse(format!(
-                    "SPI response: expected {read_len} bytes, got {}",
-                    data.len()
-                )));
-            }
-            result => return result,
-        }
-    }
 }
 
 /// Configuration options for opening a Dediprog device
@@ -227,6 +185,11 @@ pub struct Dediprog {
     max_io_mode: DpIoMode,
     /// Flash size in bytes (set after probing, needed for OpaqueMaster)
     flash_size: Option<u32>,
+    /// Bulk programming algorithm selected from the probed chip.
+    write_mode: WriteMode,
+    /// Chip page geometry and maximum data size for control SPI programming.
+    page_size: usize,
+    spi_page_size: usize,
 }
 
 impl Dediprog {
@@ -325,6 +288,9 @@ impl Dediprog {
             io_mode: DpIoMode::Single,
             max_io_mode: config.io_mode,
             flash_size: None,
+            write_mode: WriteMode::PagePgm,
+            page_size: 256,
+            spi_page_size: 256,
         };
 
         dediprog.init_device(config).await?;
@@ -444,6 +410,9 @@ impl Dediprog {
             io_mode: DpIoMode::Single,
             max_io_mode: config.io_mode,
             flash_size: None,
+            write_mode: WriteMode::PagePgm,
+            page_size: 256,
+            spi_page_size: 256,
         };
 
         dediprog.init_device(&config).await?;
@@ -887,14 +856,6 @@ impl Dediprog {
     async fn spi_transceive(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         // Set to single I/O mode for generic commands
         self.set_io_mode(DpIoMode::Single).await?;
-        transceive_with_status_retry(write_data, read_len, STATUS_ACCESS_TIMEOUT, || {
-            self.spi_transceive_once(write_data, read_len)
-        })
-        .await
-    }
-
-    /// One control SPI transaction, without retrying commands or responses.
-    async fn spi_transceive_once(&self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         // Build command
         let (value, index) = if self.protocol >= Protocol::V2 {
             // New protocol: value indicates if we need a read
@@ -976,6 +937,27 @@ impl Dediprog {
         self.flash_size = Some(size);
     }
 
+    /// Configure bulk transfers using the probed chip's programming algorithm.
+    pub fn set_flash_chip(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        self.set_flash_size(chip.total_size);
+        self.write_mode = if chip
+            .features
+            .contains(rflasher_core::chip::Features::AAI_WORD)
+        {
+            WriteMode::TwoByteAai
+        } else {
+            WriteMode::PagePgm
+        };
+        self.page_size = chip.page_size.max(1) as usize;
+        self.spi_page_size = if self.write_mode == WriteMode::TwoByteAai
+            || chip.write_granularity == rflasher_core::chip::WriteGranularity::Byte
+        {
+            1
+        } else {
+            self.page_size
+        };
+    }
+
     // =========================================================================
     // Bulk Read/Write (CMD_READ/CMD_WRITE with USB bulk transfers)
     // =========================================================================
@@ -986,7 +968,7 @@ impl Dediprog {
     /// `value` and `idx` are the USB control transfer wValue/wIndex fields.
     #[allow(clippy::too_many_arguments)]
     fn prepare_rw_cmd(
-        &self,
+        protocol: Protocol,
         cmd_buf: &mut [u8; MAX_CMD_SIZE],
         value: &mut u16,
         idx: &mut u16,
@@ -1002,7 +984,7 @@ impl Dediprog {
         cmd_buf[3] = mode;
         cmd_buf[4] = 0; // Opcode (overridden below for V2/V3)
 
-        match self.protocol {
+        match protocol {
             Protocol::V1 => {
                 // V1: address in wValue/wIndex, 5-byte command packet
                 if start >> 24 != 0 {
@@ -1023,10 +1005,6 @@ impl Dediprog {
                     // The firmware handles the SPI read command internally
                     cmd_buf[3] = ReadMode::Fast as u8;
                     cmd_buf[4] = opcodes::FAST_READ;
-                } else {
-                    // For V2 writes, use page program mode
-                    cmd_buf[3] = WriteMode::PagePgm as u8;
-                    cmd_buf[4] = 0;
                 }
 
                 cmd_buf[5] = 0; // RFU
@@ -1053,8 +1031,6 @@ impl Dediprog {
                     cmd_buf[11] = 4; // dummy half-cycles (8 clocks / 2 for fast read)
                     Ok(12)
                 } else {
-                    cmd_buf[3] = WriteMode::PagePgm as u8;
-                    cmd_buf[4] = 0;
                     // Page size (256 bytes) as 32-bit LE
                     cmd_buf[10] = 0x00;
                     cmd_buf[11] = 0x01;
@@ -1089,7 +1065,8 @@ impl Dediprog {
         let mut cmd_buf = [0u8; MAX_CMD_SIZE];
         let mut value: u16 = 0;
         let mut idx: u16 = 0;
-        let cmd_len = self.prepare_rw_cmd(
+        let cmd_len = Self::prepare_rw_cmd(
+            self.protocol,
             &mut cmd_buf,
             &mut value,
             &mut idx,
@@ -1134,10 +1111,9 @@ impl Dediprog {
 
     /// Bulk write to flash using CMD_WRITE + USB bulk OUT transfers.
     ///
-    /// Start and len MUST be 256-byte aligned. Builds a single contiguous
-    /// USB buffer with each 256-byte page padded to 512 bytes (0xFF fill),
-    /// then submits it as one large URB. The firmware reads 512 bytes at a
-    /// time and handles WREN, page program, and WIP polling internally.
+    /// Start and len MUST be 256-byte aligned. Each USB transfer contains
+    /// 256 data bytes followed by 256 bytes of 0xFF padding, as in flashprog.
+    /// The firmware handles WREN, page/AAI programming, and WIP polling.
     async fn bulk_write_flash(&mut self, start: u32, data: &[u8]) -> Result<()> {
         const PAGE_SIZE: usize = 256;
         let len = data.len();
@@ -1154,12 +1130,13 @@ impl Dediprog {
         let mut cmd_buf = [0u8; MAX_CMD_SIZE];
         let mut value: u16 = 0;
         let mut idx: u16 = 0;
-        let cmd_len = self.prepare_rw_cmd(
+        let cmd_len = Self::prepare_rw_cmd(
+            self.protocol,
             &mut cmd_buf,
             &mut value,
             &mut idx,
             false,
-            WriteMode::PagePgm as u8,
+            self.write_mode as u8,
             start,
             count,
         )?;
@@ -1167,36 +1144,34 @@ impl Dediprog {
         self.control_write_raw(Command::Write as u8, value, idx, &cmd_buf[..cmd_len])
             .await?;
 
-        // Build a single padded buffer: for each 256-byte page, write 256 data + 256 0xFF.
-        // The firmware consumes 512 bytes per page and handles the SPI protocol internally.
         let mut out_ep: Endpoint<Bulk, Out> = self
             .iface()
             .endpoint(self.out_endpoint)
             .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
 
-        let count = count as usize;
-        let total_usb_len = count * BULK_CHUNK_SIZE;
-        let mut out_buf = out_ep.allocate(total_usb_len);
-
-        for i in 0..count {
-            let src_start = i * PAGE_SIZE;
-            out_buf.extend_from_slice(&data[src_start..src_start + PAGE_SIZE]);
+        for page in data.as_chunks::<PAGE_SIZE>().0 {
+            let mut out_buf = out_ep.allocate(BULK_CHUNK_SIZE);
+            out_buf.extend_from_slice(page);
             out_buf.extend_from_slice(&[0xFF; BULK_CHUNK_SIZE - PAGE_SIZE]);
+            out_ep.submit(out_buf);
+
+            let result = ep_wait!(out_ep, Duration::from_secs(ASYNC_TIMEOUT_SECS))
+                .ok_or(DediprogError::Timeout)?;
+            result
+                .status
+                .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
+            if result.actual_len != BULK_CHUNK_SIZE {
+                return Err(DediprogError::TransferFailed(format!(
+                    "Short bulk write: expected {BULK_CHUNK_SIZE} bytes, got {}",
+                    result.actual_len
+                )));
+            }
         }
-
-        out_ep.submit(out_buf);
-
-        // Scale timeout with transfer size: 10 s base + 10 ms per page
-        // (accommodates worst-case page-program time of typical NOR flash)
-        let timeout =
-            Duration::from_secs(ASYNC_TIMEOUT_SECS) + Duration::from_millis(count as u64 * 10);
-
-        let result = ep_wait!(out_ep, timeout).ok_or(DediprogError::Timeout)?;
-        result
-            .status
-            .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
-
-        Ok(())
+        // USB delivery can finish before the firmware has drained its buffers.
+        // Wait here, not just at the hybrid boundary, before another bulk chunk.
+        rflasher_core::protocol::wait_ready(self, 10_000, 5_000_000)
+            .await
+            .map_err(|e| DediprogError::TransferFailed(format!("bulk worker status: {e}")))
     }
 
     /// Slow read via SPI transceive (for unaligned head/tail residuals).
@@ -1215,44 +1190,21 @@ impl Dediprog {
     }
 
     /// Slow write via SPI transceive (for unaligned head/tail residuals).
-    /// Sends individual WREN + PP + RDSR poll sequences, max 11 bytes data per transfer.
+    /// Uses byte programming for SST tails, otherwise page programming.
     async fn slow_write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
         let max_write = 16 - 5; // 11 bytes per transceive (16 - 1 opcode - 3 addr - 1 margin)
         let mut offset = 0usize;
 
         while offset < data.len() {
             let a = addr + offset as u32;
-            // Respect page boundaries (256 bytes)
-            let page_offset = a as usize % 256;
-            let to_page_end = 256 - page_offset;
+            let page_offset = a as usize % self.spi_page_size;
+            let to_page_end = self.spi_page_size - page_offset;
             let remaining = data.len() - offset;
             let chunk_len = remaining.min(max_write).min(to_page_end);
 
-            // WREN
-            self.spi_transceive(&[opcodes::WREN], 0).await?;
-
-            // Page Program: [PP, addr_hi, addr_mid, addr_lo, data...]
-            let mut cmd = Vec::with_capacity(4 + chunk_len);
-            cmd.push(opcodes::PP);
-            cmd.push((a >> 16) as u8);
-            cmd.push((a >> 8) as u8);
-            cmd.push(a as u8);
-            cmd.extend_from_slice(&data[offset..offset + chunk_len]);
-            self.spi_transceive(&cmd, 0).await?;
-
-            // Poll RDSR until WIP clears (bit 0)
-            // Use a simple retry counter instead of Instant (not available on WASM)
-            let max_polls = 1000;
-            for poll in 0..max_polls {
-                let status = self.spi_transceive(&[opcodes::RDSR], 1).await?;
-                if status[0] & 0x01 == 0 {
-                    break;
-                }
-                if poll == max_polls - 1 {
-                    return Err(DediprogError::Timeout);
-                }
-                platform_sleep!(Duration::from_micros(100));
-            }
+            rflasher_core::protocol::program_page_3b(self, a, &data[offset..offset + chunk_len])
+                .await
+                .map_err(|e| DediprogError::TransferFailed(format!("SPI program: {e}")))?;
 
             offset += chunk_len;
         }
@@ -1335,7 +1287,11 @@ impl OpaqueMaster for Dediprog {
 
         // Split into: head residue + aligned bulk + tail residue
         // Bulk writes require 256-byte (page) alignment
-        let head_residue = if !(addr as usize).is_multiple_of(PAGE_SIZE) {
+        let head_residue = if self.page_size != PAGE_SIZE
+            || (self.spi_page_size == 1 && self.write_mode != WriteMode::TwoByteAai)
+        {
+            len
+        } else if !(addr as usize).is_multiple_of(PAGE_SIZE) {
             len.min(PAGE_SIZE - (addr as usize % PAGE_SIZE))
         } else {
             0
@@ -1357,9 +1313,7 @@ impl OpaqueMaster for Dediprog {
         let bulk_len = (remaining / PAGE_SIZE) * PAGE_SIZE;
 
         if bulk_len > 0 {
-            // Split into chunks that fit in a single USB buffer.
-            // Each page is 512 bytes on the wire (256 data + 256 padding), so
-            // MAX_WRITE_PAGES pages = MAX_WRITE_PAGES * 512 bytes USB buffer.
+            // Bound each CMD_WRITE request to MAX_WRITE_PAGES pages.
             let max_pages = (MAX_BLOCK_COUNT as usize).min(MAX_WRITE_PAGES);
             let mut bulk_offset = 0usize;
             while bulk_offset < bulk_len {

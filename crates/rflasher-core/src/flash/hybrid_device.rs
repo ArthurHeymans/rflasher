@@ -14,7 +14,7 @@
 //!
 //! ```text
 //!   FlashDevice::read()  ──► OpaqueMaster::read()   (CMD_READ + bulk IN)
-//!   FlashDevice::write() ──► OpaqueMaster::write()   (CMD_WRITE + bulk OUT)
+//!   FlashDevice::write() ──► OpaqueMaster::write() (chip-configured programming)
 //!   FlashDevice::erase() ──► SpiMaster (WREN + SE/BE + RDSR polling)
 //!   FlashDevice::wp_*()  ──► SpiMaster (status register access)
 //! ```
@@ -32,8 +32,8 @@ use crate::wp::{
 
 /// Flash device adapter for hybrid programmers (SpiMaster + OpaqueMaster)
 ///
-/// Uses `OpaqueMaster` for bulk read/write (fast path) and `SpiMaster` for
-/// everything else (probe, erase, status registers, write protection).
+/// Uses `OpaqueMaster` for reads and writes, and `SpiMaster` for probe, erase
+/// and write protection. The master must be configured for the probed chip.
 ///
 /// # Example
 ///
@@ -44,7 +44,7 @@ use crate::wp::{
 ///
 /// let mut master = Dediprog::open().unwrap();
 /// let ctx = probe(&mut master, &db).unwrap();
-/// master.set_flash_size(ctx.total_size() as u32);
+/// master.set_flash_chip(&ctx.chip);
 /// let mut device = HybridFlashDevice::new(master, ctx);
 /// ```
 pub struct HybridFlashDevice<M: SpiMaster + OpaqueMaster> {
@@ -151,7 +151,7 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
     }
 
     // =========================================================================
-    // Read/Write: use OpaqueMaster (fast bulk path)
+    // Read/Write: use bulk transfers where the master supports the chip's mode
     // =========================================================================
 
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {

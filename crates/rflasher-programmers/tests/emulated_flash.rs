@@ -353,10 +353,7 @@ fn erase_plans_avoid_opcodes_the_programmer_cannot_send() {
             .all(|b| !refused.contains(&b.opcode))
     );
     let mut device = SpiFlashDevice::new(master, probed.into_context());
-    let mut policy = MutationPolicy {
-        allow_full_chip: true,
-        ..Default::default()
-    };
+    let mut policy = MutationPolicy::default();
 
     // A whole-chip erase would pick chip erase; a 64 KiB region, block erase.
     block_on(unified::erase_region_with_policy(

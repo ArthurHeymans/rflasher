@@ -31,6 +31,7 @@ struct State {
     fail_restore: bool,
     error_flag: u8,
     bulk_writes: usize,
+    bulk_aai: bool,
     aai_next: Option<usize>,
     fail_aai_at: Option<usize>,
     erase_busy_us: u32,
@@ -234,9 +235,16 @@ impl OpaqueMaster for Master {
         Ok(())
     }
     async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
-        let mut s = self.0.lock().unwrap();
-        s.bulk_writes += 1;
-        s.program(addr as usize, data)
+        let aai = {
+            let mut s = self.0.lock().unwrap();
+            s.bulk_writes += 1;
+            s.bulk_aai
+        };
+        if aai {
+            rflasher_core::protocol::aai_word_program(self, addr, data).await
+        } else {
+            self.0.lock().unwrap().program(addr as usize, data)
+        }
     }
     async fn erase(&mut self, _: u32, _: u32) -> Result<()> {
         panic!("hybrid must erase through SPI")
@@ -272,6 +280,7 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
         fail_restore: false,
         error_flag: 0,
         bulk_writes: 0,
+        bulk_aai: false,
         aai_next: None,
         fail_aai_at: None,
         erase_busy_us: 0,
@@ -771,9 +780,67 @@ fn unknown_cmp_layouts_and_unavailable_sr2_reads_do_not_unlock() {
 }
 
 #[test]
+fn spi_and_bulk_aai_programming_preserve_protection_and_adjacent_bytes() {
+    block_on(async {
+        for (aai, bulk) in [(false, false), (true, false), (true, true)] {
+            for (addr, len) in [(0, 256), (1, 256), (0, 257), (1, 1)] {
+                let features = Features::WRSR_WREN
+                    | if aai {
+                        Features::AAI_WORD
+                    } else {
+                        Features::empty()
+                    };
+                let (master, mut ctx) = fixture(Unlock::Status, 0x3c, features, 8192);
+                ctx.chip.write_granularity = WriteGranularity::Byte;
+                let state = master.0.clone();
+                {
+                    let mut s = state.lock().unwrap();
+                    s.data.fill(0xff);
+                    s.bulk_aai = bulk;
+                }
+                let mut device = if bulk {
+                    ErasedFlashDevice::new(HybridFlashDevice::new(master, ctx))
+                } else {
+                    ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx))
+                };
+                let data: Vec<_> = (0..len).map(|i| i as u8).collect();
+                device.write(addr, &data).await.unwrap();
+                let mut readback = vec![0; len];
+                device.read(addr, &mut readback).await.unwrap();
+                assert_eq!(readback, data);
+                let s = state.lock().unwrap();
+                assert_eq!(s.bulk_writes, usize::from(bulk));
+                assert_eq!(s.sr1, 0x3c);
+                assert_eq!(s.aai_next, None);
+                assert!(s.data[..addr as usize].iter().all(|b| *b == 0xff));
+                assert!(s.data[addr as usize + len..].iter().all(|b| *b == 0xff));
+                assert!(
+                    s.commands
+                        .iter()
+                        .filter(|(op, _)| *op == 0x02)
+                        .all(|(_, bytes)| bytes.len() == 1)
+                );
+                let words = s.commands.iter().filter(|(op, _)| *op == 0xad).count();
+                assert_eq!(
+                    words,
+                    if aai {
+                        (len - addr as usize % 2) / 2
+                    } else {
+                        0
+                    }
+                );
+            }
+        }
+    });
+}
+
+#[test]
 fn aai_transfer_failures_exit_mode_before_restoring_protection() {
     block_on(async {
-        for fail_at in [0, 2] {
+        for (hybrid, fail_at) in [false, true]
+            .into_iter()
+            .flat_map(|hybrid| [0, 2].map(|addr| (hybrid, addr)))
+        {
             let features = Features::WRSR_WREN | Features::AAI_WORD;
             let (master, ctx) = fixture(Unlock::Status, 0x3c, features, 8192);
             let state = master.0.clone();
@@ -781,8 +848,13 @@ fn aai_transfer_failures_exit_mode_before_restoring_protection() {
                 let mut s = state.lock().unwrap();
                 s.data.fill(0xff);
                 s.fail_aai_at = Some(fail_at);
+                s.bulk_aai = hybrid;
             }
-            let mut device = SpiFlashDevice::new(master, ctx);
+            let mut device = if hybrid {
+                ErasedFlashDevice::new(HybridFlashDevice::new(master, ctx))
+            } else {
+                ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx))
+            };
             assert_eq!(
                 device.write(0, &[0x55; 4]).await,
                 Err(Error::SpiTransferFailed)

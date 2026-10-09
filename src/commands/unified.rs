@@ -1059,7 +1059,6 @@ mod tests {
             &layout,
             &mut MutationPolicy {
                 allow_dangerous: true,
-                allow_full_chip: true,
                 ..Default::default()
             },
         ))

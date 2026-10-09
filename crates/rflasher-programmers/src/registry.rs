@@ -470,8 +470,8 @@ async fn open_dediprog(
     let chip_info = ChipInfo::from(result);
     let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
 
-    // Set flash size so OpaqueMaster bulk read/write knows the bounds
-    master.set_flash_size(ctx.total_size() as u32);
+    // Configure bulk bounds and programming mode from the probed chip.
+    master.set_flash_chip(&ctx.chip);
 
     // Use HybridFlashDevice: OpaqueMaster for fast bulk read/write (CMD_READ/CMD_WRITE),
     // SpiMaster for erase, status register access, and write protection
@@ -947,14 +947,19 @@ async fn open_sunxi_fel(
     master.set_use_4byte_addr(ctx.total_size() > 16 * 1024 * 1024);
     master.set_erase_blocks(ctx.chip.erase_blocks().to_vec());
 
-    // Use HybridFlashDevice: OpaqueMaster for fast bulk read/write/erase
-    // (batched SPI commands with on-SoC busy-wait), SpiMaster for WP and
-    // status register access
-    let device = HybridFlashDevice::new(master, ctx);
-    Ok(FlashHandle::with_chip_info(
-        ErasedFlashDevice::new(device),
-        chip_info,
-    ))
+    // FEL's bulk writer implements only 256-byte page programming.
+    let device = if ctx
+        .chip
+        .features
+        .contains(rflasher_core::chip::Features::AAI_WORD)
+        || ctx.chip.write_granularity == rflasher_core::chip::WriteGranularity::Byte
+        || ctx.chip.page_size != 256
+    {
+        ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx))
+    } else {
+        ErasedFlashDevice::new(HybridFlashDevice::new(master, ctx))
+    };
+    Ok(FlashHandle::with_chip_info(device, chip_info))
 }
 
 #[cfg(all(test, feature = "dummy"))]

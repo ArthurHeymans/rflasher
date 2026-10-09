@@ -63,7 +63,6 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut backup = cli.recovery_backup.map(commands::unified::FileRecovery);
     let mut policy = rflasher_core::flash::MutationPolicy {
         allow_dangerous: cli.allow_dangerous_regions,
-        allow_full_chip: cli.allow_full_chip,
         recovery: backup
             .as_mut()
             .map(|b| b as &mut dyn rflasher_core::flash::RecoveryBackup),
