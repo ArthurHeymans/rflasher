@@ -19,8 +19,6 @@ pub trait RecoveryBackup {
 pub struct MutationPolicy<'a> {
     /// Authorize dangerous-region changes and temporary erase/restore.
     pub allow_dangerous: bool,
-    /// Authorize a selection covering the entire device.
-    pub allow_full_chip: bool,
     /// Optional durable storage for a full image taken before any mutation.
     pub recovery: Option<&'a mut dyn RecoveryBackup>,
 }
@@ -50,22 +48,6 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
             format_args!("region '{}' is dangerous; {}", r.name, DANGEROUS_HINT),
         ));
     }
-    if regions
-        .iter()
-        .map(|r| r.end as u64 - r.start as u64 + 1)
-        .sum::<u64>()
-        == device.size() as u64
-        && !policy.allow_full_chip
-    {
-        return Err(refuse(
-            Refusal::FullChip,
-            format_args!(
-                "the operation covers the whole chip; authorize it explicitly \
-                 (--allow-full-chip)"
-            ),
-        ));
-    }
-
     // Identify the descriptor on the device itself, not just in a caller's
     // supplied layout (which could hide or rename dangerous regions).
     let mut protected_regions = layout.regions.clone();

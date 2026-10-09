@@ -58,14 +58,14 @@ man -l man/rflasher.1
 rflasher probe -p ch341a                # detect the flash chip
 rflasher info -p ch341a                 # detailed chip information
 rflasher read -p ch341a backup.bin      # read flash to a file
-rflasher write -p ch341a firmware.bin --allow-full-chip # erase, write and verify
-rflasher erase -p ch341a --allow-full-chip
+rflasher write -p ch341a firmware.bin   # erase, write and verify
+rflasher erase -p ch341a
 rflasher verify -p ch341a firmware.bin
 rflasher list-chips                     # supported chips
 rflasher list-programmers               # available programmers
 ```
 
-Short aliases exist (`r`/`w`/`v`, `E` for erase), the programmer can be set with the `RFLASHER_PROGRAMMER` environment variable, and `-v`/`-vv` increase log verbosity. `rflasher write -p ch341a firmware.bin --allow-full-chip --no-verify` skips verification.
+Short aliases exist (`r`/`w`/`v`, `E` for erase), the programmer can be set with the `RFLASHER_PROGRAMMER` environment variable, and `-v`/`-vv` increase log verbosity. `rflasher write -p ch341a firmware.bin --no-verify` skips verification.
 
 ### Programmers
 
@@ -105,13 +105,12 @@ If the selected definition contradicts the chip's SFDP data on size, or on a pag
 
 Authorizations are independent:
 
-- `--allow-full-chip` acknowledges an operation covering the entire flash.
 - `--allow-dangerous-regions` acknowledges modifying ME/TXE/IE, the flash descriptor, or PTT. The shared core preflight detects IFD regions on the device even without `--ifd` or a supplied layout; if the on-device descriptor is unusable (damaged, or describing a second chip), only this flag lets the operation proceed. Prefer selecting only BIOS instead.
 - `--force` overrides contradictory chip/SFDP size or page geometry; it does **not** authorize dangerous regions or execute disputed erase opcodes. Opaque hwseq/MTD devices reject irrelevant `--chip`/`--force` options.
 
-Erase blocks can straddle selected region boundaries. The neighboring data is then read first, restored after the erase and verified; erasing into a dangerous or read-only region is refused as above. `--recovery-backup FILE` additionally writes and synchronizes a full-device image before any mutation (it refuses to overwrite an existing file), which covers power loss in the middle of such an operation. To recover, use it as the input image with the required full-chip/dangerous-region acknowledgements. Library users supply a `RecoveryBackup` through `MutationPolicy`.
+Erase blocks can straddle selected region boundaries. The neighboring data is then read first, restored after the erase and verified; erasing into a dangerous or read-only region is refused as above. `--recovery-backup FILE` additionally writes and synchronizes a full-device image before any mutation (it refuses to overwrite an existing file), which covers power loss in the middle of such an operation. To recover, use it as the input image with dangerous-region authorization if required. Library users supply a `RecoveryBackup` through `MutationPolicy`.
 
-The web UI offers chip selection and separate SFDP/region acknowledgements, with one-operation full-chip authorization. SFDP-only chips have no documented protection-register layout, so WP mutation is unavailable rather than guessed.
+The web UI offers chip selection and separate SFDP/region acknowledgements, with one-operation dangerous-region authorization. SFDP-only chips have no documented protection-register layout, so WP mutation is unavailable rather than guessed.
 
 ### Layouts and regions
 

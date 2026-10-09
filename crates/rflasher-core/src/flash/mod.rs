@@ -26,7 +26,7 @@
 //! use rflasher_core::flash::{FlashDevice, MutationPolicy, OpaqueFlashDevice, SpiFlashDevice};
 //! use rflasher_core::flash::unified;
 //!
-//! let mut policy = MutationPolicy { allow_full_chip: true, ..Default::default() };
+//! let mut policy = MutationPolicy::default();
 //!
 //! // Using SPI programmer
 //! let ctx = flash::probe(master, &db)?;

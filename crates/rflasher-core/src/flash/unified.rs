@@ -39,8 +39,6 @@ use crate::layout::{Layout, LayoutError, Region};
 ///
 /// # Returns
 /// Statistics about the operations performed
-///
-/// This always covers the whole chip, so `policy.allow_full_chip` must be set.
 pub async fn smart_write_with_policy<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     data: &[u8],
@@ -109,7 +107,7 @@ pub async fn erase_region_with_policy<D: FlashDevice + ?Sized>(
     erase_region_prepared(device, region).await
 }
 
-/// Write a region with safe defaults (no full-chip or dangerous-region authorization).
+/// Write a region with safe defaults (no dangerous-region authorization).
 pub async fn smart_write_region<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     addr: u32,
@@ -145,7 +143,7 @@ pub async fn erase_by_layout<D: FlashDevice + ?Sized>(
     erase_by_layout_with_policy(device, layout, &mut MutationPolicy::default()).await
 }
 
-/// Erase one region with safe defaults (no full-chip or dangerous-region authorization).
+/// Erase one region with safe defaults (no dangerous-region authorization).
 pub async fn erase_region<D: FlashDevice + ?Sized>(device: &mut D, region: &Region) -> Result<()> {
     erase_region_with_policy(device, region, &mut MutationPolicy::default()).await
 }
@@ -824,10 +822,7 @@ mod tests {
         flash.bytes[0x40..0x44].copy_from_slice(&0u32.to_le_bytes());
         flash.bytes[0x44..0x48].copy_from_slice(&((3u32 << 16) | 2).to_le_bytes()); // BIOS 8..16K
         flash.bytes[0x48..0x4c].copy_from_slice(&((1u32 << 16) | 1).to_le_bytes()); // ME 4..8K
-        let mut whole = MutationPolicy {
-            allow_full_chip: true,
-            ..Default::default()
-        };
+        let mut whole = MutationPolicy::default();
         assert!(matches!(
             block_on(smart_write_with_policy(
                 &mut flash,
@@ -858,10 +853,7 @@ mod tests {
         flash.bytes[4..8].copy_from_slice(&((2u32 << 24) | (4 << 16)).to_le_bytes());
         flash.bytes[0x44..0x48].copy_from_slice(&((0x7ffu32 << 16) | 0x10).to_le_bytes());
         let image = vec![0xff; 16384];
-        let mut policy = MutationPolicy {
-            allow_full_chip: true,
-            ..Default::default()
-        };
+        let mut policy = MutationPolicy::default();
         assert_eq!(
             block_on(smart_write_with_policy(
                 &mut flash,
@@ -917,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn whole_chip_and_dangerous_acknowledgements_are_independent() {
+    fn whole_chip_erase_only_needs_authorization_for_dangerous_regions() {
         let mut flash = FakeFlash::new(64);
         let mut region = Region::new("whole", 0, 63);
         region.dangerous = true;
@@ -925,10 +917,7 @@ mod tests {
             block_on(erase_region_with_policy(
                 &mut flash,
                 &region,
-                &mut MutationPolicy {
-                    allow_full_chip: true,
-                    ..Default::default()
-                }
+                &mut MutationPolicy::default()
             )),
             Err(Error::MutationRefused(crate::Refusal::DangerousRegion))
         );
@@ -941,9 +930,9 @@ mod tests {
                     ..Default::default()
                 }
             )),
-            Err(Error::MutationRefused(crate::Refusal::FullChip))
+            Ok(())
         );
-        assert_eq!(flash.mutations, 0);
+        assert!(flash.mutations > 0);
     }
 
     #[derive(Default)]
@@ -989,10 +978,7 @@ mod tests {
             &mut full,
             &[0xff; 64],
             &mut full_progress,
-            &mut MutationPolicy {
-                allow_full_chip: true,
-                ..Default::default()
-            },
+            &mut MutationPolicy::default(),
         ))
         .unwrap();
         assert_eq!(full_stats.bytes_changed, 64);
@@ -1045,10 +1031,7 @@ mod tests {
             &mut device,
             &data,
             &mut progress,
-            &mut MutationPolicy {
-                allow_full_chip: true,
-                ..Default::default()
-            },
+            &mut MutationPolicy::default(),
         ))
         .unwrap();
         assert_eq!(stats.bytes_changed, 1);
@@ -1096,10 +1079,7 @@ mod tests {
         block_on(erase_region_with_policy(
             &mut device,
             &Region::new("full", 0, 63),
-            &mut MutationPolicy {
-                allow_full_chip: true,
-                ..Default::default()
-            },
+            &mut MutationPolicy::default(),
         ))
         .unwrap();
         assert_eq!(device.mutations, 1);

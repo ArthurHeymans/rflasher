@@ -124,7 +124,7 @@ macro_rules! with_programmer {
 /// for operations that need chip-level read/write/erase.
 ///
 /// For Dediprog: creates [`HybridFlashDevice`] (fast bulk read/write via
-/// `OpaqueMaster`) and calls `set_flash_size()` first.
+/// `OpaqueMaster`) and configures the probed chip's bulk programming mode first.
 /// For all others: creates [`SpiFlashDevice`].
 ///
 /// The body receives `$device` as `&mut impl FlashDevice`. The macro handles
@@ -169,7 +169,7 @@ macro_rules! with_flash_device {
                 result
             }
             Programmer::Dediprog(mut master) => {
-                master.set_flash_size($ctx_flash.total_size() as u32);
+                master.set_flash_chip(&$ctx_flash.chip);
                 let mut $device = HybridFlashDevice::new(master, $ctx_flash);
                 let result = { $body };
                 let (master, _) = $device.into_parts();
@@ -509,7 +509,6 @@ pub struct RflasherApp {
     /// Explicit chip/profile selection; empty means automatic resolution.
     selected_chip: String,
     override_sfdp: bool,
-    allow_full_chip: bool,
     allow_dangerous: bool,
     /// Whether the udev rules window is open
     show_udev_window: bool,
@@ -639,7 +638,6 @@ impl Default for RflasherApp {
             ctx: None,
             selected_chip: String::new(),
             override_sfdp: false,
-            allow_full_chip: false,
             allow_dangerous: false,
             show_udev_window: false,
         }
@@ -1096,9 +1094,7 @@ impl RflasherApp {
         let ctx = self.ctx.clone();
         let chip = chip_info.chip.clone();
         let data = data.clone();
-        let allow_full_chip = self.allow_full_chip;
         let allow_dangerous = self.allow_dangerous;
-        self.allow_full_chip = false;
         self.allow_dangerous = false;
 
         self.operation = OperationState::Writing {
@@ -1119,7 +1115,6 @@ impl RflasherApp {
 
                 with_flash_device!(shared, programmer, ctx_flash, device, {
                     let mut policy = MutationPolicy {
-                        allow_full_chip,
                         allow_dangerous,
                         recovery: None,
                     };
@@ -1166,9 +1161,7 @@ impl RflasherApp {
         let ctx = self.ctx.clone();
         let chip = chip_info.chip.clone();
         let size = chip_info.size;
-        let allow_full_chip = self.allow_full_chip;
         let allow_dangerous = self.allow_dangerous;
-        self.allow_full_chip = false;
         self.allow_dangerous = false;
 
         self.operation = OperationState::Erasing {
@@ -1187,7 +1180,6 @@ impl RflasherApp {
 
                 with_flash_device!(shared, programmer, ctx_flash, device, {
                     let mut policy = MutationPolicy {
-                        allow_full_chip,
                         allow_dangerous,
                         recovery: None,
                     };
@@ -1373,9 +1365,6 @@ fn error_message(error: rflasher_core::Error) -> String {
                                 the correct chip or explicitly acknowledge the separate SFDP \
                                 override before probing again."
             .to_string(),
-        Error::MutationRefused(Refusal::FullChip) => {
-            format!("{error}. Tick \"Authorize one full-chip mutation\" to proceed.")
-        }
         Error::MutationRefused(Refusal::DangerousRegion | Refusal::UnusableDescriptor) => {
             format!(
                 "{error}. Tick \"Authorize ME/TXE/IE, descriptor and PTT changes\" only if \
@@ -1697,10 +1686,6 @@ impl RflasherApp {
 
         ui.add_enabled_ui(!busy, |ui| {
             ui.checkbox(
-                &mut self.allow_full_chip,
-                "Authorize one full-chip mutation",
-            );
-            ui.checkbox(
                 &mut self.allow_dangerous,
                 "Authorize ME/TXE/IE, descriptor and PTT changes (may brick system)",
             );
@@ -1713,18 +1698,12 @@ impl RflasherApp {
                     if ui.button("Read").clicked() {
                         self.spawn_read();
                     }
-                    if ui
-                        .add_enabled(self.allow_full_chip, egui::Button::new("Write"))
-                        .clicked()
-                    {
+                    if ui.button("Write").clicked() {
                         self.spawn_write();
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(self.allow_full_chip, egui::Button::new("Erase"))
-                        .clicked()
-                    {
+                    if ui.button("Erase").clicked() {
                         self.spawn_erase();
                     }
                     if ui.button("Verify").clicked() {

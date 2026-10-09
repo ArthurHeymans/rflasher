@@ -48,10 +48,6 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub allow_dangerous_regions: bool,
 
-    /// Explicitly authorize an operation covering the whole chip
-    #[arg(long, global = true)]
-    pub allow_full_chip: bool,
-
     /// Save a full-chip backup to FILE before modifying the flash
     /// (refuses to overwrite an existing file)
     #[arg(long, global = true, value_name = "FILE")]

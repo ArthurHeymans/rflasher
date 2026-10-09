@@ -35,8 +35,6 @@ pub enum Refusal {
     /// The operation would modify a dangerous region (ME/TXE/IE, descriptor,
     /// PTT) without authorization
     DangerousRegion,
-    /// The operation covers the whole chip without authorization
-    FullChip,
     /// The flash descriptor on the chip is unusable, so dangerous regions
     /// cannot be located without authorizing dangerous-region changes
     UnusableDescriptor,
@@ -150,7 +148,6 @@ impl fmt::Display for Refusal {
                 "it would modify a dangerous region (ME/TXE/IE, descriptor or PTT), \
                  which was not authorized"
             }
-            Self::FullChip => "it covers the whole chip, which was not authorized",
             Self::UnusableDescriptor => {
                 "the flash descriptor on the chip is unusable, so dangerous regions cannot \
                  be located unless dangerous-region changes are authorized"

@@ -255,7 +255,7 @@ pub trait FlashDeviceExt: FlashDevice {
         Ok(buf)
     }
 
-    /// Erase the entire flash chip. `policy.allow_full_chip` must be set.
+    /// Erase the entire flash chip after policy preflight.
     async fn erase_all_with_policy(
         &mut self,
         policy: &mut super::MutationPolicy<'_>,
