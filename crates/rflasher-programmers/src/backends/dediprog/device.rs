@@ -1189,6 +1189,30 @@ impl Dediprog {
         Ok(())
     }
 
+    /// Split a write and refuse any slow portion outside the 24-bit address space.
+    fn write_lengths(addr: u32, len: usize, bulk_supported: bool) -> CoreResult<(usize, usize)> {
+        const PAGE_SIZE: usize = 256;
+        const ADDRESS_LIMIT: u64 = 1 << 24;
+
+        let head = if !bulk_supported {
+            len
+        } else if !(addr as usize).is_multiple_of(PAGE_SIZE) {
+            len.min(PAGE_SIZE - addr as usize % PAGE_SIZE)
+        } else {
+            0
+        };
+        let bulk = (len - head) / PAGE_SIZE * PAGE_SIZE;
+        let tail = len - head - bulk;
+        // Validate both residuals before issuing even the first bulk transfer.
+        if (head > 0 && u64::from(addr) + head as u64 > ADDRESS_LIMIT)
+            || (tail > 0 && u64::from(addr) + len as u64 > ADDRESS_LIMIT)
+        {
+            log::error!("Dediprog slow write cannot address beyond 16 MiB");
+            return Err(CoreError::WriteError { addr });
+        }
+        Ok((head, bulk))
+    }
+
     /// Slow write via SPI transceive (for unaligned head/tail residuals).
     /// Uses byte programming for SST tails, otherwise page programming.
     async fn slow_write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
@@ -1285,17 +1309,10 @@ impl OpaqueMaster for Dediprog {
             return Ok(());
         }
 
-        // Split into: head residue + aligned bulk + tail residue
-        // Bulk writes require 256-byte (page) alignment
-        let head_residue = if self.page_size != PAGE_SIZE
-            || (self.spi_page_size == 1 && self.write_mode != WriteMode::TwoByteAai)
-        {
-            len
-        } else if !(addr as usize).is_multiple_of(PAGE_SIZE) {
-            len.min(PAGE_SIZE - (addr as usize % PAGE_SIZE))
-        } else {
-            0
-        };
+        // Bulk writes require 256-byte alignment and compatible chip geometry.
+        let bulk_supported = self.page_size == PAGE_SIZE
+            && (self.spi_page_size != 1 || self.write_mode == WriteMode::TwoByteAai);
+        let (head_residue, bulk_len) = Self::write_lengths(addr, len, bulk_supported)?;
 
         // Head: slow write for unaligned start
         if head_residue > 0 {
@@ -1309,8 +1326,6 @@ impl OpaqueMaster for Dediprog {
 
         // Aligned bulk portion
         let bulk_start = addr + head_residue as u32;
-        let remaining = len - head_residue;
-        let bulk_len = (remaining / PAGE_SIZE) * PAGE_SIZE;
 
         if bulk_len > 0 {
             // Bound each CMD_WRITE request to MAX_WRITE_PAGES pages.
