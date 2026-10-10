@@ -49,23 +49,26 @@ pub struct SunxiFel {
     erase_blocks: Vec<EraseBlock>,
 }
 
-impl SunxiFel {
-    /// Open the first available FEL device
-    pub async fn open() -> Result<Self> {
-        let devices: Vec<_> = nusb::list_devices()
+impl crate::UsbProgrammer for SunxiFel {
+    const NAME: &'static str = "sunxi FEL";
+    type Config = ();
+    type Error = Error;
+
+    async fn candidates(_config: &()) -> Result<Vec<nusb::DeviceInfo>> {
+        let selector = nusb::DeviceSelector::all().with_vid_pid(FEL_VID, FEL_PID);
+        crate::usb::list_devices(&[selector])
             .await
-            .map_err(|e| Error::Usb(format!("failed to enumerate USB devices: {}", e)))?
-            .filter(|d| d.vendor_id() == FEL_VID && d.product_id() == FEL_PID)
-            .collect();
+            .map_err(|e| Error::Usb(format!("failed to enumerate USB devices: {}", e)))
+    }
 
-        let device_info = devices.first().ok_or(Error::DeviceNotFound)?;
+    async fn open_device(device: nusb::DeviceInfo, _config: ()) -> Result<Self> {
+        Self::open(device).await
+    }
+}
 
-        log::info!(
-            "Found FEL device: bus={} addr={}",
-            device_info.bus_id(),
-            device_info.device_address()
-        );
-
+impl SunxiFel {
+    /// Open a FEL device found with [`crate::UsbProgrammer::candidates`]
+    pub async fn open(device_info: nusb::DeviceInfo) -> Result<Self> {
         let device = device_info
             .open()
             .await

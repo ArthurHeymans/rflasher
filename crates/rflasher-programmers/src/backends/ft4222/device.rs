@@ -77,57 +77,29 @@ pub struct Ft4222 {
     in_max_packet_size: usize,
 }
 
-// ---------------------------------------------------------------------------
-// Native-only methods (device enumeration)
-// ---------------------------------------------------------------------------
+/// USB devices this backend drives.
+const USB_SELECTORS: &[nusb::DeviceSelector] =
+    &[nusb::DeviceSelector::all().with_vid_pid(FTDI_VID, FT4222H_PID)];
 
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-impl Ft4222 {
-    /// Open an FT4222H device with default configuration.
-    pub async fn open() -> Result<Self> {
-        Self::open_with_config(SpiConfig::default()).await
-    }
+#[cfg(not(target_arch = "wasm32"))]
+impl crate::UsbProgrammer for Ft4222 {
+    const NAME: &'static str = "FT4222H";
+    type Config = SpiConfig;
+    type Error = Ft4222Error;
 
-    /// Open an FT4222H device with custom configuration.
-    pub async fn open_with_config(config: SpiConfig) -> Result<Self> {
-        Self::open_nth_with_config(0, config).await
-    }
-
-    /// Open the nth FT4222H device (0-indexed) with default configuration.
-    pub async fn open_nth(index: usize) -> Result<Self> {
-        Self::open_nth_with_config(index, SpiConfig::default()).await
-    }
-
-    /// Open the nth FT4222H device with custom configuration.
-    pub async fn open_nth_with_config(index: usize, config: SpiConfig) -> Result<Self> {
-        let devices: Vec<_> = nusb::list_devices()
+    async fn candidates(_config: &SpiConfig) -> Result<Vec<nusb::DeviceInfo>> {
+        crate::usb::list_devices(USB_SELECTORS)
             .await
-            .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?
-            .filter(|d| d.vendor_id() == FTDI_VID && d.product_id() == FT4222H_PID)
-            .collect();
-
-        let device_info = devices.get(index).ok_or(Ft4222Error::DeviceNotFound)?;
-        Self::open_device(device_info, config).await
+            .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))
     }
 
-    /// List all connected FT4222H devices.
-    pub async fn list_devices() -> Result<Vec<Ft4222DeviceInfo>> {
-        let devices: Vec<_> = nusb::list_devices()
-            .await
-            .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?
-            .filter(|d| d.vendor_id() == FTDI_VID && d.product_id() == FT4222H_PID)
-            .map(|d| Ft4222DeviceInfo {
-                bus_id: d.bus_id().to_string(),
-                address: d.device_address(),
-            })
-            .collect();
-
-        Ok(devices)
+    async fn open_device(device: nusb::DeviceInfo, config: SpiConfig) -> Result<Self> {
+        Self::open(device, config).await
     }
 }
 
 // ---------------------------------------------------------------------------
-// WASM-only methods (WebUSB device picker, async open, shutdown)
+// WASM-only methods (WebUSB device picker, shutdown)
 // ---------------------------------------------------------------------------
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
@@ -135,12 +107,10 @@ impl Ft4222 {
     /// Request an FT4222H device via the WebUSB permission prompt.
     ///
     /// This must be called from a user gesture (e.g., button click) in the browser.
-    #[cfg(target_arch = "wasm32")]
     pub async fn request_device() -> Result<nusb::DeviceInfo> {
         log::info!("Requesting FT4222H device via WebUSB picker...");
 
-        let selector = nusb::DeviceSelector::all().with_vid_pid(FTDI_VID, FT4222H_PID);
-        let device_info = nusb::request_device(&[selector])
+        let device_info = nusb::request_device(USB_SELECTORS)
             .await
             .map_err(|e| Ft4222Error::OpenFailed(format!("WebUSB request failed: {e}")))?
             .ok_or(Ft4222Error::DeviceNotFound)?;
@@ -152,11 +122,6 @@ impl Ft4222 {
         );
 
         Ok(device_info)
-    }
-
-    /// Open an FT4222H device from a WebUSB-selected `DeviceInfo`.
-    pub async fn open(device_info: nusb::DeviceInfo, config: SpiConfig) -> Result<Self> {
-        Self::open_device(&device_info, config).await
     }
 
     /// Shutdown the device and drain pending endpoint state.
@@ -190,8 +155,11 @@ impl Ft4222 {
 
 #[cfg_attr(any(), allow(dead_code))]
 impl Ft4222 {
-    /// Open a specific FT4222H device.
-    async fn open_device(device_info: &nusb::DeviceInfo, config: SpiConfig) -> Result<Self> {
+    /// Open an FT4222H device
+    ///
+    /// Natively, find devices with [`crate::UsbProgrammer::candidates`]; in
+    /// the browser, use `request_device`.
+    pub async fn open(device_info: nusb::DeviceInfo, config: SpiConfig) -> Result<Self> {
         log::info!(
             "Opening FT4222H device VID={:04X} PID={:04X}",
             device_info.vendor_id(),
@@ -832,21 +800,6 @@ impl SpiMaster for Ft4222 {
                 let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
             }
         }
-    }
-}
-
-/// Information about a connected FT4222H device.
-#[derive(Debug, Clone)]
-pub struct Ft4222DeviceInfo {
-    /// USB bus identifier (platform-defined; integer string on Linux)
-    pub bus_id: String,
-    /// USB device address.
-    pub address: u8,
-}
-
-impl std::fmt::Display for Ft4222DeviceInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FT4222H at bus {} address {}", self.bus_id, self.address)
     }
 }
 

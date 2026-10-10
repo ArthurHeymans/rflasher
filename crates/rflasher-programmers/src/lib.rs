@@ -76,6 +76,8 @@ mod erased;
 mod handle;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod registry;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub mod usb;
 
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use erased::{ErasedFlashDevice, ErasedSpiMaster};
@@ -85,6 +87,10 @@ pub use handle::{ChipInfo, FlashHandle};
 pub use registry::{
     BoxedSpiMaster, OpenOptions, open_flash, open_flash_with_options, open_spi_programmer,
 };
+#[cfg(all(feature = "usb", not(target_arch = "wasm32")))]
+pub use usb::UsbProgrammer;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub use usb::{ChooseUsbDevice, UsbDeviceSummary};
 
 // The catalog is shared by the CLI and the web frontend on every `std` target.
 #[cfg(feature = "std")]

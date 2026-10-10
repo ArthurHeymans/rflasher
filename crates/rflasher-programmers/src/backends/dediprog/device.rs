@@ -116,7 +116,7 @@ where
 #[derive(Debug, Clone)]
 pub struct DediprogConfig {
     /// Device index (when multiple devices are connected)
-    pub device_index: usize,
+    pub device_index: Option<usize>,
     /// Device ID to search for (e.g., "SF123456")
     pub device_id: Option<String>,
     /// Target flash (1 or 2 for dual-chip programmers)
@@ -132,7 +132,7 @@ pub struct DediprogConfig {
 impl Default for DediprogConfig {
     fn default() -> Self {
         Self {
-            device_index: 0,
+            device_index: None,
             device_id: None,
             target: Target::ApplicationFlash1,
             spi_speed_index: DEFAULT_SPI_SPEED_INDEX,
@@ -149,9 +149,10 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<DediprogConfig> {
     for (key, value) in options {
         match *key {
             "device" | "index" => {
-                config.device_index = value
-                    .parse()
-                    .map_err(|_| DediprogError::InvalidParameter(format!("device: {}", value)))?;
+                config.device_index =
+                    Some(value.parse().map_err(|_| {
+                        DediprogError::InvalidParameter(format!("device: {value}"))
+                    })?);
             }
             "id" => {
                 config.device_id = Some(value.to_string());
@@ -241,189 +242,15 @@ impl Dediprog {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Native-only methods (device enumeration, Drop)
-// ---------------------------------------------------------------------------
+/// USB devices this backend drives.
+const USB_SELECTORS: &[nusb::DeviceSelector] =
+    &[nusb::DeviceSelector::all().with_vid_pid(DEDIPROG_USB_VENDOR, DEDIPROG_USB_PRODUCT)];
 
-#[cfg(all(feature = "std", not(feature = "wasm")))]
 impl Dediprog {
-    /// Open the first available Dediprog device
-    pub async fn open() -> Result<Self> {
-        Self::open_with_config(DediprogConfig::default()).await
-    }
-
-    /// Open a Dediprog device with the specified configuration
-    pub async fn open_with_config(config: DediprogConfig) -> Result<Self> {
-        // Find matching devices
-        let devices: Vec<_> = nusb::list_devices()
-            .await
-            .map_err(|e| DediprogError::OpenFailed(e.to_string()))?
-            .filter(|d| {
-                d.vendor_id() == DEDIPROG_USB_VENDOR && d.product_id() == DEDIPROG_USB_PRODUCT
-            })
-            .collect();
-
-        if devices.is_empty() {
-            return Err(DediprogError::DeviceNotFound);
-        }
-
-        // If searching by ID, try each device
-        if let Some(ref target_id) = config.device_id {
-            for device_info in &devices {
-                match Self::try_open_device(device_info, &config).await {
-                    Ok(mut dediprog) => {
-                        // Read device ID and check
-                        if let Ok(id) = dediprog.read_device_id().await {
-                            let id_str = format!("SF{:06}", id);
-                            if id_str.contains(target_id) || target_id.contains(&id_str) {
-                                log::info!("Found Dediprog with ID {}", id_str);
-                                return Ok(dediprog);
-                            }
-                        }
-                        // Close and try next
-                        drop(dediprog);
-                    }
-                    Err(_) => continue,
-                }
-            }
-            return Err(DediprogError::DeviceNotFound);
-        }
-
-        // Open by index
-        let device_info = devices
-            .get(config.device_index)
-            .ok_or(DediprogError::DeviceNotFound)?;
-
-        Self::try_open_device(device_info, &config).await
-    }
-
-    /// Try to open a specific USB device (native/blocking)
-    async fn try_open_device(
-        device_info: &nusb::DeviceInfo,
-        config: &DediprogConfig,
-    ) -> Result<Self> {
-        log::info!(
-            "Opening Dediprog at bus {} address {}",
-            device_info.bus_id(),
-            device_info.device_address()
-        );
-
-        let device = device_info
-            .open()
-            .await
-            .map_err(|e| DediprogError::OpenFailed(e.to_string()))?;
-
-        // Claim interface 0
-        let interface = device
-            .claim_interface(0)
-            .await
-            .map_err(|e| DediprogError::ClaimFailed(e.to_string()))?;
-
-        let mut dediprog = Self {
-            interface,
-            in_endpoint: BULK_IN_EP,
-            out_endpoint: BULK_OUT_EP_SF100, // Will be updated based on device type
-            device_type: DeviceType::Unknown,
-            firmware_version: 0,
-            device_string: String::new(),
-            protocol: Protocol::Unknown,
-            io_mode: DpIoMode::Single,
-            max_io_mode: config.io_mode,
-            flash_size: None,
-            write_mode: WriteMode::PagePgm,
-            page_size: 256,
-            spi_page_size: 256,
-        };
-
-        dediprog.init_device(config).await?;
-        Ok(dediprog)
-    }
-
-    /// List all connected Dediprog devices
-    pub async fn list_devices() -> Result<Vec<DediprogDeviceInfo>> {
-        let devices: Vec<_> = nusb::list_devices()
-            .await
-            .map_err(|e| DediprogError::OpenFailed(e.to_string()))?
-            .filter(|d| {
-                d.vendor_id() == DEDIPROG_USB_VENDOR && d.product_id() == DEDIPROG_USB_PRODUCT
-            })
-            .map(|d| DediprogDeviceInfo {
-                bus_id: d.bus_id().to_string(),
-                address: d.device_address(),
-            })
-            .collect();
-
-        Ok(devices)
-    }
-}
-
-/// Information about a connected Dediprog device
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-#[derive(Debug, Clone)]
-pub struct DediprogDeviceInfo {
-    /// USB bus identifier (platform-defined; integer string on Linux)
-    pub bus_id: String,
-    /// USB device address
-    pub address: u8,
-}
-
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-impl std::fmt::Display for DediprogDeviceInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Dediprog at bus {} address {}",
-            self.bus_id, self.address
-        )
-    }
-}
-
-// Native-only best-effort cleanup. On WASM, dropping mid-operation from a
-// cancelled task must not block the event loop; explicit shutdown is used
-// there instead.
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for Dediprog {
-    fn drop(&mut self) {
-        futures_lite::future::block_on(async {
-            // Reset I/O mode
-            let _ = self.set_io_mode(DpIoMode::Single).await;
-            // Turn off voltage
-            let _ = self.set_voltage(0).await;
-        });
-    }
-}
-
-// ---------------------------------------------------------------------------
-// WASM-only methods (WebUSB device picker, async open, shutdown)
-// ---------------------------------------------------------------------------
-
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-impl Dediprog {
-    /// Request a Dediprog device via the WebUSB permission prompt
+    /// Open a Dediprog device
     ///
-    /// This must be called from a user gesture (e.g., button click) in the browser.
-    /// It shows the browser's device picker filtered to Dediprog devices.
-    #[cfg(target_arch = "wasm32")]
-    pub async fn request_device() -> Result<nusb::DeviceInfo> {
-        log::info!("Requesting Dediprog device via WebUSB picker...");
-
-        let selector =
-            nusb::DeviceSelector::all().with_vid_pid(DEDIPROG_USB_VENDOR, DEDIPROG_USB_PRODUCT);
-        let device_info = nusb::request_device(&[selector])
-            .await
-            .map_err(|e| DediprogError::OpenFailed(format!("WebUSB request failed: {e}")))?
-            .ok_or(DediprogError::DeviceNotFound)?;
-
-        log::info!(
-            "Dediprog device selected: VID={:04X} PID={:04X}",
-            device_info.vendor_id(),
-            device_info.product_id()
-        );
-
-        Ok(device_info)
-    }
-
-    /// Open a Dediprog device from a DeviceInfo (async, for WASM)
+    /// Natively, find devices with [`crate::UsbProgrammer::candidates`]; in
+    /// the browser, use `request_device`.
     pub async fn open(device_info: nusb::DeviceInfo, config: DediprogConfig) -> Result<Self> {
         log::info!(
             "Opening Dediprog device VID={:04X} PID={:04X}",
@@ -444,7 +271,7 @@ impl Dediprog {
         let mut dediprog = Self {
             interface,
             in_endpoint: BULK_IN_EP,
-            out_endpoint: BULK_OUT_EP_SF100,
+            out_endpoint: BULK_OUT_EP_SF100, // Updated from the device type
             device_type: DeviceType::Unknown,
             firmware_version: 0,
             device_string: String::new(),
@@ -459,6 +286,90 @@ impl Dediprog {
 
         dediprog.init_device(&config).await?;
         Ok(dediprog)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl crate::UsbProgrammer for Dediprog {
+    const NAME: &'static str = "Dediprog";
+    type Config = DediprogConfig;
+    type Error = DediprogError;
+
+    /// Applies the `device=N` and `id=SFxxxxxx` selectors. Matching by ID
+    /// opens each device to read it.
+    async fn candidates(config: &DediprogConfig) -> Result<Vec<nusb::DeviceInfo>> {
+        let devices = crate::usb::list_devices(USB_SELECTORS)
+            .await
+            .map_err(|e| DediprogError::OpenFailed(e.to_string()))?;
+        let devices: Vec<_> = match config.device_index {
+            Some(index) => devices.into_iter().skip(index).take(1).collect(),
+            None => devices,
+        };
+        let Some(target_id) = &config.device_id else {
+            return Ok(devices);
+        };
+
+        let mut matching = Vec::new();
+        for device_info in devices {
+            let Ok(mut dediprog) = Self::open(device_info.clone(), config.clone()).await else {
+                continue;
+            };
+            if let Ok(id) = dediprog.read_device_id().await {
+                let id_str = format!("SF{:06}", id);
+                if id_str.contains(target_id.as_str()) || target_id.contains(&id_str) {
+                    log::info!("Found Dediprog with ID {}", id_str);
+                    matching.push(device_info);
+                }
+            }
+        }
+        Ok(matching)
+    }
+
+    async fn open_device(device: nusb::DeviceInfo, config: DediprogConfig) -> Result<Self> {
+        Self::open(device, config).await
+    }
+}
+
+// Native-only best-effort cleanup. On WASM, dropping mid-operation from a
+// cancelled task must not block the event loop; explicit shutdown is used
+// there instead.
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Dediprog {
+    fn drop(&mut self) {
+        futures_lite::future::block_on(async {
+            // Reset I/O mode
+            let _ = self.set_io_mode(DpIoMode::Single).await;
+            // Turn off voltage
+            let _ = self.set_voltage(0).await;
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WASM-only methods (WebUSB device picker, shutdown)
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+impl Dediprog {
+    /// Request a Dediprog device via the WebUSB permission prompt
+    ///
+    /// This must be called from a user gesture (e.g., button click) in the browser.
+    /// It shows the browser's device picker filtered to Dediprog devices.
+    pub async fn request_device() -> Result<nusb::DeviceInfo> {
+        log::info!("Requesting Dediprog device via WebUSB picker...");
+
+        let device_info = nusb::request_device(USB_SELECTORS)
+            .await
+            .map_err(|e| DediprogError::OpenFailed(format!("WebUSB request failed: {e}")))?
+            .ok_or(DediprogError::DeviceNotFound)?;
+
+        log::info!(
+            "Dediprog device selected: VID={:04X} PID={:04X}",
+            device_info.vendor_id(),
+            device_info.product_id()
+        );
+
+        Ok(device_info)
     }
 
     /// Shutdown: turn off voltage and reset I/O mode (WASM equivalent of Drop)
@@ -606,7 +517,7 @@ impl Dediprog {
     }
 
     /// Read the device ID (serial number from sticker)
-    #[allow(dead_code)] // Only called from native open_with_config
+    #[allow(dead_code)] // Only called from native device selection
     async fn read_device_id(&mut self) -> Result<u32> {
         if self.device_type >= DeviceType::SF600PG2 {
             // Newer protocol for SF600PG2/SF700

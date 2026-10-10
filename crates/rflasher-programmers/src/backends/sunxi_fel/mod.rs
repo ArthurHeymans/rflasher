@@ -33,12 +33,13 @@
 //! # Example
 //!
 //! ```no_run
+//! use rflasher_programmers::UsbProgrammer;
 //! use rflasher_programmers::sunxi_fel::SunxiFel;
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
 //! # futures_lite::future::block_on(async {
-//! let mut fel = SunxiFel::open().await?;
+//! let mut fel = SunxiFel::open_matching((), None).await?;
 //! println!("Connected to: {}", fel.soc_name());
 //! let mut id = [0u8; 3];
 //! let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut id);

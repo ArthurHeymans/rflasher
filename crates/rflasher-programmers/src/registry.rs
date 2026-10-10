@@ -3,6 +3,8 @@
 //! This module handles opening programmers by name and creating FlashHandles.
 //! It completely hides SpiMaster and OpaqueMaster from the public API.
 
+#[cfg(feature = "usb")]
+use crate::UsbProgrammer;
 #[allow(unused_imports)] // Only used when at least one programmer backend is enabled
 use crate::catalog::{ProgrammerParams, parse_programmer_params};
 use crate::erased::{ErasedFlashDevice, ErasedSpiMaster};
@@ -379,7 +381,7 @@ async fn open_ch341a_master(
 ) -> Result<crate::ch341a::Ch341a, Box<dyn std::error::Error>> {
     log::info!("Opening CH341A programmer...");
 
-    let master = crate::ch341a::Ch341a::open().await.map_err(|e| {
+    let master = crate::ch341a::Ch341a::open_matching((), None).await.map_err(|e| {
         format!(
             "Failed to open CH341A: {}\nMake sure the device is connected and you have permissions.",
             e
@@ -409,7 +411,7 @@ async fn open_ch347_master(
 
     let config = parse_options(&options).map_err(|e| format!("Invalid CH347 parameters: {}", e))?;
 
-    let master = Ch347::open_with_config(config).await.map_err(|e| {
+    let master = Ch347::open_matching(config, None).await.map_err(|e| {
         format!(
             "Failed to open CH347: {}\nMake sure the device is connected and you have permissions.",
             e
@@ -440,7 +442,7 @@ async fn open_dediprog_master(
     let config =
         parse_options(&options).map_err(|e| format!("Invalid Dediprog parameters: {}", e))?;
 
-    let master = Dediprog::open_with_config(config).await.map_err(|e| {
+    let master = Dediprog::open_matching(config, None).await.map_err(|e| {
         format!(
             "Failed to open Dediprog: {}\n\
              Make sure the device is connected and you have USB permissions.",
@@ -566,7 +568,7 @@ async fn open_ftdi_master(
 
     let config = parse_options(&options).map_err(|e| format!("Invalid FTDI parameters: {}", e))?;
 
-    let master = Ftdi::open(&config).await.map_err(|e| {
+    let master = Ftdi::open_matching(config, None).await.map_err(|e| {
         format!(
             "Failed to open FTDI device: {}\n\
              Make sure the device is connected and you have permissions.\n\
@@ -600,7 +602,7 @@ async fn open_ft4222_master(
     let config =
         parse_options(&options).map_err(|e| format!("Invalid FT4222 parameters: {}", e))?;
 
-    let master = Ft4222::open_with_config(config).await.map_err(|e| {
+    let master = Ft4222::open_matching(config, None).await.map_err(|e| {
         format!(
             "Failed to open FT4222H device: {}\n\
              Make sure the device is connected and you have USB permissions.",
@@ -888,7 +890,7 @@ async fn open_raiden_master(
     let config =
         parse_options(&options).map_err(|e| format!("Invalid raiden parameters: {}", e))?;
 
-    let master = RaidenDebugSpi::open_with_config(&config)
+    let master = RaidenDebugSpi::open_matching(config, None)
         .await
         .map_err(|e| {
             format!(
@@ -916,14 +918,16 @@ async fn open_sunxi_fel_master(
 ) -> Result<crate::sunxi_fel::SunxiFel, Box<dyn std::error::Error>> {
     log::info!("Opening sunxi FEL programmer...");
 
-    let master = crate::sunxi_fel::SunxiFel::open().await.map_err(|e| {
-        format!(
-            "Failed to open sunxi FEL device: {}\n\
+    let master = crate::sunxi_fel::SunxiFel::open_matching((), None)
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to open sunxi FEL device: {}\n\
              Make sure the device is in FEL mode (hold FEL button while plugging in USB)\n\
              and you have USB permissions (VID:1F3A PID:EFE8).",
-            e
-        )
-    })?;
+                e
+            )
+        })?;
 
     log::info!("Connected to: {}", master.soc_name());
 

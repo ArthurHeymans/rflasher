@@ -16,12 +16,13 @@
 //! # Example
 //!
 //! ```no_run
+//! use rflasher_programmers::UsbProgrammer;
 //! use rflasher_programmers::ch341a::Ch341a;
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
 //! # futures_lite::future::block_on(async {
-//! let mut ch341a = Ch341a::open().await?;
+//! let mut ch341a = Ch341a::open_matching((), None).await?;
 //! let mut id = [0u8; 3];
 //! let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut id); // JEDEC ID
 //! ch341a.execute(&mut cmd).await?;
@@ -39,7 +40,5 @@ mod protocol;
 
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use device::Ch341a;
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-pub use device::Ch341aDeviceInfo;
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{Ch341aError, Result};

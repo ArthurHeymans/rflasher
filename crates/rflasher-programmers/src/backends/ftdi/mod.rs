@@ -30,22 +30,16 @@
 //! # Example
 //!
 //! ```no_run
+//! use rflasher_programmers::UsbProgrammer;
 //! use rflasher_programmers::ftdi::{Ftdi, FtdiConfig, FtdiDeviceType};
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
 //! # futures_lite::future::block_on(async {
-//! // Open with default settings (FT4232H channel A)
-//! let mut ftdi = Ftdi::open_first().await?;
-//!
-//! // Or open a specific device type
-//! let mut ftdi = Ftdi::open_device(FtdiDeviceType::Ft2232H).await?;
-//!
-//! // Or with full configuration
 //! let config = FtdiConfig::for_device(FtdiDeviceType::Ft2232H)
 //!     .interface(rflasher_programmers::ftdi::FtdiInterface::B)?
 //!     .divisor(4)?;
-//! let mut ftdi = Ftdi::open(&config).await?;
+//! let mut ftdi = Ftdi::open_matching(config, None).await?;
 //!
 //! // Read JEDEC ID
 //! let mut id = [0u8; 3];
@@ -96,10 +90,8 @@ mod error;
 mod protocol;
 
 pub use device::Ftdi;
-// Device enumeration is native-only; parse_options is pure and shared with the
-// WASM frontend so both surfaces validate the same way.
-#[cfg(all(feature = "ftdi", not(target_arch = "wasm32")))]
-pub use device::FtdiDeviceInfo;
+// parse_options is pure and shared with the WASM frontend so both surfaces
+// validate the same way.
 #[cfg(any(feature = "ftdi", feature = "ftdi-wasm"))]
 pub use device::parse_options;
 pub use error::{FtdiError, Result};
