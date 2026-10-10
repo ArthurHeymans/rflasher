@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use nusb::Endpoint;
-use nusb::transfer::{Buffer, Bulk, In, Out};
+use nusb::transfer::{Buffer, Bulk, In, Out, TransferError};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
 use rflasher_core::spi::{SpiCommand, check_io_mode_supported, opcodes};
@@ -68,6 +68,48 @@ macro_rules! platform_sleep {
             let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
         }
     }};
+}
+
+// USB bulk completion does not mean the firmware has released the SPI bus.
+// Some firmware stalls control SPI until buffered programming and settling finish.
+// Only an exact one-byte RDSR is safe to replay; never retry mutation commands
+// or treat other transport failures as a busy indication.
+const STATUS_ACCESS_TIMEOUT: Duration = Duration::from_secs(5);
+const STATUS_ACCESS_POLL: Duration = Duration::from_millis(10);
+
+async fn transceive_with_status_retry<F, Fut>(
+    write_data: &[u8],
+    read_len: usize,
+    timeout: Duration,
+    mut transfer: F,
+) -> Result<Vec<u8>>
+where
+    F: FnMut() -> Fut,
+    Fut: core::future::Future<Output = Result<Vec<u8>>>,
+{
+    let status_read = write_data == [opcodes::RDSR] && read_len == 1;
+    let deadline = web_time::Instant::now() + timeout;
+    loop {
+        match transfer().await {
+            Err(DediprogError::UsbTransfer(TransferError::Stall)) if status_read => {
+                let remaining = deadline.saturating_duration_since(web_time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(DediprogError::Timeout);
+                }
+                platform_sleep!(remaining.min(STATUS_ACCESS_POLL));
+                if web_time::Instant::now() >= deadline {
+                    return Err(DediprogError::Timeout);
+                }
+            }
+            Ok(data) if data.len() != read_len => {
+                return Err(DediprogError::InvalidResponse(format!(
+                    "SPI response: expected {read_len} bytes, got {}",
+                    data.len()
+                )));
+            }
+            result => return result,
+        }
+    }
 }
 
 /// Configuration options for opening a Dediprog device
@@ -856,6 +898,14 @@ impl Dediprog {
     async fn spi_transceive(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         // Set to single I/O mode for generic commands
         self.set_io_mode(DpIoMode::Single).await?;
+        transceive_with_status_retry(write_data, read_len, STATUS_ACCESS_TIMEOUT, || {
+            self.spi_transceive_once(write_data, read_len)
+        })
+        .await
+    }
+
+    /// One control SPI transaction, without replaying commands or responses.
+    async fn spi_transceive_once(&self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
         // Build command
         let (value, index) = if self.protocol >= Protocol::V2 {
             // New protocol: value indicates if we need a read
