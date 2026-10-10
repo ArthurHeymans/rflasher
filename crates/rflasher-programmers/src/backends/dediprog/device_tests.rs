@@ -1,4 +1,97 @@
 use super::*;
+use futures_lite::future::block_on;
+
+#[test]
+fn only_exact_status_reads_retry_control_stalls() {
+    block_on(async {
+        for (command, read_len) in [
+            (&[opcodes::RDSR][..], 1),
+            (&[opcodes::RDSR][..], 2),
+            (&[opcodes::RDSR, 0][..], 1),
+            (&[opcodes::RDSR2][..], 1),
+            (&[opcodes::WREN][..], 0),
+            (&[opcodes::WRDI][..], 0),
+            (&[opcodes::WRSR, 0][..], 0),
+            (&[opcodes::AAI_WP, 0, 0, 0, 0, 0][..], 0),
+            (&[opcodes::PP, 0, 0, 0, 0][..], 0),
+            (&[opcodes::SE_20, 0, 0, 0][..], 0),
+        ] {
+            let mut attempts = 0;
+            let result =
+                transceive_with_status_retry(command, read_len, STATUS_ACCESS_TIMEOUT, || {
+                    attempts += 1;
+                    std::future::ready(if attempts <= 2 {
+                        Err(DediprogError::UsbTransfer(TransferError::Stall))
+                    } else {
+                        // Preserve the live WIP/AAI/protection bits for the caller.
+                        Ok(vec![0x43; read_len])
+                    })
+                })
+                .await;
+            if command == [opcodes::RDSR] && read_len == 1 {
+                assert_eq!(result.unwrap(), [0x43]);
+                assert_eq!(attempts, 3);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(DediprogError::UsbTransfer(TransferError::Stall))
+                ));
+                assert_eq!(attempts, 1);
+            }
+        }
+    });
+}
+
+#[test]
+fn status_retries_are_bounded_and_preserve_failures() {
+    block_on(async {
+        let mut attempts = 0;
+        let result =
+            transceive_with_status_retry(&[opcodes::RDSR], 1, Duration::from_millis(1), || {
+                attempts += 1;
+                std::future::ready(Err(DediprogError::UsbTransfer(TransferError::Stall)))
+            })
+            .await;
+        assert!(matches!(result, Err(DediprogError::Timeout)));
+        assert_eq!(attempts, 1);
+
+        for error in [
+            TransferError::Disconnected,
+            TransferError::Cancelled,
+            TransferError::Fault,
+            TransferError::InvalidArgument,
+            TransferError::Unknown(42),
+        ] {
+            let mut attempts = 0;
+            let result =
+                transceive_with_status_retry(&[opcodes::RDSR], 1, STATUS_ACCESS_TIMEOUT, || {
+                    attempts += 1;
+                    std::future::ready(Err(DediprogError::UsbTransfer(error)))
+                })
+                .await;
+            assert!(matches!(result, Err(DediprogError::UsbTransfer(e)) if e == error));
+            assert_eq!(attempts, 1);
+        }
+        for response in [
+            Err(DediprogError::Timeout),
+            Err(DediprogError::TransferFailed("unclassified failure".into())),
+            Ok(vec![]),
+        ] {
+            let mut responses = vec![response].into_iter();
+            let result =
+                transceive_with_status_retry(&[opcodes::RDSR], 1, STATUS_ACCESS_TIMEOUT, || {
+                    std::future::ready(responses.next().expect("failure must not be retried"))
+                })
+                .await;
+            assert!(matches!(
+                result,
+                Err(DediprogError::Timeout
+                    | DediprogError::TransferFailed(_)
+                    | DediprogError::InvalidResponse(_))
+            ));
+        }
+    });
+}
 
 #[test]
 fn write_splitting_preserves_bulk_and_residual_lengths() {
