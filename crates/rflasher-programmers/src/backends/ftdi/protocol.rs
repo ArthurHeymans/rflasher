@@ -471,14 +471,6 @@ pub const SUPPORTED_DEVICES: &[SupportedDevice] = &[
     },
 ];
 
-/// Get device info for a VID/PID pair.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn get_device_info(vid: u16, pid: u16) -> Option<&'static SupportedDevice> {
-    SUPPORTED_DEVICES
-        .iter()
-        .find(|d| d.vendor_id == vid && d.product_id == pid)
-}
-
 // ============================================================================
 // FTDI configuration
 // ============================================================================

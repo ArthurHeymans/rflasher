@@ -10,8 +10,6 @@ pub type Result<T> = std::result::Result<T, RaidenError>;
 pub enum RaidenError {
     /// Device not found
     DeviceNotFound,
-    /// Multiple devices found, serial number required
-    MultipleDevicesFound(usize),
     /// Failed to open device
     OpenFailed(String),
     /// Failed to claim interface
@@ -50,13 +48,6 @@ impl fmt::Display for RaidenError {
                 write!(
                     f,
                     "Raiden Debug SPI device not found (VID:18D1, subclass:51)"
-                )
-            }
-            RaidenError::MultipleDevicesFound(count) => {
-                write!(
-                    f,
-                    "Multiple Raiden devices found ({}), specify serial number",
-                    count
                 )
             }
             RaidenError::OpenFailed(msg) => write!(f, "Failed to open Raiden device: {}", msg),

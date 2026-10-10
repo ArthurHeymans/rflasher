@@ -22,12 +22,13 @@
 //! # Example
 //!
 //! ```no_run
+//! use rflasher_programmers::UsbProgrammer;
 //! use rflasher_programmers::dediprog::Dediprog;
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
 //! # futures_lite::future::block_on(async {
-//! let mut dediprog = Dediprog::open().await?;
+//! let mut dediprog = Dediprog::open_matching(Default::default(), None).await?;
 //! println!("Device: {}", dediprog.device_string());
 //!
 //! let mut id = [0u8; 3];
@@ -52,6 +53,7 @@
 //! # Example with options
 //!
 //! ```no_run
+//! use rflasher_programmers::UsbProgrammer;
 //! use rflasher_programmers::dediprog::{Dediprog, parse_options};
 //!
 //! let options = [
@@ -61,7 +63,7 @@
 //! ];
 //! # futures_lite::future::block_on(async {
 //! let config = parse_options(&options)?;
-//! let dediprog = Dediprog::open_with_config(config).await?;
+//! let dediprog = Dediprog::open_matching(config, None).await?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! # }).unwrap();
 //! ```
@@ -73,8 +75,6 @@ mod error;
 #[cfg(any(feature = "std", feature = "wasm"))]
 mod protocol;
 
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-pub use device::DediprogDeviceInfo;
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use device::{Dediprog, DediprogConfig, parse_options};
 #[cfg(any(feature = "std", feature = "wasm"))]

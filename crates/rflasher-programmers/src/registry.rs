@@ -3,10 +3,13 @@
 //! This module handles opening programmers by name and creating FlashHandles.
 //! It completely hides SpiMaster and OpaqueMaster from the public API.
 
+#[cfg(feature = "usb")]
+use crate::UsbProgrammer;
 #[allow(unused_imports)] // Only used when at least one programmer backend is enabled
 use crate::catalog::{ProgrammerParams, parse_programmer_params};
 use crate::erased::{ErasedFlashDevice, ErasedSpiMaster};
 use crate::handle::{ChipInfo, FlashHandle};
+use crate::usb::ChooseUsbDevice;
 use rflasher_core::chip::ChipProvider;
 #[allow(unused_imports)] // Used in feature-gated code
 use rflasher_core::flash::FlashDevice;
@@ -73,8 +76,8 @@ fn log_probe_result(result: &ProbeResult) {
     log_sfdp_mismatches(&result.mismatches, &result.chip.name);
 }
 
-/// User choices that steer how a probed chip is matched to a database entry
-#[derive(Debug, Clone, Copy, Default)]
+/// User choices for the programmer device and the probed chip definition
+#[derive(Clone, Copy, Default)]
 pub struct OpenOptions<'a> {
     /// Name of the chip definition to use when several share the probed JEDEC ID
     /// (`--chip`). See [`ProbeOptions::chip`].
@@ -82,6 +85,9 @@ pub struct OpenOptions<'a> {
     /// Proceed despite a database entry that contradicts the chip's SFDP data
     /// (`--force`). See [`ProbeOptions::force`].
     pub force: bool,
+    /// Picks between several connected USB programmers matching the
+    /// programmer specification. Without it, several matches are an error.
+    pub choose_usb_device: Option<ChooseUsbDevice<'a>>,
 }
 
 /// The chip database together with the user's probing choices
@@ -135,12 +141,16 @@ pub type BoxedSpiMaster = ErasedSpiMaster;
 ///
 /// # Arguments
 /// * `programmer` - Programmer specification (e.g., "ch341a" or "serprog:dev=/dev/ttyUSB0")
+/// * `choose_usb_device` - See [`OpenOptions::choose_usb_device`]
 ///
 /// # Returns
 /// A boxed SpiMaster that can execute raw SPI commands
 pub async fn open_spi_programmer(
     programmer: &str,
+    choose_usb_device: Option<ChooseUsbDevice<'_>>,
 ) -> Result<BoxedSpiMaster, Box<dyn std::error::Error>> {
+    // Not every feature combination has a USB backend.
+    let _ = choose_usb_device;
     let params = parse_programmer_params(programmer)?;
 
     match params.name.as_str() {
@@ -151,17 +161,17 @@ pub async fn open_spi_programmer(
 
         #[cfg(feature = "ch341a")]
         "ch341a" | "ch341a_spi" => {
-            Ok(ErasedSpiMaster::new(open_ch341a_master(&params).await?))
+            Ok(ErasedSpiMaster::new(open_ch341a_master(&params, choose_usb_device).await?))
         }
 
         #[cfg(feature = "ch347")]
         "ch347" | "ch347_spi" => {
-            Ok(ErasedSpiMaster::new(open_ch347_master(&params).await?))
+            Ok(ErasedSpiMaster::new(open_ch347_master(&params, choose_usb_device).await?))
         }
 
         #[cfg(feature = "dediprog")]
         "dediprog" | "dediprog_spi" => {
-            Ok(ErasedSpiMaster::new(open_dediprog_master(&params).await?))
+            Ok(ErasedSpiMaster::new(open_dediprog_master(&params, choose_usb_device).await?))
         }
 
         #[cfg(feature = "serprog-native")]
@@ -179,12 +189,12 @@ pub async fn open_spi_programmer(
 
         #[cfg(feature = "ftdi")]
         "ftdi" | "ft2232_spi" | "ft4232_spi" => {
-            Ok(ErasedSpiMaster::new(open_ftdi_master(&params).await?))
+            Ok(ErasedSpiMaster::new(open_ftdi_master(&params, choose_usb_device).await?))
         }
 
         #[cfg(feature = "ft4222")]
         "ft4222" | "ft4222_spi" => {
-            Ok(ErasedSpiMaster::new(open_ft4222_master(&params).await?))
+            Ok(ErasedSpiMaster::new(open_ft4222_master(&params, choose_usb_device).await?))
         }
 
         #[cfg(feature = "linux-spi")]
@@ -199,12 +209,12 @@ pub async fn open_spi_programmer(
 
         #[cfg(feature = "raiden")]
         "raiden_debug_spi" | "raiden" | "raiden_spi" => {
-            Ok(ErasedSpiMaster::new(open_raiden_master(&params).await?))
+            Ok(ErasedSpiMaster::new(open_raiden_master(&params, choose_usb_device).await?))
         }
 
         #[cfg(feature = "sunxi-fel")]
         "sunxi_fel" | "sunxi-fel" | "fel" => {
-            Ok(ErasedSpiMaster::new(open_sunxi_fel_master(&params).await?))
+            Ok(ErasedSpiMaster::new(open_sunxi_fel_master(&params, choose_usb_device).await?))
         }
 
         // Internal and MTD are opaque-only or not SPI-based
@@ -290,22 +300,24 @@ pub async fn open_flash_with_options(
         "dummy" => open_dummy(&params, db).await,
 
         #[cfg(feature = "ch341a")]
-        "ch341a" | "ch341a_spi" => open_ch341a(&params, db).await,
+        "ch341a" | "ch341a_spi" => open_ch341a(&params, db, options.choose_usb_device).await,
 
         #[cfg(feature = "ch347")]
-        "ch347" | "ch347_spi" => open_ch347(&params, db).await,
+        "ch347" | "ch347_spi" => open_ch347(&params, db, options.choose_usb_device).await,
 
         #[cfg(feature = "dediprog")]
-        "dediprog" | "dediprog_spi" => open_dediprog(&params, db).await,
+        "dediprog" | "dediprog_spi" => open_dediprog(&params, db, options.choose_usb_device).await,
 
         #[cfg(feature = "serprog-native")]
         "serprog" => open_serprog(&params, db).await,
 
         #[cfg(feature = "ftdi")]
-        "ftdi" | "ft2232_spi" | "ft4232_spi" => open_ftdi(&params, db).await,
+        "ftdi" | "ft2232_spi" | "ft4232_spi" => {
+            open_ftdi(&params, db, options.choose_usb_device).await
+        }
 
         #[cfg(feature = "ft4222")]
-        "ft4222" | "ft4222_spi" => open_ft4222(&params, db).await,
+        "ft4222" | "ft4222_spi" => open_ft4222(&params, db, options.choose_usb_device).await,
 
         #[cfg(feature = "linux-spi")]
         "linux_spi" | "linux-spi" | "spidev" => open_linux_spi(&params, db).await,
@@ -322,10 +334,14 @@ pub async fn open_flash_with_options(
         "internal" => open_internal(&params, db).await,
 
         #[cfg(feature = "raiden")]
-        "raiden_debug_spi" | "raiden" | "raiden_spi" => open_raiden(&params, db).await,
+        "raiden_debug_spi" | "raiden" | "raiden_spi" => {
+            open_raiden(&params, db, options.choose_usb_device).await
+        }
 
         #[cfg(feature = "sunxi-fel")]
-        "sunxi_fel" | "sunxi-fel" | "fel" => open_sunxi_fel(&params, db).await,
+        "sunxi_fel" | "sunxi-fel" | "fel" => {
+            open_sunxi_fel(&params, db, options.choose_usb_device).await
+        }
 
         _ => Err(format!("Unknown programmer: {}", params.name).into()),
     }
@@ -376,10 +392,11 @@ async fn open_dummy(
 #[cfg(feature = "ch341a")]
 async fn open_ch341a_master(
     _params: &ProgrammerParams,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<crate::ch341a::Ch341a, Box<dyn std::error::Error>> {
     log::info!("Opening CH341A programmer...");
 
-    let master = crate::ch341a::Ch341a::open().await.map_err(|e| {
+    let master = crate::ch341a::Ch341a::open_matching((), choose).await.map_err(|e| {
         format!(
             "Failed to open CH341A: {}\nMake sure the device is connected and you have permissions.",
             e
@@ -393,13 +410,15 @@ async fn open_ch341a_master(
 async fn open_ch341a(
     params: &ProgrammerParams,
     db: &Probing<'_>,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_ch341a_master(params).await?, db).await
+    probe_and_create_handle(open_ch341a_master(params, choose).await?, db).await
 }
 
 #[cfg(feature = "ch347")]
 async fn open_ch347_master(
     params: &ProgrammerParams,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<crate::ch347::Ch347, Box<dyn std::error::Error>> {
     use crate::ch347::{Ch347, parse_options};
 
@@ -409,7 +428,7 @@ async fn open_ch347_master(
 
     let config = parse_options(&options).map_err(|e| format!("Invalid CH347 parameters: {}", e))?;
 
-    let master = Ch347::open_with_config(config).await.map_err(|e| {
+    let master = Ch347::open_matching(config, choose).await.map_err(|e| {
         format!(
             "Failed to open CH347: {}\nMake sure the device is connected and you have permissions.",
             e
@@ -423,13 +442,15 @@ async fn open_ch347_master(
 async fn open_ch347(
     params: &ProgrammerParams,
     db: &Probing<'_>,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_ch347_master(params).await?, db).await
+    probe_and_create_handle(open_ch347_master(params, choose).await?, db).await
 }
 
 #[cfg(feature = "dediprog")]
 async fn open_dediprog_master(
     params: &ProgrammerParams,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<crate::dediprog::Dediprog, Box<dyn std::error::Error>> {
     use crate::dediprog::{Dediprog, parse_options};
 
@@ -440,7 +461,7 @@ async fn open_dediprog_master(
     let config =
         parse_options(&options).map_err(|e| format!("Invalid Dediprog parameters: {}", e))?;
 
-    let master = Dediprog::open_with_config(config).await.map_err(|e| {
+    let master = Dediprog::open_matching(config, choose).await.map_err(|e| {
         format!(
             "Failed to open Dediprog: {}\n\
              Make sure the device is connected and you have USB permissions.",
@@ -461,8 +482,9 @@ async fn open_dediprog_master(
 async fn open_dediprog(
     params: &ProgrammerParams,
     db: &Probing<'_>,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    let mut master = open_dediprog_master(params).await?;
+    let mut master = open_dediprog_master(params, choose).await?;
 
     // Probe the flash chip via SpiMaster
     let result = db.probe(&mut master).await?;
@@ -557,6 +579,7 @@ async fn open_serprog(
 #[cfg(feature = "ftdi")]
 async fn open_ftdi_master(
     params: &ProgrammerParams,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<crate::ftdi::Ftdi, Box<dyn std::error::Error>> {
     use crate::ftdi::{Ftdi, parse_options};
 
@@ -566,7 +589,7 @@ async fn open_ftdi_master(
 
     let config = parse_options(&options).map_err(|e| format!("Invalid FTDI parameters: {}", e))?;
 
-    let master = Ftdi::open(&config).await.map_err(|e| {
+    let master = Ftdi::open_matching(config, choose).await.map_err(|e| {
         format!(
             "Failed to open FTDI device: {}\n\
              Make sure the device is connected and you have permissions.\n\
@@ -583,13 +606,15 @@ async fn open_ftdi_master(
 async fn open_ftdi(
     params: &ProgrammerParams,
     db: &Probing<'_>,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_ftdi_master(params).await?, db).await
+    probe_and_create_handle(open_ftdi_master(params, choose).await?, db).await
 }
 
 #[cfg(feature = "ft4222")]
 async fn open_ft4222_master(
     params: &ProgrammerParams,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<crate::ft4222::Ft4222, Box<dyn std::error::Error>> {
     use crate::ft4222::{Ft4222, parse_options};
 
@@ -600,7 +625,7 @@ async fn open_ft4222_master(
     let config =
         parse_options(&options).map_err(|e| format!("Invalid FT4222 parameters: {}", e))?;
 
-    let master = Ft4222::open_with_config(config).await.map_err(|e| {
+    let master = Ft4222::open_matching(config, choose).await.map_err(|e| {
         format!(
             "Failed to open FT4222H device: {}\n\
              Make sure the device is connected and you have USB permissions.",
@@ -620,8 +645,9 @@ async fn open_ft4222_master(
 async fn open_ft4222(
     params: &ProgrammerParams,
     db: &Probing<'_>,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_ft4222_master(params).await?, db).await
+    probe_and_create_handle(open_ft4222_master(params, choose).await?, db).await
 }
 
 #[cfg(feature = "linux-spi")]
@@ -878,6 +904,7 @@ async fn open_internal(
 #[cfg(feature = "raiden")]
 async fn open_raiden_master(
     params: &ProgrammerParams,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<crate::raiden::RaidenDebugSpi, Box<dyn std::error::Error>> {
     use crate::raiden::{RaidenDebugSpi, parse_options};
 
@@ -888,7 +915,7 @@ async fn open_raiden_master(
     let config =
         parse_options(&options).map_err(|e| format!("Invalid raiden parameters: {}", e))?;
 
-    let master = RaidenDebugSpi::open_with_config(&config)
+    let master = RaidenDebugSpi::open_matching(config, choose)
         .await
         .map_err(|e| {
             format!(
@@ -906,24 +933,28 @@ async fn open_raiden_master(
 async fn open_raiden(
     params: &ProgrammerParams,
     db: &Probing<'_>,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_raiden_master(params).await?, db).await
+    probe_and_create_handle(open_raiden_master(params, choose).await?, db).await
 }
 
 #[cfg(feature = "sunxi-fel")]
 async fn open_sunxi_fel_master(
     _params: &ProgrammerParams,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<crate::sunxi_fel::SunxiFel, Box<dyn std::error::Error>> {
     log::info!("Opening sunxi FEL programmer...");
 
-    let master = crate::sunxi_fel::SunxiFel::open().await.map_err(|e| {
-        format!(
-            "Failed to open sunxi FEL device: {}\n\
+    let master = crate::sunxi_fel::SunxiFel::open_matching((), choose)
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to open sunxi FEL device: {}\n\
              Make sure the device is in FEL mode (hold FEL button while plugging in USB)\n\
              and you have USB permissions (VID:1F3A PID:EFE8).",
-            e
-        )
-    })?;
+                e
+            )
+        })?;
 
     log::info!("Connected to: {}", master.soc_name());
 
@@ -934,8 +965,9 @@ async fn open_sunxi_fel_master(
 async fn open_sunxi_fel(
     params: &ProgrammerParams,
     db: &Probing<'_>,
+    choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    let mut master = open_sunxi_fel_master(params).await?;
+    let mut master = open_sunxi_fel_master(params, choose).await?;
 
     // Probe the flash chip via SpiMaster
     let result = db.probe(&mut master).await?;
@@ -980,7 +1012,7 @@ mod dispatch_tests {
     #[test]
     fn dummy_raw_and_flash_dispatch_keep_distinct_results() {
         futures_lite::future::block_on(async {
-            let mut master = open_spi_programmer("dummy").await.unwrap();
+            let mut master = open_spi_programmer("dummy", None).await.unwrap();
             let mut jedec = [0; 3];
             master
                 .execute(&mut SpiCommand::read_reg(opcodes::RDID, &mut jedec))

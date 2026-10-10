@@ -29,19 +29,16 @@
 //! # Example
 //!
 //! ```no_run
+//! use rflasher_programmers::UsbProgrammer;
 //! use rflasher_programmers::ft4222::{Ft4222, SpiConfig};
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
 //! # futures_lite::future::block_on(async {
-//! // Open with default settings (10 MHz, CS0)
-//! let mut ft4222 = Ft4222::open().await?;
-//!
-//! // Or with custom configuration
 //! let config = SpiConfig::new()
 //!     .with_speed_khz(20_000)  // 20 MHz
 //!     .with_cs(1);             // Use CS1
-//! let mut ft4222 = Ft4222::open_with_config(config).await?;
+//! let mut ft4222 = Ft4222::open_matching(config, None).await?;
 //!
 //! // Read JEDEC ID
 //! let mut id = [0u8; 3];
@@ -100,7 +97,7 @@ mod error;
 mod protocol;
 
 #[cfg(any(feature = "std", feature = "wasm"))]
-pub use device::{Ft4222, Ft4222DeviceInfo, parse_options};
+pub use device::{Ft4222, parse_options};
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{Ft4222Error, Result};
 #[cfg(any(feature = "std", feature = "wasm"))]

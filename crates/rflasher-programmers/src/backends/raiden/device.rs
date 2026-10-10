@@ -87,172 +87,22 @@ pub struct RaidenDebugSpi {
     supports_full_duplex: bool,
 }
 
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-impl RaidenDebugSpi {
-    /// Open a Raiden Debug SPI device with default configuration.
-    pub async fn open() -> Result<Self> {
-        Self::open_with_config(&RaidenConfig::default()).await
-    }
-
-    /// Open a Raiden Debug SPI device with specific configuration.
-    pub async fn open_with_config(config: &RaidenConfig) -> Result<Self> {
-        let devices = Self::find_devices(config.serial.as_deref()).await?;
-
-        if devices.is_empty() {
-            return Err(RaidenError::DeviceNotFound);
-        }
-
-        if devices.len() > 1 && config.serial.is_none() {
-            return Err(RaidenError::MultipleDevicesFound(devices.len()));
-        }
-
-        let device_info = &devices[0];
-
-        log::info!(
-            "Opening Raiden Debug SPI device at bus {} address {} (protocol v{})",
-            device_info.bus_id,
-            device_info.address,
-            device_info.protocol_version,
-        );
-
-        let device = device_info
-            .info
-            .open()
-            .await
-            .map_err(|e| RaidenError::OpenFailed(e.to_string()))?;
-
-        let interface = device
-            .claim_interface(device_info.interface_num)
-            .await
-            .map_err(|e| RaidenError::ClaimFailed(e.to_string()))?;
-
-        let mut raiden = Self {
-            interface,
-            interface_num: device_info.interface_num,
-            in_ep: device_info.in_ep,
-            out_ep: device_info.out_ep,
-            protocol_version: device_info.protocol_version,
-            max_spi_write: V1_MAX_PAYLOAD as u16,
-            max_spi_read: V1_MAX_PAYLOAD as u16,
-            supports_full_duplex: false,
-        };
-
-        raiden.enable_target(config.target).await?;
-
-        if raiden.protocol_version >= PROTOCOL_V2 {
-            raiden.configure_v2().await?;
-        }
-
-        Ok(raiden)
-    }
-
-    /// Find all Raiden Debug SPI devices.
-    async fn find_devices(serial_filter: Option<&str>) -> Result<Vec<RaidenDeviceInfo>> {
-        let mut devices = Vec::new();
-
-        for dev_info in nusb::list_devices().await? {
-            if dev_info.vendor_id() != GOOGLE_VID {
-                continue;
-            }
-
-            if let Some(filter) = serial_filter {
-                if let Some(serial) = dev_info.serial_number() {
-                    if !serial.contains(filter) {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-            }
-
-            for iface_info in dev_info.interfaces() {
-                if iface_info.class() != 0xFF
-                    || iface_info.subclass() != RAIDEN_SPI_SUBCLASS
-                    || (iface_info.protocol() != PROTOCOL_V1
-                        && iface_info.protocol() != PROTOCOL_V2)
-                {
-                    continue;
-                }
-
-                let device = match dev_info.open().await {
-                    Ok(device) => device,
-                    Err(e) => {
-                        log::debug!("Failed to open device for endpoint discovery: {}", e);
-                        continue;
-                    }
-                };
-
-                let mut in_ep = None;
-                let mut out_ep = None;
-
-                if let Ok(config) = device.active_configuration() {
-                    for iface in config.interface_alt_settings() {
-                        if iface.interface_number() != iface_info.interface_number() {
-                            continue;
-                        }
-                        for ep in iface.endpoints() {
-                            match ep.direction() {
-                                nusb::transfer::Direction::In if in_ep.is_none() => {
-                                    in_ep = Some(ep.address())
-                                }
-                                nusb::transfer::Direction::Out if out_ep.is_none() => {
-                                    out_ep = Some(ep.address())
-                                }
-                                _ => {}
-                            }
-                        }
-                        break;
-                    }
-                }
-
-                if let (Some(in_ep), Some(out_ep)) = (in_ep, out_ep) {
-                    devices.push(RaidenDeviceInfo {
-                        info: dev_info.clone(),
-                        bus_id: dev_info.bus_id().to_string(),
-                        address: dev_info.device_address(),
-                        serial: dev_info.serial_number().map(|s| s.to_string()),
-                        interface_num: iface_info.interface_number(),
-                        in_ep,
-                        out_ep,
-                        protocol_version: iface_info.protocol(),
-                    });
-                }
-
-                break;
-            }
-        }
-
-        Ok(devices)
-    }
-
-    /// List all connected Raiden Debug SPI devices.
-    pub async fn list_devices() -> Result<Vec<RaidenDeviceInfo>> {
-        Self::find_devices(None).await
-    }
+/// Whether `iface` is a Raiden Debug SPI interface.
+fn is_raiden_interface(iface: &nusb::InterfaceInfo) -> bool {
+    iface.class() == 0xFF
+        && iface.subclass() == RAIDEN_SPI_SUBCLASS
+        && (iface.protocol() == PROTOCOL_V1 || iface.protocol() == PROTOCOL_V2)
 }
 
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 impl RaidenDebugSpi {
-    /// Request a Raiden device via the WebUSB permission prompt.
-    pub async fn request_device() -> Result<nusb::DeviceInfo> {
-        log::info!("Requesting Raiden Debug SPI device via WebUSB picker...");
-
-        let selector = nusb::DeviceSelector::all().with_vid(GOOGLE_VID);
-        nusb::request_device(&[selector])
-            .await
-            .map_err(|e| RaidenError::OpenFailed(format!("WebUSB request failed: {e}")))?
-            .ok_or(RaidenError::DeviceNotFound)
-    }
-
-    /// Open a previously granted Raiden WebUSB device.
+    /// Open a Raiden Debug SPI device
+    ///
+    /// Natively, find devices with [`crate::UsbProgrammer::candidates`]; in
+    /// the browser, use `request_device`.
     pub async fn open(device_info: nusb::DeviceInfo, config: &RaidenConfig) -> Result<Self> {
         let iface_info = device_info
             .interfaces()
-            .find(|iface| {
-                iface.class() == 0xFF
-                    && iface.subclass() == RAIDEN_SPI_SUBCLASS
-                    && (iface.protocol() == PROTOCOL_V1 || iface.protocol() == PROTOCOL_V2)
-            })
+            .find(|iface| is_raiden_interface(iface))
             .ok_or(RaidenError::DeviceNotFound)?;
 
         let interface_num = iface_info.interface_number();
@@ -317,6 +167,47 @@ impl RaidenDebugSpi {
         }
 
         Ok(raiden)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl crate::UsbProgrammer for RaidenDebugSpi {
+    const NAME: &'static str = "Raiden Debug SPI";
+    type Config = RaidenConfig;
+    type Error = RaidenError;
+
+    /// Applies the `serial` selector (substring match).
+    async fn candidates(config: &RaidenConfig) -> Result<Vec<nusb::DeviceInfo>> {
+        let selector = nusb::DeviceSelector::all().with_vid(GOOGLE_VID);
+        Ok(crate::usb::list_devices(&[selector])
+            .await?
+            .into_iter()
+            .filter(|info| info.interfaces().any(is_raiden_interface))
+            .filter(|info| {
+                config.serial.as_deref().is_none_or(|filter| {
+                    info.serial_number()
+                        .is_some_and(|serial| serial.contains(filter))
+                })
+            })
+            .collect())
+    }
+
+    async fn open_device(device: nusb::DeviceInfo, config: RaidenConfig) -> Result<Self> {
+        Self::open(device, &config).await
+    }
+}
+
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+impl RaidenDebugSpi {
+    /// Request a Raiden device via the WebUSB permission prompt.
+    pub async fn request_device() -> Result<nusb::DeviceInfo> {
+        log::info!("Requesting Raiden Debug SPI device via WebUSB picker...");
+
+        let selector = nusb::DeviceSelector::all().with_vid(GOOGLE_VID);
+        nusb::request_device(&[selector])
+            .await
+            .map_err(|e| RaidenError::OpenFailed(format!("WebUSB request failed: {e}")))?
+            .ok_or(RaidenError::DeviceNotFound)
     }
 
     /// Shut down the bridge explicitly in WASM mode.
@@ -653,42 +544,6 @@ impl SpiMaster for RaidenDebugSpi {
         if us > 0 {
             platform_sleep!(Duration::from_micros(us as u64));
         }
-    }
-}
-
-/// Information about a connected Raiden Debug SPI device
-#[cfg_attr(all(feature = "wasm", target_arch = "wasm32"), allow(dead_code))]
-#[derive(Debug, Clone)]
-pub struct RaidenDeviceInfo {
-    /// nusb device info
-    pub(crate) info: nusb::DeviceInfo,
-    /// USB bus identifier (platform-defined; integer string on Linux)
-    pub bus_id: String,
-    /// USB device address
-    pub address: u8,
-    /// Device serial number (if available)
-    pub serial: Option<String>,
-    /// Interface number
-    pub(crate) interface_num: u8,
-    /// IN endpoint address
-    pub(crate) in_ep: u8,
-    /// OUT endpoint address
-    pub(crate) out_ep: u8,
-    /// Protocol version
-    pub protocol_version: u8,
-}
-
-impl std::fmt::Display for RaidenDeviceInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Raiden Debug SPI at bus {} address {} (v{})",
-            self.bus_id, self.address, self.protocol_version
-        )?;
-        if let Some(ref serial) = self.serial {
-            write!(f, " serial={}", serial)?;
-        }
-        Ok(())
     }
 }
 

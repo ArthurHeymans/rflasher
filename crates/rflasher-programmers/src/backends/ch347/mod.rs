@@ -26,19 +26,16 @@
 //! # Example
 //!
 //! ```no_run
+//! use rflasher_programmers::UsbProgrammer;
 //! use rflasher_programmers::ch347::{Ch347, SpiConfig, SpiSpeed, ChipSelect};
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
 //! # futures_lite::future::block_on(async {
-//! // Open with default settings (7.5 MHz, mode 0, CS0)
-//! let mut ch347 = Ch347::open().await?;
-//!
-//! // Or with custom configuration
 //! let config = SpiConfig::new()
 //!     .with_speed(SpiSpeed::Speed30M)
 //!     .with_cs(ChipSelect::CS1);
-//! let mut ch347 = Ch347::open_with_config(config).await?;
+//! let mut ch347 = Ch347::open_matching(config, None).await?;
 //!
 //! // Read JEDEC ID
 //! let mut id = [0u8; 3];
@@ -70,8 +67,6 @@ mod protocol;
 
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use device::Ch347;
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-pub use device::Ch347DeviceInfo;
 #[cfg(feature = "std")]
 pub use device::parse_options;
 #[cfg(any(feature = "std", feature = "wasm"))]

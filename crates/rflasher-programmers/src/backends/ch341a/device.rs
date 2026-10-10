@@ -66,159 +66,15 @@ pub struct Ch341a {
     stored_delay_us: u32,
 }
 
-// ---------------------------------------------------------------------------
-// Native-only methods (device enumeration, Drop)
-// ---------------------------------------------------------------------------
+/// USB devices this backend drives.
+const USB_SELECTORS: &[nusb::DeviceSelector] =
+    &[nusb::DeviceSelector::all().with_vid_pid(CH341A_USB_VENDOR, CH341A_USB_PRODUCT)];
 
-#[cfg(all(feature = "std", not(feature = "wasm")))]
 impl Ch341a {
     /// Open a CH341A device
     ///
-    /// Searches for a CH341A device (VID:1a86 PID:5512) and opens it.
-    /// Returns an error if no device is found or if the device cannot be opened.
-    pub async fn open() -> Result<Self> {
-        Self::open_nth(0).await
-    }
-
-    /// Open the nth CH341A device (0-indexed)
-    ///
-    /// Useful when multiple CH341A devices are connected.
-    pub async fn open_nth(index: usize) -> Result<Self> {
-        let devices: Vec<_> = nusb::list_devices()
-            .await
-            .map_err(|e| Ch341aError::OpenFailed(e.to_string()))?
-            .filter(|d| d.vendor_id() == CH341A_USB_VENDOR && d.product_id() == CH341A_USB_PRODUCT)
-            .collect();
-
-        let device_info = devices.get(index).ok_or(Ch341aError::DeviceNotFound)?;
-
-        log::info!(
-            "Opening CH341A device at bus {} address {}",
-            device_info.bus_id(),
-            device_info.device_address()
-        );
-
-        let device = device_info
-            .open()
-            .await
-            .map_err(|e| Ch341aError::OpenFailed(e.to_string()))?;
-
-        // Get device descriptor for version info
-        let desc = device_info;
-        log::debug!(
-            "Device: VID={:04X} PID={:04X}",
-            desc.vendor_id(),
-            desc.product_id()
-        );
-
-        // Claim interface 0
-        let interface = device
-            .claim_interface(0)
-            .await
-            .map_err(|e| Ch341aError::ClaimFailed(e.to_string()))?;
-
-        // Open bulk endpoints
-        let out_ep = interface
-            .endpoint::<Bulk, Out>(WRITE_EP)
-            .map_err(|e| Ch341aError::ClaimFailed(e.to_string()))?;
-        let in_ep = interface
-            .endpoint::<Bulk, In>(READ_EP)
-            .map_err(|e| Ch341aError::ClaimFailed(e.to_string()))?;
-
-        let mut ch341a = Self {
-            #[cfg(feature = "wasm")]
-            _interface: interface,
-            out_ep,
-            in_ep,
-            stored_delay_us: 0,
-        };
-
-        // Configure the device for SPI mode
-        ch341a.configure().await?;
-
-        Ok(ch341a)
-    }
-
-    /// List all connected CH341A devices
-    pub async fn list_devices() -> Result<Vec<Ch341aDeviceInfo>> {
-        let devices: Vec<_> = nusb::list_devices()
-            .await
-            .map_err(|e| Ch341aError::OpenFailed(e.to_string()))?
-            .filter(|d| d.vendor_id() == CH341A_USB_VENDOR && d.product_id() == CH341A_USB_PRODUCT)
-            .map(|d| Ch341aDeviceInfo {
-                bus_id: d.bus_id().to_string(),
-                address: d.device_address(),
-            })
-            .collect();
-
-        Ok(devices)
-    }
-}
-
-/// Information about a connected CH341A device
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-#[derive(Debug, Clone)]
-pub struct Ch341aDeviceInfo {
-    /// USB bus identifier (platform-defined; integer string on Linux)
-    pub bus_id: String,
-    /// USB device address
-    pub address: u8,
-}
-
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-impl std::fmt::Display for Ch341aDeviceInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CH341A at bus {} address {}", self.bus_id, self.address)
-    }
-}
-
-// Native-only best-effort cleanup; WASM uses explicit shutdown instead.
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for Ch341a {
-    fn drop(&mut self) {
-        futures_lite::future::block_on(async {
-            // Drain any pending transfers before shutdown to avoid panics
-            self.drain_all_pending().await;
-
-            // Disable output pins on close
-            if let Err(e) = self.enable_pins(false).await {
-                log::warn!("Failed to disable pins on close: {}", e);
-            }
-        });
-    }
-}
-
-// ---------------------------------------------------------------------------
-// WASM-only methods (WebUSB device picker, async open, shutdown)
-// ---------------------------------------------------------------------------
-
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-impl Ch341a {
-    /// Request a CH341A device via the WebUSB permission prompt
-    ///
-    /// This must be called from a user gesture (e.g., button click) in the browser.
-    /// It shows the browser's device picker filtered to CH341A devices.
-    #[cfg(target_arch = "wasm32")]
-    pub async fn request_device() -> Result<nusb::DeviceInfo> {
-        log::info!("Requesting CH341A device via WebUSB picker...");
-
-        let selector =
-            nusb::DeviceSelector::all().with_vid_pid(CH341A_USB_VENDOR, CH341A_USB_PRODUCT);
-        let device_info = nusb::request_device(&[selector])
-            .await
-            .map_err(|e| Ch341aError::OpenFailed(format!("WebUSB request failed: {e}")))?
-            .ok_or(Ch341aError::DeviceNotFound)?;
-
-        log::info!(
-            "CH341A device selected: VID={:04X} PID={:04X}",
-            device_info.vendor_id(),
-            device_info.product_id()
-        );
-
-        Ok(device_info)
-    }
-
-    /// Open a CH341A device from a DeviceInfo
+    /// Natively, find devices with [`crate::UsbProgrammer::candidates`]; in
+    /// the browser, use `request_device`.
     pub async fn open(device_info: nusb::DeviceInfo) -> Result<Self> {
         log::info!(
             "Opening CH341A device VID={:04X} PID={:04X}",
@@ -244,6 +100,7 @@ impl Ch341a {
             .map_err(|e| Ch341aError::ClaimFailed(e.to_string()))?;
 
         let mut ch341a = Self {
+            #[cfg(feature = "wasm")]
             _interface: interface,
             out_ep,
             in_ep,
@@ -252,6 +109,67 @@ impl Ch341a {
 
         ch341a.configure().await?;
         Ok(ch341a)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl crate::UsbProgrammer for Ch341a {
+    const NAME: &'static str = "CH341A";
+    type Config = ();
+    type Error = Ch341aError;
+
+    async fn candidates(_config: &()) -> Result<Vec<nusb::DeviceInfo>> {
+        crate::usb::list_devices(USB_SELECTORS)
+            .await
+            .map_err(|e| Ch341aError::OpenFailed(e.to_string()))
+    }
+
+    async fn open_device(device: nusb::DeviceInfo, _config: ()) -> Result<Self> {
+        Self::open(device).await
+    }
+}
+
+// Native-only best-effort cleanup; WASM uses explicit shutdown instead.
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Ch341a {
+    fn drop(&mut self) {
+        futures_lite::future::block_on(async {
+            // Drain any pending transfers before shutdown to avoid panics
+            self.drain_all_pending().await;
+
+            // Disable output pins on close
+            if let Err(e) = self.enable_pins(false).await {
+                log::warn!("Failed to disable pins on close: {}", e);
+            }
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WASM-only methods (WebUSB device picker, shutdown)
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+impl Ch341a {
+    /// Request a CH341A device via the WebUSB permission prompt
+    ///
+    /// This must be called from a user gesture (e.g., button click) in the browser.
+    /// It shows the browser's device picker filtered to CH341A devices.
+    pub async fn request_device() -> Result<nusb::DeviceInfo> {
+        log::info!("Requesting CH341A device via WebUSB picker...");
+
+        let device_info = nusb::request_device(USB_SELECTORS)
+            .await
+            .map_err(|e| Ch341aError::OpenFailed(format!("WebUSB request failed: {e}")))?
+            .ok_or(Ch341aError::DeviceNotFound)?;
+
+        log::info!(
+            "CH341A device selected: VID={:04X} PID={:04X}",
+            device_info.vendor_id(),
+            device_info.product_id()
+        );
+
+        Ok(device_info)
     }
 
     /// Shutdown: disable output pins (WASM equivalent of Drop)

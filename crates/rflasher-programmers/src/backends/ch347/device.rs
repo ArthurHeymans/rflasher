@@ -118,71 +118,36 @@ fn parse_spi_read_packet(packet: &[u8], remaining: usize) -> Result<&[u8]> {
     Ok(&packet[3..3 + data_len.min(remaining)])
 }
 
-// ---------------------------------------------------------------------------
-// Native-only methods (device enumeration, Drop)
-// ---------------------------------------------------------------------------
+/// USB devices this backend drives (CH347T and CH347F).
+const USB_SELECTORS: &[nusb::DeviceSelector] = &[
+    nusb::DeviceSelector::all().with_vid_pid(CH347_USB_VENDOR, CH347T_USB_PRODUCT),
+    nusb::DeviceSelector::all().with_vid_pid(CH347_USB_VENDOR, CH347F_USB_PRODUCT),
+];
 
-#[cfg(all(feature = "std", not(feature = "wasm")))]
 impl Ch347 {
-    /// Open a CH347 device with default configuration
+    /// Open a CH347 device
     ///
-    /// Searches for a CH347 device (VID:1a86 PID:55db or 55de) and opens it.
-    /// Returns an error if no device is found or if the device cannot be opened.
-    pub async fn open() -> Result<Self> {
-        Self::open_with_config(SpiConfig::default()).await
-    }
-
-    /// Open a CH347 device with custom configuration
-    pub async fn open_with_config(config: SpiConfig) -> Result<Self> {
-        Self::open_nth_with_config(0, config).await
-    }
-
-    /// Open the nth CH347 device (0-indexed) with default configuration
-    ///
-    /// Useful when multiple CH347 devices are connected.
-    pub async fn open_nth(index: usize) -> Result<Self> {
-        Self::open_nth_with_config(index, SpiConfig::default()).await
-    }
-
-    /// Open the nth CH347 device with custom configuration
-    pub async fn open_nth_with_config(index: usize, config: SpiConfig) -> Result<Self> {
-        let devices: Vec<_> = nusb::list_devices()
-            .await
-            .map_err(|e| Ch347Error::OpenFailed(e.to_string()))?
-            .filter(|d| {
-                d.vendor_id() == CH347_USB_VENDOR
-                    && (d.product_id() == CH347T_USB_PRODUCT
-                        || d.product_id() == CH347F_USB_PRODUCT)
-            })
-            .collect();
-
-        let device_info = devices.get(index).ok_or(Ch347Error::DeviceNotFound)?;
+    /// Natively, find devices with [`crate::UsbProgrammer::candidates`]; in
+    /// the browser, use `request_device`.
+    pub async fn open(device_info: nusb::DeviceInfo, config: SpiConfig) -> Result<Self> {
         let variant = Ch347Variant::from_product_id(device_info.product_id())
             .ok_or(Ch347Error::DeviceNotFound)?;
 
         log::info!(
-            "Opening CH347{} device at bus {} address {}",
+            "Opening CH347{} device VID={:04X} PID={:04X}",
             if variant == Ch347Variant::Ch347T {
                 "T"
             } else {
                 "F"
             },
-            device_info.bus_id(),
-            device_info.device_address()
+            device_info.vendor_id(),
+            device_info.product_id()
         );
 
         let device = device_info
             .open()
             .await
             .map_err(|e| Ch347Error::OpenFailed(e.to_string()))?;
-
-        // Get device descriptor for version info
-        let desc = device_info;
-        log::debug!(
-            "Device: VID={:04X} PID={:04X}",
-            desc.vendor_id(),
-            desc.product_id()
-        );
 
         // Find the vendor-specific interface for SPI
         // CH347T uses interface 2, CH347F uses interface 4
@@ -194,13 +159,11 @@ impl Ch347 {
 
         log::debug!("Using interface {}", iface_num);
 
-        // Claim interface
         let interface = device
             .claim_interface(iface_num)
             .await
             .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
 
-        // Open bulk endpoints
         let out_ep = interface
             .endpoint::<Bulk, Out>(WRITE_EP)
             .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
@@ -217,36 +180,30 @@ impl Ch347 {
             variant,
         };
 
-        // Configure the device for SPI mode
         ch347.configure().await?;
-
         Ok(ch347)
     }
+}
 
-    /// List all connected CH347 devices
-    pub async fn list_devices() -> Result<Vec<Ch347DeviceInfo>> {
-        let devices: Vec<_> = nusb::list_devices()
+#[cfg(not(target_arch = "wasm32"))]
+impl crate::UsbProgrammer for Ch347 {
+    const NAME: &'static str = "CH347";
+    type Config = SpiConfig;
+    type Error = Ch347Error;
+
+    async fn candidates(_config: &SpiConfig) -> Result<Vec<nusb::DeviceInfo>> {
+        crate::usb::list_devices(USB_SELECTORS)
             .await
-            .map_err(|e| Ch347Error::OpenFailed(e.to_string()))?
-            .filter(|d| {
-                d.vendor_id() == CH347_USB_VENDOR
-                    && (d.product_id() == CH347T_USB_PRODUCT
-                        || d.product_id() == CH347F_USB_PRODUCT)
-            })
-            .map(|d| {
-                let variant =
-                    Ch347Variant::from_product_id(d.product_id()).unwrap_or(Ch347Variant::Ch347T);
-                Ch347DeviceInfo {
-                    bus_id: d.bus_id().to_string(),
-                    address: d.device_address(),
-                    variant,
-                }
-            })
-            .collect();
-
-        Ok(devices)
+            .map_err(|e| Ch347Error::OpenFailed(e.to_string()))
     }
 
+    async fn open_device(device: nusb::DeviceInfo, config: SpiConfig) -> Result<Self> {
+        Self::open(device, config).await
+    }
+}
+
+#[cfg(all(feature = "std", not(feature = "wasm")))]
+impl Ch347 {
     /// Update SPI configuration
     ///
     /// This sends the new configuration to the device.
@@ -274,37 +231,8 @@ impl Ch347 {
     }
 }
 
-/// Information about a connected CH347 device
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-#[derive(Debug, Clone)]
-pub struct Ch347DeviceInfo {
-    /// USB bus identifier (platform-defined; integer string on Linux)
-    pub bus_id: String,
-    /// USB device address
-    pub address: u8,
-    /// Device variant
-    pub variant: Ch347Variant,
-}
-
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-impl std::fmt::Display for Ch347DeviceInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "CH347{} at bus {} address {}",
-            if self.variant == Ch347Variant::Ch347T {
-                "T"
-            } else {
-                "F"
-            },
-            self.bus_id,
-            self.address
-        )
-    }
-}
-
 // ---------------------------------------------------------------------------
-// WASM-only methods (WebUSB device picker, async open, shutdown)
+// WASM-only methods (WebUSB device picker, shutdown)
 // ---------------------------------------------------------------------------
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
@@ -313,15 +241,10 @@ impl Ch347 {
     ///
     /// This must be called from a user gesture (e.g., button click) in the browser.
     /// It shows the browser's device picker filtered to CH347 devices (both T and F variants).
-    #[cfg(target_arch = "wasm32")]
     pub async fn request_device() -> Result<nusb::DeviceInfo> {
         log::info!("Requesting CH347 device via WebUSB picker...");
 
-        let selectors = [
-            nusb::DeviceSelector::all().with_vid_pid(CH347_USB_VENDOR, CH347T_USB_PRODUCT),
-            nusb::DeviceSelector::all().with_vid_pid(CH347_USB_VENDOR, CH347F_USB_PRODUCT),
-        ];
-        let device_info = nusb::request_device(&selectors)
+        let device_info = nusb::request_device(USB_SELECTORS)
             .await
             .map_err(|e| Ch347Error::OpenFailed(format!("WebUSB request failed: {e}")))?
             .ok_or(Ch347Error::DeviceNotFound)?;
@@ -333,68 +256,6 @@ impl Ch347 {
         );
 
         Ok(device_info)
-    }
-
-    /// Open a CH347 device from a DeviceInfo with default configuration (WASM async path)
-    pub async fn open(device_info: nusb::DeviceInfo) -> Result<Self> {
-        Self::open_with_config(device_info, SpiConfig::default()).await
-    }
-
-    /// Open a CH347 device from a DeviceInfo with custom configuration (WASM async path)
-    pub async fn open_with_config(
-        device_info: nusb::DeviceInfo,
-        config: SpiConfig,
-    ) -> Result<Self> {
-        let variant =
-            Ch347Variant::from_product_id(device_info.product_id()).unwrap_or(Ch347Variant::Ch347T);
-
-        log::info!(
-            "Opening CH347{} device VID={:04X} PID={:04X}",
-            if variant == Ch347Variant::Ch347T {
-                "T"
-            } else {
-                "F"
-            },
-            device_info.vendor_id(),
-            device_info.product_id()
-        );
-
-        let device = device_info
-            .open()
-            .await
-            .map_err(|e| Ch347Error::OpenFailed(e.to_string()))?;
-
-        // Find the vendor-specific interface for SPI
-        let config_desc = device
-            .active_configuration()
-            .map_err(|e| Ch347Error::OpenFailed(format!("Failed to get config: {}", e)))?;
-
-        let iface_num = find_vendor_interface(&config_desc)?;
-
-        log::debug!("Using interface {}", iface_num);
-
-        let interface = device
-            .claim_interface(iface_num)
-            .await
-            .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
-
-        let out_ep = interface
-            .endpoint::<Bulk, Out>(WRITE_EP)
-            .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
-        let in_ep = interface
-            .endpoint::<Bulk, In>(READ_EP)
-            .map_err(|e| Ch347Error::ClaimFailed(e.to_string()))?;
-
-        let mut ch347 = Self {
-            _interface: interface,
-            out_ep,
-            in_ep,
-            config,
-            variant,
-        };
-
-        ch347.configure().await?;
-        Ok(ch347)
     }
 
     /// Shutdown: clean up (WASM equivalent of Drop)

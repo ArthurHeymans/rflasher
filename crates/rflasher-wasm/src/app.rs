@@ -231,7 +231,7 @@ async fn open_programmer(
             let config =
                 rflasher_programmers::ch347::parse_options(options).map_err(|e| e.to_string())?;
             let device_info = Ch347::request_device().await.map_err(|e| e.to_string())?;
-            let ch347 = Ch347::open_with_config(device_info, config)
+            let ch347 = Ch347::open(device_info, config)
                 .await
                 .map_err(|e| e.to_string())?;
             let display = match ch347.variant() {

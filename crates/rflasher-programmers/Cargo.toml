@@ -19,23 +19,25 @@ wasm = [
     "dep:gloo-timers",
 ]
 
+# Native USB device selection shared by the USB backends
+usb = ["std", "dep:nusb"]
+
 # Programmer backends
 dummy = ["alloc"]
-ch341a = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
-ch347 = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
-dediprog = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer", "dep:web-time"]
-ft4222 = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer"]
-raiden = ["std", "dep:nusb", "dep:futures-lite", "dep:futures-timer", "dep:zerocopy"]
-sunxi-fel = ["std", "dep:nusb"]
+ch341a = ["usb", "dep:futures-lite", "dep:futures-timer"]
+ch347 = ["usb", "dep:futures-lite", "dep:futures-timer"]
+dediprog = ["usb", "dep:futures-lite", "dep:futures-timer", "dep:web-time"]
+ft4222 = ["usb", "dep:futures-lite", "dep:futures-timer"]
+raiden = ["usb", "dep:futures-lite", "dep:futures-timer", "dep:zerocopy"]
+sunxi-fel = ["usb"]
 serprog = ["std", "dep:embedded-io", "dep:embedded-io-async", "dep:thiserror", "dep:futures-lite"]
 serprog-native = ["serprog", "dep:serialport"]
 
 # FTDI backends (pure-Rust ftdi-nusb MPSSE)
 ftdi = [
-    "std",
+    "usb",
     "dep:ftdi-nusb",
     "ftdi-nusb/smol",
-    "dep:nusb",
     "dep:futures-lite",
 ]
 ftdi-wasm = [

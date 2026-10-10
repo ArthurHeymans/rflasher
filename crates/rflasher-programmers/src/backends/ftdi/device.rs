@@ -55,94 +55,49 @@ fn map_interface(iface: FtdiInterface) -> ftdi_nusb::Interface {
 
 #[cfg(all(feature = "ftdi", not(target_arch = "wasm32")))]
 impl Ftdi {
-    /// Open an FTDI device with the given configuration
-    pub async fn open(config: &FtdiConfig) -> Result<Self> {
+    /// Open an FTDI device found with [`crate::UsbProgrammer::candidates`]
+    pub async fn open(device_info: nusb::DeviceInfo, config: &FtdiConfig) -> Result<Self> {
         log::info!(
             "Opening FTDI {} channel {} (ftdi-nusb backend)",
             config.device_type.name(),
             config.interface.letter()
         );
 
-        let interface = map_interface(config.interface);
-        let vid = config.device_type.vendor_id();
-        let pid = config.device_type.product_id();
-
-        let mut filter = ftdi_nusb::DeviceFilter::new(vid, pid);
-        if let Some(serial) = &config.serial {
-            filter = filter.serial(serial);
-        }
-        if let Some(description) = &config.description {
-            filter = filter.description(description);
-        }
-
-        log::debug!(
-            "Looking for FTDI device VID={:04X} PID={:04X} serial={:?} description={:?}",
-            vid,
-            pid,
-            config.serial,
-            config.description
-        );
-
-        let mut device = FtdiDevice::open_with_filter(&filter, interface)
+        let device = FtdiDevice::from_device_info(device_info, map_interface(config.interface))
             .await
             .map_err(|e| FtdiError::OpenFailed(format!("{}", e)))?;
+        Self::init(device, config).await
+    }
+}
 
-        log::debug!("Opened FTDI device VID={:04X} PID={:04X}", vid, pid);
+#[cfg(all(feature = "ftdi", not(target_arch = "wasm32")))]
+impl crate::UsbProgrammer for Ftdi {
+    const NAME: &'static str = "FTDI";
+    type Config = FtdiConfig;
+    type Error = FtdiError;
 
-        // Reset USB device
-        device
-            .usb_reset()
-            .await
-            .map_err(|e| FtdiError::ConfigFailed(format!("USB reset failed: {}", e)))?;
-
-        // Set latency timer (2ms for best performance)
-        device
-            .set_latency_timer(2)
-            .await
-            .map_err(|e| FtdiError::ConfigFailed(format!("Set latency timer failed: {}", e)))?;
-
-        let ftdi = Self::configure(device, config).await?;
-
-        log::info!(
-            "FTDI configured for SPI at {:.2} MHz (ftdi-nusb backend)",
-            config.spi_clock_mhz()
+    /// Applies the `type`, `serial` and `description` selectors.
+    async fn candidates(config: &FtdiConfig) -> Result<Vec<nusb::DeviceInfo>> {
+        let selector = nusb::DeviceSelector::all().with_vid_pid(
+            config.device_type.vendor_id(),
+            config.device_type.product_id(),
         );
-
-        Ok(ftdi)
-    }
-
-    /// Open the first available FTDI device
-    pub async fn open_first() -> Result<Self> {
-        Self::open(&FtdiConfig::default()).await
-    }
-
-    /// Open a specific device type
-    pub async fn open_device(device_type: FtdiDeviceType) -> Result<Self> {
-        Self::open(&FtdiConfig::for_device(device_type)).await
-    }
-
-    /// List available FTDI devices
-    pub async fn list_devices() -> Result<Vec<FtdiDeviceInfo>> {
-        let devices = nusb::list_devices()
+        let matches = |expected: &Option<String>, actual: Option<&str>| {
+            expected.as_deref().is_none_or(|e| actual == Some(e))
+        };
+        Ok(crate::usb::list_devices(&[selector])
             .await
             .map_err(|e| FtdiError::UsbError(e.to_string()))?
-            .filter_map(|dev| {
-                let vid = dev.vendor_id();
-                let pid = dev.product_id();
-
-                get_device_info(vid, pid).map(|info| FtdiDeviceInfo {
-                    bus_id: dev.bus_id().to_string(),
-                    address: dev.device_address(),
-                    vendor_id: vid,
-                    product_id: pid,
-                    vendor_name: info.vendor_name,
-                    device_name: info.device_name,
-                    serial: None,
-                })
+            .into_iter()
+            .filter(|info| {
+                matches(&config.serial, info.serial_number())
+                    && matches(&config.description, info.product_string())
             })
-            .collect();
+            .collect())
+    }
 
-        Ok(devices)
+    async fn open_device(device: nusb::DeviceInfo, config: FtdiConfig) -> Result<Self> {
+        Self::open(device, &config).await
     }
 }
 
@@ -183,32 +138,10 @@ impl Ftdi {
             config.interface.letter()
         );
 
-        let interface = map_interface(config.interface);
-
-        let mut device = FtdiDevice::open_wasm(device, interface)
+        let device = FtdiDevice::open_wasm(device, map_interface(config.interface))
             .await
             .map_err(|e| FtdiError::OpenFailed(format!("{}", e)))?;
-
-        // Reset USB device
-        device
-            .usb_reset()
-            .await
-            .map_err(|e| FtdiError::ConfigFailed(format!("USB reset failed: {}", e)))?;
-
-        // Set latency timer (2ms for best performance)
-        device
-            .set_latency_timer(2)
-            .await
-            .map_err(|e| FtdiError::ConfigFailed(format!("Set latency timer failed: {}", e)))?;
-
-        let ftdi = Self::configure(device, config).await?;
-
-        log::info!(
-            "FTDI configured for SPI at {:.2} MHz (ftdi-nusb WebUSB)",
-            config.spi_clock_mhz()
-        );
-
-        Ok(ftdi)
+        Self::init(device, config).await
     }
 
     /// Shutdown: release pins (WASM equivalent of Drop)
@@ -226,6 +159,29 @@ impl Ftdi {
 // ---------------------------------------------------------------------------
 
 impl Ftdi {
+    /// Reset a freshly opened device and configure it for SPI.
+    async fn init(mut device: FtdiDevice, config: &FtdiConfig) -> Result<Self> {
+        device
+            .usb_reset()
+            .await
+            .map_err(|e| FtdiError::ConfigFailed(format!("USB reset failed: {}", e)))?;
+
+        // Set latency timer (2ms for best performance)
+        device
+            .set_latency_timer(2)
+            .await
+            .map_err(|e| FtdiError::ConfigFailed(format!("Set latency timer failed: {}", e)))?;
+
+        let ftdi = Self::configure(device, config).await?;
+
+        log::info!(
+            "FTDI configured for SPI at {:.2} MHz",
+            config.spi_clock_mhz()
+        );
+
+        Ok(ftdi)
+    }
+
     async fn configure(mut device: FtdiDevice, config: &FtdiConfig) -> Result<Self> {
         let clock_hz = if config.device_type.is_high_speed() {
             60_000_000 / u32::from(config.divisor)
@@ -350,46 +306,6 @@ impl SpiMaster for Ftdi {
                 }
             }
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Device info (for list_devices, native only)
-// ---------------------------------------------------------------------------
-
-/// Information about a connected FTDI device
-#[cfg(all(feature = "ftdi", not(target_arch = "wasm32")))]
-#[derive(Debug, Clone)]
-pub struct FtdiDeviceInfo {
-    /// USB bus identifier (platform-defined; integer string on Linux)
-    pub bus_id: String,
-    /// USB device address
-    pub address: u8,
-    /// Vendor ID
-    pub vendor_id: u16,
-    /// Product ID
-    pub product_id: u16,
-    /// Vendor name
-    pub vendor_name: &'static str,
-    /// Device name
-    pub device_name: &'static str,
-    /// Serial number (if available)
-    pub serial: Option<String>,
-}
-
-#[cfg(all(feature = "ftdi", not(target_arch = "wasm32")))]
-impl std::fmt::Display for FtdiDeviceInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} {} at bus {} address {} ({:04X}:{:04X})",
-            self.vendor_name,
-            self.device_name,
-            self.bus_id,
-            self.address,
-            self.vendor_id,
-            self.product_id
-        )
     }
 }
 

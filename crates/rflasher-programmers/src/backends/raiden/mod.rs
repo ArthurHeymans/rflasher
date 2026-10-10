@@ -33,20 +33,17 @@
 //! # Example
 //!
 //! ```no_run
+//! use rflasher_programmers::UsbProgrammer;
 //! use rflasher_programmers::raiden::{RaidenDebugSpi, RaidenConfig, Target};
 //! use rflasher_core::programmer::SpiMaster;
 //! use rflasher_core::spi::{SpiCommand, opcodes};
 //!
 //! # futures_lite::future::block_on(async {
-//! // Open with default settings (first device, AP target)
-//! let mut raiden = RaidenDebugSpi::open().await?;
-//!
-//! // Or with specific configuration
 //! let config = RaidenConfig {
 //!     serial: Some("SERIALNUM".to_string()),
 //!     target: Target::Ec,
 //! };
-//! let mut raiden = RaidenDebugSpi::open_with_config(&config).await?;
+//! let mut raiden = RaidenDebugSpi::open_matching(config, None).await?;
 //!
 //! // Read JEDEC ID
 //! let mut id = [0u8; 3];
@@ -65,7 +62,7 @@ mod error;
 mod protocol;
 
 #[cfg(any(feature = "std", feature = "wasm"))]
-pub use device::{RaidenConfig, RaidenDebugSpi, RaidenDeviceInfo, parse_options};
+pub use device::{RaidenConfig, RaidenDebugSpi, parse_options};
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use error::{RaidenError, Result};
 #[cfg(any(feature = "std", feature = "wasm"))]
