@@ -15,11 +15,12 @@
 
 mod cli;
 mod commands;
+mod device_selection;
 
 use clap::Parser;
 use cli::{Cli, Commands, LayoutArgs, LayoutCommands, WpCommands};
 use rflasher_chips::ChipDatabase;
-use rflasher_programmers::{FlashHandle, OpenOptions, open_flash_with_options};
+use rflasher_programmers::{ChooseUsbDevice, FlashHandle, OpenOptions, open_flash_with_options};
 
 use rflasher_core::flash::FlashDevice;
 use rflasher_core::layout::Layout;
@@ -56,9 +57,12 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Loaded {} chip definitions", db.len());
 
     let programmer = cli.programmer;
+    let prompt: ChooseUsbDevice = &device_selection::prompt_usb_device;
+    let choose_usb_device = device_selection::can_prompt(cli.non_interactive).then_some(prompt);
     let open_options = OpenOptions {
         chip: cli.chip.as_deref(),
         force: cli.force,
+        choose_usb_device,
     };
     let mut backup = cli.recovery_backup.map(commands::unified::FileRecovery);
     let mut policy = rflasher_core::flash::MutationPolicy {
@@ -214,7 +218,12 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(feature = "repl")]
         Commands::Repl { script } => {
-            commands::repl::cmd_repl(require_programmer(&programmer)?, script.as_deref()).await
+            commands::repl::cmd_repl(
+                require_programmer(&programmer)?,
+                script.as_deref(),
+                choose_usb_device,
+            )
+            .await
         }
     }
 }

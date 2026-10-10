@@ -30,6 +30,10 @@ pub struct Cli {
     )]
     pub programmer: Option<String>,
 
+    /// Fail instead of prompting when multiple USB programmers are connected
+    #[arg(long, global = true)]
+    pub non_interactive: bool,
+
     /// Use the chip definition with this name
     ///
     /// Needed when several definitions share the probed JEDEC ID and differ in

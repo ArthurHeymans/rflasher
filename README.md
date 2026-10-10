@@ -67,6 +67,8 @@ rflasher list-programmers               # available programmers
 
 Short aliases exist (`r`/`w`/`v`, `E` for erase), the programmer can be set with the `RFLASHER_PROGRAMMER` environment variable, and `-v`/`-vv` increase log verbosity. `rflasher write -p ch341a firmware.bin --no-verify` skips verification.
 
+When several connected USB programmers match the `-p` specification, rflasher lists them (with USB bus/address and serial number) and asks which one to use. Selector options narrow the list, e.g. `-p dediprog:id=SF123456` or `-p ftdi:serial=FT123456`. With `--non-interactive`, or when stdin or stderr is not a terminal, several matches are an error instead.
+
 ### Programmers
 
 | Programmer | Parameters | Example |
