@@ -557,6 +557,47 @@ fn persistent_ewsr_and_combined_status_writes_follow_chip_metadata() {
 }
 
 #[test]
+fn either_chips_use_volatile_ewsr_for_temporary_unlock_and_restore() {
+    block_on(async {
+        // EITHER chip: persistent writes go through WREN, but the temporary
+        // unlock borrowed for one mutation must use volatile EWSR (0x50),
+        // never WREN (0x06), before each status write — for single- and
+        // two-byte status writes, and on mutation failure as well as success.
+        for (extended, fail) in [(false, false), (true, false), (false, true)] {
+            let mut features = Features::WRSR_WREN | Features::WRSR_EWSR;
+            if extended {
+                features |= Features::WRSR_EXT;
+            }
+            let (master, ctx) = fixture(Unlock::Bp2Srwd, 0x9c, features, 8192);
+            let state = master.0.clone();
+            state.lock().unwrap().fail_mutation = fail;
+            let mut device = SpiFlashDevice::new(master, ctx);
+            assert_eq!(
+                device.erase(0, 4096).await,
+                if fail {
+                    Err(Error::SpiTransferFailed)
+                } else {
+                    Ok(())
+                }
+            );
+            let s = state.lock().unwrap();
+            assert_eq!(s.sr1, 0x9c);
+            let status_writes: Vec<_> = s
+                .commands
+                .iter()
+                .enumerate()
+                .filter(|(_, (op, _))| *op == 0x01)
+                .collect();
+            assert!(!status_writes.is_empty());
+            for (i, (_, bytes)) in status_writes {
+                assert_eq!(s.commands[i - 1].0, 0x50);
+                assert_eq!(bytes.len(), if extended { 2 } else { 1 });
+            }
+        }
+    });
+}
+
+#[test]
 fn erase_and_bulk_program_error_flags_are_reported_and_protection_restored() {
     block_on(async {
         for (unlock, sr1, flag) in [(Unlock::At2x, 0x80, 0x20), (Unlock::Bp2EpSrwd, 0x9c, 0x60)] {

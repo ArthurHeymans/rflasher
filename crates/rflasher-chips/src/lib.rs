@@ -435,6 +435,8 @@ mod tests {
             ("GD25Q128", Unlock::Bp4Srwd),
             ("MX25L12805D", Unlock::Bp3Srwd),
             ("SST25VF016B", Unlock::Status),
+            ("SST25VF512A", Unlock::Status),
+            ("SST25VF010A", Unlock::Status),
             ("25F160S33B8", Unlock::Bp2EpSrwd),
             ("SST26VF016B(A)", Unlock::Sst26_6),
             ("SST26VF032B(A)", Unlock::Sst26_10),
@@ -455,6 +457,15 @@ mod tests {
         assert!(!atmel.features.contains(Features::WP_WINBOND));
         let sst = db.iter().find(|chip| chip.name == "SST26VF080A").unwrap();
         assert!(!sst.features.contains(Features::SST26_BPR));
+        // The REMS-probed SST25 A variants write SR via persistent EWSR only.
+        for name in ["SST25VF512A", "SST25VF010A"] {
+            let chip = db.iter().find(|chip| chip.name == name).unwrap();
+            assert!(
+                chip.features.contains(Features::WRSR_PERSISTENT_EWSR),
+                "{name}"
+            );
+            assert!(!chip.features.contains(Features::WRSR_WREN), "{name}");
+        }
     }
 
     #[test]

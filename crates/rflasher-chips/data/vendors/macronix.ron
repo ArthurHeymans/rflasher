@@ -164,6 +164,7 @@
             unlock: Some(Status),
             device_id: 0x2210,
             total_size: KiB(64),
+            page_size: 32,
             features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
