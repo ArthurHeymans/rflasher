@@ -7,6 +7,7 @@
     chips: [
         (
             name: "Pm25LD010(C)",
+            unlock: Some(Status),
             device_id: 0x0021,
             total_size: KiB(128),
             features: (wrsr_wren: true),
@@ -22,6 +23,7 @@
         ),
         (
             name: "Pm25LD020(C)",
+            unlock: Some(Status),
             device_id: 0x0022,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -37,6 +39,7 @@
         ),
         (
             name: "Pm25LD040(C)",
+            unlock: Some(Status),
             device_id: 0x007E,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -52,6 +55,7 @@
         ),
         (
             name: "Pm25LD256C",
+            unlock: Some(Status),
             device_id: 0x002F,
             total_size: KiB(32),
             features: (wrsr_wren: true),
@@ -66,6 +70,7 @@
         ),
         (
             name: "Pm25LD512(C)",
+            unlock: Some(Status),
             device_id: 0x0020,
             total_size: KiB(64),
             features: (wrsr_wren: true),
@@ -81,6 +86,7 @@
         ),
         (
             name: "Pm25LQ016",
+            unlock: Some(Bp3Srwd),
             device_id: 0x0045,
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
@@ -95,6 +101,7 @@
         ),
         (
             name: "Pm25LQ020",
+            unlock: Some(Bp3Srwd),
             device_id: 0x0042,
             total_size: KiB(256),
             features: (wrsr_wren: true, otp: true),
@@ -109,6 +116,7 @@
         ),
         (
             name: "Pm25LQ032C",
+            unlock: Some(Bp3Srwd),
             device_id: 0x0046,
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
@@ -124,6 +132,7 @@
         ),
         (
             name: "Pm25LQ040",
+            unlock: Some(Bp3Srwd),
             device_id: 0x0043,
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true),
@@ -138,6 +147,7 @@
         ),
         (
             name: "Pm25LQ080",
+            unlock: Some(Bp3Srwd),
             device_id: 0x0044,
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true),
@@ -180,6 +190,7 @@
         ),
         (
             name: "Pm25LV016B",
+            unlock: Some(Status),
             device_id: 0x0014,
             total_size: MiB(2),
             features: (wrsr_wren: true),
@@ -194,6 +205,7 @@
         ),
         (
             name: "Pm25LV020",
+            unlock: Some(Status),
             device_id: 0x007D,
             total_size: KiB(256),
             features: (wrsr_wren: true),
@@ -206,6 +218,7 @@
         ),
         (
             name: "Pm25LV040",
+            unlock: Some(Status),
             device_id: 0x007E,
             total_size: KiB(512),
             features: (wrsr_wren: true),
@@ -219,6 +232,7 @@
         ),
         (
             name: "Pm25LV080B",
+            unlock: Some(Status),
             device_id: 0x0013,
             total_size: MiB(1),
             features: (wrsr_wren: true),

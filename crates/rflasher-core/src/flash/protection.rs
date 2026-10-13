@@ -9,6 +9,19 @@ use crate::error::{EraseFailure, Error, Result};
 use crate::programmer::SpiMaster;
 use crate::protocol;
 use crate::spi::{AddressWidth, IoMode, SpiCommand};
+use crate::wp::{RegisterWriteEnable, StatusWriteMethods};
+
+/// Enable opcode for the temporary status writes in this module.
+///
+/// `prepare`/`restore` only borrow the protection state for one mutation,
+/// so a documented volatile procedure (EWSR on EITHER chips that also
+/// offer persistent WREN writes) is preferred: a power loss mid-operation
+/// then restores protection by itself. Chips without a volatile procedure
+/// fall back to their persistent one, which `restore` rewrites explicitly.
+fn temporary_write_enable(features: Features) -> Option<RegisterWriteEnable> {
+    let methods = StatusWriteMethods::from_features(features);
+    methods.volatile.or(methods.persistent)
+}
 
 // Keep the bounded sector snapshot inline: core also supports no-alloc targets.
 #[allow(clippy::large_enum_variant)]
@@ -36,13 +49,10 @@ async fn write_status<M: SpiMaster + ?Sized>(
     sr1: u8,
     sr2: Option<u8>,
 ) -> Result<()> {
-    let features = ctx.chip.features;
-    if features.intersects(Features::WRSR_WREN | Features::WRSR_VOLATILE_WREN) {
-        protocol::write_enable(master).await?;
-    } else if features.intersects(Features::WRSR_EWSR | Features::WRSR_PERSISTENT_EWSR) {
-        protocol::write_enable_ewsr(master).await?;
-    } else {
-        return Err(Error::ChipNotSupported);
+    match temporary_write_enable(ctx.chip.features) {
+        Some(RegisterWriteEnable::Wren) => protocol::write_enable(master).await?,
+        Some(RegisterWriteEnable::Ewsr) => protocol::write_enable_ewsr(master).await?,
+        None => return Err(Error::ChipNotSupported),
     }
     let data = [sr1 & !3, sr2.unwrap_or(0)];
     master
@@ -143,22 +153,10 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
         if sr1 & bp == 0 {
             return Ok(SavedProtection::Unchanged);
         }
-        if !ctx.chip.features.intersects(
-            Features::WRSR_WREN
-                | Features::WRSR_VOLATILE_WREN
-                | Features::WRSR_EWSR
-                | Features::WRSR_PERSISTENT_EWSR,
-        ) {
-            return Err(Error::ChipNotSupported);
-        }
-        let enable = if ctx
-            .chip
-            .features
-            .intersects(Features::WRSR_WREN | Features::WRSR_VOLATILE_WREN)
-        {
-            0x06
-        } else {
-            0x50
+        let enable = match temporary_write_enable(ctx.chip.features) {
+            Some(RegisterWriteEnable::Wren) => 0x06,
+            Some(RegisterWriteEnable::Ewsr) => 0x50,
+            None => return Err(Error::ChipNotSupported),
         };
         if master.max_write_len() == 0 || !master.probe_opcode(enable) || !master.probe_opcode(0x01)
         {

@@ -223,6 +223,7 @@
             unlock: Some(Bp2Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
+            page_size: 512,
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
@@ -291,6 +292,7 @@
             unlock: Some(Bp2Srwd),
             device_id: 0x2018,
             total_size: MiB(16),
+            page_size: 512,
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
