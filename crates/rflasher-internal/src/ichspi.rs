@@ -367,6 +367,9 @@ pub struct IchSpiController<H: HostAccess> {
     hwseq: HwseqData,
     /// Current opcodes (for software sequencing)
     opcodes: Option<Opcodes>,
+    /// WREN/EWSR sent on its own; the next command uses it as its atomic
+    /// prefix, like flashprog's `ich_spi_send_multicommand`.
+    pending_preop: Option<u8>,
     /// BBAR value
     bbar: u32,
 }
@@ -462,6 +465,7 @@ impl<H: HostAccess> IchSpiController<H> {
             ich7_swseq,
             hwseq,
             opcodes: None,
+            pending_preop: None,
             bbar: 0,
         };
 
@@ -1114,7 +1118,6 @@ impl<H: HostAccess> IchSpiController<H> {
     ///
     /// Returns the preop index (0 or 1) if found, None otherwise.
     /// This is used to detect if a command is a preop like WREN or EWSR.
-    #[allow(dead_code)]
     fn find_preop(&self, opcode: u8) -> Option<usize> {
         self.opcodes
             .as_ref()?
@@ -1169,6 +1172,17 @@ impl<H: HostAccess> IchSpiController<H> {
         }
 
         0 // No preop needed
+    }
+
+    /// Atomic mode for a write `opcode`. A preop the caller sent first
+    /// (`SpiMaster::execute`) selects its PREOP slot, so chips whose WRSR
+    /// needs EWSR (older SST25) get it; otherwise WREN as needed.
+    fn select_atomic(&self, opcode: u8, preop: Option<u8>) -> Result<u8, InternalError> {
+        match preop.map(|preop| (preop, self.find_preop(preop))) {
+            Some((_, Some(index))) => Ok(index as u8 + 1),
+            Some((JEDEC_EWSR, None)) => Err(InternalError::Io("EWSR not in the PREOP table")),
+            _ => Ok(self.get_atomic_for_opcode(opcode)),
+        }
     }
 
     /// Print HSFS register bits
@@ -2029,6 +2043,16 @@ impl<H: HostAccess> IchSpiController<H> {
         writearr: &[u8],
         readarr: &mut [u8],
     ) -> Result<(), InternalError> {
+        self.ich7_swseq_send_command_after(writearr, readarr, None)
+    }
+
+    /// [`Self::ich7_swseq_send_command`] after an explicit `preop`.
+    fn ich7_swseq_send_command_after(
+        &self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+        preop: Option<u8>,
+    ) -> Result<(), InternalError> {
         if writearr.is_empty() {
             return Err(InternalError::Io("Empty write array"));
         }
@@ -2107,7 +2131,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
         // Determine if we need atomic mode (preop + main op)
         let atomic = if is_write {
-            self.get_atomic_for_opcode(opcode)
+            self.select_atomic(opcode, preop)?
         } else {
             0
         };
@@ -2288,6 +2312,16 @@ impl<H: HostAccess> IchSpiController<H> {
         writearr: &[u8],
         readarr: &mut [u8],
     ) -> Result<(), InternalError> {
+        self.swseq_send_command_after(writearr, readarr, None)
+    }
+
+    /// [`Self::swseq_send_command`] after an explicit `preop`.
+    fn swseq_send_command_after(
+        &self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+        preop: Option<u8>,
+    ) -> Result<(), InternalError> {
         if writearr.is_empty() {
             return Err(InternalError::Io("Empty write array"));
         }
@@ -2367,7 +2401,7 @@ impl<H: HostAccess> IchSpiController<H> {
         // Determine if we need atomic mode (preop + main op)
         // Write operations typically need WREN first
         let atomic = if is_write {
-            self.get_atomic_for_opcode(opcode)
+            self.select_atomic(opcode, preop)?
         } else {
             0
         };
@@ -2625,17 +2659,14 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         }
 
         // WREN (0x06) and EWSR (0x50) are preops on Intel, not regular opcodes.
-        // They're handled automatically via atomic mode when a write/erase command
-        // is executed. The higher-level protocol sends these separately, so we
-        // silently succeed here - the actual WREN will be sent atomically with
-        // the next write/erase command.
-        if cmd.opcode == 0x06 || cmd.opcode == 0x50 {
-            log::trace!(
-                "Ignoring preop {:#04x} - will be sent atomically with next command",
-                cmd.opcode
-            );
+        // The higher-level protocol sends them separately; remember which one
+        // and send it atomically with the next command.
+        if cmd.opcode == JEDEC_WREN || cmd.opcode == JEDEC_EWSR {
+            log::trace!("Deferring preop {:#04x} to the next command", cmd.opcode);
+            self.pending_preop = Some(cmd.opcode);
             return Ok(());
         }
+        let preop = self.pending_preop.take();
 
         // Intel controller doesn't support dummy cycles in swseq
         if cmd.dummy_cycles > 0 {
@@ -2694,9 +2725,9 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
 
         // Execute the command - route to appropriate swseq implementation
         let result = if self.generation == IchChipset::Ich7 {
-            self.ich7_swseq_send_command(&writearr[..write_len], cmd.read_buf)
+            self.ich7_swseq_send_command_after(&writearr[..write_len], cmd.read_buf, preop)
         } else {
-            self.swseq_send_command(&writearr[..write_len], cmd.read_buf)
+            self.swseq_send_command_after(&writearr[..write_len], cmd.read_buf, preop)
         };
         result.map_err(InternalError::to_core_error)
     }
@@ -2707,8 +2738,8 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
             return false;
         }
 
-        // Check if the opcode is in the OPMENU table
-        self.has_opcode(opcode)
+        // OPMENU opcodes, or WREN/EWSR sent atomically from the PREOP table.
+        self.has_opcode(opcode) || self.find_preop(opcode).is_some()
     }
 }
 
@@ -2770,8 +2801,40 @@ mod tests {
                 size_comp1: 0,
             },
             opcodes: None,
+            pending_preop: None,
             bbar: 0,
         }
+    }
+
+    #[test]
+    fn swseq_writes_use_the_preop_sent_before_them() {
+        let mut controller = test_controller();
+        controller.mode = SpiMode::SoftwareSequencing;
+        controller.opcodes = Some(Opcodes::default());
+        assert!(controller.probe_opcode(JEDEC_WREN));
+        assert!(controller.probe_opcode(JEDEC_EWSR));
+        // SST25VF064C: EWSR + WRSR selects the EWSR slot, not WREN.
+        assert_eq!(
+            controller
+                .select_atomic(JEDEC_WRSR, Some(JEDEC_EWSR))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            controller
+                .select_atomic(JEDEC_WRSR, Some(JEDEC_WREN))
+                .unwrap(),
+            1
+        );
+        assert_eq!(controller.select_atomic(JEDEC_WRSR, None).unwrap(), 1);
+        // A locked table without EWSR must not silently fall back to WREN.
+        controller.opcodes.as_mut().unwrap().preop = [JEDEC_WREN, 0];
+        assert!(!controller.probe_opcode(JEDEC_EWSR));
+        assert!(
+            controller
+                .select_atomic(JEDEC_WRSR, Some(JEDEC_EWSR))
+                .is_err()
+        );
     }
 
     #[test]
