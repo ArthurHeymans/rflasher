@@ -119,4 +119,5 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
 futures-lite = "2"
+tempfile = "3"
 proptest = "1"

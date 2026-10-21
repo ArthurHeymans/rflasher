@@ -217,22 +217,9 @@ pub async fn open_spi_programmer(
             Ok(ErasedSpiMaster::new(open_sunxi_fel_master(&params, choose_usb_device).await?))
         }
 
-        #[cfg(feature = "ati-spi")]
+        #[cfg(all(feature = "ati-spi", target_os = "linux"))]
         "ati_spi" | "ati-spi" | "ati" | "amdgpu" => {
-            use crate::ati_spi::find_ati_gpu;
-            log::info!("Opening ATI/AMD GPU SPI programmer for REPL...");
-            crate::catalog::validate_no_options(&params.as_option_pairs())
-                .map_err(|e| format!("Invalid ATI SPI parameters: {e}"))?;
-            let master = find_ati_gpu()
-                .map_err(|e| format!("Failed to scan for ATI GPUs: {e}"))?
-                .ok_or("No supported ATI/AMD GPU found on PCI bus")?
-                .create_controller()
-                .map_err(|e| {
-                    format!(
-                        "Failed to initialize ATI SPI controller: {e}\nMake sure you have root privileges and the GPU driver isn't blocking MMIO access."
-                    )
-                })?;
-            Ok(ErasedSpiMaster::new(master))
+            Ok(ErasedSpiMaster::new(crate::ati_spi::open(&params.as_option_pairs())?))
         }
 
         // Internal and MTD are opaque-only or not SPI-based
@@ -361,7 +348,7 @@ pub async fn open_flash_with_options(
             open_sunxi_fel(&params, db, options.choose_usb_device).await
         }
 
-        #[cfg(feature = "ati-spi")]
+        #[cfg(all(feature = "ati-spi", target_os = "linux"))]
         "ati_spi" | "ati-spi" | "ati" | "amdgpu" => open_ati_spi(&params, db).await,
 
         _ => Err(format!("Unknown programmer: {}", params.name).into()),
@@ -1165,40 +1152,11 @@ mod serprog_open_tests {
     }
 }
 
-#[cfg(feature = "ati-spi")]
+#[cfg(all(feature = "ati-spi", target_os = "linux"))]
 async fn open_ati_spi(
     params: &ProgrammerParams,
     db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    use crate::ati_spi::find_ati_gpu;
-
-    log::info!("Opening ATI/AMD GPU SPI programmer...");
-
-    crate::catalog::validate_no_options(&params.as_option_pairs())
-        .map_err(|e| format!("Invalid ATI SPI parameters: {e}"))?;
-
-    let gpu = find_ati_gpu()
-        .map_err(|e| format!("Failed to scan for ATI GPUs: {e}"))?
-        .ok_or(
-            "No supported ATI/AMD GPU found on PCI bus.\n\
-             Supported: Radeon HD 2000 through RX 500 series (R600 → Polaris).",
-        )?;
-
-    log::info!(
-        "Using GPU: {} ({}) at {:02x}:{:02x}.{:x}",
-        gpu.name(),
-        gpu.family(),
-        gpu.address.bus(),
-        gpu.address.device(),
-        gpu.address.function()
-    );
-
-    let master = gpu.create_controller().map_err(|e| {
-        format!(
-            "Failed to initialize ATI SPI controller: {e}\n\
-             Make sure you have root privileges and the GPU driver isn't blocking MMIO access."
-        )
-    })?;
-
+    let master = crate::ati_spi::open(&params.as_option_pairs())?;
     probe_and_create_handle(master, db).await
 }

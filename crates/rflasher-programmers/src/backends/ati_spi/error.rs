@@ -8,6 +8,10 @@ pub enum AtiSpiError {
         name: &'static str,
     },
     Pci(rflasher_pci::PciError),
+    Options(String),
+    Selection(String),
+    Ownership(String),
+    UnsupportedCommand(&'static str),
     SpiInit(&'static str),
     Io(&'static str),
 }
@@ -30,6 +34,12 @@ impl fmt::Display for AtiSpiError {
                 "GPU {vendor_id:04x}:{device_id:04x} ({name}) is not supported"
             ),
             Self::Pci(error) => write!(f, "PCI access error: {error}"),
+            Self::Options(message) => write!(f, "invalid ATI SPI options: {message}"),
+            Self::Selection(message) => f.write_str(message),
+            Self::Ownership(message) => {
+                write!(f, "GPU is not available for exclusive access: {message}")
+            }
+            Self::UnsupportedCommand(message) => write!(f, "unsupported SPI command: {message}"),
             Self::SpiInit(message) => write!(f, "SPI controller init failed: {message}"),
             Self::Io(message) => write!(f, "I/O error: {message}"),
         }

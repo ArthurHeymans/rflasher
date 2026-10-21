@@ -3,7 +3,7 @@
 //! Maps GPU PCI device IDs to their SPI interface type.
 //! Ported from flashrom `ati_spi.c` (Luc Verhaegen, Jiajie Chen).
 
-/// Hardware test status for an ATI GPU entry.
+/// Historical flashrom hardware test status, not validation of this Rust port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestStatus {
     Ok,
@@ -21,7 +21,7 @@ pub enum AtiSpiType {
     Evergreen,
     /// Northern Island (HD 6xxx: Cayman, Barts, Turks, Caicos) — BAR2
     NorthernIsland,
-    /// Southern Island (HD 7xxx: Lombok, Verde, Pitcairn) — BAR2
+    /// Southern Island — BAR2; only Lombok has an implemented enable sequence
     SouthernIsland,
     /// Bonaire (GCN 1.1, first Sea Island) — BAR5, SMC indirect
     Bonaire,
@@ -82,7 +82,12 @@ pub const ATI_VID: u16 = 0x1002;
 pub fn find_ati_spi_device(vendor_id: u16, device_id: u16) -> Option<&'static AtiSpiDevice> {
     ATI_SPI_DEVICES
         .iter()
-        .find(|d| d.vendor_id == vendor_id && d.device_id == device_id)
+        .find(|d| {
+            d.vendor_id == vendor_id && d.device_id == device_id
+                // The inherited SouthernIsland enable is for Lombok only.
+                // Other SI IDs identify GPUs, not compatible SPI controllers.
+                && (d.spi_type != AtiSpiType::SouthernIsland || matches!(d.device_id, 0x6840..=0x6843))
+        })
 }
 
 // Macro to reduce boilerplate in the device table
@@ -102,9 +107,10 @@ macro_rules! ati_dev {
 use AtiSpiType::*;
 use TestStatus::{Ok as TOk, Untested as NT};
 
-/// Complete PCI device ID table for ATI/AMD GPU SPI flash access.
+/// PCI identification table covering R600 through Polaris (HD 2xxx → RX 5xx).
 ///
-/// Covers R600 through Polaris (HD 2xxx → RX 5xx).
+/// Includes pending Southern Islands entries for identification; the lookup
+/// excludes non-Lombok IDs until their flash enable sequence is implemented.
 pub static ATI_SPI_DEVICES: &[AtiSpiDevice] = &[
     // === Bonaire (GCN 1.1 / Sea Islands) ===
     ati_dev!(0x6640, Bonaire, NT, "Saturn XT [FirePro M6100]"),
@@ -894,3 +900,20 @@ pub static ATI_SPI_DEVICES: &[AtiSpiDevice] = &[
     ati_dev!(0x95CE, R600, NT, "RV620"),
     ati_dev!(0x95CF, R600, NT, "RV620 GL [FirePro 2260]"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_southern_islands_cannot_use_the_lombok_enable() {
+        for id in [0x6798, 0x6818, 0x683d, 0x6610, 0x6660] {
+            assert!(find_ati_spi_device(ATI_VID, id).is_none(), "{id:04x}");
+        }
+        assert_eq!(
+            find_ati_spi_device(ATI_VID, 0x6840).unwrap().spi_type,
+            AtiSpiType::SouthernIsland
+        );
+        assert!(find_ati_spi_device(0x8086, 0x6840).is_none());
+    }
+}

@@ -11,15 +11,17 @@
 //! - **R600** (HD 2xxx–4xxx): Direct MMIO via BAR2, ROM_SW_* registers
 //! - **Evergreen** (HD 5xxx): Same engine, different GPIO init
 //! - **Northern Island** (HD 6xxx): Same engine, extra GPIO setup
-//! - **Southern Island** (HD 7xxx): Same engine
+//! - **Southern Island**: Lombok only; other Southern Islands remain unsupported
 //! - **Sea Islands+** (GCN 1.1+: Bonaire, Hawaii, Iceland, Tonga, Fiji, Polaris):
 //!   BAR5, SMC indirect register access for ROM_SW_* registers
 
 use super::error::AtiSpiError;
 use super::ids::{AtiSpiType, find_ati_spi_device};
+use super::ownership::DeviceClaim;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{AddressWidth, SpiCommand, check_io_mode_supported};
+use rflasher_pci::PciConfigAccess;
 
 use core::marker::PhantomData;
 use tock_registers::fields::FieldValue;
@@ -65,6 +67,69 @@ register_structs! {
 
 const STATUS_LOOP_COUNT: usize = 1000;
 const SPI_TRANSFER_SIZE: usize = 0x100;
+// Reserve receive space for every dummy byte expressible by SpiCommand, so
+// callers can safely chunk reads using max_read_len() even for SFDP/RDUID.
+const MAX_DUMMY_BYTES: usize = (u8::MAX as usize).div_ceil(8);
+const MAX_READ_SIZE: usize = SPI_TRANSFER_SIZE - MAX_DUMMY_BYTES;
+
+#[derive(Debug)]
+struct PreparedCommand {
+    write: Vec<u8>,
+    receive_len: usize,
+    discard: usize,
+}
+
+fn prepare_command(cmd: &SpiCommand<'_>) -> CoreResult<PreparedCommand> {
+    check_io_mode_supported(cmd.io_mode, SpiFeatures::empty())?;
+    // The command register has room for an opcode and only three address bytes.
+    // In particular, a fourth address byte cannot be shifted out in read mode.
+    if cmd.address_width == AddressWidth::FourByte {
+        return Err(CoreError::OpcodeNotSupported);
+    }
+    match (cmd.address_width, cmd.address) {
+        (AddressWidth::None, None) => {}
+        (AddressWidth::ThreeByte, Some(address)) if address <= 0xff_ffff => {}
+        (AddressWidth::ThreeByte, Some(_)) => return Err(CoreError::AddressOutOfBounds),
+        _ => return Err(CoreError::SpiTransferFailed),
+    }
+    if !cmd.dummy_cycles.is_multiple_of(8)
+        || cmd.write_data.len() > SPI_TRANSFER_SIZE
+        || cmd.read_buf.len() > MAX_READ_SIZE
+        || (cmd.has_read() && cmd.has_write())
+    {
+        return Err(CoreError::SpiTransferFailed);
+    }
+
+    let dummy_bytes = cmd.dummy_cycles as usize / 8;
+    if cmd.has_read() {
+        // Dummy clocks are part of the receive phase, NOT transmit FIFO data.
+        // Read them along with the response and discard the leading bytes.
+        let mut header = [0; 4];
+        header[0] = cmd.opcode;
+        let address_bytes = cmd.address_width.bytes() as usize;
+        if let Some(address) = cmd.address {
+            cmd.address_width.encode(address, &mut header[1..]);
+        }
+        Ok(PreparedCommand {
+            write: header[..1 + address_bytes].to_vec(),
+            receive_len: dummy_bytes + cmd.read_buf.len(),
+            discard: dummy_bytes,
+        })
+    } else {
+        let len = cmd.header_len() + cmd.write_data.len();
+        if len > SPI_TRANSFER_SIZE + 4 {
+            return Err(CoreError::SpiTransferFailed);
+        }
+        let mut write = vec![0; len];
+        let header_len = cmd.encode_header(&mut write);
+        write[header_len..].copy_from_slice(cmd.write_data);
+        Ok(PreparedCommand {
+            write,
+            receive_len: 0,
+            discard: 0,
+        })
+    }
+}
 #[derive(Clone, Copy)]
 struct SmcRegister<R: RegisterLongName> {
     address: u32,
@@ -131,20 +196,25 @@ pub struct AtiSpiController {
     bar: rflasher_pci::MappedBar,
     spi_type: AtiSpiType,
     saved: Option<SavedState>,
+    // Declared last: hold the claim through register restore and BAR unmapping.
+    _claim: DeviceClaim,
 }
 
 impl AtiSpiController {
     /// Create and initialize a new ATI SPI controller.
     ///
     /// Maps the GPU MMIO BAR, saves the current register state, and enables
-    /// SPI access. Discover candidate GPUs first with
-    /// [`scan_for_ati_gpus`](super::scan_for_ati_gpus).
-    pub fn new(
-        vendor_id: u16,
-        device_id: u16,
-        address: rflasher_pci::PciAddress,
-        bar_index: u8,
-    ) -> Result<Self, AtiSpiError> {
+    /// SPI access. The device must be unbound with driver_override set to
+    /// "none"; a per-device advisory lock excludes other controller instances.
+    /// Identity and BAR selection are read from the actual PCI function, not
+    /// supplied by callers. See `docs/ati-spi.md` for preparation and recovery.
+    pub fn new(address: rflasher_pci::PciAddress) -> Result<Self, AtiSpiError> {
+        let pci = rflasher_pci::SysfsPci::system();
+        let claim = DeviceClaim::acquire(
+            &std::path::Path::new("/sys/bus/pci/devices").join(address.to_string()),
+        )?;
+        let vendor_id = pci.read16(address, 0)?;
+        let device_id = pci.read16(address, 2)?;
         let dev =
             find_ati_spi_device(vendor_id, device_id).ok_or(AtiSpiError::UnsupportedDevice {
                 vendor_id,
@@ -159,12 +229,18 @@ impl AtiSpiController {
             dev.spi_type.family_name()
         );
 
-        let bar = rflasher_pci::SysfsPci::system().map_bar(address, bar_index, 0x7000)?;
+        log::warn!(
+            "ATI SPI is experimental; historical flashrom test status ({:?}) does not validate this Rust port",
+            dev.status
+        );
+        let bar_index = (dev.spi_type.io_bar() - 0x10) / 4;
+        let bar = pci.map_bar(address, bar_index, 0x7000)?;
 
         let mut ctrl = Self {
             bar,
             spi_type: dev.spi_type,
             saved: None,
+            _claim: claim,
         };
 
         ctrl.save()?;
@@ -567,9 +643,17 @@ impl AtiSpiController {
     }
 
     /// Execute a raw SPI command, dispatching to the correct family.
-    pub fn send_command(&self, writearr: &[u8], readarr: &mut [u8]) -> Result<(), AtiSpiError> {
+    ///
+    /// Read prefixes may contain at most four bytes. Raw callers must include
+    /// dummy clocks in the receive length and discard those bytes themselves.
+    pub fn send_command(&mut self, writearr: &[u8], readarr: &mut [u8]) -> Result<(), AtiSpiError> {
         if writearr.is_empty() {
             return Err(AtiSpiError::Io("SPI command must have at least 1 byte"));
+        }
+        if !readarr.is_empty() && writearr.len() > 4 {
+            return Err(AtiSpiError::UnsupportedCommand(
+                "read command prefix exceeds the four-byte command register",
+            ));
         }
         if writearr.len().saturating_sub(4) > SPI_TRANSFER_SIZE {
             return Err(AtiSpiError::Io("SPI write exceeds the hardware FIFO"));
@@ -621,7 +705,7 @@ impl SpiMaster for AtiSpiController {
     }
 
     fn max_read_len(&self) -> usize {
-        self.max_transfer_size()
+        MAX_READ_SIZE
     }
 
     fn max_write_len(&self) -> usize {
@@ -629,57 +713,13 @@ impl SpiMaster for AtiSpiController {
     }
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        // Single-I/O only: reject anything the hardware cannot frame.
-        check_io_mode_supported(cmd.io_mode, self.features())?;
-
-        if cmd.write_data.len() > self.max_write_len() || cmd.read_buf.len() > self.max_read_len() {
-            return Err(CoreError::SpiTransferFailed);
-        }
-
-        // Build the write array: opcode + address + dummy + write data.
-        // Dummy clock cycles go out as 0xFF bytes after the address,
-        // matching `SpiCommand::encode_header` semantics.
-        let dummy_bytes = cmd.dummy_cycles.div_ceil(8) as usize;
-        let max = self.max_transfer_size() + 4 + dummy_bytes; // opcode + address + data + dummy
-        let mut writearr = vec![0u8; max];
-        let mut write_len = 1;
-
-        writearr[0] = cmd.opcode;
-
-        match cmd.address_width {
-            AddressWidth::None => {}
-            AddressWidth::ThreeByte => {
-                let addr = cmd.address.unwrap_or(0);
-                writearr[1] = (addr >> 16) as u8;
-                writearr[2] = (addr >> 8) as u8;
-                writearr[3] = addr as u8;
-                write_len += 3;
-            }
-            AddressWidth::FourByte => {
-                let addr = cmd.address.unwrap_or(0);
-                writearr[1] = (addr >> 24) as u8;
-                writearr[2] = (addr >> 16) as u8;
-                writearr[3] = (addr >> 8) as u8;
-                writearr[4] = addr as u8;
-                write_len += 4;
-            }
-        }
-
-        let write_data = cmd.write_data;
-        if write_data.len() > max - write_len {
-            return Err(CoreError::SpiTransferFailed);
-        }
-        if dummy_bytes > 0 {
-            writearr[write_len..write_len + dummy_bytes].fill(0xFF);
-            write_len += dummy_bytes;
-        }
-        if !write_data.is_empty() {
-            writearr[write_len..write_len + write_data.len()].copy_from_slice(write_data);
-            write_len += write_data.len();
-        }
-
-        self.send_command(&writearr[..write_len], cmd.read_buf)
-            .map_err(map_ati_error)
+        let prepared = prepare_command(cmd)?;
+        let mut receive = [0; SPI_TRANSFER_SIZE];
+        self.send_command(&prepared.write, &mut receive[..prepared.receive_len])
+            .map_err(map_ati_error)?;
+        cmd.read_buf
+            .copy_from_slice(&receive[prepared.discard..prepared.receive_len]);
+        Ok(())
     }
 
     fn probe_opcode(&self, _opcode: u8) -> bool {
@@ -693,6 +733,7 @@ impl SpiMaster for AtiSpiController {
 
 fn map_ati_error(e: AtiSpiError) -> CoreError {
     match e {
+        AtiSpiError::UnsupportedCommand(_) => CoreError::OpcodeNotSupported,
         AtiSpiError::Io(_) => CoreError::IoError,
         AtiSpiError::SpiInit(_) => CoreError::ProgrammerError,
         _ => CoreError::ProgrammerError,
@@ -702,6 +743,138 @@ fn map_ati_error(e: AtiSpiError) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_framing_keeps_dummy_clocks_in_the_receive_phase() {
+        let mut buf = [0; MAX_READ_SIZE];
+        let sfdp = SpiCommand::read_3b(0x5a, 0x123456, &mut buf).with_dummy_cycles(8);
+        let prepared = prepare_command(&sfdp).unwrap();
+        assert_eq!(prepared.write, [0x5a, 0x12, 0x34, 0x56]);
+        assert_eq!(prepared.discard, 1);
+        assert_eq!(prepared.receive_len, MAX_READ_SIZE + 1);
+
+        let uid = SpiCommand::read_reg(0x4b, &mut buf[..8]).with_dummy_cycles(32);
+        let prepared = prepare_command(&uid).unwrap();
+        assert_eq!(prepared.write, [0x4b]);
+        assert_eq!((prepared.discard, prepared.receive_len), (4, 12));
+        let long_dummy = SpiCommand::read_3b(0x0b, 0, &mut buf).with_dummy_cycles(248);
+        assert!(prepare_command(&long_dummy).unwrap().receive_len <= SPI_TRANSFER_SIZE);
+    }
+
+    #[test]
+    fn rejects_unrepresentable_frames_and_keeps_a_full_page_write() {
+        let mut buf = [0; SPI_TRANSFER_SIZE];
+        assert!(matches!(
+            prepare_command(&SpiCommand::read_4b(0x13, 0, &mut buf[..8])),
+            Err(CoreError::OpcodeNotSupported)
+        ));
+        assert!(matches!(
+            prepare_command(&SpiCommand::erase_4b(0xdc, 0)),
+            Err(CoreError::OpcodeNotSupported)
+        ));
+        assert!(matches!(
+            prepare_command(&SpiCommand::write_4b(0x12, 0, &[1])),
+            Err(CoreError::OpcodeNotSupported)
+        ));
+        assert!(prepare_command(&SpiCommand::read_3b(3, 0x1000000, &mut buf[..8])).is_err());
+        assert!(
+            prepare_command(&SpiCommand::read_reg(0x4b, &mut buf[..8]).with_dummy_cycles(7))
+                .is_err()
+        );
+        assert!(prepare_command(&SpiCommand::read_reg(0x9f, &mut buf)).is_err());
+        assert!(
+            prepare_command(
+                &SpiCommand::read_3b(0x3b, 0, &mut buf[..8])
+                    .with_io_mode(rflasher_core::spi::IoMode::DualOut)
+            )
+            .is_err()
+        );
+        let mut duplex = SpiCommand::read_reg(0x9f, &mut buf[..8]);
+        duplex.write_data = &[1];
+        assert!(prepare_command(&duplex).is_err());
+        let mut missing_address = SpiCommand::simple(3);
+        missing_address.address_width = AddressWidth::ThreeByte;
+        assert!(prepare_command(&missing_address).is_err());
+
+        let prepared = prepare_command(&SpiCommand::write_3b(2, 0x123456, &[0xa5; 256])).unwrap();
+        assert_eq!(&prepared.write[..4], &[2, 0x12, 0x34, 0x56]);
+        assert_eq!(prepared.write.len(), 260);
+        assert_eq!(prepared.receive_len, 0);
+    }
+
+    fn mock_controller(spi_type: AtiSpiType) -> (tempfile::TempDir, AtiSpiController) {
+        let dir = tempfile::tempdir().unwrap();
+        let address = rflasher_pci::PciAddress::new(0, 3, 0, 0);
+        let path = dir.path().join(address.to_string());
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("config"), []).unwrap();
+        std::fs::write(path.join("driver_override"), "none\n").unwrap();
+        let file = std::fs::File::create(path.join("resource2")).unwrap();
+        file.set_len(0x7000).unwrap();
+        let bar = rflasher_pci::SysfsPci::new(dir.path())
+            .map_bar(address, 2, 0x7000)
+            .unwrap();
+        let claim = DeviceClaim::acquire(&path).unwrap();
+        (
+            dir,
+            AtiSpiController {
+                bar,
+                spi_type,
+                saved: None,
+                _claim: claim,
+            },
+        )
+    }
+
+    #[test]
+    fn r600_read_discards_dummy_data_and_program_uses_entire_fifo() {
+        let (_dir, mut ctrl) = mock_controller(AtiSpiType::R600);
+        ctrl.r600().sw_status.set(1);
+        ctrl.r600().sw_data[0].set(u32::from_le_bytes([0xaa, b'S', b'F', b'D']));
+        ctrl.r600().sw_data[1].set(u32::from_le_bytes([b'P', 0, 0, 0]));
+        let mut buf = [0; 4];
+        futures_lite::future::block_on(
+            ctrl.execute(&mut SpiCommand::read_3b(0x5a, 0, &mut buf).with_dummy_cycles(8)),
+        )
+        .unwrap();
+        assert_eq!(&buf, b"SFDP");
+        assert_eq!(ctrl.r600().sw_command.get(), 0x5a);
+        assert_eq!(
+            ctrl.r600().sw_control.read(SoftwareControl::COMMAND_BYTES),
+            3
+        );
+        assert_eq!(ctrl.r600().sw_control.read(SoftwareControl::DATA_BYTES), 5);
+        assert!(ctrl.r600().sw_control.is_set(SoftwareControl::READ));
+
+        ctrl.r600().sw_status.set(1);
+        let page: Vec<u8> = (0..=255).collect();
+        futures_lite::future::block_on(ctrl.execute(&mut SpiCommand::write_3b(2, 0x123456, &page)))
+            .unwrap();
+        assert_eq!(ctrl.r600().sw_command.get(), 0x12345602);
+        assert_eq!(ctrl.r600().sw_data[0].get(), 0x00010203);
+        assert_eq!(ctrl.r600().sw_data[63].get(), 0xfcfdfeff);
+        assert_eq!(
+            ctrl.r600().sw_control.read(SoftwareControl::DATA_BYTES),
+            256
+        );
+        assert!(!ctrl.r600().sw_control.is_set(SoftwareControl::READ));
+    }
+
+    #[test]
+    fn invalid_raw_reads_fail_before_touching_either_register_interface() {
+        for spi_type in [AtiSpiType::R600, AtiSpiType::Bonaire] {
+            let (_dir, mut ctrl) = mock_controller(spi_type);
+            assert!(
+                ctrl.send_command(&[0x5a, 0, 0, 0, 0xff], &mut [0; 8])
+                    .is_err()
+            );
+            assert!(ctrl.send_command(&[3], &mut [0; 257]).is_err());
+            assert!(ctrl.send_command(&[], &mut []).is_err());
+            assert!(ctrl.send_command(&[0; 261], &mut []).is_err());
+            assert_eq!(ctrl.r600().sw_command.get(), 0);
+            assert_eq!(ctrl.ci().smc_index.get(), 0);
+        }
+    }
 
     /// GPIO pad mux bits must match the masks upstream ati_spi.c drives
     /// (0x700 for GPIO7-9, 0x80000 legacy bit); a shifted field would wedge

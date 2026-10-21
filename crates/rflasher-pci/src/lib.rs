@@ -270,8 +270,9 @@ mod linux {
         }
     }
 
+    // Moving an owned mapping between threads does not create concurrent access.
+    // It is deliberately not Sync: index/data register pairs need serialization.
     unsafe impl Send for MappedBar {}
-    unsafe impl Sync for MappedBar {}
 
     /// Linux sysfs PCI backend.
     #[derive(Clone, Debug)]

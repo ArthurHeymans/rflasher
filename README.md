@@ -81,6 +81,7 @@ When several connected USB programmers match the `-p` specification, rflasher li
 | `ft4222` | `spispeed=`, `cs=` | `rflasher probe -p ft4222:spispeed=20000,cs=0` |
 | `raiden` | — | `rflasher probe -p raiden` |
 | `internal` | — | `rflasher probe -p internal` |
+| [`ati_spi`](docs/ati-spi.md) | `pci=DDDD:BB:DD.F` | Experimental GPU VBIOS access; read the preparation instructions before probing |
 | `linux_spi` | `dev=`, `spispeed=` | `rflasher probe -p linux_spi:dev=/dev/spidev0.0,spispeed=4000` |
 | `linux_gpio_spi` | `gpiochip=`, `cs=`, `sck=`, `mosi=`, `miso=`, `spispeed=` | `rflasher probe -p linux_gpio_spi:gpiochip=0,cs=25,sck=11,mosi=10,miso=9` |
 | `linux_mtd` | `dev=` | `rflasher read -p linux_mtd:dev=0 backup.bin` |

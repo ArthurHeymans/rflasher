@@ -308,10 +308,10 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
     programmers.push(ProgrammerInfo {
         name: "ati_spi",
         aliases: &["ati-spi", "ati", "amdgpu"],
-        description: "ATI/AMD Radeon GPU VBIOS SPI flash (R600 through Polaris)",
+        description: "Experimental ATI/AMD GPU VBIOS SPI flash (R600 through Polaris)",
         transport: Transport::Internal,
-        options: &[],
-        validate: validate_no_options,
+        options: crate::ati_spi::schema::OPTIONS,
+        validate: crate::ati_spi::schema::validate_options,
     });
 
     #[cfg(feature = "internal")]
@@ -655,6 +655,9 @@ mod schema_tests {
                         values.extend(presets.iter().map(u32::to_string));
                         // Also exercise the documented k/m/g suffix contract.
                         values.push("1m".to_string());
+                    }
+                    OptionKind::Text if info.name == "ati_spi" && spec.key == "pci" => {
+                        values.push("0000:03:00.0".to_string());
                     }
                     _ => values.push(sample_value(&spec.kind)),
                 }

@@ -3247,6 +3247,7 @@ dependencies = [
  "rflasher-internal",
  "rflasher-pci",
  "serialport",
+ "tempfile",
  "thiserror 2.0.19",
  "tock-registers",
  "wasm-bindgen",
