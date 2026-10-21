@@ -181,7 +181,7 @@ const INTERNAL_OPTIONS: &[OptionSpec] = &[OptionSpec {
 // ============================================================================
 
 /// Accept no options at all (programmers without configurable behavior).
-fn validate_no_options(options: &[(&str, &str)]) -> Result<(), String> {
+pub(crate) fn validate_no_options(options: &[(&str, &str)]) -> Result<(), String> {
     match options.first() {
         None => Ok(()),
         Some((key, _)) => Err(format!("unknown option: {key}")),
@@ -302,6 +302,16 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         transport: Transport::LinuxDevice,
         options: crate::linux_gpio::schema::OPTIONS,
         validate: crate::linux_gpio::schema::validate_options,
+    });
+
+    #[cfg(all(feature = "ati-spi", target_os = "linux"))]
+    programmers.push(ProgrammerInfo {
+        name: "ati_spi",
+        aliases: &["ati-spi", "ati", "amdgpu"],
+        description: "Experimental ATI/AMD GPU VBIOS SPI flash (R600 through Polaris)",
+        transport: Transport::Internal,
+        options: crate::ati_spi::schema::OPTIONS,
+        validate: crate::ati_spi::schema::validate_options,
     });
 
     #[cfg(feature = "internal")]
@@ -645,6 +655,9 @@ mod schema_tests {
                         values.extend(presets.iter().map(u32::to_string));
                         // Also exercise the documented k/m/g suffix contract.
                         values.push("1m".to_string());
+                    }
+                    OptionKind::Text if info.name == "ati_spi" && spec.key == "pci" => {
+                        values.push("0000:03:00.0".to_string());
                     }
                     _ => values.push(sample_value(&spec.kind)),
                 }

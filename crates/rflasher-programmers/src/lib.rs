@@ -15,6 +15,9 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+#[cfg(all(feature = "ati-spi", target_os = "linux"))]
+#[path = "backends/ati_spi/mod.rs"]
+pub mod ati_spi;
 #[cfg(feature = "ch341a")]
 #[path = "backends/ch341a/mod.rs"]
 pub mod ch341a;

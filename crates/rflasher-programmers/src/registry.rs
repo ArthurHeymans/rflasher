@@ -217,6 +217,11 @@ pub async fn open_spi_programmer(
             Ok(ErasedSpiMaster::new(open_sunxi_fel_master(&params, choose_usb_device).await?))
         }
 
+        #[cfg(all(feature = "ati-spi", target_os = "linux"))]
+        "ati_spi" | "ati-spi" | "ati" | "amdgpu" => {
+            Ok(ErasedSpiMaster::new(crate::ati_spi::open(&params.as_option_pairs())?))
+        }
+
         // Internal and MTD are opaque-only or not SPI-based
         #[cfg(feature = "internal")]
         "internal" => {
@@ -342,6 +347,9 @@ pub async fn open_flash_with_options(
         "sunxi_fel" | "sunxi-fel" | "fel" => {
             open_sunxi_fel(&params, db, options.choose_usb_device).await
         }
+
+        #[cfg(all(feature = "ati-spi", target_os = "linux"))]
+        "ati_spi" | "ati-spi" | "ati" | "amdgpu" => open_ati_spi(&params, db).await,
 
         _ => Err(format!("Unknown programmer: {}", params.name).into()),
     }
@@ -1142,4 +1150,13 @@ mod serprog_open_tests {
         ));
         assert!(parse_serprog_config(&parse_programmer_params("serprog:bad=1").unwrap()).is_err());
     }
+}
+
+#[cfg(all(feature = "ati-spi", target_os = "linux"))]
+async fn open_ati_spi(
+    params: &ProgrammerParams,
+    db: &Probing<'_>,
+) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+    let master = crate::ati_spi::open(&params.as_option_pairs())?;
+    probe_and_create_handle(master, db).await
 }
