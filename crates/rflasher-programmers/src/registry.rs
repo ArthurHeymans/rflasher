@@ -1168,7 +1168,7 @@ mod serprog_open_tests {
 #[cfg(feature = "ati-spi")]
 async fn open_ati_spi(
     params: &ProgrammerParams,
-    db: &dyn ChipProvider,
+    db: &Probing<'_>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
     use crate::ati_spi::find_ati_gpu;
 
