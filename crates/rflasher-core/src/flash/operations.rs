@@ -1113,6 +1113,7 @@ where
     // Try SFDP probing
     log::debug!("Attempting SFDP probe...");
 
+    let mut sfdp_absent = false;
     let sfdp = match crate::sfdp::probe(master).await {
         Ok(info) => {
             log::info!(
@@ -1124,11 +1125,13 @@ where
         }
         Err(e) => {
             log::debug!("SFDP probe failed: {:?}", e);
+            // A transport failure does not prove that SFDP is absent.
+            sfdp_absent = e == Error::ChipNotSupported;
             None
         }
     };
 
-    let db_chip = select_probed_chip(
+    let selection = select_probed_chip(
         master,
         provider,
         jedec_manufacturer,
@@ -1136,7 +1139,54 @@ where
         sfdp.as_ref(),
         options.chip,
     )
-    .await?;
+    .await;
+    let mut db_chip = match selection {
+        Err(Error::ChipNotFound) if options.chip.is_some() && sfdp.is_none() && sfdp_absent => {
+            // A requested name may refer to a legacy identity, but never let
+            // it override an identifiable RDID chip.
+            match select_probed_chip(
+                master,
+                provider,
+                jedec_manufacturer,
+                jedec_device,
+                None,
+                None,
+            )
+            .await
+            {
+                Ok(None) => None,
+                _ => return Err(Error::ChipNotFound),
+            }
+        }
+        other => other?,
+    };
+    // AMIC's four-byte continuation ID may have been unresolvable (short
+    // controller read, inconsistent re-read, or transfer error). Do not turn
+    // that uncertainty into a legacy match.
+    if db_chip.is_none()
+        && sfdp.is_none()
+        && sfdp_absent
+        && !(jedec_manufacturer == 0x7f && jedec_device >> 8 == 0x37)
+    {
+        // RES2 is 0xAB followed by three zero bytes and two response bytes.
+        // Never interpret a failed transfer as an identity.
+        let mut id = [0; 2];
+        let mut cmd = crate::spi::SpiCommand::read_3b(crate::spi::opcodes::RES, 0, &mut id);
+        match master.execute(&mut cmd).await {
+            Ok(()) if id != [0, 0] && id != [0xff, 0xff] => {
+                let candidates: Vec<_> = (0..)
+                    .map_while(|i| provider.find_nth_by_res2_id(id[0], id[1], i))
+                    .collect();
+                if candidates.len() > 1 && options.chip.is_none() {
+                    return Err(Error::ChipAmbiguous);
+                }
+                db_chip =
+                    select_candidates(candidates, id[0], u16::from(id[1]), None, options.chip)?;
+            }
+            Ok(()) | Err(Error::OpcodeNotSupported) => {}
+            Err(e) => return Err(e),
+        }
+    }
     if db_chip.is_some() {
         log::debug!("Chip found in database");
     } else {
@@ -1959,7 +2009,7 @@ mod tests {
                 cmd.read_buf
                     .copy_from_slice(&response[..cmd.read_buf.len()]);
             } else {
-                assert_eq!(cmd.opcode, opcodes::RDSFDP);
+                assert!(matches!(cmd.opcode, opcodes::RDSFDP | opcodes::RES));
                 cmd.read_buf.fill(0xff);
             }
             Ok(())
