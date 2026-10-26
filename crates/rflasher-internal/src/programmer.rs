@@ -82,7 +82,7 @@ mod linux {
     }
 
     impl InternalProgrammer {
-        /// Detect the chipset, enable its SPI controller and BIOS writes.
+        /// Detect the chipset and enable its SPI controller.
         pub fn open(options: InternalOptions) -> Result<Self, InternalError> {
             match crate::detect_chipset()?.ok_or(InternalError::NoChipset)? {
                 AnyDetectedChipset::Intel(chipset) => Self::from_intel_chipset(&chipset, options),
@@ -95,10 +95,7 @@ mod linux {
             chipset: &DetectedChipset,
             options: InternalOptions,
         ) -> Result<Self, InternalError> {
-            let mut controller = IchSpiController::new(chipset, options.mode)?;
-            if let Err(e) = controller.enable_bios_write() {
-                log::warn!("Could not enable BIOS writes: {}", e);
-            }
+            let controller = IchSpiController::new(chipset, options.mode)?;
             if controller.spi_mode() == SpiMode::HardwareSequencing {
                 HwseqFlash::new(Box::new(controller)).map(Self::HardwareSequencing)
             } else {
@@ -131,7 +128,11 @@ mod linux {
     ///
     /// # Intel software-sequencing limitations
     ///
-    /// - Only opcodes in the OPMENU table can be executed
+    /// - Only classified opcodes in the OPMENU table can be executed;
+    ///   unknown opcodes, including ambiguous 0x35 (RDSR2 or QPI enter),
+    ///   are not advertised or executed
+    /// - Mutating commands enable BIOS writes first; opcode meanings must
+    ///   match the connected flash
     /// - Maximum 64 bytes per transfer
     /// - Only single I/O mode (no dual/quad)
     /// - No 4-byte addressing support (24-bit address max)
@@ -235,8 +236,6 @@ mod linux {
         fn check_writable(&self, addr: u32, len: usize) -> CoreResult<()> {
             if !self.is_valid_range(addr, len) {
                 Err(CoreError::AddressOutOfBounds)
-            } else if !self.controller.writes_enabled() {
-                Err(CoreError::WriteProtected)
             } else {
                 Ok(())
             }

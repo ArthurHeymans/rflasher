@@ -442,6 +442,12 @@ impl Default for Opcodes {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MutationIntent {
+    ReadOnly,
+    Mutating,
+}
+
 #[derive(Clone, Copy)]
 struct RegisterChange {
     offset: usize,
@@ -1430,7 +1436,7 @@ impl<H: HostAccess> IchSpiController<H> {
             | JEDEC_BE_D8       // 0xD8 - Block Erase 64KB
             | JEDEC_CE_C7       // 0xC7 - Chip Erase
             | JEDEC_CE_60       // 0x60 - Chip Erase (alternative)
-            | JEDEC_WRSR // 0x01 - Write Status Register
+            | JEDEC_WRSR | 0x31 | 0x11 // Write status registers
         );
 
         if needs_wren {
@@ -1505,6 +1511,38 @@ impl<H: HostAccess> IchSpiController<H> {
                 _ => "unknown",
             };
             log::debug!("op[{}]: {:#04x} ({})", i, op.opcode, type_str);
+        }
+    }
+
+    /// Enable writes lazily, before a flash mutation is issued.
+    fn mutation_gate(&mut self) -> Result<(), InternalError> {
+        if !self.bios_writes_enabled {
+            self.enable_bios_write()?;
+        }
+        Ok(())
+    }
+
+    /// Classify supported commands by their effect, not their transfer framing.
+    fn opcode_intent(opcode: u8) -> Option<MutationIntent> {
+        match opcode {
+            // RES can also release the device from deep power-down; it does not
+            // modify flash contents or protection. 0x4b reads a unique ID.
+            JEDEC_READ | JEDEC_FAST_READ | JEDEC_RDSR | 0x15 | JEDEC_REMS | JEDEC_RDID
+            | JEDEC_RES | 0x4b => Some(MutationIntent::ReadOnly),
+            // 0x35 is RDSR2 on some parts but enters QPI on Macronix parts.
+            // OPMENU transfer type does not identify the flash's interpretation.
+            JEDEC_BYTE_PROGRAM | JEDEC_SE | JEDEC_BE_52 | JEDEC_BE_D8 | JEDEC_CE_C7
+            | JEDEC_CE_60 | JEDEC_WRSR | 0x31 | 0x11 => Some(MutationIntent::Mutating),
+            _ => None,
+        }
+    }
+
+    fn gate_opcode(&mut self, opcode: u8, allow_unknown: bool) -> Result<(), InternalError> {
+        match Self::opcode_intent(opcode) {
+            Some(MutationIntent::ReadOnly) => Ok(()),
+            Some(MutationIntent::Mutating) => self.mutation_gate(),
+            None if allow_unknown => self.mutation_gate(),
+            None => Err(InternalError::NotSupported("Unclassified SPI opcode")),
         }
     }
 
@@ -1792,13 +1830,14 @@ impl<H: HostAccess> IchSpiController<H> {
     /// Write data using hardware sequencing
     ///
     /// This is the main write path - optimized for throughput.
-    pub fn hwseq_write(&self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+    pub fn hwseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
         let len = data.len();
         self.hwseq_check_range(addr, len)?;
         if len == 0 {
             return Ok(());
         }
 
+        self.mutation_gate()?;
         let mut offset = 0;
         let mut current_addr = addr as u64;
 
@@ -1878,7 +1917,7 @@ impl<H: HostAccess> IchSpiController<H> {
     ///
     /// `addr` and `len` must consist of whole hardware erase blocks. This is
     /// verified for the entire range before the first cycle is started.
-    pub fn hwseq_erase(&self, addr: u32, len: u32) -> Result<(), InternalError> {
+    pub fn hwseq_erase(&mut self, addr: u32, len: u32) -> Result<(), InternalError> {
         self.hwseq_check_range(addr, len as usize)?;
 
         let end_addr = addr as u64 + len as u64;
@@ -1896,6 +1935,10 @@ impl<H: HostAccess> IchSpiController<H> {
             current_addr += erase_size;
         }
 
+        if len == 0 {
+            return Ok(());
+        }
+        self.mutation_gate()?;
         // Clear FDONE, FCERR, AEL by writing 1s to them (do once at start)
         self.spibar
             .write16(ICH9_REG_HSFS, self.spibar.read16(ICH9_REG_HSFS));
@@ -2406,21 +2449,42 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Send a raw SPI command using ICH7 software sequencing
+    /// Send a raw SPI command using ICH7 software sequencing.
+    ///
+    /// Only classified opcodes in OPMENU are accepted. Mutating commands
+    /// enable BIOS writes first; unknown commands (including ambiguous 0x35)
+    /// are rejected. Opcode meanings must match the connected flash.
     pub fn ich7_swseq_send_command(
-        &self,
+        &mut self,
         writearr: &[u8],
         readarr: &mut [u8],
     ) -> Result<(), InternalError> {
-        self.ich7_swseq_send_command_after(writearr, readarr, None)
+        self.ich7_swseq_send_command_after(writearr, readarr, None, false)
+    }
+
+    /// Send a raw command, allowing unknown opcodes through the mutation gate.
+    ///
+    /// Known opcodes retain their normal classification; OPMENU and framing
+    /// checks still apply. This does not bypass BIOS write protection.
+    ///
+    /// # Safety
+    /// The caller must verify the command's meaning and effects on the connected
+    /// flash and platform, including for opcodes classified as read-only.
+    pub unsafe fn ich7_swseq_send_command_unchecked(
+        &mut self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+    ) -> Result<(), InternalError> {
+        self.ich7_swseq_send_command_after(writearr, readarr, None, true)
     }
 
     /// [`Self::ich7_swseq_send_command`] after an explicit `preop`.
     fn ich7_swseq_send_command_after(
-        &self,
+        &mut self,
         writearr: &[u8],
         readarr: &mut [u8],
         preop: Option<u8>,
+        allow_unknown: bool,
     ) -> Result<(), InternalError> {
         if writearr.is_empty() {
             return Err(InternalError::Io("Empty write array"));
@@ -2507,6 +2571,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
         // For read operations, we need to use the readarr
         // For write operations, we use the data from writearr
+        self.gate_opcode(opcode, allow_unknown)?;
         if is_write {
             let mut data_buf: [u8; 64] = [0; 64];
             let len = data_slice.len().min(64);
@@ -2519,7 +2584,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Read data using ICH7 software sequencing
-    pub fn ich7_swseq_read(&self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+    pub fn ich7_swseq_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
         // Check we have a read opcode available
         let read_opcode = if self.find_opcode_index(JEDEC_READ).is_some() {
             JEDEC_READ
@@ -2560,7 +2625,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Write data using ICH7 software sequencing
-    pub fn ich7_swseq_write(&self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+    pub fn ich7_swseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
         // Check we have a program opcode available
         if self.find_opcode_index(JEDEC_BYTE_PROGRAM).is_none() {
             return Err(InternalError::NotSupported("No program opcode available"));
@@ -2598,7 +2663,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Erase a block using ICH7 software sequencing
-    pub fn ich7_swseq_erase(&self, addr: u32, len: u32) -> Result<(), InternalError> {
+    pub fn ich7_swseq_erase(&mut self, addr: u32, len: u32) -> Result<(), InternalError> {
         // Find an erase opcode - prefer 4KB sector erase for granularity
         let (erase_opcode, erase_size) = if self.find_opcode_index(JEDEC_SE).is_some() {
             (JEDEC_SE, 4096u32)
@@ -2638,7 +2703,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Wait for Write-In-Progress (WIP) bit to clear using ICH7 swseq
-    fn ich7_swseq_wait_wip(&self) -> Result<(), InternalError> {
+    fn ich7_swseq_wait_wip(&mut self) -> Result<(), InternalError> {
         // Check we have RDSR opcode
         if self.find_opcode_index(JEDEC_RDSR).is_none() {
             // No RDSR available, just wait a fixed time
@@ -2676,20 +2741,40 @@ impl<H: HostAccess> IchSpiController<H> {
     ///
     /// The first byte of writearr is the opcode. For address-type commands,
     /// bytes 1-3 are the 24-bit address. Any remaining bytes are data to write.
+    /// Only classified opcodes in OPMENU are accepted. Mutating commands enable
+    /// BIOS writes first; unknown commands (including ambiguous 0x35) are
+    /// rejected. Opcode meanings must match the connected flash.
     pub fn swseq_send_command(
-        &self,
+        &mut self,
         writearr: &[u8],
         readarr: &mut [u8],
     ) -> Result<(), InternalError> {
-        self.swseq_send_command_after(writearr, readarr, None)
+        self.swseq_send_command_after(writearr, readarr, None, false)
+    }
+
+    /// Send a raw command, allowing unknown opcodes through the mutation gate.
+    ///
+    /// Known opcodes retain their normal classification; OPMENU and framing
+    /// checks still apply. This does not bypass BIOS write protection.
+    ///
+    /// # Safety
+    /// The caller must verify the command's meaning and effects on the connected
+    /// flash and platform, including for opcodes classified as read-only.
+    pub unsafe fn swseq_send_command_unchecked(
+        &mut self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+    ) -> Result<(), InternalError> {
+        self.swseq_send_command_after(writearr, readarr, None, true)
     }
 
     /// [`Self::swseq_send_command`] after an explicit `preop`.
     fn swseq_send_command_after(
-        &self,
+        &mut self,
         writearr: &[u8],
         readarr: &mut [u8],
         preop: Option<u8>,
+        allow_unknown: bool,
     ) -> Result<(), InternalError> {
         if writearr.is_empty() {
             return Err(InternalError::Io("Empty write array"));
@@ -2775,6 +2860,8 @@ impl<H: HostAccess> IchSpiController<H> {
             0
         };
 
+        self.gate_opcode(opcode, allow_unknown)?;
+
         // For read operations, we need to use the readarr
         // For write operations, we use the data from writearr
         if is_write {
@@ -2791,7 +2878,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Read data using software sequencing
-    pub fn swseq_read(&self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+    pub fn swseq_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
         // Check we have a read opcode available
         let read_opcode = if self.find_opcode_index(JEDEC_READ).is_some() {
             JEDEC_READ
@@ -2832,7 +2919,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Write data using software sequencing
-    pub fn swseq_write(&self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+    pub fn swseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
         // Check we have a program opcode available
         if self.find_opcode_index(JEDEC_BYTE_PROGRAM).is_none() {
             return Err(InternalError::NotSupported("No program opcode available"));
@@ -2870,7 +2957,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Erase a block using software sequencing
-    pub fn swseq_erase(&self, addr: u32, len: u32) -> Result<(), InternalError> {
+    pub fn swseq_erase(&mut self, addr: u32, len: u32) -> Result<(), InternalError> {
         // Find an erase opcode - prefer 4KB sector erase for granularity
         let (erase_opcode, erase_size) = if self.find_opcode_index(JEDEC_SE).is_some() {
             (JEDEC_SE, 4096u32)
@@ -2911,7 +2998,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Wait for Write-In-Progress (WIP) bit to clear
-    fn swseq_wait_wip(&self) -> Result<(), InternalError> {
+    fn swseq_wait_wip(&mut self) -> Result<(), InternalError> {
         // Check we have RDSR opcode
         if self.find_opcode_index(JEDEC_RDSR).is_none() {
             // No RDSR available, just wait a fixed time
@@ -3102,9 +3189,9 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
 
         // Execute the command - route to appropriate swseq implementation
         let result = if self.generation == IchChipset::Ich7 {
-            self.ich7_swseq_send_command_after(&writearr[..write_len], cmd.read_buf, preop)
+            self.ich7_swseq_send_command_after(&writearr[..write_len], cmd.read_buf, preop, false)
         } else {
-            self.swseq_send_command_after(&writearr[..write_len], cmd.read_buf, preop)
+            self.swseq_send_command_after(&writearr[..write_len], cmd.read_buf, preop, false)
         };
         result.map_err(InternalError::to_core_error)
     }
@@ -3116,7 +3203,8 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         }
 
         // OPMENU opcodes, or WREN/EWSR sent atomically from the PREOP table.
-        self.has_opcode(opcode) || self.find_preop(opcode).is_some()
+        (Self::opcode_intent(opcode).is_some() && self.has_opcode(opcode))
+            || ((opcode == JEDEC_WREN || opcode == JEDEC_EWSR) && self.find_preop(opcode).is_some())
     }
 }
 
@@ -3323,6 +3411,195 @@ mod tests {
     }
 
     #[test]
+    fn direct_paths_gate_mutations_and_restore() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.host.enable_write8_readback();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            c.opcodes = Some(Opcodes::default());
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            let host = c.host.clone();
+            // A refused command never enables writes, regardless of framing.
+            c.opcodes.as_mut().unwrap().opcode[0].opcode = 0xaa;
+            let send = |c: &mut IchSpiController<FakeHost>, cmd: &[u8], out: &mut [u8]| {
+                if ich7 {
+                    c.ich7_swseq_send_command(cmd, out)
+                } else {
+                    c.swseq_send_command(cmd, out)
+                }
+            };
+            assert!(send(&mut c, &[0xaa, 0, 0, 0], &mut []).is_err());
+            assert!(host.writes().is_empty());
+            let _ = send(&mut c, &[JEDEC_RDSR], &mut [0]);
+            assert!(host.writes().is_empty());
+            // SMM protection is checked before issuing even a read-framed mutation.
+            c.opcodes.as_mut().unwrap().opcode[0] = Opcode {
+                opcode: JEDEC_CE_C7,
+                spi_type: SPI_OPCODE_TYPE_READ_NO_ADDRESS,
+                atomic: 0,
+            };
+            host.set_config32(
+                c.config_bdf,
+                PCI_REG_BIOS_CNTL as u16,
+                u32::from(BIOS_CNTL_SMM_BWP),
+            );
+            assert!(matches!(
+                send(&mut c, &[JEDEC_CE_C7], &mut [0]),
+                Err(InternalError::AccessDenied { .. })
+            ));
+            assert!(host.writes().is_empty());
+            host.set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            // Cycle may fail in the fake, but enable must precede it and be restored.
+            let _ = send(&mut c, &[JEDEC_CE_C7], &mut [0]);
+            assert_eq!(host.writes().len(), 1);
+            drop(c);
+            assert_eq!(host.writes().len(), 2);
+            assert_eq!(host.writes()[1].2 & 1, 0);
+        }
+    }
+
+    #[test]
+    fn locked_menu_identification_reads_and_ambiguous_opcode() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.locked = true;
+            c.mode = SpiMode::SoftwareSequencing;
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            c.opcodes = Some(Opcodes::default());
+            let host = c.host.clone();
+            let send = |c: &mut IchSpiController<FakeHost>, cmd: &[u8], out: &mut [u8]| {
+                if ich7 {
+                    c.ich7_swseq_send_command(cmd, out)
+                } else {
+                    c.swseq_send_command(cmd, out)
+                }
+            };
+            for opcode in [JEDEC_RES, 0x4b] {
+                c.opcodes.as_mut().unwrap().opcode[0] = Opcode {
+                    opcode,
+                    spi_type: SPI_OPCODE_TYPE_READ_WITH_ADDRESS,
+                    atomic: 0,
+                };
+                c.spibar.set32(ICH7_REG_OPMENU, u32::from(opcode));
+                assert!(c.probe_opcode(opcode));
+                let writes_before = c.spibar.writes().len();
+                // The fake may report a cycle error; verify the cycle was issued.
+                let _ = send(&mut c, &[opcode, 0, 0, 0], &mut [0; 2]);
+                let control = if ich7 {
+                    ICH7_REG_SPIC
+                } else {
+                    PCH100_REG_SSFSC
+                };
+                assert!(
+                    c.spibar.writes()[writes_before..]
+                        .iter()
+                        .any(|w| w.0 == control)
+                );
+                assert!(host.writes().is_empty());
+            }
+            c.opcodes.as_mut().unwrap().opcode[0].opcode = 0x35;
+            assert!(!c.probe_opcode(0x35));
+            assert!(matches!(
+                send(&mut c, &[0x35, 0, 0, 0], &mut [0]),
+                Err(InternalError::NotSupported("Unclassified SPI opcode"))
+            ));
+            assert!(host.writes().is_empty());
+        }
+    }
+
+    #[test]
+    fn unsafe_unknown_command_is_always_treated_as_mutating() {
+        let mut c = test_controller();
+        c.host.enable_write8_readback();
+        c.host
+            .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        c.opcodes = Some(Opcodes::default());
+        c.opcodes.as_mut().unwrap().opcode[0] = Opcode {
+            opcode: 0xaa,
+            spi_type: SPI_OPCODE_TYPE_READ_NO_ADDRESS,
+            atomic: 0,
+        };
+        let host = c.host.clone();
+        assert!(!c.probe_opcode(0xaa));
+        // SAFETY: the fake controller has no physical flash.
+        let _ = unsafe { c.swseq_send_command_unchecked(&[0xaa], &mut [0]) };
+        assert_eq!(host.writes().len(), 1);
+        drop(c);
+        assert_eq!(host.writes().len(), 2);
+    }
+
+    #[test]
+    fn ambiguous_opcode_unchecked_still_obeys_write_protection() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.opcodes = Some(Opcodes::default());
+            c.opcodes.as_mut().unwrap().opcode[0] = Opcode {
+                opcode: 0x35,
+                spi_type: SPI_OPCODE_TYPE_READ_NO_ADDRESS,
+                atomic: 0,
+            };
+            c.host.set_config32(
+                c.config_bdf,
+                PCI_REG_BIOS_CNTL as u16,
+                u32::from(BIOS_CNTL_SMM_BWP),
+            );
+            // SAFETY: the fake controller has no physical flash.
+            let result = unsafe {
+                if ich7 {
+                    c.ich7_swseq_send_command_unchecked(&[0x35], &mut [0])
+                } else {
+                    c.swseq_send_command_unchecked(&[0x35], &mut [0])
+                }
+            };
+            assert!(matches!(result, Err(InternalError::AccessDenied { .. })));
+            assert!(c.host.writes().is_empty());
+            assert!(c.spibar.writes().is_empty());
+        }
+    }
+
+    #[test]
+    fn failed_lazy_enable_is_restored_and_status_write_is_gated() {
+        let mut c = test_controller();
+        c.opcodes = Some(Opcodes::default());
+        c.host
+            .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        let host = c.host.clone();
+        assert!(c.swseq_send_command(&[JEDEC_WRSR, 0], &mut []).is_err());
+        assert!(!c.writes_enabled());
+        assert_eq!(host.writes().len(), 1);
+        drop(c);
+        assert_eq!(host.writes().len(), 2);
+        assert_eq!(host.writes()[1].2 & 1, 0);
+    }
+
+    #[test]
+    fn read_probe_and_hwseq_mutations_are_lazy() {
+        let mut c = test_controller();
+        c.host.enable_write8_readback();
+        c.host
+            .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        let host = c.host.clone();
+        let shared: &IchSpiController<FakeHost> = &c;
+        shared.hwseq_read(0, &mut [0; 1]).unwrap();
+        assert!(!c.probe_opcode(JEDEC_READ));
+        assert!(host.writes().is_empty());
+        c.hwseq_write(0, &[0]).unwrap();
+        c.hwseq_erase(0, 4096).unwrap();
+        assert_eq!(host.writes().len(), 1);
+        drop(c);
+        assert_eq!(host.writes().len(), 2);
+    }
+
+    #[test]
     fn configuration_wait_polls_hardware_sequencer_without_status_writes() {
         let c = test_controller();
         c.spibar.set_hsfs_busy_reads(3);
@@ -3462,6 +3739,10 @@ mod tests {
     /// sequencer whose partitions report `low`/`high` BERASE encodings.
     fn ich9_controller(low: u16, high: u16, fpb: u32) -> IchSpiController<FakeHost> {
         let mut controller = test_controller();
+        controller.host.enable_write8_readback();
+        controller
+            .host
+            .set_config32(controller.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
         controller.generation = IchChipset::Ich9;
         controller.hwseq = HwseqData {
             addr_mask: ICH9_FADDR_FLA,
@@ -3482,13 +3763,19 @@ mod tests {
         use futures_lite::future::block_on;
         use rflasher_core::flash::FlashDevice;
 
-        let mut flash = HwseqFlash::with_size(Box::new(ich9_controller(3, 3, 0)), 1 << 20).unwrap();
+        let controller = ich9_controller(3, 3, 0);
+        controller.host.set_config32(
+            controller.config_bdf,
+            PCI_REG_BIOS_CNTL as u16,
+            u32::from(BIOS_CNTL_SMM_BWP),
+        );
+        let mut flash = HwseqFlash::with_size(Box::new(controller), 1 << 20).unwrap();
         assert_eq!(flash.erase_granularity(), 64 * 1024);
         assert_eq!(flash.erase_blocks()[0].total_size(), 1 << 20);
-        // BIOS writes are not enabled on the fake chipset.
+        // SMM write protection prevents the lazy enable.
         assert_eq!(
             block_on(flash.erase(0, 64 * 1024)),
-            Err(CoreError::WriteProtected)
+            Err(CoreError::RegionProtected)
         );
         assert_eq!(
             block_on(flash.read(1 << 20, &mut [0])),
@@ -3499,7 +3786,7 @@ mod tests {
     #[test]
     fn ich9_erase_follows_berase_instead_of_assuming_4k() {
         // BERASE = 3: every cycle erases 64 KiB.
-        let controller = ich9_controller(3, 3, 0);
+        let mut controller = ich9_controller(3, 3, 0);
         assert_eq!(
             controller.hwseq_erase_geometry(16 << 20).unwrap(),
             64 * 1024
@@ -3527,7 +3814,7 @@ mod tests {
 
     #[test]
     fn ich9_4k_erase_walks_every_block() {
-        let controller = ich9_controller(1, 1, 0);
+        let mut controller = ich9_controller(1, 1, 0);
         assert_eq!(controller.hwseq_erase_geometry(8 << 20).unwrap(), 4096);
         controller.hwseq_erase(0x2000, 0x3000).unwrap();
         assert_eq!(
@@ -3539,7 +3826,7 @@ mod tests {
     #[test]
     fn ich9_partitions_with_different_erase_sizes() {
         // FPB = 0x100 puts the boundary at 1 MiB: 4 KiB blocks below, 64 KiB above.
-        let controller = ich9_controller(1, 3, 0x100);
+        let mut controller = ich9_controller(1, 3, 0x100);
         assert_eq!(controller.hwseq_erase_geometry(8 << 20).unwrap(), 64 * 1024);
 
         // Each partition erases in its own block size ...
@@ -3563,7 +3850,7 @@ mod tests {
 
     #[test]
     fn hwseq_erase_rejects_partial_blocks_before_any_cycle() {
-        let controller = test_controller();
+        let mut controller = test_controller();
         // PCH100+: 4 KiB blocks. None of these is a sequence of whole blocks.
         for (addr, len) in [(1, 4096), (0, 4095), (4096, 100), (2048, 4096)] {
             assert!(
