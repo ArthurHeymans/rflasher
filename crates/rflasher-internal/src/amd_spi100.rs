@@ -32,6 +32,7 @@ use crate::error::InternalError;
 #[cfg(all(feature = "std", target_os = "linux"))]
 use crate::host::LinuxHost;
 use crate::host::{HostAccess, MmioAccess};
+use rflasher_core::chip::FlashChip;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{IoMode, SpiCommand, opcodes};
@@ -432,8 +433,24 @@ impl<H: HostAccess> Spi100Controller<H> {
     /// Read data from flash
     ///
     /// This uses memory-mapped access when available and falls back to
-    /// SPI commands for data outside the mapped range.
-    pub fn read(&self, chip_size: u64, start: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+    /// SPI commands for data outside the mapped range. Chips beyond 16 MiB
+    /// must support the native READ_4B command.
+    pub fn read(&self, chip: &FlashChip, start: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+        let chip_size = u64::from(chip.total_size);
+        if chip_size > 16 * 1024 * 1024 && !chip.features.supports_4ba_read() {
+            // Extended-address-register and mode-switch addressing don't work.
+            return Err(InternalError::NotSupported(
+                "AMD SPI100 needs native 4-byte reads for chips over 16 MiB",
+            ));
+        }
+        self.read_sized(chip_size, start, buf)
+    }
+
+    /// [`Self::read`] once the chip's addressing is known to work.
+    fn read_sized(&self, chip_size: u64, start: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+        if u64::from(start) + buf.len() as u64 > chip_size {
+            return Err(InternalError::Io("Flash read outside chip bounds"));
+        }
         let len = buf.len();
 
         // Don't consider memory mapping at all if 4BA chips are not mapped as expected
@@ -733,6 +750,10 @@ impl<H: HostAccess> Spi100Controller<H> {
         if cmd.io_mode != IoMode::Single {
             return Err(CoreError::IoModeNotSupported);
         }
+        // Dummy cycles are sent as FIFO bytes, so only whole bytes are exact.
+        if !cmd.dummy_cycles.is_multiple_of(8) {
+            return Err(CoreError::OpcodeNotSupported);
+        }
 
         let write_len = cmd.header_len().saturating_add(cmd.write_data.len());
         self.check_readwritecnt(write_len, cmd.read_buf.len())
@@ -775,13 +796,16 @@ impl<H: HostAccess> Controller for Spi100Controller<H> {
     }
 
     fn controller_read(&mut self, addr: u32, buf: &mut [u8], chip_size: usize) -> CoreResult<()> {
-        // AMD read needs chip_size parameter, use provided chip_size or default
-        let chip_size_u64 = if chip_size > 0 {
-            chip_size as u64
+        // Without the chip's features, only three-byte reads are known to work.
+        let chip_size = if chip_size > 0 {
+            chip_size
         } else {
             16 * 1024 * 1024 // Default to 16MB if not yet probed
         };
-        self.read(chip_size_u64, addr, buf)
+        if chip_size > 16 * 1024 * 1024 {
+            return Err(CoreError::ChipNotSupported);
+        }
+        self.read_sized(chip_size as u64, addr, buf)
             .map_err(InternalError::to_core_error)
     }
 
@@ -855,7 +879,12 @@ impl Spi100Controller {
         ))
     }
 
-    pub fn read(&self, _chip_size: u64, _start: u32, _buf: &mut [u8]) -> Result<(), InternalError> {
+    pub fn read(
+        &self,
+        _chip: &FlashChip,
+        _start: u32,
+        _buf: &mut [u8],
+    ) -> Result<(), InternalError> {
         Err(InternalError::NotSupported(
             "AMD SPI100 controller not available on this target",
         ))
