@@ -84,8 +84,8 @@ pub trait HostAccess: PciConfigAccess<Error = InternalError> {
 
 /// Default PCI configuration-space backend for the current target.
 ///
-/// On Linux userspace this uses sysfs config access and falls back to direct
-/// x86 PCI config I/O for hidden devices. On unsupported targets it returns
+/// On Linux userspace this uses only kernel-mediated sysfs config access.
+/// On unsupported targets it returns
 /// [`InternalError::NotSupported`] via the PCI stubs; embedded callers should
 /// provide their own [`PciConfigAccess`] implementation.
 #[derive(Debug, Default, Clone, Copy)]
@@ -128,13 +128,6 @@ impl PciConfigAccess for DefaultPciAccess {
         {
             rflasher_pci::SysfsPci::system()
                 .read32(address, offset)
-                .or_else(|error| {
-                    if address.segment() == 0 {
-                        rflasher_pci::read32_direct(address, offset)
-                    } else {
-                        Err(error)
-                    }
-                })
                 .map_err(Into::into)
         }
         #[cfg(not(all(feature = "std", target_os = "linux")))]
@@ -257,6 +250,7 @@ impl HostAccess for LinuxHost {
 pub(crate) mod tests {
     use super::*;
     use crate::error::PciAccessError;
+    use alloc::{vec, vec::Vec};
     use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
@@ -270,9 +264,17 @@ pub(crate) mod tests {
         writes: PciWrites,
         delays: Arc<Mutex<Vec<u32>>>,
         update_write8: bool,
+        deny_reads: bool,
+        deny_writes: bool,
     }
 
     impl FakeHost {
+        pub(crate) fn deny_reads(&mut self) {
+            self.deny_reads = true;
+        }
+        pub(crate) fn deny_writes(&mut self) {
+            self.deny_writes = true;
+        }
         pub(crate) fn enable_write8_readback(&mut self) {
             self.update_write8 = true;
         }
@@ -306,6 +308,11 @@ pub(crate) mod tests {
         }
 
         fn read32(&self, bdf: PciAddress, offset: u16) -> Result<u32> {
+            if self.deny_reads {
+                return Err(InternalError::AccessDenied {
+                    region: "PCI config",
+                });
+            }
             self.config
                 .lock()
                 .unwrap()
@@ -322,6 +329,11 @@ pub(crate) mod tests {
         }
 
         fn write8(&self, bdf: PciAddress, offset: u16, value: u8) -> Result<()> {
+            if self.deny_writes {
+                return Err(InternalError::AccessDenied {
+                    region: "PCI config",
+                });
+            }
             self.writes
                 .lock()
                 .unwrap()

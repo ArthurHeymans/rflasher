@@ -56,17 +56,74 @@ pub fn find_intel_chipset_in_iter<I>(devices: I) -> Result<Option<DetectedChipse
 where
     I: IntoIterator<Item = PciDevice>,
 {
-    let mut found = None;
+    let mut bridge: Option<DetectedChipset> = None;
+    let mut spi: Option<DetectedChipset> = None;
     for dev in devices {
         let Some(chipset) = detected_intel_from_device(&dev) else {
             continue;
         };
-        if found.is_some() {
-            return Err(InternalError::MultipleChipsets);
+        let slot = if crate::ichspi::is_visible_spi_id(chipset.enable.device_id) {
+            &mut spi
+        } else {
+            &mut bridge
+        };
+        if let Some(previous) = slot {
+            // Repeated enumeration of the same function is harmless, but two
+            // distinct bridges or SPI functions must not be collapsed.
+            if (
+                previous.domain,
+                previous.bus,
+                previous.device,
+                previous.function,
+                previous.enable.device_id,
+                previous.revision_id,
+            ) != (
+                chipset.domain,
+                chipset.bus,
+                chipset.device,
+                chipset.function,
+                chipset.enable.device_id,
+                chipset.revision_id,
+            ) {
+                return Err(InternalError::MultipleChipsets);
+            }
+        } else {
+            *slot = Some(chipset);
         }
-        found = Some(chipset);
     }
-
+    let found = match (bridge, spi) {
+        (Some(bridge), Some(spi)) => {
+            // The paired SPI function must be at the PCH's documented location,
+            // not merely another same-generation device on the same bus.
+            let expected = match bridge.chipset_type() {
+                crate::chipset::IchChipset::ApolloLake | crate::chipset::IchChipset::GeminiLake => {
+                    (0x0d, 2)
+                }
+                crate::chipset::IchChipset::Series100SunrisePoint
+                | crate::chipset::IchChipset::C620Lewisburg
+                | crate::chipset::IchChipset::Series300CannonPoint
+                | crate::chipset::IchChipset::Series500TigerPoint => (0x1f, 5),
+                _ => return Err(InternalError::MultipleChipsets),
+            };
+            if (spi.device, spi.function) != expected
+                || bridge.domain != spi.domain
+                || bridge.bus != spi.bus
+                || bridge.chipset_type() != spi.chipset_type()
+                || (bridge.device == spi.device && bridge.function == spi.function)
+            {
+                return Err(InternalError::MultipleChipsets);
+            }
+            if bridge.enable.status.is_bad() {
+                return Err(InternalError::UnsupportedChipset {
+                    vendor_id: bridge.enable.vendor_id,
+                    device_id: bridge.enable.device_id,
+                    name: bridge.enable.device_name,
+                });
+            }
+            Some(spi)
+        }
+        (bridge, spi) => bridge.or(spi),
+    };
     if let Some(chipset) = &found
         && chipset.enable.status.is_bad()
     {
@@ -287,6 +344,98 @@ mod tests {
             find_intel_chipset_in_devices(&devices),
             Err(InternalError::MultipleChipsets)
         ));
+    }
+
+    #[test]
+    fn prefers_visible_spi_to_bridge_in_either_order() {
+        for (bridge, spi) in [(0xa1c0, 0xa1a4), (0xa303, 0xa324), (0x4380, 0x43a4)] {
+            let bridge = pci_device(INTEL_VID, bridge, 0);
+            let mut spi = pci_device(INTEL_VID, spi, 0);
+            spi.address = PciAddress::new(0, 0, 0x1f, 5);
+            for devices in [[bridge, spi], [spi, bridge]] {
+                let found = find_intel_chipset_in_devices(&devices).unwrap().unwrap();
+                assert_eq!(found.enable.device_id, spi.device_id);
+                assert_eq!(found.function, 5);
+            }
+        }
+    }
+
+    #[test]
+    fn cannon_point_bridge_spi_and_smbus_in_all_orders() {
+        let bridge = pci_device(INTEL_VID, 0xa303, 0);
+        let mut spi = pci_device(INTEL_VID, 0xa324, 0);
+        spi.address = PciAddress::new(0, 0, 0x1f, 5);
+        let mut smbus = pci_device(INTEL_VID, 0xa323, 0);
+        smbus.address = PciAddress::new(0, 0, 0x1f, 4);
+        assert!(find_chipset(INTEL_VID, 0xa323, None).is_none());
+        for devices in [
+            [bridge, spi, smbus],
+            [bridge, smbus, spi],
+            [spi, bridge, smbus],
+            [spi, smbus, bridge],
+            [smbus, bridge, spi],
+            [smbus, spi, bridge],
+            [bridge, bridge, spi],
+            [bridge, spi, bridge],
+            [spi, bridge, bridge],
+            [spi, spi, bridge],
+            [spi, bridge, spi],
+            [bridge, spi, spi],
+        ] {
+            let found = find_intel_chipset_in_devices(&devices).unwrap().unwrap();
+            assert_eq!(found.enable.device_id, 0xa324);
+            assert_eq!(found.enable.status, crate::chipset::TestStatus::Untested);
+        }
+        for address in [
+            PciAddress::new(1, 0, 0x1f, 5),
+            PciAddress::new(0, 1, 0x1f, 5),
+        ] {
+            let mut other_spi = spi;
+            other_spi.address = address;
+            for devices in [[bridge, other_spi], [other_spi, bridge]] {
+                assert!(matches!(
+                    find_intel_chipset_in_devices(&devices),
+                    Err(InternalError::MultipleChipsets)
+                ));
+            }
+        }
+        let mut other_generation = pci_device(INTEL_VID, 0x43a4, 0);
+        other_generation.address = spi.address;
+        assert!(matches!(
+            find_intel_chipset_in_devices(&[bridge, other_generation]),
+            Err(InternalError::MultipleChipsets)
+        ));
+        let mut other = bridge;
+        other.address = PciAddress::new(0, 1, 0x1f, 0);
+        for devices in [
+            [bridge, spi, other],
+            [bridge, other, spi],
+            [spi, bridge, other],
+            [spi, other, bridge],
+            [other, bridge, spi],
+            [other, spi, bridge],
+        ] {
+            assert!(matches!(
+                find_intel_chipset_in_devices(&devices),
+                Err(InternalError::MultipleChipsets)
+            ));
+        }
+        let mut other_spi = spi;
+        other_spi.address = PciAddress::new(0, 0, 0x1e, 5);
+        assert!(matches!(
+            find_intel_chipset_in_devices(&[bridge, other_spi]),
+            Err(InternalError::MultipleChipsets)
+        ));
+        for devices in [
+            [bridge, spi, other_spi],
+            [spi, other_spi, bridge],
+            [other_spi, bridge, spi],
+        ] {
+            assert!(matches!(
+                find_intel_chipset_in_devices(&devices),
+                Err(InternalError::MultipleChipsets)
+            ));
+        }
     }
 
     #[test]

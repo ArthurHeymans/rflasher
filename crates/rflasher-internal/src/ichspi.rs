@@ -154,11 +154,70 @@ fn uses_silvermont_sbase(chipset: &DetectedChipset) -> bool {
         && matches!(chipset.enable.device_id, 0x0f1c..=0x0f1f | 0x1f38..=0x1f3b | 0x229c)
 }
 
+pub(crate) fn is_visible_spi_id(id: u16) -> bool {
+    matches!(
+        id,
+        0x9d24
+            | 0xa2a4
+            | 0xa1a4
+            | 0x9da4
+            | 0xa324
+            | 0x02a4
+            | 0x06a4
+            | 0x34a4
+            | 0x4da4
+            | 0xa3a4
+            | 0xa0a4
+            | 0x43a4
+            | 0x51a4
+            | 0x54a4
+            | 0x7a24
+            | 0x7aa4
+            | 0x4b24
+            | 0x5a96
+            | 0x3196
+            | 0x7e23
+            | 0xa823
+            | 0xae23
+    )
+}
+
+/// PCI location of the BIOS control register and, on PCH100+, SPI BAR.
+/// IDs and bridge mappings follow flashprog's chipset_enable.c. Do not infer
+/// a location for other generations or IDs: an unrelated function may exist.
+pub(crate) fn intel_config_bdf(chipset: &DetectedChipset) -> Result<PciAddress, InternalError> {
+    let actual = PciAddress::new(
+        chipset.domain,
+        chipset.bus,
+        chipset.device,
+        chipset.function,
+    );
+    let id = chipset.enable.device_id;
+    if is_visible_spi_id(id) && chipset.chipset_type().is_pch100_compatible() {
+        return Ok(actual);
+    }
+    let location = match (chipset.chipset_type(), id) {
+        (IchChipset::Series100SunrisePoint, _)
+        | (IchChipset::C620Lewisburg, 0xa1c0..=0xa1c7)
+        | (IchChipset::Series300CannonPoint, 0xa3c8 | 0xa3da) => (0x1f, 5),
+        (IchChipset::ApolloLake, 0x5ae8) | (IchChipset::GeminiLake, 0x31e8 | 0x3197) => (0x0d, 2),
+        (generation, _) if !generation.is_pch100_compatible() => return Ok(actual),
+        _ => {
+            return Err(InternalError::NotSupported(
+                "No validated SPI PCI device mapping for this chipset",
+            ));
+        }
+    };
+    Ok(PciAddress::new(
+        chipset.domain,
+        chipset.bus,
+        location.0,
+        location.1,
+    ))
+}
+
 /// Gets the SPI BAR physical address using host-provided PCI config access.
-///
-/// This helper is independent from Linux sysfs and can be exercised by
-/// embedded firmware or fake hosts. It covers both PCH100+ hidden SPI function
-/// BAR discovery and legacy RCBA-relative SPI BAR discovery.
+/// Linux uses sysfs only; inaccessible or hidden SPI devices are refused.
 pub fn get_spibar_address_with_host<H: PciConfigAccess<Error = InternalError>>(
     host: &H,
     chipset: &DetectedChipset,
@@ -166,9 +225,40 @@ pub fn get_spibar_address_with_host<H: PciConfigAccess<Error = InternalError>>(
     let generation = chipset.chipset_type();
 
     if generation.is_pch100_compatible() {
-        const SPI_FUNCTION: u8 = 5;
-        let spi_bdf = PciAddress::new(chipset.domain, chipset.bus, chipset.device, SPI_FUNCTION);
-        let spibar_raw = host.read32(spi_bdf, PCI_REG_SPIBAR as u16)?;
+        let spi_bdf = intel_config_bdf(chipset)?;
+        let read_config = |offset| {
+            host.read32(spi_bdf, offset).map_err(|e| {
+            log::warn!("Cannot read SPI PCI configuration at {spi_bdf:?}: {e}");
+            InternalError::ChipsetEnable("SPI PCI config unavailable or access denied; hidden SPI devices cannot be accessed safely via sysfs")
+        })
+        };
+        let identity = read_config(0)?;
+        let device = (identity >> 16) as u16;
+        let valid = if is_visible_spi_id(chipset.enable.device_id) {
+            device == chipset.enable.device_id
+        } else {
+            match generation {
+                IchChipset::Series100SunrisePoint => matches!(device, 0x9d24 | 0xa2a4),
+                IchChipset::C620Lewisburg => matches!(device, 0xa1a4 | 0xa224),
+                IchChipset::Series300CannonPoint => device == 0xa3a4,
+                IchChipset::ApolloLake => device == 0x5a96,
+                IchChipset::GeminiLake => device == 0x3196,
+                _ => false,
+            }
+        };
+        if identity as u16 != 0x8086 || !valid {
+            return Err(InternalError::ChipsetEnable(
+                "PCI function is not a validated Intel SPI controller",
+            ));
+        }
+        let spibar_raw = read_config(PCI_REG_SPIBAR as u16)?;
+        // SPI BAR is a 32-bit memory BAR; never treat I/O or other BAR
+        // encodings as a physical MMIO address.
+        if spibar_raw & 0x7 != 0 {
+            return Err(InternalError::ChipsetEnable(
+                "SPI BAR is not a 32-bit memory BAR",
+            ));
+        }
         let addr = spibar_raw & 0xffff_f000;
 
         if addr == 0 || addr == 0xffff_f000 {
@@ -370,11 +460,8 @@ pub struct IchSpiController<H: HostAccess> {
     spibar: H::MmioRegion,
     /// Chipset generation
     generation: IchChipset,
-    /// PCI location of LPC/eSPI bridge
-    lpc_segment: u16,
-    lpc_bus: u8,
-    lpc_device: u8,
-    lpc_function: u8,
+    /// PCI location of BIOS_CNTL (SPI function on PCH100+).
+    config_bdf: PciAddress,
     /// Whether configuration is locked (HSFS.FLOCKDN)
     locked: bool,
     /// BIOS_CNTL.BWE was observed or successfully verified during enable.
@@ -413,12 +500,7 @@ pub struct IchSpiController<H: HostAccess> {
 impl<H: HostAccess> Drop for IchSpiController<H> {
     fn drop(&mut self) {
         if self.restore_pci_bwe {
-            let bdf = PciAddress::new(
-                self.lpc_segment,
-                self.lpc_bus,
-                self.lpc_device,
-                self.lpc_function,
-            );
+            let bdf = self.config_bdf;
             match self.host.read8(bdf, PCI_REG_BIOS_CNTL as u16) {
                 Ok(value) => {
                     if let Err(e) =
@@ -459,6 +541,7 @@ impl<H: HostAccess> IchSpiController<H> {
         let generation = chipset.chipset_type();
 
         // Get SPI BAR address
+        let config_bdf = intel_config_bdf(chipset)?;
         let spibar_addr = get_spibar_address_with_host(&host, chipset)?;
         log::debug!("SPI BAR at physical address: {:#x}", spibar_addr);
 
@@ -517,10 +600,7 @@ impl<H: HostAccess> IchSpiController<H> {
             host,
             spibar,
             generation,
-            lpc_segment: chipset.domain,
-            lpc_bus: chipset.bus,
-            lpc_device: chipset.device,
-            lpc_function: chipset.function,
+            config_bdf,
             locked: false,
             bios_writes_enabled: false,
             silvermont_bcr: uses_silvermont_sbase(chipset),
@@ -1451,12 +1531,7 @@ impl<H: HostAccess> IchSpiController<H> {
             self.bios_writes_enabled = true;
             return Ok(());
         }
-        let lpc_bdf = PciAddress::new(
-            self.lpc_segment,
-            self.lpc_bus,
-            self.lpc_device,
-            self.lpc_function,
-        );
+        let lpc_bdf = self.config_bdf;
         let bios_cntl = self.host.read8(lpc_bdf, PCI_REG_BIOS_CNTL as u16)?;
 
         log::debug!("BIOS_CNTL: {:#04x}", bios_cntl);
@@ -3060,16 +3135,14 @@ impl IchSpiController {
 mod tests {
     use super::*;
     use crate::host::tests::{FakeHost, FakeMmio};
+    use alloc::vec;
 
     fn test_controller() -> IchSpiController<FakeHost> {
         IchSpiController {
             host: FakeHost::default(),
             spibar: FakeMmio::default(),
             generation: IchChipset::Series100SunrisePoint,
-            lpc_segment: 0,
-            lpc_bus: 0,
-            lpc_device: 0x1f,
-            lpc_function: 0,
+            config_bdf: PciAddress::new(0, 0, 0x1f, 0),
             locked: false,
             bios_writes_enabled: false,
             silvermont_bcr: false,
@@ -3532,7 +3605,7 @@ mod tests {
     fn detected_with_generation(generation: IchChipset) -> DetectedChipset {
         let enable = INTEL_CHIPSETS
             .iter()
-            .find(|chipset| chipset.chipset == generation)
+            .find(|chipset| chipset.chipset == generation && !is_visible_spi_id(chipset.device_id))
             .expect("Intel chipset table entry for generation");
 
         DetectedChipset {
@@ -3543,6 +3616,117 @@ mod tests {
             function: 0,
             revision_id: 0,
         }
+    }
+
+    fn detected_id(id: u16) -> DetectedChipset {
+        let enable = INTEL_CHIPSETS.iter().find(|e| e.device_id == id).unwrap();
+        DetectedChipset {
+            enable,
+            domain: 3,
+            bus: 7,
+            device: 0x1f,
+            function: 0,
+            revision_id: 0,
+        }
+    }
+
+    #[test]
+    fn pch_spi_mapping_and_identity() {
+        for (id, target, spi_id) in [
+            (0x9d48, (0x1f, 5), 0x9d24),
+            (0xa1c0, (0x1f, 5), 0xa1a4),
+            (0xa3c8, (0x1f, 5), 0xa3a4),
+            (0x5ae8, (0x0d, 2), 0x5a96),
+            (0x31e8, (0x0d, 2), 0x3196),
+        ] {
+            let chipset = detected_id(id);
+            let bdf = PciAddress::new(3, 7, target.0, target.1);
+            let host = FakeHost::default();
+            host.set_config32(bdf, 0, (spi_id << 16) | 0x8086);
+            host.set_config32(bdf, 0x10, 0xfed1_c000);
+            assert_eq!(intel_config_bdf(&chipset).unwrap(), bdf);
+            assert_eq!(
+                get_spibar_address_with_host(&host, &chipset).unwrap(),
+                0xfed1_c000
+            );
+            host.set_config32(bdf, 0, 0x4b23_8086);
+            assert!(get_spibar_address_with_host(&host, &chipset).is_err());
+            assert!(host.writes().is_empty());
+        }
+        for id in [
+            0xa1a4, 0xa324, 0x43a4, 0x4b24, 0x5a96, 0x3196, 0x7e23, 0xa823, 0xae23,
+        ] {
+            let mut chipset = detected_id(id);
+            chipset.device = 12;
+            chipset.function = 3;
+            let bdf = PciAddress::new(3, 7, 12, 3);
+            let host = FakeHost::default();
+            host.set_config32(bdf, 0, (u32::from(id) << 16) | 0x8086);
+            host.set_config32(bdf, 0x10, 0xfed1_c000);
+            assert_eq!(intel_config_bdf(&chipset).unwrap(), bdf);
+            assert_eq!(
+                get_spibar_address_with_host(&host, &chipset).unwrap(),
+                0xfed1_c000
+            );
+        }
+        assert!(crate::intel_pci::find_chipset(0x8086, 0x4b23, None).is_none());
+        for id in [0xa303, 0x4380] {
+            assert!(intel_config_bdf(&detected_id(id)).is_err());
+        }
+    }
+
+    #[test]
+    fn missing_spi_refuses_before_writes() {
+        let host = FakeHost::default();
+        let chipset = detected_id(0x5ae8);
+        assert!(matches!(
+            get_spibar_address_with_host(&host, &chipset),
+            Err(InternalError::ChipsetEnable(_))
+        ));
+        assert!(host.writes().is_empty());
+        let mut denied = host.clone();
+        denied.deny_reads();
+        assert!(matches!(
+            get_spibar_address_with_host(&denied, &chipset),
+            Err(InternalError::ChipsetEnable(_))
+        ));
+        assert!(denied.writes().is_empty());
+    }
+
+    #[test]
+    fn pch_bios_control_uses_and_restores_spi_bdf() {
+        let mut host = FakeHost::default();
+        host.enable_write8_readback();
+        let chipset = detected_id(0x5ae8);
+        let spi = PciAddress::new(3, 7, 0x0d, 2);
+        host.set_config32(spi, 0, 0x5a96_8086);
+        host.set_config32(spi, 0x10, 0xfed1_c000);
+        host.set_config32(spi, 0xdc, 0);
+        assert_eq!(
+            get_spibar_address_with_host(&host, &chipset).unwrap(),
+            0xfed1_c000
+        );
+        let mut controller = test_controller();
+        controller.host = host.clone();
+        controller.config_bdf = intel_config_bdf(&chipset).unwrap();
+        controller.enable_bios_write().unwrap();
+        drop(controller);
+        let writes = host.writes();
+        assert_eq!(writes.len(), 2);
+        assert!(writes.iter().all(|w| w.0 == spi && w.1 == 0xdc));
+        assert_eq!(writes[0].2 & 1, 1);
+        assert_eq!(writes[1].2 & 1, 0);
+
+        host.set_config32(spi, 0xdc, 0);
+        let mut denied = host.clone();
+        denied.deny_writes();
+        let mut controller = test_controller();
+        controller.host = denied;
+        controller.config_bdf = spi;
+        assert!(controller.enable_bios_write().is_err());
+        assert!(!controller.writes_enabled());
+        drop(controller);
+        assert_eq!(host.writes().len(), 2);
     }
 
     #[test]
@@ -3561,7 +3745,8 @@ mod tests {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Series100SunrisePoint);
         let spi_bdf = PciAddress::new(chipset.domain, chipset.bus, chipset.device, 5);
-        host.set_config32(spi_bdf, PCI_REG_SPIBAR as u16, 0xfed1_c001);
+        host.set_config32(spi_bdf, 0, 0x9d24_8086);
+        host.set_config32(spi_bdf, PCI_REG_SPIBAR as u16, 0xfed1_c000);
 
         let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
 
@@ -3573,11 +3758,36 @@ mod tests {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Series100SunrisePoint);
         let spi_bdf = PciAddress::new(chipset.domain, chipset.bus, chipset.device, 5);
+        host.set_config32(spi_bdf, 0, 0x9d24_8086);
         host.set_config32(spi_bdf, PCI_REG_SPIBAR as u16, u32::MAX);
 
         let err = get_spibar_address_with_host(&host, &chipset).unwrap_err();
 
         assert!(matches!(err, InternalError::ChipsetEnable(_)));
+    }
+
+    #[test]
+    fn pch_spi_bar_rejects_io_reserved_and_unassigned() {
+        let host = FakeHost::default();
+        let chipset = detected_id(0xa324);
+        let bdf = PciAddress::new(3, 7, 0x1f, 0);
+        host.set_config32(bdf, 0, 0xa324_8086);
+        for bar in [
+            0xfed1_c001,
+            0xfed1_c002,
+            0xfed1_c004,
+            0,
+            0xffff_f000,
+            u32::MAX,
+        ] {
+            host.set_config32(bdf, 0x10, bar);
+            assert!(
+                get_spibar_address_with_host(&host, &chipset).is_err(),
+                "BAR {bar:#x}"
+            );
+        }
+        assert!(host.writes().is_empty());
+        assert!(crate::intel_pci::find_chipset(0x8086, 0xa124, None).is_none());
     }
 
     #[test]
