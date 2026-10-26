@@ -2899,6 +2899,27 @@ mod tests {
         controller
     }
 
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
+    fn hwseq_flash_plans_with_the_controller_block_size() {
+        use crate::programmer::HwseqFlash;
+        use futures_lite::future::block_on;
+        use rflasher_core::flash::FlashDevice;
+
+        let mut flash = HwseqFlash::with_size(Box::new(ich9_controller(3, 3, 0)), 1 << 20).unwrap();
+        assert_eq!(flash.erase_granularity(), 64 * 1024);
+        assert_eq!(flash.erase_blocks()[0].total_size(), 1 << 20);
+        // BIOS writes are not enabled on the fake chipset.
+        assert_eq!(
+            block_on(flash.erase(0, 64 * 1024)),
+            Err(CoreError::WriteProtected)
+        );
+        assert_eq!(
+            block_on(flash.read(1 << 20, &mut [0])),
+            Err(CoreError::AddressOutOfBounds)
+        );
+    }
+
     #[test]
     fn ich9_erase_follows_berase_instead_of_assuming_4k() {
         // BERASE = 3: every cycle erases 64 KiB.

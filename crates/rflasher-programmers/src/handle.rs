@@ -94,7 +94,7 @@ impl FlashHandle {
     }
 
     /// Create a new handle without chip information (opaque programmers)
-    #[cfg(any(feature = "linux-mtd", feature = "internal"))]
+    #[cfg(any(feature = "linux-mtd", all(feature = "internal", target_os = "linux")))]
     pub(crate) fn without_chip_info(device: ErasedFlashDevice) -> Self {
         Self {
             device,
