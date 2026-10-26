@@ -31,6 +31,17 @@ pub trait ChipProvider {
         None
     }
 
+    /// Find the `index`-th candidate for a two-byte legacy RES identity.
+    /// Providers without audited RES2 identities return no candidates.
+    fn find_nth_by_res2_id(
+        &self,
+        _manufacturer: u8,
+        _device: u8,
+        _index: usize,
+    ) -> Option<&FlashChip> {
+        None
+    }
+
     /// Find the `index`-th (0-based, database order) chip with the given JEDEC IDs.
     ///
     /// Callers enumerate candidates by increasing `index` until `None`. The

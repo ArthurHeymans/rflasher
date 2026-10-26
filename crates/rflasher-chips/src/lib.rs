@@ -159,6 +159,22 @@ impl ChipProvider for ChipDatabase {
         ChipDatabase::find_by_jedec_id(self, manufacturer, device)
     }
 
+    fn find_nth_by_res2_id(
+        &self,
+        manufacturer: u8,
+        device: u8,
+        index: usize,
+    ) -> Option<&FlashChip> {
+        self.chips
+            .iter()
+            .filter(|c| {
+                c.jedec_manufacturer == manufacturer
+                    && c.jedec_device == u16::from(device)
+                    && c.features.contains(Features::RES2_ID)
+            })
+            .nth(index)
+    }
+
     fn find_nth_by_banked_jedec_id(
         &self,
         bank: u8,
