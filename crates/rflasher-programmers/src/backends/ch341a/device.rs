@@ -66,6 +66,12 @@ pub struct Ch341a {
     stored_delay_us: u32,
 }
 
+/// Split a delay between the next CS packet and host-side sleep.
+fn split_delay(stored_us: u32, us: u32) -> (u32, u32) {
+    let deferred = us.min(20 - stored_us);
+    (stored_us + deferred, us - deferred)
+}
+
 /// USB devices this backend drives.
 const USB_SELECTORS: &[nusb::DeviceSelector] =
     &[nusb::DeviceSelector::all().with_vid_pid(CH341A_USB_VENDOR, CH341A_USB_PRODUCT)];
@@ -368,6 +374,13 @@ impl Ch341a {
                 }
 
                 let expected = in_flight_sizes[complete_idx];
+                if completion.actual_len < expected {
+                    self.drain_all_pending().await;
+                    return Err(Ch341aError::TransferFailed(format!(
+                        "short IN transfer: expected {expected} bytes, got {}",
+                        completion.actual_len
+                    )));
+                }
                 let actual = std::cmp::min(completion.actual_len, expected);
                 let dst_end = std::cmp::min(in_done + actual, total_spi_bytes);
                 rbuf[in_done..dst_end].copy_from_slice(&completion.buffer[..dst_end - in_done]);
@@ -503,17 +516,17 @@ impl SpiMaster for Ch341a {
 
     async fn delay_us(&mut self, us: u32) {
         // Accumulate small delays into the CS packet (up to ~20us)
-        if (us + self.stored_delay_us) > 20 {
-            let inc = 20 - self.stored_delay_us;
-
+        let (stored_us, sleep_us) = split_delay(self.stored_delay_us, us);
+        self.stored_delay_us = stored_us;
+        if sleep_us > 0 {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                std::thread::sleep(Duration::from_micros((us - inc) as u64));
+                std::thread::sleep(Duration::from_micros(sleep_us as u64));
             }
 
             #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
             {
-                let delay_ms = ((us - inc) as f64 / 1000.0).ceil() as i32;
+                let delay_ms = (sleep_us as f64 / 1000.0).ceil() as i32;
                 if delay_ms > 0 {
                     // Use setTimeout to delay in WASM
                     let promise = js_sys::Promise::new(&mut |resolve, _| {
@@ -527,10 +540,22 @@ impl SpiMaster for Ch341a {
                     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
                 }
             }
+        }
+    }
+}
 
-            self.stored_delay_us = inc;
-        } else {
-            self.stored_delay_us += us;
+#[cfg(test)]
+mod delay_tests {
+    #[test]
+    fn delays_preserve_accumulated_time_without_overflow() {
+        for (stored, requested, expected) in [
+            (0, 10, (10, 0)),
+            (10, 5, (15, 0)),
+            (15, 15, (20, 10)),
+            (20, 0, (20, 0)),
+            (10, u32::MAX, (20, u32::MAX - 10)),
+        ] {
+            assert_eq!(super::split_delay(stored, requested), expected);
         }
     }
 }
