@@ -259,6 +259,7 @@ pub(crate) mod tests {
     use crate::error::PciAccessError;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
 
     /// Fake no-heap-shape host used by controller construction tests.
     #[derive(Default)]
@@ -347,9 +348,11 @@ pub(crate) mod tests {
     /// reads back a per-partition value chosen through [`FakeMmio::set_berase`]
     /// (partitions split at the FPB boundary). SPI100 commands are recorded
     /// on trigger and return the configured response at the FIFO receive offset.
-    #[derive(Default)]
+    #[derive(Default, Clone)]
     pub(crate) struct FakeMmio {
-        regs: RefCell<BTreeMap<usize, u32>>,
+        regs: Arc<Mutex<BTreeMap<usize, u32>>>,
+        writes: Arc<Mutex<Vec<(usize, u32, usize)>>>,
+        blocked_write32: RefCell<Option<usize>>,
         bytes: RefCell<BTreeMap<usize, u8>>,
         reads: RefCell<Vec<(usize, usize)>>,
         berase: RefCell<[u16; 2]>,
@@ -364,8 +367,12 @@ pub(crate) mod tests {
             *self.berase.borrow_mut() = [low, high];
         }
 
+        pub(crate) fn block_write32(&self, offset: usize) {
+            *self.blocked_write32.borrow_mut() = Some(offset);
+        }
+
         pub(crate) fn set32(&self, offset: usize, value: u32) {
-            self.regs.borrow_mut().insert(offset, value);
+            self.regs.lock().unwrap().insert(offset, value);
         }
 
         /// FADDR of every erase cycle started so far
@@ -387,6 +394,10 @@ pub(crate) mod tests {
                 .extend(data.iter().enumerate().map(|(i, &b)| (offset + i, b)));
         }
 
+        pub(crate) fn writes(&self) -> Vec<(usize, u32, usize)> {
+            self.writes.lock().unwrap().clone()
+        }
+
         pub(crate) fn reads(&self) -> Vec<(usize, usize)> {
             self.reads.borrow().clone()
         }
@@ -400,7 +411,7 @@ pub(crate) mod tests {
         }
 
         fn reg(&self, offset: usize) -> u32 {
-            self.regs.borrow().get(&offset).copied().unwrap_or(0)
+            self.regs.lock().unwrap().get(&offset).copied().unwrap_or(0)
         }
     }
 
@@ -434,6 +445,10 @@ pub(crate) mod tests {
             u64::from_le_bytes(core::array::from_fn(|i| self.byte(offset + i)))
         }
         fn write8(&self, offset: usize, value: u8) {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((offset, u32::from(value), 1));
             if offset >= 0x80 {
                 self.bytes.borrow_mut().insert(offset, value);
             } else {
@@ -458,6 +473,10 @@ pub(crate) mod tests {
             }
         }
         fn write16(&self, offset: usize, value: u16) {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((offset, u32::from(value), 2));
             use crate::ich_regs::*;
             match offset {
                 // Status bits are write-1-to-clear.
@@ -484,7 +503,10 @@ pub(crate) mod tests {
             }
         }
         fn write32(&self, offset: usize, value: u32) {
-            self.set32(offset, value);
+            self.writes.lock().unwrap().push((offset, value, 4));
+            if *self.blocked_write32.borrow() != Some(offset) {
+                self.set32(offset, value);
+            }
         }
     }
 

@@ -147,6 +147,13 @@ impl core::fmt::Display for SpiMode {
     }
 }
 
+const SILVERMONT_REG_BCR: usize = 0xfc;
+
+fn uses_silvermont_sbase(chipset: &DetectedChipset) -> bool {
+    chipset.chipset_type() == IchChipset::BayTrail
+        && matches!(chipset.enable.device_id, 0x0f1c..=0x0f1f | 0x1f38..=0x1f3b | 0x229c)
+}
+
 /// Gets the SPI BAR physical address using host-provided PCI config access.
 ///
 /// This helper is independent from Linux sysfs and can be exercised by
@@ -171,6 +178,18 @@ pub fn get_spibar_address_with_host<H: PciConfigAccess<Error = InternalError>>(
         }
 
         Ok(addr as u64)
+    } else if uses_silvermont_sbase(chipset) {
+        let lpc_bdf = PciAddress::new(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        let sbase = host.read32(lpc_bdf, 0x54)? & 0xffff_fe00;
+        if sbase == 0 || sbase == 0xffff_fe00 {
+            return Err(InternalError::ChipsetEnable("SBASE is invalid"));
+        }
+        Ok(u64::from(sbase))
     } else if generation.is_ich9_compatible() || generation == IchChipset::Ich7 {
         let lpc_bdf = PciAddress::new(
             chipset.domain,
@@ -351,6 +370,10 @@ pub struct IchSpiController<H: HostAccess> {
     locked: bool,
     /// BIOS_CNTL.BWE was observed or successfully verified during enable.
     bios_writes_enabled: bool,
+    /// Bay Trail / Avoton / Braswell BCR is in the SBASE MMIO window.
+    silvermont_bcr: bool,
+    /// Restore Silvermont BCR.WPD if this controller enabled it.
+    restore_bcr_wpd: bool,
     /// Whether software sequencing is locked (DLOCK.SSEQ_LOCKDN on PCH100+)
     swseq_locked: bool,
     /// Flash descriptor valid
@@ -372,6 +395,17 @@ pub struct IchSpiController<H: HostAccess> {
     pending_preop: Option<u8>,
     /// BBAR value
     bbar: u32,
+}
+
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+impl<H: HostAccess> Drop for IchSpiController<H> {
+    fn drop(&mut self) {
+        if self.restore_bcr_wpd {
+            let bcr = self.spibar.read32(SILVERMONT_REG_BCR);
+            self.spibar
+                .write32(SILVERMONT_REG_BCR, bcr & !u32::from(BIOS_CNTL_BWE));
+        }
+    }
 }
 
 #[cfg(all(feature = "std", target_os = "linux"))]
@@ -457,6 +491,8 @@ impl<H: HostAccess> IchSpiController<H> {
             lpc_function: chipset.function,
             locked: false,
             bios_writes_enabled: false,
+            silvermont_bcr: uses_silvermont_sbase(chipset),
+            restore_bcr_wpd: false,
             swseq_locked: false,
             desc_valid: false,
             requested_mode: mode,
@@ -1233,6 +1269,26 @@ impl<H: HostAccess> IchSpiController<H> {
     /// Enable BIOS write access via BIOS_CNTL register
     pub fn enable_bios_write(&mut self) -> Result<(), InternalError> {
         self.bios_writes_enabled = false;
+        if self.silvermont_bcr {
+            let bcr = self.spibar.read32(SILVERMONT_REG_BCR);
+            if bcr & u32::from(BIOS_CNTL_BLE) != 0 {
+                log::warn!("BIOS Lock Enable is set - writes may trigger SMI");
+            }
+            if bcr & u32::from(BIOS_CNTL_SMM_BWP) != 0 {
+                return Err(InternalError::AccessDenied { region: "BIOS" });
+            }
+            if bcr & u32::from(BIOS_CNTL_BWE) == 0 {
+                // Record ownership before the write so failed verification is cleaned up too.
+                self.restore_bcr_wpd = true;
+                self.spibar
+                    .write32(SILVERMONT_REG_BCR, bcr | u32::from(BIOS_CNTL_BWE));
+                if self.spibar.read32(SILVERMONT_REG_BCR) & u32::from(BIOS_CNTL_BWE) == 0 {
+                    return Err(InternalError::ChipsetEnable("Cannot enable BIOS writes"));
+                }
+            }
+            self.bios_writes_enabled = true;
+            return Ok(());
+        }
         let lpc_bdf = PciAddress::new(
             self.lpc_segment,
             self.lpc_bus,
@@ -2776,6 +2832,8 @@ mod tests {
             lpc_function: 0,
             locked: false,
             bios_writes_enabled: false,
+            silvermont_bcr: false,
+            restore_bcr_wpd: false,
             swseq_locked: false,
             desc_valid: false,
             requested_mode: SpiMode::HardwareSequencing,
@@ -3099,6 +3157,113 @@ mod tests {
         let err = get_spibar_address_with_host(&host, &chipset).unwrap_err();
 
         assert!(matches!(err, InternalError::ChipsetEnable(_)));
+    }
+
+    #[test]
+    fn silvermont_sbase_discovery_and_errors() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::BayTrail);
+        let bdf = PciAddress::new(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        assert!(matches!(
+            get_spibar_address_with_host(&host, &chipset),
+            Err(InternalError::PciAccess(_))
+        ));
+        for value in [0, u32::MAX] {
+            host.set_config32(bdf, 0x54, value);
+            assert!(matches!(
+                get_spibar_address_with_host(&host, &chipset),
+                Err(InternalError::ChipsetEnable(_))
+            ));
+        }
+        host.set_config32(bdf, 0x54, 0xfed0_13ff);
+        assert_eq!(
+            get_spibar_address_with_host(&host, &chipset).unwrap(),
+            0xfed0_1200
+        );
+    }
+
+    #[test]
+    fn silvermont_device_scope_includes_braswell() {
+        for id in [0x0f1c, 0x1f38, 0x229c] {
+            let enable = INTEL_CHIPSETS
+                .iter()
+                .find(|entry| entry.device_id == id)
+                .unwrap();
+            let chipset = DetectedChipset {
+                enable,
+                ..detected_with_generation(IchChipset::BayTrail)
+            };
+            assert!(uses_silvermont_sbase(&chipset));
+            let host = FakeHost::default();
+            let bdf = PciAddress::new(
+                chipset.domain,
+                chipset.bus,
+                chipset.device,
+                chipset.function,
+            );
+            host.set_config32(bdf, 0x54, 0xfed0_1002);
+            assert_eq!(
+                get_spibar_address_with_host(&host, &chipset).unwrap(),
+                0xfed0_1000
+            );
+        }
+    }
+
+    #[test]
+    fn silvermont_bcr_enable_and_restore() {
+        let mut controller = test_controller();
+        controller.silvermont_bcr = true;
+        let mmio = controller.spibar.clone();
+        mmio.set32(0xfc, 0x1234_5604);
+        controller.enable_bios_write().unwrap();
+        controller.enable_bios_write().unwrap();
+        assert_eq!(mmio.read32(0xfc), 0x1234_5605);
+        // Other bits can change during the controller lifetime.
+        mmio.set32(0xfc, 0x1234_5645);
+        drop(controller);
+        assert_eq!(mmio.read32(0xfc), 0x1234_5644);
+        assert_eq!(
+            mmio.writes(),
+            vec![(0xfc, 0x1234_5605, 4), (0xfc, 0x1234_5644, 4)]
+        );
+    }
+
+    #[test]
+    fn silvermont_bcr_existing_enable_and_access_failures() {
+        let mut controller = test_controller();
+        controller.silvermont_bcr = true;
+        let mmio = controller.spibar.clone();
+        mmio.set32(0xfc, 1);
+        controller.enable_bios_write().unwrap();
+        drop(controller);
+        assert!(mmio.writes().is_empty());
+
+        let mut controller = test_controller();
+        controller.silvermont_bcr = true;
+        let mmio = controller.spibar.clone();
+        mmio.set32(0xfc, u32::from(BIOS_CNTL_SMM_BWP));
+        assert!(matches!(
+            controller.enable_bios_write(),
+            Err(InternalError::AccessDenied { .. })
+        ));
+        drop(controller);
+        assert!(mmio.writes().is_empty());
+
+        let mut controller = test_controller();
+        controller.silvermont_bcr = true;
+        controller.spibar.block_write32(0xfc);
+        let mmio = controller.spibar.clone();
+        assert!(matches!(
+            controller.enable_bios_write(),
+            Err(InternalError::ChipsetEnable(_))
+        ));
+        drop(controller);
+        assert_eq!(mmio.writes(), vec![(0xfc, 1, 4), (0xfc, 0, 4)]);
     }
 
     #[test]
