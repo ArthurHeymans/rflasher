@@ -50,6 +50,11 @@ pub trait Controller {
     /// For AMD: delegates to SpiMaster
     fn controller_erase(&mut self, addr: u32, len: u32) -> CoreResult<()>;
 
+    /// Physical flash capacity, when the controller can determine it reliably.
+    fn physical_flash_size(&self) -> Result<Option<u32>, InternalError> {
+        Ok(None)
+    }
+
     /// Erase block size the flash must be planned with, for a flash of
     /// `flash_size` bytes, if the controller fixes it.
     ///

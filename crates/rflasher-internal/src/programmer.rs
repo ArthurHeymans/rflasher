@@ -188,18 +188,33 @@ mod linux {
         erase_blocks: [EraseBlock; 1],
     }
 
+    fn descriptor_size(header: &[u8], physical_size: Option<u32>) -> Result<u32, InternalError> {
+        let region_end = rflasher_core::layout::parse_ifd(header)
+            .ok()
+            .and_then(|layout| layout.regions.iter().map(|r| r.end).max())
+            .and_then(|end| end.checked_add(1))
+            .filter(|&size| size > 0)
+            .ok_or(InternalError::InvalidDescriptor)?;
+        match physical_size {
+            Some(size) if size >= region_end => Ok(size),
+            Some(_) => Err(InternalError::InvalidDescriptor),
+            None => {
+                log::warn!(
+                    "Physical flash density is unknown; using the last descriptor region endpoint"
+                );
+                Ok(region_end)
+            }
+        }
+    }
+
     impl HwseqFlash {
         fn new(mut controller: Box<dyn Controller + Send>) -> Result<Self, InternalError> {
             let mut header = [0; 4096];
             controller
                 .controller_read(0, &mut header, 0)
                 .map_err(|_| InternalError::Io("Cannot read the flash descriptor"))?;
-            let size = rflasher_core::layout::parse_ifd(&header)
-                .ok()
-                .and_then(|layout| layout.regions.iter().map(|r| r.end + 1).max())
-                .filter(|&size| size > 0)
-                .ok_or(InternalError::InvalidDescriptor)?;
-            log::info!("Flash size: {} bytes (from IFD)", size);
+            let size = descriptor_size(&header, controller.physical_flash_size()?)?;
+            log::info!("Flash size: {} bytes", size);
             Self::with_size(controller, size)
         }
 
@@ -226,6 +241,22 @@ mod linux {
                 Ok(())
             }
         }
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn descriptor_size_preserves_unallocated_tail() {
+        let mut header = [0u8; 4096];
+        header[0..4].copy_from_slice(&0x0ff0_a55au32.to_le_bytes());
+        header[4..8].copy_from_slice(&((2u32 << 24) | (4 << 16)).to_le_bytes());
+        header[0x40..0x44].copy_from_slice(&0u32.to_le_bytes());
+        header[0x44..0x48].copy_from_slice(&((0x7ffu32 << 16) | 1).to_le_bytes());
+        header[0x48..0x4c].copy_from_slice(&0x7fffu32.to_le_bytes());
+        assert_eq!(descriptor_size(&header, Some(16 << 20)).unwrap(), 16 << 20);
+        assert_eq!(descriptor_size(&header, None).unwrap(), 8 << 20);
+        assert!(descriptor_size(&header, Some(4 << 20)).is_err());
+        header[0] = 0;
+        assert!(descriptor_size(&header, Some(16 << 20)).is_err());
     }
 
     impl FlashDevice for HwseqFlash {
