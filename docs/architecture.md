@@ -64,7 +64,7 @@ more capable.
 | Backend | Access |
 |---|---|
 | AMD SPI100 | SPI; reads through the checked memory window where the chip allows it |
-| Dediprog | SPI; CMD_READ/CMD_WRITE bulk transfers for aligned blocks on chips up to 16 MiB |
+| Dediprog | SPI; CMD_READ/CMD_WRITE bulk transfers for aligned blocks; chips over 16 MiB need native four-byte modes (protocol V2/V3) |
 | sunxi FEL | SPI; payload bulk reads and page programs for compatible chips |
 | Intel software sequencing | SPI |
 | Intel hardware sequencing, Linux MTD | Opaque |

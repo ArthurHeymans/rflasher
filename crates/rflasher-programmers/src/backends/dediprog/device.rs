@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use nusb::Endpoint;
 use nusb::transfer::{Buffer, Bulk, In, Out, TransferError};
-use rflasher_core::chip::{Features, FlashChip, WriteGranularity};
+use rflasher_core::chip::{Features, WriteGranularity};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::flash::{self, AddressMode, FlashContext};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
@@ -887,14 +887,12 @@ impl Dediprog {
     ///
     /// Returns the command packet size. The packet is written into `cmd_buf`.
     /// `value` and `idx` are the USB control transfer wValue/wIndex fields.
-    #[allow(clippy::too_many_arguments)]
     fn prepare_rw_cmd(
         protocol: Protocol,
         cmd_buf: &mut [u8; MAX_CMD_SIZE],
         value: &mut u16,
         idx: &mut u16,
-        is_read: bool,
-        mode: u8,
+        cmd: BulkCommand,
         start: u32,
         count: u16,
     ) -> Result<usize> {
@@ -902,61 +900,35 @@ impl Dediprog {
         cmd_buf[0] = (count & 0xFF) as u8;
         cmd_buf[1] = ((count >> 8) & 0xFF) as u8;
         cmd_buf[2] = 0; // RFU
-        cmd_buf[3] = mode;
-        cmd_buf[4] = 0; // Opcode (overridden below for V2/V3)
+        cmd_buf[3] = cmd.mode;
+        cmd_buf[4] = cmd.opcode;
+        if !cmd.four_byte && start >> 24 != 0 {
+            return Err(DediprogError::Unsupported(
+                "three-byte bulk command beyond 16 MiB".to_string(),
+            ));
+        }
 
         match protocol {
             Protocol::V1 => {
                 // V1: address in wValue/wIndex, 5-byte command packet
-                if start >> 24 != 0 {
-                    return Err(DediprogError::Unsupported(
-                        "4-byte address not supported on V1 protocol".to_string(),
-                    ));
-                }
                 *value = (start & 0xFFFF) as u16;
                 *idx = ((start >> 16) & 0xFF) as u16;
                 Ok(5)
             }
-            Protocol::V2 => {
+            Protocol::V2 | Protocol::V3 => {
                 *value = 0;
                 *idx = 0;
-
-                if is_read {
-                    // For V2 reads, use standard read mode with fast read opcode
-                    // The firmware handles the SPI read command internally
-                    cmd_buf[3] = ReadMode::Fast as u8;
-                    cmd_buf[4] = opcodes::FAST_READ;
-                }
-
                 cmd_buf[5] = 0; // RFU
-                cmd_buf[6] = (start & 0xFF) as u8;
-                cmd_buf[7] = ((start >> 8) & 0xFF) as u8;
-                cmd_buf[8] = ((start >> 16) & 0xFF) as u8;
-                cmd_buf[9] = ((start >> 24) & 0xFF) as u8;
-                Ok(10)
-            }
-            Protocol::V3 => {
-                *value = 0;
-                *idx = 0;
-
-                cmd_buf[5] = 0; // RFU
-                cmd_buf[6] = (start & 0xFF) as u8;
-                cmd_buf[7] = ((start >> 8) & 0xFF) as u8;
-                cmd_buf[8] = ((start >> 16) & 0xFF) as u8;
-                cmd_buf[9] = ((start >> 24) & 0xFF) as u8;
-
-                if is_read {
-                    cmd_buf[3] = ReadMode::Configurable as u8;
-                    cmd_buf[4] = opcodes::FAST_READ;
-                    cmd_buf[10] = if start >> 24 != 0 { 4 } else { 3 }; // address length
-                    cmd_buf[11] = 4; // dummy half-cycles (8 clocks / 2 for fast read)
+                cmd_buf[6..10].copy_from_slice(&start.to_le_bytes());
+                if protocol == Protocol::V2 {
+                    Ok(10)
+                } else if cmd.is_read {
+                    cmd_buf[10] = if cmd.four_byte { 4 } else { 3 }; // address length
+                    cmd_buf[11] = cmd.dummy_half_clocks;
                     Ok(12)
                 } else {
                     // Page size (256 bytes) as 32-bit LE
-                    cmd_buf[10] = 0x00;
-                    cmd_buf[11] = 0x01;
-                    cmd_buf[12] = 0x00;
-                    cmd_buf[13] = 0x00;
+                    cmd_buf[10..14].copy_from_slice(&(BULK_PAGE_SIZE as u32).to_le_bytes());
                     Ok(14)
                 }
             }
@@ -971,7 +943,12 @@ impl Dediprog {
     /// Start and len MUST be 512-byte aligned. Uses a single large URB so the
     /// kernel handles all USB scheduling internally -- avoids per-packet
     /// userspace round-trips through nusb's epoll background thread.
-    async fn bulk_read_flash(&mut self, start: u32, buf: &mut [u8]) -> Result<()> {
+    async fn bulk_read_flash(
+        &mut self,
+        start: u32,
+        buf: &mut [u8],
+        cmd: BulkCommand,
+    ) -> Result<()> {
         let len = buf.len();
         if len == 0 {
             return Ok(());
@@ -991,8 +968,7 @@ impl Dediprog {
             &mut cmd_buf,
             &mut value,
             &mut idx,
-            true,
-            ReadMode::Std as u8,
+            cmd,
             start,
             count,
         )?;
@@ -1035,7 +1011,7 @@ impl Dediprog {
     /// Start and len MUST be 256-byte aligned. Each USB transfer contains
     /// 256 data bytes followed by 256 bytes of 0xFF padding, as in flashprog.
     /// The firmware handles WREN, page/AAI programming, and WIP polling.
-    async fn bulk_write_flash(&mut self, start: u32, data: &[u8], mode: WriteMode) -> Result<()> {
+    async fn bulk_write_flash(&mut self, start: u32, data: &[u8], cmd: BulkCommand) -> Result<()> {
         const PAGE_SIZE: usize = 256;
         let len = data.len();
         if len == 0 {
@@ -1056,8 +1032,7 @@ impl Dediprog {
             &mut cmd_buf,
             &mut value,
             &mut idx,
-            false,
-            mode as u8,
+            cmd,
             start,
             count,
         )?;
@@ -1096,11 +1071,16 @@ impl Dediprog {
     }
 
     /// Bulk-read whole 512-byte chunks, bounded per USB transfer.
-    async fn bulk_read_range(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
+    async fn bulk_read_range(
+        &mut self,
+        addr: u32,
+        buf: &mut [u8],
+        cmd: BulkCommand,
+    ) -> CoreResult<()> {
         let max_len = (MAX_BLOCK_COUNT as usize).min(MAX_READ_BLOCKS) * BULK_CHUNK_SIZE;
         let mut chunk_addr = addr;
         for chunk in buf.chunks_mut(max_len) {
-            self.bulk_read_flash(chunk_addr, chunk)
+            self.bulk_read_flash(chunk_addr, chunk, cmd)
                 .await
                 .map_err(|_| CoreError::ReadError { addr: chunk_addr })?;
             chunk_addr += chunk.len() as u32;
@@ -1113,12 +1093,12 @@ impl Dediprog {
         &mut self,
         addr: u32,
         data: &[u8],
-        mode: WriteMode,
+        cmd: BulkCommand,
     ) -> CoreResult<()> {
         let max_len = (MAX_BLOCK_COUNT as usize).min(MAX_WRITE_PAGES) * BULK_PAGE_SIZE;
         let mut chunk_addr = addr;
         for chunk in data.chunks(max_len) {
-            self.bulk_write_flash(chunk_addr, chunk, mode)
+            self.bulk_write_flash(chunk_addr, chunk, cmd)
                 .await
                 .map_err(|error| {
                     log::error!(
@@ -1136,39 +1116,117 @@ impl Dediprog {
 /// Bytes per page in a CMD_WRITE bulk transfer.
 const BULK_PAGE_SIZE: usize = 256;
 
-/// Split `len` bytes at `addr` into `(head, bulk)`: an unaligned head, then
-/// whole `block`-sized blocks. The rest is the tail. Head and tail use
-/// generic SPI commands.
-fn bulk_split(addr: u32, len: usize, block: usize) -> (usize, usize) {
-    let start = u64::from(addr);
-    let end = start + len as u64;
-    let bulk_start = start.next_multiple_of(block as u64);
-    let bulk = end.saturating_sub(bulk_start) / block as u64 * block as u64;
-    if bulk == 0 {
-        return (len, 0);
+/// Command bytes for one CMD_READ or CMD_WRITE bulk transfer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BulkCommand {
+    is_read: bool,
+    /// Firmware read or write mode.
+    mode: u8,
+    /// SPI opcode; 0 lets the firmware use the mode's default.
+    opcode: u8,
+    /// Whether the opcode takes a four-byte address.
+    four_byte: bool,
+    /// Dummy clocks / 2, for protocol V3 configurable reads.
+    dummy_half_clocks: u8,
+}
+
+impl BulkCommand {
+    /// Bulk read command for the chip, as flashprog encodes it.
+    ///
+    /// Chips beyond 16 MiB need a native four-byte read mode: three-byte
+    /// commands there would depend on the chip's address mode and extended
+    /// address register, which generic SPI accesses change. Without one,
+    /// they use generic SPI.
+    fn read(protocol: Protocol, ctx: &FlashContext) -> Option<Self> {
+        let features = ctx.chip.features;
+        let cmd = |mode: ReadMode, opcode, four_byte, dummy_half_clocks| Self {
+            is_read: true,
+            mode: mode as u8,
+            opcode,
+            four_byte,
+            dummy_half_clocks,
+        };
+        if ctx.address_mode == AddressMode::ThreeByte {
+            return match protocol {
+                Protocol::Unknown => None,
+                Protocol::V1 => Some(cmd(ReadMode::Std, 0, false, 0)),
+                Protocol::V2 => Some(cmd(ReadMode::Fast, opcodes::FAST_READ, false, 0)),
+                Protocol::V3 => Some(cmd(ReadMode::Configurable, opcodes::FAST_READ, false, 4)),
+            };
+        }
+        match protocol {
+            Protocol::V2 if features.supports_4ba_fast_read() => Some(cmd(
+                ReadMode::FourByteAddrFast0x0C,
+                opcodes::FAST_READ_4B,
+                true,
+                0,
+            )),
+            Protocol::V3 if features.supports_4ba_fast_read() => {
+                Some(cmd(ReadMode::Configurable, opcodes::FAST_READ_4B, true, 4))
+            }
+            Protocol::V3 if features.supports_4ba_read() => {
+                Some(cmd(ReadMode::Configurable, opcodes::READ_4B, true, 0))
+            }
+            _ => None,
+        }
     }
-    ((bulk_start - start) as usize, bulk as usize)
-}
 
-/// Whether the three-byte bulk commands can address this chip.
-///
-/// Beyond 16 MiB they would depend on the chip's address mode and extended
-/// address register, which generic SPI accesses change, so larger chips use
-/// generic SPI.
-fn bulk_addressable(protocol: Protocol, ctx: &FlashContext) -> bool {
-    protocol != Protocol::Unknown && ctx.address_mode == AddressMode::ThreeByte
-}
+    /// Bulk program command for the chip, if its pages fit CMD_WRITE.
+    ///
+    /// Like reads, chips beyond 16 MiB need native four-byte programming.
+    fn write(protocol: Protocol, ctx: &FlashContext) -> Option<Self> {
+        let chip = &ctx.chip;
+        let cmd = |mode: WriteMode, opcode, four_byte| Self {
+            is_read: false,
+            mode: mode as u8,
+            opcode,
+            four_byte,
+            dummy_half_clocks: 0,
+        };
+        if protocol == Protocol::Unknown
+            || usize::from(chip.page_size) != BULK_PAGE_SIZE
+            || (chip.write_granularity == WriteGranularity::Byte
+                && !chip.features.contains(Features::AAI_WORD))
+        {
+            return None;
+        }
+        if ctx.address_mode == AddressMode::ThreeByte {
+            return Some(if chip.features.contains(Features::AAI_WORD) {
+                cmd(WriteMode::TwoByteAai, 0, false)
+            } else {
+                cmd(WriteMode::PagePgm, 0, false)
+            });
+        }
+        if !chip.features.supports_4ba_program() || chip.features.contains(Features::AAI_WORD) {
+            return None;
+        }
+        match protocol {
+            Protocol::V2 => Some(cmd(
+                WriteMode::FourByteAddr256BPagePgm0x12,
+                opcodes::PP_4B,
+                true,
+            )),
+            Protocol::V3 => Some(cmd(
+                WriteMode::FourByteAddr256BPagePgm,
+                opcodes::PP_4B,
+                true,
+            )),
+            _ => None,
+        }
+    }
 
-/// Firmware programming algorithm for the chip, if its pages fit CMD_WRITE.
-fn bulk_write_mode(chip: &FlashChip) -> Option<WriteMode> {
-    if usize::from(chip.page_size) != BULK_PAGE_SIZE {
-        None
-    } else if chip.features.contains(Features::AAI_WORD) {
-        Some(WriteMode::TwoByteAai)
-    } else if chip.write_granularity == WriteGranularity::Byte {
-        None
-    } else {
-        Some(WriteMode::PagePgm)
+    /// Split `len` bytes at `addr` into `(head, bulk)`: an unaligned head,
+    /// then whole `block`-sized blocks. The rest is the tail. Head and tail
+    /// use generic SPI commands.
+    fn split(addr: u32, len: usize, block: usize) -> (usize, usize) {
+        let start = u64::from(addr);
+        let end = start + len as u64;
+        let bulk_start = start.next_multiple_of(block as u64);
+        let bulk = end.saturating_sub(bulk_start) / block as u64 * block as u64;
+        if bulk == 0 {
+            return (len, 0);
+        }
+        ((bulk_start - start) as usize, bulk as usize)
     }
 }
 
@@ -1248,10 +1306,10 @@ impl SpiMaster for Dediprog {
         addr: u32,
         buf: &mut [u8],
     ) -> CoreResult<()> {
-        if !bulk_addressable(self.protocol, ctx) {
+        let Some(cmd) = BulkCommand::read(self.protocol, ctx) else {
             return flash::spi_read(self, ctx, addr, buf).await;
-        }
-        let (head, bulk) = bulk_split(addr, buf.len(), BULK_CHUNK_SIZE);
+        };
+        let (head, bulk) = BulkCommand::split(addr, buf.len(), BULK_CHUNK_SIZE);
         let (head_buf, rest) = buf.split_at_mut(head);
         let (bulk_buf, tail_buf) = rest.split_at_mut(bulk);
         let bulk_addr = addr + head as u32;
@@ -1260,7 +1318,7 @@ impl SpiMaster for Dediprog {
             flash::spi_read(self, ctx, addr, head_buf).await?;
         }
         if !bulk_buf.is_empty() {
-            self.bulk_read_range(bulk_addr, bulk_buf).await?;
+            self.bulk_read_range(bulk_addr, bulk_buf, cmd).await?;
         }
         if !tail_buf.is_empty() {
             flash::spi_read(self, ctx, tail_addr, tail_buf).await?;
@@ -1269,18 +1327,17 @@ impl SpiMaster for Dediprog {
     }
 
     /// CMD_WRITE bulk transfers for aligned pages, using the firmware's
-    /// page-program or AAI algorithm.
+    /// page-program (three- or four-byte) or AAI algorithm.
     async fn program_flash(
         &mut self,
         ctx: &FlashContext,
         addr: u32,
         data: &[u8],
     ) -> CoreResult<()> {
-        let mode = bulk_write_mode(&ctx.chip).filter(|_| bulk_addressable(self.protocol, ctx));
-        let Some(mode) = mode else {
+        let Some(cmd) = BulkCommand::write(self.protocol, ctx) else {
             return flash::spi_program(self, ctx, addr, data).await;
         };
-        let (head, bulk) = bulk_split(addr, data.len(), BULK_PAGE_SIZE);
+        let (head, bulk) = BulkCommand::split(addr, data.len(), BULK_PAGE_SIZE);
         let (head_data, rest) = data.split_at(head);
         let (bulk_data, tail_data) = rest.split_at(bulk);
         let bulk_addr = addr + head as u32;
@@ -1289,7 +1346,7 @@ impl SpiMaster for Dediprog {
             flash::spi_program(self, ctx, addr, head_data).await?;
         }
         if !bulk_data.is_empty() {
-            self.bulk_write_range(bulk_addr, bulk_data, mode).await?;
+            self.bulk_write_range(bulk_addr, bulk_data, cmd).await?;
         }
         if !tail_data.is_empty() {
             flash::spi_program(self, ctx, tail_addr, tail_data).await?;
