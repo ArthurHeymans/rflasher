@@ -210,11 +210,17 @@ fn build_register_values(bits: &WpBits, bit_map: &WpRegBitMap) -> (u8, u8, u8) {
 }
 
 /// Read current register values preserving non-WP bits
-async fn read_current_registers<M: SpiMaster + ?Sized>(master: &mut M) -> WpResult<(u8, u8, u8)> {
+async fn read_current_registers<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    read_sr2: bool,
+) -> WpResult<(u8, u8)> {
     let sr1 = protocol::read_status1(master).await?;
-    let sr2 = protocol::read_status2(master).await.unwrap_or(0);
-    let sr3 = protocol::read_status3(master).await.unwrap_or(0);
-    Ok((sr1, sr2, sr3))
+    let sr2 = if read_sr2 {
+        protocol::read_status2(master).await?
+    } else {
+        0
+    };
+    Ok((sr1, sr2))
 }
 
 /// Create a mask for bits that should be modified
@@ -277,6 +283,8 @@ pub enum RegisterWriteEnable {
 /// A chip's persistent and volatile write procedures are separate capabilities.
 #[derive(Debug, Clone, Copy)]
 pub struct StatusWriteMethods {
+    /// Whether the chip documents the combined SR1/SR2 WRSR format.
+    pub extended: bool,
     /// Documented procedure that survives power loss.
     pub persistent: Option<RegisterWriteEnable>,
     /// Documented temporary procedure, lost at power-off.
@@ -288,6 +296,7 @@ impl StatusWriteMethods {
     pub fn from_features(features: crate::chip::Features) -> Self {
         use crate::chip::Features;
         Self {
+            extended: features.contains(Features::WRSR_EXT),
             persistent: if features.contains(Features::WRSR_WREN) {
                 Some(RegisterWriteEnable::Wren)
             } else if features.contains(Features::WRSR_PERSISTENT_EWSR) {
@@ -312,7 +321,10 @@ impl StatusWriteMethods {
         } else {
             self.persistent.ok_or(WpError::PersistentUnsupported)?
         };
-        Ok(ResolvedWriteOptions { enable })
+        Ok(ResolvedWriteOptions {
+            enable,
+            extended: self.extended,
+        })
     }
 }
 
@@ -320,6 +332,7 @@ impl StatusWriteMethods {
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedWriteOptions {
     enable: RegisterWriteEnable,
+    extended: bool,
 }
 
 impl WriteOptions {
@@ -336,12 +349,38 @@ pub async fn write_wp_bits<M: SpiMaster + ?Sized>(
     bit_map: &WpRegBitMap,
     options: ResolvedWriteOptions,
 ) -> WpResult<()> {
-    // Read current values
-    let (curr_sr1, curr_sr2, _curr_sr3) = read_current_registers(master).await?;
+    // Check the protection mode before any mutation, including direct bit writes.
+    if let Some(1) = read_bit(master, &bit_map.wps).await? {
+        return Err(WpError::UnsupportedState);
+    }
 
-    // Build new values and masks
     let (new_sr1, new_sr2, _new_sr3) = build_register_values(bits, bit_map);
-    let (mask1, mask2, _mask3) = build_register_masks(bit_map, bits);
+    let (mask1, mask2, mask3) = build_register_masks(bit_map, bits);
+    if mask3 != 0 {
+        return Err(WpError::ChipUnsupported);
+    }
+    // The documented wire format applies even when SR2 has no WP fields.
+    // A one-byte WRSR may clear SR2, so preserve it in either case.
+    let has_sr2 = [
+        &bit_map.srp,
+        &bit_map.srl,
+        &bit_map.cmp,
+        &bit_map.sec,
+        &bit_map.tb,
+    ]
+    .into_iter()
+    .chain(bit_map.bp.iter())
+    .any(|info| {
+        info.is_present()
+            && matches!(
+                info.reg,
+                Some(StatusRegister::Status2 | StatusRegister::Config)
+            )
+    });
+    if has_sr2 && !options.extended {
+        return Err(WpError::ChipUnsupported);
+    }
+    let (curr_sr1, curr_sr2) = read_current_registers(master, options.extended).await?;
 
     // Merge new values with current values (preserving non-WP bits)
     let final_sr1 = (curr_sr1 & !mask1) | (new_sr1 & mask1);
@@ -349,7 +388,7 @@ pub async fn write_wp_bits<M: SpiMaster + ?Sized>(
 
     // Determine which registers need to be written
     let need_sr1 = mask1 != 0;
-    let need_sr2 = mask2 != 0;
+    let need_sr2 = options.extended && (mask1 != 0 || mask2 != 0);
 
     if !need_sr1 && !need_sr2 {
         // Nothing to write
@@ -370,7 +409,7 @@ pub async fn write_wp_bits<M: SpiMaster + ?Sized>(
     }
 
     // Verify the write
-    let (verify_sr1, verify_sr2, _) = read_current_registers(master).await?;
+    let (verify_sr1, verify_sr2) = read_current_registers(master, need_sr2).await?;
     if (verify_sr1 & mask1) != (final_sr1 & mask1) {
         return Err(WpError::VerifyFailed);
     }
@@ -529,6 +568,62 @@ pub fn get_available_ranges(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn register_read_errors_abort_before_write() {
+        use crate::chip::Features;
+        use crate::programmer::SpiFeatures;
+        use crate::spi::SpiCommand;
+
+        struct Master {
+            fail: u8,
+            commands: std::vec::Vec<u8>,
+        }
+        impl SpiMaster for Master {
+            fn features(&self) -> SpiFeatures {
+                SpiFeatures::empty()
+            }
+            fn max_read_len(&self) -> usize {
+                256
+            }
+            fn max_write_len(&self) -> usize {
+                256
+            }
+            async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> crate::error::Result<()> {
+                self.commands.push(cmd.opcode);
+                if cmd.opcode == self.fail {
+                    return Err(Error::SpiTransferFailed);
+                }
+                cmd.read_buf.fill(0);
+                Ok(())
+            }
+            async fn delay_us(&mut self, _: u32) {}
+        }
+        let options = WriteOptions::default()
+            .for_features(Features::WRSR_WREN | Features::WRSR_EXT)
+            .unwrap();
+        let mut map = WpRegBitMap::winbond_standard();
+        let mut bits = WpBits::empty();
+        bits.set_bp_value(1, 3);
+        for fail in [0x35, 0x15] {
+            map.wps = if fail == 0x15 {
+                RegBitInfo::new(StatusRegister::Status3, 2, BitWritability::ReadWrite)
+            } else {
+                RegBitInfo::not_present()
+            };
+            let mut master = Master {
+                fail,
+                commands: std::vec::Vec::new(),
+            };
+            assert!(
+                futures_lite::future::block_on(write_wp_bits(&mut master, &bits, &map, options))
+                    .is_err()
+            );
+            assert!(!master.commands.contains(&0x01));
+            assert!(!master.commands.contains(&0x06));
+        }
+    }
 
     #[test]
     fn write_enable_command_follows_chip_features_and_volatility() {

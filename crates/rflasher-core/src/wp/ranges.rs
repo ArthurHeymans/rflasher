@@ -48,8 +48,8 @@ pub fn decode_range(bits: &WpBits, total_size: u32, decoder: RangeDecoder) -> Wp
 /// Standard SPI25 range decoding
 ///
 /// This is the most common algorithm used by Winbond, GigaDevice, ISSI, etc.
-/// The protected size is calculated as: block_size * 2^(bp - offset)
-/// where block_size depends on SEC bit (4K sectors or 64K blocks).
+/// Block mode uses fractions of the chip size; sector mode uses 4K
+/// sectors with a 32K cap.
 pub fn decode_range_spi25(bits: &WpBits, total_size: u32) -> WpRange {
     decode_range_generic(bits, total_size, false, false)
 }
@@ -92,8 +92,8 @@ pub fn decode_range_spi25_2x_block(bits: &WpBits, total_size: u32) -> WpRange {
 ///
 /// # Algorithm
 /// 1. BP=0 means no protection, BP=max means full chip protection
-/// 2. Otherwise: protected_size = block_size * 2^(bp - offset)
-/// 3. SEC bit selects 4K sectors vs 64K blocks
+/// 2. Otherwise: block mode uses chip fractions or fixed-size blocks
+/// 3. SEC bit selects 4K sectors vs block mode
 /// 4. TB bit selects top (high addresses) vs bottom (low addresses)
 /// 5. CMP bit complements (inverts) the protected range
 fn decode_range_generic(
@@ -125,7 +125,7 @@ fn decode_range_generic(
         // SEC=1 means 4K sector protection
         4 * 1024
     } else {
-        // SEC=0 means 64K block protection
+        // Fixed-block decoders use 64K blocks.
         64 * 1024
     };
 
@@ -139,7 +139,14 @@ fn decode_range_generic(
         coefficient *= 2;
     }
 
-    let mut protected_size = block_size.saturating_mul(coefficient);
+    let mut protected_size = if !fixed_64k && !double_coeff && bits.sec != Some(1) {
+        // Scale the block unit for large chips, but never below 64 KiB.
+        let max_coeff = 1u32 << (max_bp - 2);
+        let block_len = (total_size / 2 / max_coeff).max(64 * 1024);
+        block_len.saturating_mul(coefficient)
+    } else {
+        block_size.saturating_mul(coefficient)
+    };
 
     // Clamp protected size based on SEC bit for sector protection
     // SEC=1 with high BP typically caps at 32K
@@ -351,6 +358,114 @@ pub fn decode_spi25_wp(
 mod tests {
     use super::*;
 
+    // W25Q128BV table 2, W25Q64FV table 2: block fractions and
+    // sector-mode sizes, including the CMP complement and both TB values.
+    #[test]
+    fn winbond_datasheet_tables() {
+        // Block sizes in KiB, BP=0..7 (W25Q16/64/128/256 tables).
+        for (mib, blocks) in [
+            (2, [0, 64, 128, 256, 512, 1024, 2048, 2048]),
+            (8, [0, 128, 256, 512, 1024, 2048, 4096, 8192]),
+            (16, [0, 256, 512, 1024, 2048, 4096, 8192, 16384]),
+            (32, [0, 512, 1024, 2048, 4096, 8192, 16384, 32768]),
+        ] {
+            let total = mib * 1024 * 1024;
+            for sec in 0..=1 {
+                for tb in 0..=1 {
+                    for cmp in 0..=1 {
+                        for bp in 0..=7 {
+                            let mut bits = WpBits::empty();
+                            bits.set_bp_value(bp, 3);
+                            bits.sec = Some(sec);
+                            bits.tb = Some(tb);
+                            bits.cmp = Some(cmp);
+                            let size = match (sec, bp) {
+                                (_, 0) => 0,
+                                (_, 7) => total,
+                                (0, _) => blocks[bp as usize] * 1024,
+
+                                (_, _) => (4096 << (bp - 1)).min(32768),
+                            };
+                            let size = size.min(total);
+                            let base_start = if tb == 1 { 0 } else { total - size };
+                            let expected = if cmp == 0 {
+                                WpRange::new(base_start, size)
+                            } else if size == 0 {
+                                WpRange::full(total)
+                            } else if tb == 1 || size == total {
+                                WpRange::new(size, total - size)
+                            } else {
+                                WpRange::new(0, total - size)
+                            };
+                            let actual = decode_range(&bits, total, RangeDecoder::Spi25);
+                            // Empty ranges have canonical start zero.
+                            if expected.len == 0 {
+                                assert_eq!(actual.len, 0);
+                            } else {
+                                assert_eq!(
+                                    actual, expected,
+                                    "total={total} sec={sec} tb={tb} cmp={cmp} bp={bp}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn four_bp_block_table_clamps_at_chip_size() {
+        // 2 MiB, four BP bits: 64 KiB minimum block, then full-chip aliases.
+        let total = 2 * 1024 * 1024;
+        let sizes = [
+            0, 65536, 131072, 262144, 524288, 1048576, 2097152, 2097152, 2097152, 2097152, 2097152,
+            2097152, 2097152, 2097152, 2097152, 2097152,
+        ];
+        for (bp, &size) in sizes.iter().enumerate() {
+            for tb in 0..=1 {
+                for cmp in 0..=1 {
+                    let mut bits = WpBits::empty();
+                    bits.set_bp_value(bp as u8, 4);
+                    bits.tb = Some(tb);
+                    bits.cmp = Some(cmp);
+                    let range = decode_range_spi25(&bits, total);
+                    let len = if cmp == 0 { size } else { total - size };
+                    let top = (tb == 0) != (cmp == 1);
+                    assert_eq!(range.len, len, "bp={bp} tb={tb} cmp={cmp}");
+                    if len != 0 {
+                        assert_eq!(range.start, if top { total - len } else { 0 });
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn w25q128_block_and_sector_ranges() {
+        let total = 16 * 1024 * 1024;
+        let mut bits = WpBits::empty();
+        bits.set_bp_value(1, 3);
+        bits.sec = Some(0);
+        bits.tb = Some(0);
+        assert_eq!(
+            decode_range(&bits, total, RangeDecoder::Spi25),
+            WpRange::new(total - 256 * 1024, 256 * 1024)
+        );
+        bits.tb = Some(1);
+        bits.cmp = Some(1);
+        assert_eq!(
+            decode_range(&bits, total, RangeDecoder::Spi25),
+            WpRange::new(256 * 1024, total - 256 * 1024)
+        );
+        bits.cmp = Some(0);
+        bits.sec = Some(1);
+        assert_eq!(
+            decode_range(&bits, total, RangeDecoder::Spi25),
+            WpRange::new(0, 4096)
+        );
+    }
+
     #[test]
     fn test_no_protection() {
         let mut bits = WpBits::empty();
@@ -375,46 +490,46 @@ mod tests {
     #[test]
     fn test_top_protection() {
         let mut bits = WpBits::empty();
-        bits.set_bp_value(1, 3); // BP=1 = 64K
+        bits.set_bp_value(1, 3); // BP=1 = 1/64 of the array
         bits.tb = Some(0); // Top
         bits.sec = Some(0);
 
         let total = 16 * 1024 * 1024;
         let range = decode_range_spi25(&bits, total);
 
-        // Should protect last 64K
-        assert_eq!(range.len, 64 * 1024);
-        assert_eq!(range.start, total - 64 * 1024);
+        // Should protect the last 256 KiB of this 16 MiB chip.
+        assert_eq!(range.len, 256 * 1024);
+        assert_eq!(range.start, total - 256 * 1024);
     }
 
     #[test]
     fn test_bottom_protection() {
         let mut bits = WpBits::empty();
-        bits.set_bp_value(1, 3); // BP=1 = 64K
+        bits.set_bp_value(1, 3); // BP=1 = 1/64 of the array
         bits.tb = Some(1); // Bottom
         bits.sec = Some(0);
 
         let range = decode_range_spi25(&bits, 16 * 1024 * 1024);
 
-        // Should protect first 64K
+        // Should protect the first 256 KiB.
         assert_eq!(range.start, 0);
-        assert_eq!(range.len, 64 * 1024);
+        assert_eq!(range.len, 256 * 1024);
     }
 
     #[test]
     fn test_cmp_inverts_range() {
         let mut bits = WpBits::empty();
-        bits.set_bp_value(1, 3); // BP=1 = 64K
-        bits.tb = Some(1); // Bottom (first 64K protected)
+        bits.set_bp_value(1, 3); // BP=1 = 1/64 of the array
+        bits.tb = Some(1); // Bottom (first 256 KiB protected)
         bits.sec = Some(0);
         bits.cmp = Some(1); // Invert
 
         let total = 16 * 1024 * 1024;
         let range = decode_range_spi25(&bits, total);
 
-        // With CMP, should protect everything EXCEPT first 64K
-        assert_eq!(range.start, 64 * 1024);
-        assert_eq!(range.len, total - 64 * 1024);
+        // With CMP, protect everything except the first 256 KiB.
+        assert_eq!(range.start, 256 * 1024);
+        assert_eq!(range.len, total - 256 * 1024);
     }
 
     #[test]

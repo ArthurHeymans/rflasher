@@ -67,7 +67,10 @@ These cover catalog entries across Atmel, Micron, SST25, Sanyo, AMIC, Boya,
 ESI/ESMT, Eon, GigaDevice, ISSI, Macronix, PMC, Spansion and Winbond, among others.
 WREN and persistent/volatile EWSR capabilities come from chip metadata; missing
 capabilities do not trigger flashprog's historical guessed-EWSR fallback.
-Combined WRSR preserves SR2 where the catalog specifies that protocol.
+Combined WRSR preserves SR2 where the catalog specifies that protocol. Flags
+indicating SR2 or QE alone do not document opcode `35` (which can enter QPI on
+Macronix parts), nor a safe write width. If BP is set and the write width is
+ambiguous, unprotection is refused before any status write.
 
 Complement protection is checked before the BP-zero fast path: CMP=1 with BP=0
 can protect the entire array, and clearing BP with CMP=1 can protect a previously
@@ -102,9 +105,18 @@ uses BP2/SRWD with separate SR1 failure flags, not Winbond TB/SEC fields.
 
 Unlock masks are not range decoders. `wp` operations require `WP_WINBOND`, an
 explicit assertion of the supported SR1/SR2 map, SPI25 range decoder and combined
-status-write procedure. Currently the bundled W25Q128.V profile carries this
-assertion; other layouts are refused rather than silently treated as Winbond.
-CMP/SRL and independent protection modes are not automatically cleared.
+status-write procedure. The bundled W25Q128.V profile carries this assertion,
+but the shared EF:4018 identity does not establish whether SR3 exists, so it
+cannot report or change WP configuration. Other unaudited layouts are refused. A profile explicitly asserting
+`WP_WPS` reads SR3 and refuses individual-lock mode and read failures. A
+floating-low response to an unsupported SR3 command is indistinguishable from
+WPS=0, so this assertion must only be assigned to a positively identified part.
+The RON schema exposes `WP_WINBOND` but not `WP_WPS`, so a custom RON
+profile cannot assert the SR3/WPS layout needed to enable WP configuration for
+the shared EF:4018 identity.
+Array operations on EF:4018 are allowed; individual locks are not removed and
+may prevent a mutation, which array verification detects. CMP/SRL and independent
+protection modes are not automatically cleared.
 Micron sector locks, Atmel security locks and PMC safeguards remain unresolved;
 array verification still detects ignored mutations.
 
