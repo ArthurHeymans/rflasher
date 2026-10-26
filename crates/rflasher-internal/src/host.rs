@@ -257,30 +257,36 @@ impl HostAccess for LinuxHost {
 pub(crate) mod tests {
     use super::*;
     use crate::error::PciAccessError;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
+    type PciWrites = Arc<Mutex<Vec<(PciAddress, u16, u32, u8)>>>;
+
     /// Fake no-heap-shape host used by controller construction tests.
-    #[derive(Default)]
+    #[derive(Default, Clone)]
     pub(crate) struct FakeHost {
-        config: RefCell<BTreeMap<(PciAddress, u16), u32>>,
-        writes: RefCell<Vec<(PciAddress, u16, u32, u8)>>,
-        delays: RefCell<Vec<u32>>,
+        config: Arc<Mutex<BTreeMap<(PciAddress, u16), u32>>>,
+        writes: PciWrites,
+        delays: Arc<Mutex<Vec<u32>>>,
+        update_write8: bool,
     }
 
     impl FakeHost {
+        pub(crate) fn enable_write8_readback(&mut self) {
+            self.update_write8 = true;
+        }
+
         pub(crate) fn set_config32(&self, bdf: PciAddress, offset: u16, value: u32) {
-            self.config.borrow_mut().insert((bdf, offset), value);
+            self.config.lock().unwrap().insert((bdf, offset), value);
+        }
+
+        pub(crate) fn writes(&self) -> Vec<(PciAddress, u16, u32, u8)> {
+            self.writes.lock().unwrap().clone()
         }
 
         pub(crate) fn delay_log(&self) -> Vec<u32> {
-            self.delays.borrow().clone()
-        }
-
-        /// Config writes as `(bdf, offset, value, width)`.
-        pub(crate) fn config_writes(&self) -> Vec<(PciAddress, u16, u32, u8)> {
-            self.writes.borrow().clone()
+            self.delays.lock().unwrap().clone()
         }
     }
 
@@ -300,33 +306,50 @@ pub(crate) mod tests {
         }
 
         fn read32(&self, bdf: PciAddress, offset: u16) -> Result<u32> {
-            self.config.borrow().get(&(bdf, offset)).copied().ok_or({
-                InternalError::PciAccess(PciAccessError::ConfigRead {
-                    bus: bdf.bus(),
-                    device: bdf.device(),
-                    function: bdf.function(),
-                    register: offset,
+            self.config
+                .lock()
+                .unwrap()
+                .get(&(bdf, offset))
+                .copied()
+                .ok_or({
+                    InternalError::PciAccess(PciAccessError::ConfigRead {
+                        bus: bdf.bus(),
+                        device: bdf.device(),
+                        function: bdf.function(),
+                        register: offset,
+                    })
                 })
-            })
         }
 
         fn write8(&self, bdf: PciAddress, offset: u16, value: u8) -> Result<()> {
             self.writes
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .push((bdf, offset, value as u32, 1));
+            if self.update_write8 {
+                let aligned = offset & !3;
+                let shift = u32::from((offset & 3) * 8);
+                let mut config = self.config.lock().unwrap();
+                let current = config.get(&(bdf, aligned)).copied().unwrap_or(0);
+                config.insert(
+                    (bdf, aligned),
+                    (current & !(0xff << shift)) | (u32::from(value) << shift),
+                );
+            }
             Ok(())
         }
 
         fn write16(&self, bdf: PciAddress, offset: u16, value: u16) -> Result<()> {
             self.writes
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .push((bdf, offset, value as u32, 2));
             Ok(())
         }
 
         fn write32(&self, bdf: PciAddress, offset: u16, value: u32) -> Result<()> {
-            self.writes.borrow_mut().push((bdf, offset, value, 4));
-            self.config.borrow_mut().insert((bdf, offset), value);
+            self.writes.lock().unwrap().push((bdf, offset, value, 4));
+            self.config.lock().unwrap().insert((bdf, offset), value);
             Ok(())
         }
     }
@@ -360,9 +383,14 @@ pub(crate) mod tests {
         spi_commands: RefCell<Vec<FakeSpiCommand>>,
         spi_response: RefCell<Vec<u8>>,
         descriptor: RefCell<Option<(usize, BTreeMap<u32, u32>)>>,
+        hsfs_busy_reads: Cell<usize>,
     }
 
     impl FakeMmio {
+        pub(crate) fn set_hsfs_busy_reads(&self, count: usize) {
+            self.hsfs_busy_reads.set(count);
+        }
+
         pub(crate) fn set_descriptor(&self, fdoc: usize, signature: u32, map: u32, comp: u32) {
             *self.descriptor.borrow_mut() =
                 Some((fdoc, [(0, signature), (4, map), (0x1000, comp)].into()));
@@ -427,9 +455,13 @@ pub(crate) mod tests {
             self.byte(offset)
         }
         fn read16(&self, offset: usize) -> u16 {
-            let value = self.reg(offset) as u16;
+            let mut value = self.reg(offset) as u16;
             if offset != crate::ich_regs::ICH9_REG_HSFS {
                 return value;
+            }
+            if self.hsfs_busy_reads.get() > 0 {
+                self.hsfs_busy_reads.set(self.hsfs_busy_reads.get() - 1);
+                value |= crate::ich_regs::HSFS_SCIP;
             }
             let boundary =
                 (self.reg(crate::ich_regs::ICH9_REG_FPB) & crate::ich_regs::FPB_FPBA) << 12;
@@ -529,7 +561,7 @@ pub(crate) mod tests {
         }
 
         fn delay_us(&self, us: u32) {
-            self.delays.borrow_mut().push(us);
+            self.delays.lock().unwrap().push(us);
         }
     }
 
