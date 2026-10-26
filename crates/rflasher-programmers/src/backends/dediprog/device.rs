@@ -226,8 +226,6 @@ pub struct Dediprog {
     protocol: Protocol,
     /// Current I/O mode
     io_mode: DpIoMode,
-    /// Configured maximum I/O mode
-    max_io_mode: DpIoMode,
 }
 
 impl Dediprog {
@@ -272,7 +270,6 @@ impl Dediprog {
             device_string: String::new(),
             protocol: Protocol::Unknown,
             io_mode: DpIoMode::Single,
-            max_io_mode: config.io_mode,
         };
 
         dediprog.init_device(&config).await?;
@@ -425,11 +422,9 @@ impl Dediprog {
             self.leave_standalone_mode().await?;
         }
 
-        // Determine multi-I/O support
-        if self.device_type.is_sf600_class() && self.protocol >= Protocol::V2 {
-            self.max_io_mode = config.io_mode;
-        } else {
-            self.max_io_mode = DpIoMode::Single;
+        if config.io_mode != DpIoMode::Single {
+            // Control transfers are single I/O, and so are the bulk reads.
+            log::warn!("Dediprog multi-I/O reads are not implemented; using single I/O");
         }
 
         self.set_leds(Led::None).await?;
@@ -1188,26 +1183,6 @@ impl SpiMaster for Dediprog {
         // 4BA support depends on protocol version
         if self.protocol >= Protocol::V2 {
             features |= SpiFeatures::FOUR_BYTE_ADDR;
-        }
-
-        // Multi-I/O support for SF600 class with protocol V2+
-        if self.device_type.is_sf600_class() && self.protocol >= Protocol::V2 {
-            match self.max_io_mode {
-                DpIoMode::DualOut | DpIoMode::DualIo => {
-                    features |= SpiFeatures::DUAL_IN;
-                    // V2 has issues with DUAL_IO, V3 works
-                    if self.protocol >= Protocol::V3 {
-                        features |= SpiFeatures::DUAL_IO;
-                    }
-                }
-                DpIoMode::QuadOut | DpIoMode::QuadIo | DpIoMode::Qpi => {
-                    features |= SpiFeatures::DUAL_IN | SpiFeatures::QUAD_IN;
-                    if self.protocol >= Protocol::V3 {
-                        features |= SpiFeatures::DUAL_IO | SpiFeatures::QUAD_IO;
-                    }
-                }
-                _ => {}
-            }
         }
 
         // Some protocol versions have restrictions on 4BA modes
