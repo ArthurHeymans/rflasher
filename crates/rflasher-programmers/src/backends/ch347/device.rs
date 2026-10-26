@@ -52,6 +52,8 @@ pub struct Ch347 {
     config: SpiConfig,
     /// Device variant (T or F)
     variant: Ch347Variant,
+    /// An incomplete USB transfer leaves the protocol state uncertain.
+    failed: bool,
 }
 
 // The SPI transfer orchestration is generic so error cleanup can be tested
@@ -98,6 +100,15 @@ async fn spi_transfer_with_io<T: SpiIo>(
     .await;
     let deassert_result = io.set_cs(false).await;
     result.and(deassert_result)
+}
+
+fn check_out_length(expected: usize, actual: usize) -> Result<()> {
+    if actual != expected {
+        return Err(Ch347Error::TransferFailed(format!(
+            "short USB write: expected {expected} bytes, got {actual}"
+        )));
+    }
+    Ok(())
 }
 
 fn parse_spi_read_packet(packet: &[u8], remaining: usize) -> Result<&[u8]> {
@@ -178,6 +189,7 @@ impl Ch347 {
             in_ep,
             config,
             variant,
+            failed: false,
         };
 
         ch347.configure().await?;
@@ -260,6 +272,11 @@ impl Ch347 {
 
     /// Shutdown: clean up (WASM equivalent of Drop)
     pub async fn shutdown(&mut self) {
+        // Failed commands may be incomplete, and WebUSB cannot cancel a timeout.
+        if self.failed {
+            log::warn!("CH347 unusable after USB failure; disconnect the programmer");
+            return;
+        }
         // Drain any pending transfers
         #[cfg(not(target_arch = "wasm32"))]
         self.out_ep.cancel_all();
@@ -427,24 +444,52 @@ impl Ch347 {
 
     /// Write data to USB endpoint
     async fn usb_write(&mut self, data: &[u8]) -> Result<()> {
+        if self.failed {
+            return Err(Ch347Error::TransferFailed(
+                "device unusable after USB failure; disconnect the programmer".into(),
+            ));
+        }
         let mut buf = Buffer::new(data.len());
         buf.extend_from_slice(data);
 
         self.out_ep.submit(buf);
 
-        let completion = ep_wait!(self.out_ep, Duration::from_secs(5))
-            .ok_or_else(|| Ch347Error::TransferFailed("USB write timed out".into()))?;
+        let completion = match ep_wait!(self.out_ep, Duration::from_secs(5)) {
+            Some(completion) => completion,
+            None => {
+                self.failed = true;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.out_ep.cancel_all();
+                    while self.out_ep.pending() > 0 {
+                        self.out_ep.next_complete().await;
+                    }
+                }
+                return Err(Ch347Error::TransferFailed("USB write timed out".into()));
+            }
+        };
 
-        completion
+        let result = completion
             .status
-            .map_err(|e| Ch347Error::TransferFailed(e.to_string()))?;
-
+            .map_err(|e| Ch347Error::TransferFailed(e.to_string()))
+            .and_then(|()| check_out_length(data.len(), completion.actual_len));
+        if result.is_err() {
+            // A partial packet may still be waiting for its payload. Even CS
+            // deassertion would be parsed as that payload, not a new command.
+            self.failed = true;
+        }
+        result?;
         log::trace!("USB write {} bytes", data.len());
         Ok(())
     }
 
     /// Read data from USB endpoint
     async fn usb_read(&mut self, buffer: &mut [u8]) -> Result<usize> {
+        if self.failed {
+            return Err(Ch347Error::TransferFailed(
+                "device unusable after USB failure; disconnect the programmer".into(),
+            ));
+        }
         let max_packet_size = self.in_ep.max_packet_size();
         // Request length must be multiple of max packet size
         let request_len = buffer.len().div_ceil(max_packet_size) * max_packet_size;
@@ -453,12 +498,25 @@ impl Ch347 {
 
         self.in_ep.submit(in_buf);
 
-        let completion = ep_wait!(self.in_ep, Duration::from_secs(5))
-            .ok_or_else(|| Ch347Error::TransferFailed("USB read timed out".into()))?;
+        let completion = match ep_wait!(self.in_ep, Duration::from_secs(5)) {
+            Some(completion) => completion,
+            None => {
+                self.failed = true;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.in_ep.cancel_all();
+                    while self.in_ep.pending() > 0 {
+                        self.in_ep.next_complete().await;
+                    }
+                }
+                return Err(Ch347Error::TransferFailed("USB read timed out".into()));
+            }
+        };
 
-        completion
-            .status
-            .map_err(|e| Ch347Error::TransferFailed(e.to_string()))?;
+        if let Err(e) = completion.status {
+            self.failed = true;
+            return Err(Ch347Error::TransferFailed(e.to_string()));
+        }
 
         let received = std::cmp::min(completion.actual_len, buffer.len());
         buffer[..received].copy_from_slice(&completion.buffer[..received]);
@@ -616,6 +674,12 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<SpiConfig> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn out_transfer_must_send_the_whole_command() {
+        assert!(super::check_out_length(13, 13).is_ok());
+        assert!(super::check_out_length(13, 12).is_err());
+    }
+
     use super::*;
 
     #[derive(Default)]
