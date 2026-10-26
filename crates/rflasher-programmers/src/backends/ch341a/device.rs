@@ -368,6 +368,13 @@ impl Ch341a {
                 }
 
                 let expected = in_flight_sizes[complete_idx];
+                if completion.actual_len < expected {
+                    self.drain_all_pending().await;
+                    return Err(Ch341aError::TransferFailed(format!(
+                        "short IN transfer: expected {expected} bytes, got {}",
+                        completion.actual_len
+                    )));
+                }
                 let actual = std::cmp::min(completion.actual_len, expected);
                 let dst_end = std::cmp::min(in_done + actual, total_spi_bytes);
                 rbuf[in_done..dst_end].copy_from_slice(&completion.buffer[..dst_end - in_done]);
@@ -528,7 +535,7 @@ impl SpiMaster for Ch341a {
                 }
             }
 
-            self.stored_delay_us = inc;
+            self.stored_delay_us += inc;
         } else {
             self.stored_delay_us += us;
         }
