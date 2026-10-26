@@ -137,7 +137,7 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         if !self.context().is_valid_range(addr, buf.len()) {
             return Err(Error::AddressOutOfBounds);
         }
-        // Delegate to the canonical free function to avoid divergent duplicates
+        // Uses the master's read fast path, if it has one
         operations::read(&mut self.master, &self.ctx, addr, buf).await
     }
 
@@ -145,8 +145,8 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         if !self.context().is_valid_range(addr, data.len()) {
             return Err(Error::AddressOutOfBounds);
         }
-        // Delegate to the canonical free function (handles AAI word program,
-        // byte-granularity chips, page splitting and 4-byte addressing)
+        // Lifts protection around the master's program fast path or the
+        // generic SPI program (AAI, byte granularity, pages, 4-byte addressing)
         operations::write(&mut self.master, &self.ctx, addr, data).await
     }
 

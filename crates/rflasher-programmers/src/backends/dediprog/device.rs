@@ -10,8 +10,10 @@ use std::time::Duration;
 
 use nusb::Endpoint;
 use nusb::transfer::{Buffer, Bulk, In, Out, TransferError};
+use rflasher_core::chip::{Features, FlashChip, WriteGranularity};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
-use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
+use rflasher_core::flash::{self, FlashContext};
+use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{SpiCommand, check_io_mode_supported, opcodes};
 
 use super::error::{DediprogError, Result};
@@ -226,13 +228,6 @@ pub struct Dediprog {
     io_mode: DpIoMode,
     /// Configured maximum I/O mode
     max_io_mode: DpIoMode,
-    /// Flash size in bytes (set after probing, needed for OpaqueMaster)
-    flash_size: Option<u32>,
-    /// Bulk programming algorithm selected from the probed chip.
-    write_mode: WriteMode,
-    /// Chip page geometry and maximum data size for control SPI programming.
-    page_size: usize,
-    spi_page_size: usize,
 }
 
 impl Dediprog {
@@ -278,10 +273,6 @@ impl Dediprog {
             protocol: Protocol::Unknown,
             io_mode: DpIoMode::Single,
             max_io_mode: config.io_mode,
-            flash_size: None,
-            write_mode: WriteMode::PagePgm,
-            page_size: 256,
-            spi_page_size: 256,
         };
 
         dediprog.init_device(&config).await?;
@@ -893,32 +884,6 @@ impl Dediprog {
         self.protocol
     }
 
-    /// Set the flash size (call after probing to enable OpaqueMaster)
-    pub fn set_flash_size(&mut self, size: u32) {
-        self.flash_size = Some(size);
-    }
-
-    /// Configure bulk transfers using the probed chip's programming algorithm.
-    pub fn set_flash_chip(&mut self, chip: &rflasher_core::chip::FlashChip) {
-        self.set_flash_size(chip.total_size);
-        self.write_mode = if chip
-            .features
-            .contains(rflasher_core::chip::Features::AAI_WORD)
-        {
-            WriteMode::TwoByteAai
-        } else {
-            WriteMode::PagePgm
-        };
-        self.page_size = chip.page_size.max(1) as usize;
-        self.spi_page_size = if self.write_mode == WriteMode::TwoByteAai
-            || chip.write_granularity == rflasher_core::chip::WriteGranularity::Byte
-        {
-            1
-        } else {
-            self.page_size
-        };
-    }
-
     // =========================================================================
     // Bulk Read/Write (CMD_READ/CMD_WRITE with USB bulk transfers)
     // =========================================================================
@@ -1075,7 +1040,7 @@ impl Dediprog {
     /// Start and len MUST be 256-byte aligned. Each USB transfer contains
     /// 256 data bytes followed by 256 bytes of 0xFF padding, as in flashprog.
     /// The firmware handles WREN, page/AAI programming, and WIP polling.
-    async fn bulk_write_flash(&mut self, start: u32, data: &[u8]) -> Result<()> {
+    async fn bulk_write_flash(&mut self, start: u32, data: &[u8], mode: WriteMode) -> Result<()> {
         const PAGE_SIZE: usize = 256;
         let len = data.len();
         if len == 0 {
@@ -1097,7 +1062,7 @@ impl Dediprog {
             &mut value,
             &mut idx,
             false,
-            self.write_mode as u8,
+            mode as u8,
             start,
             count,
         )?;
@@ -1129,209 +1094,84 @@ impl Dediprog {
             }
         }
         // USB delivery can finish before the firmware has drained its buffers.
-        // Wait here, not just at the hybrid boundary, before another bulk chunk.
+        // Wait before another bulk chunk and before returning to the caller.
         rflasher_core::protocol::wait_ready(self, 10_000, 5_000_000)
             .await
             .map_err(|e| DediprogError::TransferFailed(format!("bulk worker status: {e}")))
     }
 
-    /// Slow read via SPI transceive (for unaligned head/tail residuals).
-    /// Reads up to 16 bytes per USB control transfer using standard READ (0x03).
-    async fn slow_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
-        let mut offset = 0usize;
-        while offset < buf.len() {
-            let chunk_len = (buf.len() - offset).min(16);
-            let a = addr + offset as u32;
-            let cmd = [opcodes::READ, (a >> 16) as u8, (a >> 8) as u8, a as u8];
-            let result = self.spi_transceive(&cmd, chunk_len).await?;
-            buf[offset..offset + chunk_len].copy_from_slice(&result[..chunk_len]);
-            offset += chunk_len;
+    /// Bulk-read whole 512-byte chunks, bounded per USB transfer.
+    async fn bulk_read_range(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
+        let max_len = (MAX_BLOCK_COUNT as usize).min(MAX_READ_BLOCKS) * BULK_CHUNK_SIZE;
+        let mut chunk_addr = addr;
+        for chunk in buf.chunks_mut(max_len) {
+            self.bulk_read_flash(chunk_addr, chunk)
+                .await
+                .map_err(|_| CoreError::ReadError { addr: chunk_addr })?;
+            chunk_addr += chunk.len() as u32;
         }
         Ok(())
     }
 
-    /// Split a write and refuse any slow portion outside the 24-bit address space.
-    fn write_lengths(addr: u32, len: usize, bulk_supported: bool) -> CoreResult<(usize, usize)> {
-        const PAGE_SIZE: usize = 256;
-        const ADDRESS_LIMIT: u64 = 1 << 24;
-
-        let head = if !bulk_supported {
-            len
-        } else if !(addr as usize).is_multiple_of(PAGE_SIZE) {
-            len.min(PAGE_SIZE - addr as usize % PAGE_SIZE)
-        } else {
-            0
-        };
-        let bulk = (len - head) / PAGE_SIZE * PAGE_SIZE;
-        let tail = len - head - bulk;
-        // Validate both residuals before issuing even the first bulk transfer.
-        if (head > 0 && u64::from(addr) + head as u64 > ADDRESS_LIMIT)
-            || (tail > 0 && u64::from(addr) + len as u64 > ADDRESS_LIMIT)
-        {
-            log::error!("Dediprog slow write cannot address beyond 16 MiB");
-            return Err(CoreError::WriteError { addr });
-        }
-        Ok((head, bulk))
-    }
-
-    /// Slow write via SPI transceive (for unaligned head/tail residuals).
-    /// Uses byte programming for SST tails, otherwise page programming.
-    async fn slow_write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
-        let max_write = 16 - 5; // 11 bytes per transceive (16 - 1 opcode - 3 addr - 1 margin)
-        let mut offset = 0usize;
-
-        while offset < data.len() {
-            let a = addr + offset as u32;
-            let page_offset = a as usize % self.spi_page_size;
-            let to_page_end = self.spi_page_size - page_offset;
-            let remaining = data.len() - offset;
-            let chunk_len = remaining.min(max_write).min(to_page_end);
-
-            rflasher_core::protocol::program_page_3b(self, a, &data[offset..offset + chunk_len])
+    /// Bulk-program whole 256-byte pages, bounded per USB transfer.
+    async fn bulk_write_range(
+        &mut self,
+        addr: u32,
+        data: &[u8],
+        mode: WriteMode,
+    ) -> CoreResult<()> {
+        let max_len = (MAX_BLOCK_COUNT as usize).min(MAX_WRITE_PAGES) * BULK_PAGE_SIZE;
+        let mut chunk_addr = addr;
+        for chunk in data.chunks(max_len) {
+            self.bulk_write_flash(chunk_addr, chunk, mode)
                 .await
-                .map_err(|e| DediprogError::TransferFailed(format!("SPI program: {e}")))?;
-
-            offset += chunk_len;
+                .map_err(|error| {
+                    log::error!(
+                        "Dediprog bulk write at 0x{chunk_addr:08x} ({} bytes) failed: {error}",
+                        chunk.len()
+                    );
+                    CoreError::WriteError { addr: chunk_addr }
+                })?;
+            chunk_addr += chunk.len() as u32;
         }
         Ok(())
     }
 }
 
-// ---------------------------------------------------------------------------
-// OpaqueMaster trait implementation
-// ---------------------------------------------------------------------------
+/// Bytes per page in a CMD_WRITE bulk transfer.
+const BULK_PAGE_SIZE: usize = 256;
 
-impl OpaqueMaster for Dediprog {
-    fn size(&self) -> usize {
-        self.flash_size.unwrap_or(0) as usize
+/// The bulk commands are only used with three-byte addresses: the firmware
+/// needs dedicated modes and chip-specific opcodes beyond 16 MiB.
+const BULK_ADDRESS_LIMIT: u64 = 1 << 24;
+
+/// Split `len` bytes at `addr` into `(head, bulk)`: an unaligned head, then
+/// whole `block`-sized blocks below [`BULK_ADDRESS_LIMIT`]. The rest is the
+/// tail. Head and tail use generic SPI commands.
+fn bulk_split(addr: u32, len: usize, block: usize) -> (usize, usize) {
+    let start = u64::from(addr);
+    let end = (start + len as u64).min(BULK_ADDRESS_LIMIT);
+    let bulk_start = start.next_multiple_of(block as u64);
+    if bulk_start >= end {
+        return (len, 0);
     }
-
-    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
-        let len = buf.len();
-        if len == 0 {
-            return Ok(());
-        }
-
-        // Split into: head residue + aligned bulk + tail residue
-        let chunk_size = BULK_CHUNK_SIZE;
-        let head_residue = if !(addr as usize).is_multiple_of(chunk_size) {
-            len.min(chunk_size - (addr as usize % chunk_size))
-        } else {
-            0
-        };
-
-        // Head: slow read for unaligned start
-        if head_residue > 0 {
-            self.slow_read(addr, &mut buf[..head_residue])
-                .await
-                .map_err(|_| CoreError::ReadError { addr })?;
-        }
-
-        // Aligned bulk portion
-        let bulk_start = addr + head_residue as u32;
-        let remaining = len - head_residue;
-        let bulk_len = (remaining / chunk_size) * chunk_size;
-
-        if bulk_len > 0 {
-            // Split into chunks that fit in a single USB buffer.
-            let max_blocks = (MAX_BLOCK_COUNT as usize).min(MAX_READ_BLOCKS);
-            let mut bulk_offset = 0usize;
-            while bulk_offset < bulk_len {
-                let this_len = (bulk_len - bulk_offset).min(max_blocks * chunk_size);
-                let this_len = (this_len / chunk_size) * chunk_size;
-                if this_len == 0 {
-                    break;
-                }
-                let buf_start = head_residue + bulk_offset;
-                let read_addr = bulk_start + bulk_offset as u32;
-                self.bulk_read_flash(read_addr, &mut buf[buf_start..buf_start + this_len])
-                    .await
-                    .map_err(|_| CoreError::ReadError { addr: read_addr })?;
-                bulk_offset += this_len;
-            }
-        }
-
-        // Tail: slow read for remaining bytes
-        let tail_start = head_residue + bulk_len;
-        if tail_start < len {
-            let tail_addr = addr + tail_start as u32;
-            self.slow_read(tail_addr, &mut buf[tail_start..])
-                .await
-                .map_err(|_| CoreError::ReadError { addr: tail_addr })?;
-        }
-
-        Ok(())
+    let bulk = (end - bulk_start) / block as u64 * block as u64;
+    if bulk == 0 {
+        return (len, 0);
     }
+    ((bulk_start - start) as usize, bulk as usize)
+}
 
-    async fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
-        const PAGE_SIZE: usize = 256;
-        let len = data.len();
-        if len == 0 {
-            return Ok(());
-        }
-
-        // Bulk writes require 256-byte alignment and compatible chip geometry.
-        let bulk_supported = self.page_size == PAGE_SIZE
-            && (self.spi_page_size != 1 || self.write_mode == WriteMode::TwoByteAai);
-        let (head_residue, bulk_len) = Self::write_lengths(addr, len, bulk_supported)?;
-
-        // Head: slow write for unaligned start
-        if head_residue > 0 {
-            self.slow_write(addr, &data[..head_residue])
-                .await
-                .map_err(|error| {
-                    log::error!("Dediprog slow write at 0x{addr:08x} failed: {error}");
-                    CoreError::WriteError { addr }
-                })?;
-        }
-
-        // Aligned bulk portion
-        let bulk_start = addr + head_residue as u32;
-
-        if bulk_len > 0 {
-            // Bound each CMD_WRITE request to MAX_WRITE_PAGES pages.
-            let max_pages = (MAX_BLOCK_COUNT as usize).min(MAX_WRITE_PAGES);
-            let mut bulk_offset = 0usize;
-            while bulk_offset < bulk_len {
-                let this_len = (bulk_len - bulk_offset).min(max_pages * PAGE_SIZE);
-                let this_len = (this_len / PAGE_SIZE) * PAGE_SIZE;
-                if this_len == 0 {
-                    break;
-                }
-                let data_start = head_residue + bulk_offset;
-                let write_addr = bulk_start + bulk_offset as u32;
-                self.bulk_write_flash(write_addr, &data[data_start..data_start + this_len])
-                    .await
-                    .map_err(|error| {
-                        log::error!(
-                            "Dediprog bulk write at 0x{write_addr:08x} ({this_len} bytes) failed: {error}"
-                        );
-                        CoreError::WriteError { addr: write_addr }
-                    })?;
-                bulk_offset += this_len;
-            }
-        }
-
-        // Tail: slow write for remaining bytes
-        let tail_start = head_residue + bulk_len;
-        if tail_start < len {
-            let tail_addr = addr + tail_start as u32;
-            self.slow_write(tail_addr, &data[tail_start..])
-                .await
-                .map_err(|error| {
-                    log::error!("Dediprog slow write at 0x{tail_addr:08x} failed: {error}");
-                    CoreError::WriteError { addr: tail_addr }
-                })?;
-        }
-
-        Ok(())
-    }
-
-    async fn erase(&mut self, _addr: u32, _len: u32) -> CoreResult<()> {
-        // Erase is not supported through the opaque path.
-        // The HybridFlashDevice adapter uses SpiMaster for erase operations,
-        // since the Dediprog firmware has no bulk erase command.
-        Err(CoreError::ProgrammerError)
+/// Firmware programming algorithm for the chip, if its pages fit CMD_WRITE.
+fn bulk_write_mode(chip: &FlashChip) -> Option<WriteMode> {
+    if usize::from(chip.page_size) != BULK_PAGE_SIZE {
+        None
+    } else if chip.features.contains(Features::AAI_WORD) {
+        Some(WriteMode::TwoByteAai)
+    } else if chip.write_granularity == WriteGranularity::Byte {
+        None
+    } else {
+        Some(WriteMode::PagePgm)
     }
 }
 
@@ -1422,5 +1262,62 @@ impl SpiMaster for Dediprog {
 
     async fn delay_us(&mut self, us: u32) {
         platform_sleep!(Duration::from_micros(us as u64));
+    }
+
+    /// CMD_READ bulk transfers for aligned 512-byte chunks.
+    async fn read_flash(
+        &mut self,
+        ctx: &FlashContext,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> CoreResult<()> {
+        let (head, bulk) = if self.protocol == Protocol::Unknown {
+            (buf.len(), 0)
+        } else {
+            bulk_split(addr, buf.len(), BULK_CHUNK_SIZE)
+        };
+        let (head_buf, rest) = buf.split_at_mut(head);
+        let (bulk_buf, tail_buf) = rest.split_at_mut(bulk);
+        let bulk_addr = addr + head as u32;
+        let tail_addr = bulk_addr + bulk as u32;
+        if !head_buf.is_empty() {
+            flash::spi_read(self, ctx, addr, head_buf).await?;
+        }
+        if !bulk_buf.is_empty() {
+            self.bulk_read_range(bulk_addr, bulk_buf).await?;
+        }
+        if !tail_buf.is_empty() {
+            flash::spi_read(self, ctx, tail_addr, tail_buf).await?;
+        }
+        Ok(())
+    }
+
+    /// CMD_WRITE bulk transfers for aligned pages, using the firmware's
+    /// page-program or AAI algorithm.
+    async fn program_flash(
+        &mut self,
+        ctx: &FlashContext,
+        addr: u32,
+        data: &[u8],
+    ) -> CoreResult<()> {
+        let mode = bulk_write_mode(&ctx.chip).filter(|_| self.protocol != Protocol::Unknown);
+        let Some(mode) = mode else {
+            return flash::spi_program(self, ctx, addr, data).await;
+        };
+        let (head, bulk) = bulk_split(addr, data.len(), BULK_PAGE_SIZE);
+        let (head_data, rest) = data.split_at(head);
+        let (bulk_data, tail_data) = rest.split_at(bulk);
+        let bulk_addr = addr + head as u32;
+        let tail_addr = bulk_addr + bulk as u32;
+        if !head_data.is_empty() {
+            flash::spi_program(self, ctx, addr, head_data).await?;
+        }
+        if !bulk_data.is_empty() {
+            self.bulk_write_range(bulk_addr, bulk_data, mode).await?;
+        }
+        if !tail_data.is_empty() {
+            flash::spi_program(self, ctx, tail_addr, tail_data).await?;
+        }
+        Ok(())
     }
 }

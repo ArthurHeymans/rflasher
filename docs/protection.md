@@ -1,6 +1,6 @@
 # Chip-specific software protection
 
-SPI erase/program operations, including hybrid programmers' bulk writes, use
+SPI erase/program operations, including programmers' bulk-write fast paths, use
 explicit `Unlock` metadata. The chip catalog records the documented procedure;
 it is not inferred from the manufacturer or from an SFDP BP-field guess.
 JEDEC aliases with different procedures are not interchangeable.
@@ -121,7 +121,7 @@ array verification still detects ignored mutations.
 - [Legacy SST26VF016/032 datasheet](https://ww1.microchip.com/downloads/en/DeviceDoc/Serial-Quad-IO-%28SQI%29-Flash-Memory-SST26VF016-SST26VF032-20005017B.pdf).
 
 Stateful emulator tests exercise a 4 MiB AT25DF321-shaped BIOS update through
-SPI and hybrid bulk writes, including dynamic dispatch, preservation of data
-outside the region, mixed protection, ignored erases, locks, enable methods,
-error flags and cleanup failures. They do not replace validation with physical
-flash and programmer hardware.
+generic SPI and fast-path bulk writes, including dynamic dispatch,
+preservation of data outside the region, mixed protection, ignored erases,
+locks, enable methods, error flags and cleanup failures. They do not replace
+validation with physical flash and programmer hardware.

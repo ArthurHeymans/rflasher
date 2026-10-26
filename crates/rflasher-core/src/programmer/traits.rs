@@ -5,6 +5,7 @@
 //! in the CLI); WASM drives them from the browser event loop.
 
 use crate::error::Result;
+use crate::flash::FlashContext;
 use crate::spi::SpiCommand;
 use bitflags::bitflags;
 
@@ -47,6 +48,19 @@ impl Default for SpiFeatures {
 ///
 /// This trait represents a programmer that can execute SPI commands.
 /// Operational methods are async; metadata queries are synchronous.
+///
+/// ## Fast paths
+///
+/// [`read_flash`](Self::read_flash) and [`program_flash`](Self::program_flash)
+/// default to the generic SPI protocol ([`crate::flash::spi_read`],
+/// [`crate::flash::spi_program`]). Programmers with a faster route to the
+/// flash (bulk USB commands, a memory-mapped window, an on-target helper)
+/// override them and call the generic functions for anything the fast path
+/// cannot handle. A fast path must not be more capable than the generic
+/// protocol: callers validate operations against the plain SPI path first.
+///
+/// Never call [`crate::flash::read`] or [`crate::flash::write`] from an
+/// override; those dispatch back into these methods.
 ///
 /// ## Multi-I/O Support
 ///
@@ -125,13 +139,29 @@ pub trait SpiMaster {
 
     /// Delay for the specified number of microseconds
     async fn delay_us(&mut self, us: u32);
+
+    /// Read `buf.len()` bytes of the probed chip starting at `addr`.
+    ///
+    /// The range has already been bounds-checked against `ctx`.
+    async fn read_flash(&mut self, ctx: &FlashContext, addr: u32, buf: &mut [u8]) -> Result<()> {
+        crate::flash::spi_read(self, ctx, addr, buf).await
+    }
+
+    /// Program already-erased flash starting at `addr`.
+    ///
+    /// Called by [`crate::flash::write`] after it has validated the write
+    /// and temporarily lifted chip protection, so overrides only move data.
+    /// Return with the chip idle.
+    async fn program_flash(&mut self, ctx: &FlashContext, addr: u32, data: &[u8]) -> Result<()> {
+        crate::flash::spi_program(self, ctx, addr, data).await
+    }
 }
 
-/// Opaque master trait for programmers with restricted access
+/// Address-based flash access for programmers without raw SPI access.
 ///
-/// Some programmers (like Intel internal flash controller) don't expose
-/// raw SPI access. Instead, they provide higher-level read/write/erase
-/// operations that handle the protocol internally.
+/// The backend handles the flash protocol itself (Intel hardware
+/// sequencing, Linux MTD). Programmers that can send SPI commands implement
+/// [`SpiMaster`] instead, overriding its fast paths where they have them.
 pub trait OpaqueMaster {
     /// Get the total flash size in bytes
     fn size(&self) -> usize;

@@ -16,7 +16,7 @@ use std::pin::Pin;
 
 use rflasher_core::chip::{EraseBlock, WriteGranularity};
 use rflasher_core::error::Result;
-use rflasher_core::flash::{FlashDevice, OptimalEraseOp};
+use rflasher_core::flash::{FlashContext, FlashDevice, OptimalEraseOp};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::SpiCommand;
 use rflasher_core::wp::{WpConfig, WpMode, WpRange, WpResult, WriteOptions};
@@ -216,6 +216,18 @@ trait DynSpiMaster {
     fn probe_opcode(&self, opcode: u8) -> bool;
     fn execute<'a>(&'a mut self, cmd: &'a mut SpiCommand<'_>) -> BoxFuture<'a, Result<()>>;
     fn delay_us(&mut self, us: u32) -> BoxFuture<'_, ()>;
+    fn read_flash<'a>(
+        &'a mut self,
+        ctx: &'a FlashContext,
+        addr: u32,
+        buf: &'a mut [u8],
+    ) -> BoxFuture<'a, Result<()>>;
+    fn program_flash<'a>(
+        &'a mut self,
+        ctx: &'a FlashContext,
+        addr: u32,
+        data: &'a [u8],
+    ) -> BoxFuture<'a, Result<()>>;
 }
 
 impl<M: SpiMaster> DynSpiMaster for M {
@@ -236,6 +248,22 @@ impl<M: SpiMaster> DynSpiMaster for M {
     }
     fn delay_us(&mut self, us: u32) -> BoxFuture<'_, ()> {
         Box::pin(SpiMaster::delay_us(self, us))
+    }
+    fn read_flash<'a>(
+        &'a mut self,
+        ctx: &'a FlashContext,
+        addr: u32,
+        buf: &'a mut [u8],
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(SpiMaster::read_flash(self, ctx, addr, buf))
+    }
+    fn program_flash<'a>(
+        &'a mut self,
+        ctx: &'a FlashContext,
+        addr: u32,
+        data: &'a [u8],
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(SpiMaster::program_flash(self, ctx, addr, data))
     }
 }
 
@@ -274,5 +302,51 @@ impl SpiMaster for ErasedSpiMaster {
     }
     async fn delay_us(&mut self, us: u32) {
         self.inner.delay_us(us).await
+    }
+    // Forward the fast paths, or erased masters would silently use generic SPI.
+    async fn read_flash(&mut self, ctx: &FlashContext, addr: u32, buf: &mut [u8]) -> Result<()> {
+        self.inner.read_flash(ctx, addr, buf).await
+    }
+    async fn program_flash(&mut self, ctx: &FlashContext, addr: u32, data: &[u8]) -> Result<()> {
+        self.inner.program_flash(ctx, addr, data).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_lite::future::block_on;
+
+    /// Fails every SPI command; reads only succeed through the fast path.
+    struct FastOnly;
+
+    impl SpiMaster for FastOnly {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+        fn max_read_len(&self) -> usize {
+            64
+        }
+        fn max_write_len(&self) -> usize {
+            64
+        }
+        async fn execute(&mut self, _cmd: &mut SpiCommand<'_>) -> Result<()> {
+            Err(rflasher_core::error::Error::SpiTransferFailed)
+        }
+        async fn delay_us(&mut self, _us: u32) {}
+        async fn read_flash(&mut self, _: &FlashContext, _: u32, buf: &mut [u8]) -> Result<()> {
+            buf.fill(0xa5);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn erased_masters_keep_backend_fast_paths() {
+        let db = rflasher_chips::ChipDatabase::new();
+        let ctx = FlashContext::new(db.find_by_name("W25Q128.V")[0].clone());
+        let mut master = ErasedSpiMaster::new(FastOnly);
+        let mut buf = [0; 4];
+        block_on(rflasher_core::flash::read(&mut master, &ctx, 0, &mut buf)).unwrap();
+        assert_eq!(buf, [0xa5; 4]);
     }
 }

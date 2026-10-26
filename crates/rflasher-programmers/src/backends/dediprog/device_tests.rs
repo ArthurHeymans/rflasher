@@ -94,56 +94,37 @@ fn status_retries_are_bounded_and_preserve_failures() {
 }
 
 #[test]
-fn write_splitting_preserves_bulk_and_residual_lengths() {
-    for (addr, len, bulk_supported, expected) in [
-        (0, 512, true, (0, 512)),
-        (1, 512, true, (255, 256)),
-        (1, 1, true, (1, 0)),
-        (0, 513, true, (0, 512)),
-        (0, 512, false, (512, 0)),
+fn bulk_split_keeps_unaligned_and_four_byte_ranges_on_spi() {
+    const LIMIT: u32 = 1 << 24;
+    for (addr, len, block, expected) in [
+        (0, 512, 512, (0, 512)),
+        (1, 1024, 512, (511, 512)),
+        (0, 513, 512, (0, 512)),
+        (1, 1, 256, (1, 0)),
+        (1, 512, 256, (255, 256)),
+        (0, 0, 256, (0, 0)),
+        // Bulk commands stop at the three-byte address limit.
+        (LIMIT - 512, 1024, 256, (0, 512)),
+        (LIMIT, 4096, 512, (4096, 0)),
+        (u32::MAX, 1, 256, (1, 0)),
     ] {
-        assert_eq!(
-            Dediprog::write_lengths(addr, len, bulk_supported),
-            Ok(expected)
-        );
+        assert_eq!(bulk_split(addr, len, block), expected, "{addr:#x}+{len}");
     }
 }
 
 #[test]
-fn slow_write_ranges_must_fit_three_byte_addresses_before_any_programming() {
-    const LIMIT: u32 = 1 << 24;
-    for bulk_supported in [false, true] {
-        // The last addressable byte is valid; an empty write touches nothing.
-        assert_eq!(
-            Dediprog::write_lengths(LIMIT - 1, 1, bulk_supported),
-            Ok((1, 0))
-        );
-        assert_eq!(
-            Dediprog::write_lengths(LIMIT, 0, bulk_supported),
-            Ok((0, 0))
-        );
-        for (addr, len) in [
-            (LIMIT, 1),
-            (LIMIT + 1, 256),
-            (LIMIT - 1, 2),
-            // A valid bulk prefix must not be sent before rejecting its tail.
-            (LIMIT - 256, 257),
-            (u32::MAX, 1),
-        ] {
-            assert_eq!(
-                Dediprog::write_lengths(addr, len, bulk_supported),
-                Err(CoreError::WriteError { addr })
-            );
-        }
-    }
-    assert_eq!(
-        Dediprog::write_lengths(LIMIT - 512, 512, false),
-        Ok((512, 0))
-    );
-    assert_eq!(
-        Dediprog::write_lengths(LIMIT, 512, false),
-        Err(CoreError::WriteError { addr: LIMIT })
-    );
+fn bulk_write_mode_follows_chip_programming_algorithm() {
+    let db = rflasher_chips::ChipDatabase::new();
+    let mut chip = db.find_by_name("W25Q128.V")[0].clone();
+    assert_eq!(bulk_write_mode(&chip), Some(WriteMode::PagePgm));
+    chip.features.insert(Features::AAI_WORD);
+    assert_eq!(bulk_write_mode(&chip), Some(WriteMode::TwoByteAai));
+    chip.features.remove(Features::AAI_WORD);
+    chip.write_granularity = WriteGranularity::Byte;
+    assert_eq!(bulk_write_mode(&chip), None);
+    chip.write_granularity = WriteGranularity::Page;
+    chip.page_size = 512;
+    assert_eq!(bulk_write_mode(&chip), None);
 }
 
 #[test]

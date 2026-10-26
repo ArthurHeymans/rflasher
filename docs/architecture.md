@@ -34,6 +34,45 @@ goes through object-erasure adapters (`ErasedFlashDevice`,
 `ErasedSpiMaster`) in `rflasher-programmers`. The one boxed future per
 operation is negligible next to USB and flash latency.
 
+## SPI and opaque access
+
+There are two programmer traits, and every programmer implements exactly the
+one that matches its hardware:
+
+- `SpiMaster` executes SPI transactions; the core owns chip protocols. USB
+  bulk transport or a memory-mapped window does not make a programmer opaque.
+- `OpaqueMaster` is for programmers without raw SPI access, which accept
+  flash addresses and run the protocol themselves.
+
+`SpiFlashDevice` wraps a `SpiMaster` and the probed `FlashContext`;
+`OpaqueFlashDevice` wraps an `OpaqueMaster`. Both implement `FlashDevice`,
+the address-level interface used by every high-level operation.
+
+Programmers with a faster route to the flash override the provided
+`SpiMaster::read_flash` and `SpiMaster::program_flash` methods. Their
+defaults are the generic protocol (`flash::spi_read`, `flash::spi_program`),
+and an override receives the chip context on every call, so it decides per
+chip and per range, and falls back by calling the generic function. No
+configuration step is needed after probing, and erasure through
+`ErasedSpiMaster` keeps the overrides.
+
+The core keeps everything around the fast path: bounds checks, the
+preflight that the generic protocol could perform the write, temporary
+unprotection and its restoration, erase, status registers and write
+protection. A fast path may only be faster than the generic protocol, never
+more capable.
+
+| Backend | Access |
+|---|---|
+| Dediprog | SPI; CMD_READ/CMD_WRITE bulk transfers for aligned blocks below 16 MiB |
+| sunxi FEL | SPI; payload bulk reads and page programs for compatible chips |
+| Intel software sequencing, AMD SPI100 | SPI |
+| Intel hardware sequencing, Linux MTD | Opaque |
+| CH341A/CH347, FTDI/FT4222, Raiden, serprog, spidev/GPIO, ATI SPI, dummy | SPI |
+
+Fallback is selected from known capabilities, never by retrying a failed fast
+transfer as a generic one.
+
 ## Firmware reuse of the internal programmer
 
 The Intel ICH/PCH and AMD SPI100 controller code in `rflasher-internal` is

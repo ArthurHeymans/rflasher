@@ -11,9 +11,7 @@ use rflasher_core::flash::MutationPolicy;
 use rflasher_core::flash::unified::{
     WriteProgress, WriteStats, erase_region_with_policy, smart_write_with_policy,
 };
-use rflasher_core::flash::{
-    FlashContext, FlashDevice, HybridFlashDevice, ProbeResult, SpiFlashDevice,
-};
+use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult, SpiFlashDevice};
 use rflasher_programmers::catalog::{OptionKind, ProgrammerInfo, Transport, available_programmers};
 use rflasher_programmers::ch341a::Ch341a;
 use rflasher_programmers::ch347::Ch347;
@@ -120,12 +118,9 @@ macro_rules! with_programmer {
     };
 }
 
-/// Like [`with_programmer!`], but wraps the programmer in a [`FlashDevice`]
-/// for operations that need chip-level read/write/erase.
-///
-/// For Dediprog: creates [`HybridFlashDevice`] (fast bulk read/write via
-/// `OpaqueMaster`) and configures the probed chip's bulk programming mode first.
-/// For all others: creates [`SpiFlashDevice`].
+/// Like [`with_programmer!`], but wraps the programmer in a
+/// [`SpiFlashDevice`] for operations that need chip-level read/write/erase.
+/// Programmers with bulk paths (Dediprog) select them per chip themselves.
 ///
 /// The body receives `$device` as `&mut impl FlashDevice`. The macro handles
 /// extracting the master back via `into_parts()` and putting the Programmer
@@ -168,9 +163,8 @@ macro_rules! with_flash_device {
                 $shared.borrow_mut().programmer = Some(Programmer::Ft4222(master));
                 result
             }
-            Programmer::Dediprog(mut master) => {
-                master.set_flash_chip(&$ctx_flash.chip);
-                let mut $device = HybridFlashDevice::new(master, $ctx_flash);
+            Programmer::Dediprog(master) => {
+                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
                 let result = { $body };
                 let (master, _) = $device.into_parts();
                 $shared.borrow_mut().programmer = Some(Programmer::Dediprog(master));
