@@ -7,13 +7,14 @@ use std::rc::Rc;
 
 use rflasher_chips::ChipDatabase;
 use rflasher_core::chip::FlashChip;
+use rflasher_core::error::Result as CoreResult;
 use rflasher_core::flash::MutationPolicy;
 use rflasher_core::flash::unified::{
     WriteProgress, WriteStats, erase_region_with_policy, smart_write_with_policy,
 };
-use rflasher_core::flash::{
-    FlashContext, FlashDevice, HybridFlashDevice, ProbeResult, SpiFlashDevice,
-};
+use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult, SpiFlashDevice};
+use rflasher_core::programmer::{SpiFeatures, SpiMaster};
+use rflasher_core::spi::SpiCommand;
 use rflasher_programmers::catalog::{OptionKind, ProgrammerInfo, Transport, available_programmers};
 use rflasher_programmers::ch341a::Ch341a;
 use rflasher_programmers::ch347::Ch347;
@@ -64,127 +65,64 @@ enum Programmer {
     Raiden(RaidenDebugSpi),
 }
 
-// ---------------------------------------------------------------------------
-// Macro to dispatch operations across programmer variants
-// ---------------------------------------------------------------------------
-// This eliminates the per-variant match arm duplication in every spawner.
-// The macro takes the programmer, calls the operation on the inner SpiMaster,
-// and puts it back into the shared state.
-
-/// Dispatch an async operation across all programmer variants.
-///
-/// Usage: `with_programmer!(shared, programmer, |master| { async body using master })`
-///
-/// The `master` binding is `&mut impl SpiMaster`. The async body must return
-/// the master back via `device.into_parts()` pattern or similar -- the macro
-/// handles putting the Programmer wrapper back into shared state.
-macro_rules! with_programmer {
-    ($shared:expr, $programmer:expr, $name:ident, $body:expr) => {
+/// Run `$body` with `$m` bound to the inner programmer of any variant.
+macro_rules! dispatch {
+    ($programmer:expr, $m:ident => $body:expr) => {
         match $programmer {
-            Programmer::Serprog(mut $name) => {
-                let result = $body;
-                $shared.borrow_mut().programmer = Some(Programmer::Serprog($name));
-                result
-            }
-            Programmer::Ch341a(mut $name) => {
-                let result = $body;
-                $shared.borrow_mut().programmer = Some(Programmer::Ch341a($name));
-                result
-            }
-            Programmer::Ch347(mut $name) => {
-                let result = $body;
-                $shared.borrow_mut().programmer = Some(Programmer::Ch347($name));
-                result
-            }
-            Programmer::Ftdi(mut $name) => {
-                let result = $body;
-                $shared.borrow_mut().programmer = Some(Programmer::Ftdi($name));
-                result
-            }
-            Programmer::Ft4222(mut $name) => {
-                let result = $body;
-                $shared.borrow_mut().programmer = Some(Programmer::Ft4222($name));
-                result
-            }
-            Programmer::Dediprog(mut $name) => {
-                let result = $body;
-                $shared.borrow_mut().programmer = Some(Programmer::Dediprog($name));
-                result
-            }
-            Programmer::Raiden(mut $name) => {
-                let result = $body;
-                $shared.borrow_mut().programmer = Some(Programmer::Raiden($name));
-                result
-            }
+            Programmer::Serprog($m) => $body,
+            Programmer::Ch341a($m) => $body,
+            Programmer::Ch347($m) => $body,
+            Programmer::Ftdi($m) => $body,
+            Programmer::Ft4222($m) => $body,
+            Programmer::Dediprog($m) => $body,
+            Programmer::Raiden($m) => $body,
         }
     };
 }
 
-/// Like [`with_programmer!`], but wraps the programmer in a [`FlashDevice`]
-/// for operations that need chip-level read/write/erase.
-///
-/// For Dediprog: creates [`HybridFlashDevice`] (fast bulk read/write via
-/// `OpaqueMaster`) and configures the probed chip's bulk programming mode first.
-/// For all others: creates [`SpiFlashDevice`].
-///
-/// The body receives `$device` as `&mut impl FlashDevice`. The macro handles
-/// extracting the master back via `into_parts()` and putting the Programmer
-/// wrapper back into shared state.
-macro_rules! with_flash_device {
-    ($shared:expr, $programmer:expr, $ctx_flash:expr, $device:ident, $body:expr) => {
-        match $programmer {
-            Programmer::Serprog(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                let result = { $body };
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Serprog(master));
-                result
-            }
-            Programmer::Ch341a(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                let result = { $body };
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ch341a(master));
-                result
-            }
-            Programmer::Ch347(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                let result = { $body };
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ch347(master));
-                result
-            }
-            Programmer::Ftdi(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                let result = { $body };
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ftdi(master));
-                result
-            }
-            Programmer::Ft4222(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                let result = { $body };
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Ft4222(master));
-                result
-            }
-            Programmer::Dediprog(mut master) => {
-                master.set_flash_chip(&$ctx_flash.chip);
-                let mut $device = HybridFlashDevice::new(master, $ctx_flash);
-                let result = { $body };
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Dediprog(master));
-                result
-            }
-            Programmer::Raiden(master) => {
-                let mut $device = SpiFlashDevice::new(master, $ctx_flash);
-                let result = { $body };
-                let (master, _) = $device.into_parts();
-                $shared.borrow_mut().programmer = Some(Programmer::Raiden(master));
-                result
-            }
-        }
-    };
+/// Forwards to the connected programmer, including its flash fast paths.
+impl SpiMaster for Programmer {
+    fn features(&self) -> SpiFeatures {
+        dispatch!(self, m => SpiMaster::features(m))
+    }
+
+    fn max_read_len(&self) -> usize {
+        dispatch!(self, m => SpiMaster::max_read_len(m))
+    }
+
+    fn max_write_len(&self) -> usize {
+        dispatch!(self, m => SpiMaster::max_write_len(m))
+    }
+
+    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+        dispatch!(self, m => SpiMaster::execute(m, cmd).await)
+    }
+
+    fn probe_opcode(&self, opcode: u8) -> bool {
+        dispatch!(self, m => SpiMaster::probe_opcode(m, opcode))
+    }
+
+    async fn delay_us(&mut self, us: u32) {
+        dispatch!(self, m => SpiMaster::delay_us(m, us).await)
+    }
+
+    async fn read_flash(
+        &mut self,
+        ctx: &FlashContext,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> CoreResult<()> {
+        dispatch!(self, m => SpiMaster::read_flash(m, ctx, addr, buf).await)
+    }
+
+    async fn program_flash(
+        &mut self,
+        ctx: &FlashContext,
+        addr: u32,
+        data: &[u8],
+    ) -> CoreResult<()> {
+        dispatch!(self, m => SpiMaster::program_flash(m, ctx, addr, data).await)
+    }
 }
 
 // =============================================================================
@@ -939,22 +877,23 @@ impl RflasherApp {
                     force,
                 };
 
-                with_programmer!(shared, programmer, master, {
-                    match probe_with_options(&mut master, &chip_db, &options).await {
-                        Ok(result) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::ProbeComplete(Box::new(result)));
-                        }
-                        Err(e) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::ProbeFailed(error_message(e)));
-                        }
+                let mut master = programmer;
+                match probe_with_options(&mut master, &chip_db, &options).await {
+                    Ok(result) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::ProbeComplete(Box::new(result)));
                     }
-                });
+                    Err(e) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::ProbeFailed(error_message(e)));
+                    }
+                }
+
+                shared.borrow_mut().programmer = Some(master);
             } else {
                 shared
                     .borrow_mut()
@@ -1003,58 +942,59 @@ impl RflasherApp {
                 /// visible promptly during long WebUSB reads.
                 const YIELD_INTERVAL: usize = READ_CHUNK_SIZE;
 
-                with_flash_device!(shared, programmer, ctx_flash, device, {
-                    let total = buf.len();
-                    let mut offset = 0usize;
-                    let mut last_yield = 0usize;
-                    let mut read_error: Option<rflasher_core::error::Error> = None;
+                let mut device = SpiFlashDevice::new(programmer, ctx_flash);
+                let total = buf.len();
+                let mut offset = 0usize;
+                let mut last_yield = 0usize;
+                let mut read_error: Option<rflasher_core::error::Error> = None;
 
-                    while offset < total {
-                        let chunk_size = core::cmp::min(READ_CHUNK_SIZE, total - offset);
-                        match device
-                            .read(offset as u32, &mut buf[offset..offset + chunk_size])
-                            .await
-                        {
-                            Ok(()) => {}
-                            Err(e) => {
-                                read_error = Some(e);
-                                break;
-                            }
-                        }
-                        offset += chunk_size;
-
-                        shared.borrow_mut().messages.push(AsyncMessage::Progress(
-                            ProgressUpdate::Reading {
-                                done: offset,
-                                total,
-                            },
-                        ));
-
-                        if let Some(ref ctx) = ctx {
-                            ctx.request_repaint();
-                        }
-
-                        if offset >= last_yield + YIELD_INTERVAL {
-                            last_yield = offset;
-                            yield_to_browser().await;
+                while offset < total {
+                    let chunk_size = core::cmp::min(READ_CHUNK_SIZE, total - offset);
+                    match device
+                        .read(offset as u32, &mut buf[offset..offset + chunk_size])
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(e) => {
+                            read_error = Some(e);
+                            break;
                         }
                     }
+                    offset += chunk_size;
 
-                    match read_error {
-                        None => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::ReadComplete(buf));
-                        }
-                        Some(e) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::ReadFailed(error_message(e)));
-                        }
+                    shared.borrow_mut().messages.push(AsyncMessage::Progress(
+                        ProgressUpdate::Reading {
+                            done: offset,
+                            total,
+                        },
+                    ));
+
+                    if let Some(ref ctx) = ctx {
+                        ctx.request_repaint();
                     }
-                });
+
+                    if offset >= last_yield + YIELD_INTERVAL {
+                        last_yield = offset;
+                        yield_to_browser().await;
+                    }
+                }
+
+                match read_error {
+                    None => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::ReadComplete(buf));
+                    }
+                    Some(e) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::ReadFailed(error_message(e)));
+                    }
+                }
+
+                shared.borrow_mut().programmer = Some(device.into_parts().0);
             } else {
                 shared
                     .borrow_mut()
@@ -1113,30 +1053,30 @@ impl RflasherApp {
                 let ctx_flash = FlashContext::new(chip);
                 let mut progress = SharedProgress::new(shared.clone(), ctx.clone());
 
-                with_flash_device!(shared, programmer, ctx_flash, device, {
-                    let mut policy = MutationPolicy {
-                        allow_dangerous,
-                        recovery: None,
-                    };
-                    let result =
-                        smart_write_with_policy(&mut device, &data, &mut progress, &mut policy)
-                            .await;
+                let mut device = SpiFlashDevice::new(programmer, ctx_flash);
+                let mut policy = MutationPolicy {
+                    allow_dangerous,
+                    recovery: None,
+                };
+                let result =
+                    smart_write_with_policy(&mut device, &data, &mut progress, &mut policy).await;
 
-                    match result {
-                        Ok(stats) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::WriteComplete(stats));
-                        }
-                        Err(e) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::WriteFailed(error_message(e)));
-                        }
+                match result {
+                    Ok(stats) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::WriteComplete(stats));
                     }
-                });
+                    Err(e) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::WriteFailed(error_message(e)));
+                    }
+                }
+
+                shared.borrow_mut().programmer = Some(device.into_parts().0);
             } else {
                 shared
                     .borrow_mut()
@@ -1178,29 +1118,30 @@ impl RflasherApp {
             if let Some(programmer) = programmer {
                 let ctx_flash = FlashContext::new(chip);
 
-                with_flash_device!(shared, programmer, ctx_flash, device, {
-                    let mut policy = MutationPolicy {
-                        allow_dangerous,
-                        recovery: None,
-                    };
-                    let region = rflasher_core::layout::Region::new("full chip", 0, size - 1);
-                    let result = erase_region_with_policy(&mut device, &region, &mut policy).await;
+                let mut device = SpiFlashDevice::new(programmer, ctx_flash);
+                let mut policy = MutationPolicy {
+                    allow_dangerous,
+                    recovery: None,
+                };
+                let region = rflasher_core::layout::Region::new("full chip", 0, size - 1);
+                let result = erase_region_with_policy(&mut device, &region, &mut policy).await;
 
-                    match result {
-                        Ok(()) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::EraseComplete);
-                        }
-                        Err(e) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::EraseFailed(error_message(e)));
-                        }
+                match result {
+                    Ok(()) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::EraseComplete);
                     }
-                });
+                    Err(e) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::EraseFailed(error_message(e)));
+                    }
+                }
+
+                shared.borrow_mut().programmer = Some(device.into_parts().0);
             } else {
                 shared
                     .borrow_mut()
@@ -1258,78 +1199,79 @@ impl RflasherApp {
                 const CHUNK_SIZE: usize = 4096;
                 const YIELD_INTERVAL: usize = 65536;
 
-                with_flash_device!(shared, programmer, ctx_flash, device, {
-                    let total = data.len();
-                    let mut offset = 0usize;
-                    let mut last_repaint = 0usize;
-                    let mut last_yield = 0usize;
-                    let mut verify_error: Option<String> = None;
+                let mut device = SpiFlashDevice::new(programmer, ctx_flash);
+                let total = data.len();
+                let mut offset = 0usize;
+                let mut last_repaint = 0usize;
+                let mut last_yield = 0usize;
+                let mut verify_error: Option<String> = None;
 
-                    while offset < total {
-                        let chunk_size = core::cmp::min(CHUNK_SIZE, total - offset);
-                        let mut buf = vec![0u8; chunk_size];
+                while offset < total {
+                    let chunk_size = core::cmp::min(CHUNK_SIZE, total - offset);
+                    let mut buf = vec![0u8; chunk_size];
 
-                        match device.read(offset as u32, &mut buf).await {
-                            Ok(()) => {
-                                let expected = &data[offset..offset + chunk_size];
-                                if buf != expected {
-                                    for (i, (a, b)) in buf.iter().zip(expected.iter()).enumerate() {
-                                        if a != b {
-                                            verify_error = Some(format!(
-                                                "Mismatch at 0x{:X}: read 0x{:02X}, expected 0x{:02X}",
-                                                offset + i,
-                                                a,
-                                                b
-                                            ));
-                                            break;
-                                        }
+                    match device.read(offset as u32, &mut buf).await {
+                        Ok(()) => {
+                            let expected = &data[offset..offset + chunk_size];
+                            if buf != expected {
+                                for (i, (a, b)) in buf.iter().zip(expected.iter()).enumerate() {
+                                    if a != b {
+                                        verify_error = Some(format!(
+                                            "Mismatch at 0x{:X}: read 0x{:02X}, expected 0x{:02X}",
+                                            offset + i,
+                                            a,
+                                            b
+                                        ));
+                                        break;
                                     }
-                                    break;
                                 }
-                            }
-                            Err(e) => {
-                                verify_error = Some(format!("Read error: {:?}", e));
                                 break;
                             }
                         }
-
-                        offset += chunk_size;
-
-                        shared.borrow_mut().messages.push(AsyncMessage::Progress(
-                            ProgressUpdate::Verifying {
-                                done: offset,
-                                total,
-                            },
-                        ));
-
-                        if offset >= last_repaint + YIELD_INTERVAL {
-                            last_repaint = offset;
-                            if let Some(ref ctx) = ctx {
-                                ctx.request_repaint();
-                            }
-                        }
-
-                        if offset >= last_yield + YIELD_INTERVAL {
-                            last_yield = offset;
-                            yield_to_browser().await;
+                        Err(e) => {
+                            verify_error = Some(format!("Read error: {:?}", e));
+                            break;
                         }
                     }
 
-                    match verify_error {
-                        None => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::VerifyComplete);
-                        }
-                        Some(err) => {
-                            shared
-                                .borrow_mut()
-                                .messages
-                                .push(AsyncMessage::VerifyFailed(err));
+                    offset += chunk_size;
+
+                    shared.borrow_mut().messages.push(AsyncMessage::Progress(
+                        ProgressUpdate::Verifying {
+                            done: offset,
+                            total,
+                        },
+                    ));
+
+                    if offset >= last_repaint + YIELD_INTERVAL {
+                        last_repaint = offset;
+                        if let Some(ref ctx) = ctx {
+                            ctx.request_repaint();
                         }
                     }
-                });
+
+                    if offset >= last_yield + YIELD_INTERVAL {
+                        last_yield = offset;
+                        yield_to_browser().await;
+                    }
+                }
+
+                match verify_error {
+                    None => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::VerifyComplete);
+                    }
+                    Some(err) => {
+                        shared
+                            .borrow_mut()
+                            .messages
+                            .push(AsyncMessage::VerifyFailed(err));
+                    }
+                }
+
+                shared.borrow_mut().programmer = Some(device.into_parts().0);
             } else {
                 shared
                     .borrow_mut()

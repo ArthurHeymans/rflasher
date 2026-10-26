@@ -1,21 +1,13 @@
-//! Internal programmer wrapper implementing SpiMaster and OpaqueMaster
+//! Opening the internal programmer
 //!
-//! This module provides the high-level programmer interface that wraps
-//! the low-level controllers (Intel ICH/PCH or AMD SPI100) and implements
-//! the appropriate trait (SpiMaster or OpaqueMaster).
+//! [`InternalProgrammer::open`] detects the chipset and returns either raw
+//! SPI access ([`InternalSpi`], Intel software sequencing and AMD SPI100) or
+//! address-based access ([`HwseqFlash`], Intel hardware sequencing).
+//! Embedded users can drive the controllers directly instead; see the
+//! crate README.
 
-#![cfg_attr(not(all(feature = "std", target_os = "linux")), allow(unused_imports))]
-
-use crate::amd_enable::enable_amd_spi100_with_host;
-use crate::controller::Controller;
 use crate::error::InternalError;
-use crate::host::{DefaultPciAccess, PciAddress};
-use crate::ichspi::{IchSpiController, SpiMode};
-use crate::{AnyDetectedChipset, DetectedAmdChipset, DetectedChipset};
-
-use rflasher_core::error::{Error as CoreError, Result as CoreResult};
-use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
-use rflasher_core::spi::SpiCommand;
+use crate::ichspi::SpiMode;
 
 /// Options for the internal programmer
 #[derive(Debug, Clone, Default)]
@@ -62,196 +54,214 @@ impl InternalOptions {
     }
 }
 
-/// Internal programmer for Intel ICH/PCH and AMD SPI100 chipsets
 #[cfg(all(feature = "std", target_os = "linux"))]
-pub struct InternalProgrammer {
-    /// The underlying SPI controller (Intel or AMD)
-    controller: Box<dyn Controller + Send>,
-    /// Flash size detected via hardware sequencing
-    flash_size: usize,
-}
+pub use linux::{HwseqFlash, InternalProgrammer, InternalSpi};
 
 #[cfg(all(feature = "std", target_os = "linux"))]
-impl InternalProgrammer {
-    /// Create a new internal programmer with default options
-    ///
-    /// This will:
-    /// 1. Detect the Intel chipset
-    /// 2. Initialize the SPI controller
-    /// 3. Enable BIOS writes if possible
-    pub fn new() -> Result<Self, InternalError> {
-        Self::with_options(InternalOptions::default())
+mod linux {
+    use super::InternalOptions;
+    use crate::amd_enable::enable_amd_spi100_with_host;
+    use crate::controller::Controller;
+    use crate::error::InternalError;
+    use crate::host::{DefaultPciAccess, PciAddress};
+    use crate::ichspi::{IchSpiController, SpiMode};
+    use crate::{AnyDetectedChipset, DetectedAmdChipset, DetectedChipset};
+
+    use rflasher_core::chip::{EraseBlock, WriteGranularity};
+    use rflasher_core::error::{Error as CoreError, Result as CoreResult};
+    use rflasher_core::flash::{self, FlashContext, FlashDevice};
+    use rflasher_core::programmer::{SpiFeatures, SpiMaster};
+    use rflasher_core::spi::{SpiCommand, opcodes};
+
+    /// An opened internal programmer, in the access mode its controller allows.
+    pub enum InternalProgrammer {
+        /// Raw SPI commands: Intel software sequencing or AMD SPI100.
+        Spi(InternalSpi),
+        /// Intel hardware sequencing: the controller runs the flash protocol.
+        HardwareSequencing(HwseqFlash),
     }
 
-    /// Create a new internal programmer with explicit options
-    pub fn with_options(options: InternalOptions) -> Result<Self, InternalError> {
-        // Detect chipset
-        let chipset = crate::detect_chipset()?.ok_or(InternalError::NoChipset)?;
-
-        match chipset {
-            AnyDetectedChipset::Intel(intel_chipset) => {
-                Self::from_intel_chipset(&intel_chipset, options)
+    impl InternalProgrammer {
+        /// Detect the chipset, enable its SPI controller and BIOS writes.
+        pub fn open(options: InternalOptions) -> Result<Self, InternalError> {
+            match crate::detect_chipset()?.ok_or(InternalError::NoChipset)? {
+                AnyDetectedChipset::Intel(chipset) => Self::from_intel_chipset(&chipset, options),
+                AnyDetectedChipset::Amd(chipset) => Self::from_amd_chipset(&chipset),
             }
-            AnyDetectedChipset::Amd(amd_chipset) => Self::from_amd_chipset(&amd_chipset, options),
+        }
+
+        /// Open a specific detected Intel chipset.
+        pub fn from_intel_chipset(
+            chipset: &DetectedChipset,
+            options: InternalOptions,
+        ) -> Result<Self, InternalError> {
+            let mut controller = IchSpiController::new(chipset, options.mode)?;
+            if let Err(e) = controller.enable_bios_write() {
+                log::warn!("Could not enable BIOS writes: {}", e);
+            }
+            if controller.spi_mode() == SpiMode::HardwareSequencing {
+                HwseqFlash::new(Box::new(controller)).map(Self::HardwareSequencing)
+            } else {
+                Ok(Self::Spi(InternalSpi {
+                    controller: Box::new(controller),
+                }))
+            }
+        }
+
+        /// Open a specific detected AMD chipset.
+        pub fn from_amd_chipset(chipset: &DetectedAmdChipset) -> Result<Self, InternalError> {
+            let info = enable_amd_spi100_with_host(
+                &DefaultPciAccess,
+                chipset.enable,
+                PciAddress::new(
+                    chipset.domain,
+                    chipset.bus,
+                    chipset.device,
+                    chipset.function,
+                ),
+                chipset.revision_id,
+            )?;
+            Ok(Self::Spi(InternalSpi {
+                controller: Box::new(info.create_controller()?),
+            }))
         }
     }
 
-    /// Create from a specific detected Intel chipset
-    pub fn from_intel_chipset(
-        chipset: &DetectedChipset,
-        options: InternalOptions,
-    ) -> Result<Self, InternalError> {
-        let mut controller = IchSpiController::new(chipset, options.mode)?;
-
-        // Try to enable BIOS writes
-        if let Err(e) = controller.enable_bios_write() {
-            log::warn!("Could not enable BIOS writes: {}", e);
-        }
-
-        // For now, we can't detect flash size without reading the IFD
-        // or probing the chip. Set to 0 and let caller determine size.
-        let flash_size = 0;
-
-        Ok(Self {
-            controller: Box::new(controller),
-            flash_size,
-        })
-    }
-
-    /// Create from a specific detected AMD chipset
-    pub fn from_amd_chipset(
-        chipset: &DetectedAmdChipset,
-        _options: InternalOptions,
-    ) -> Result<Self, InternalError> {
-        // Enable the AMD SPI100 controller using the detected PCI segment.
-        let info = enable_amd_spi100_with_host(
-            &DefaultPciAccess,
-            chipset.enable,
-            PciAddress::new(
-                chipset.domain,
-                chipset.bus,
-                chipset.device,
-                chipset.function,
-            ),
-            chipset.revision_id,
-        )?;
-
-        // Create the controller
-        let controller = info.create_controller()?;
-
-        // Flash size will be determined later by probing
-        let flash_size = 0;
-
-        Ok(Self {
-            controller: Box::new(controller),
-            flash_size,
-        })
-    }
-
-    /// Old API for compatibility - only works with Intel chipsets
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use from_intel_chipset or from_amd_chipset instead"
-    )]
-    pub fn from_chipset(
-        chipset: &DetectedChipset,
-        options: InternalOptions,
-    ) -> Result<Self, InternalError> {
-        Self::from_intel_chipset(chipset, options)
-    }
-
-    /// Set the flash size (should be called after probing)
-    pub fn set_flash_size(&mut self, size: usize) {
-        self.flash_size = size;
-    }
-
-    /// Erase block size erases must be planned with, if the controller
-    /// decides it (Intel hardware sequencing; see
-    /// [`Controller::erase_block_size`]).
+    /// Raw SPI access through an internal controller.
     ///
-    /// Erasing through such a controller wipes whole hardware blocks
-    /// whatever range was requested, so callers must plan with this size
-    /// rather than assume one.
-    pub fn erase_block_size(&self, flash_size: u32) -> Result<Option<u32>, InternalError> {
-        self.controller.erase_block_size(flash_size)
-    }
-
-    /// Get the operating mode (Intel only)
+    /// # Intel software-sequencing limitations
     ///
-    /// Returns SoftwareSequencing for AMD controllers
-    pub fn mode(&self) -> SpiMode {
-        self.controller.spi_mode()
+    /// - Only opcodes in the OPMENU table can be executed
+    /// - Maximum 64 bytes per transfer
+    /// - Only single I/O mode (no dual/quad)
+    /// - No 4-byte addressing support (24-bit address max)
+    /// - Dummy cycles are not supported by the Intel controller
+    pub struct InternalSpi {
+        pub(super) controller: Box<dyn Controller + Send>,
     }
 
-    /// Check if writes are enabled (internal helper)
-    fn writes_enabled(&self) -> bool {
-        self.controller.writes_enabled()
-    }
-}
-
-#[cfg(all(feature = "std", target_os = "linux"))]
-impl OpaqueMaster for InternalProgrammer {
-    fn size(&self) -> usize {
-        self.flash_size
-    }
-
-    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
-        self.controller.controller_read(addr, buf, self.flash_size)
-    }
-
-    async fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
-        if !self.writes_enabled() {
-            return Err(CoreError::WriteProtected);
+    impl SpiMaster for InternalSpi {
+        fn features(&self) -> SpiFeatures {
+            self.controller.features()
         }
 
-        self.controller.controller_write(addr, data)
-    }
-
-    async fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
-        if !self.writes_enabled() {
-            return Err(CoreError::WriteProtected);
+        fn max_read_len(&self) -> usize {
+            self.controller.max_read_len()
         }
 
-        self.controller.controller_erase(addr, len)
-    }
-}
+        fn max_write_len(&self) -> usize {
+            self.controller.max_write_len()
+        }
 
-/// SpiMaster implementation for raw SPI command execution
-///
-/// This is only available in software sequencing mode. Hardware sequencing
-/// mode does not allow arbitrary SPI commands - use OpaqueMaster instead.
-///
-/// # Limitations
-///
-/// - Only opcodes in the OPMENU table can be executed
-/// - Maximum 64 bytes per transfer
-/// - Only single I/O mode (no dual/quad)
-/// - No 4-byte addressing support (24-bit address max)
-/// - Dummy cycles are not supported by the Intel controller
-#[cfg(all(feature = "std", target_os = "linux"))]
-impl SpiMaster for InternalProgrammer {
-    fn features(&self) -> SpiFeatures {
-        self.controller.features()
-    }
+        async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+            self.controller.execute(cmd)
+        }
 
-    fn max_read_len(&self) -> usize {
-        self.controller.max_read_len()
-    }
+        fn probe_opcode(&self, opcode: u8) -> bool {
+            self.controller.probe_opcode(opcode)
+        }
 
-    fn max_write_len(&self) -> usize {
-        self.controller.max_write_len()
-    }
+        async fn delay_us(&mut self, us: u32) {
+            std::thread::sleep(std::time::Duration::from_micros(us as u64));
+        }
 
-    async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        self.controller.execute(cmd)
+        async fn read_flash(
+            &mut self,
+            ctx: &FlashContext,
+            addr: u32,
+            buf: &mut [u8],
+        ) -> CoreResult<()> {
+            match self.controller.fast_read(ctx, addr, buf) {
+                Some(result) => result,
+                None => flash::spi_read(self, ctx, addr, buf).await,
+            }
+        }
     }
 
-    fn probe_opcode(&self, opcode: u8) -> bool {
-        self.controller.probe_opcode(opcode)
+    /// Flash behind Intel hardware sequencing.
+    ///
+    /// The size comes from the flash descriptor and the erase block size from
+    /// the controller, which always erases whole hardware blocks.
+    pub struct HwseqFlash {
+        controller: Box<dyn Controller + Send>,
+        size: u32,
+        erase_blocks: [EraseBlock; 1],
     }
 
-    async fn delay_us(&mut self, us: u32) {
-        std::thread::sleep(std::time::Duration::from_micros(us as u64));
+    impl HwseqFlash {
+        fn new(mut controller: Box<dyn Controller + Send>) -> Result<Self, InternalError> {
+            let mut header = [0; 4096];
+            controller
+                .controller_read(0, &mut header, 0)
+                .map_err(|_| InternalError::Io("Cannot read the flash descriptor"))?;
+            let size = rflasher_core::layout::parse_ifd(&header)
+                .ok()
+                .and_then(|layout| layout.regions.iter().map(|r| r.end + 1).max())
+                .filter(|&size| size > 0)
+                .ok_or(InternalError::InvalidDescriptor)?;
+            log::info!("Flash size: {} bytes (from IFD)", size);
+            Self::with_size(controller, size)
+        }
+
+        pub(crate) fn with_size(
+            controller: Box<dyn Controller + Send>,
+            size: u32,
+        ) -> Result<Self, InternalError> {
+            let block = controller.erase_block_size(size)?.unwrap_or(4096);
+            log::info!("Hardware sequencing erase block size: {} bytes", block);
+            Ok(Self {
+                controller,
+                size,
+                // The opcode is never sent; the controller picks its own.
+                erase_blocks: [EraseBlock::with_count(opcodes::SE_20, block, size / block)],
+            })
+        }
+
+        fn check_writable(&self, addr: u32, len: usize) -> CoreResult<()> {
+            if !self.is_valid_range(addr, len) {
+                Err(CoreError::AddressOutOfBounds)
+            } else if !self.controller.writes_enabled() {
+                Err(CoreError::WriteProtected)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl FlashDevice for HwseqFlash {
+        fn size(&self) -> u32 {
+            self.size
+        }
+
+        fn erase_granularity(&self) -> u32 {
+            self.erase_blocks[0].min_block_size()
+        }
+
+        fn write_granularity(&self) -> WriteGranularity {
+            WriteGranularity::Bit
+        }
+
+        fn erase_blocks(&self) -> &[EraseBlock] {
+            &self.erase_blocks
+        }
+
+        async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
+            if !self.is_valid_range(addr, buf.len()) {
+                return Err(CoreError::AddressOutOfBounds);
+            }
+            self.controller
+                .controller_read(addr, buf, self.size as usize)
+        }
+
+        async fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
+            self.check_writable(addr, data.len())?;
+            self.controller.controller_write(addr, data)
+        }
+
+        async fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
+            self.check_writable(addr, len as usize)?;
+            self.controller.controller_erase(addr, len)
+        }
     }
 }
 
@@ -265,74 +275,28 @@ pub fn programmer_info() -> rflasher_core::programmer::ProgrammerInfo {
     }
 }
 
-// Non-Linux stub
-#[cfg(not(all(feature = "std", target_os = "linux")))]
-pub struct InternalProgrammer {
-    _private: (),
-}
-
-#[cfg(not(all(feature = "std", target_os = "linux")))]
-impl InternalProgrammer {
-    pub fn new() -> Result<Self, InternalError> {
-        Err(InternalError::NotSupported(
-            "Internal programmer only supported on Linux",
-        ))
-    }
-
-    pub fn with_options(_options: InternalOptions) -> Result<Self, InternalError> {
-        Err(InternalError::NotSupported(
-            "Internal programmer only supported on Linux",
-        ))
-    }
-}
-
-#[cfg(not(all(feature = "std", target_os = "linux")))]
-impl OpaqueMaster for InternalProgrammer {
-    fn size(&self) -> usize {
-        0
-    }
-
-    async fn read(&mut self, _addr: u32, _buf: &mut [u8]) -> CoreResult<()> {
-        Err(CoreError::ProgrammerNotReady)
-    }
-
-    async fn write(&mut self, _addr: u32, _data: &[u8]) -> CoreResult<()> {
-        Err(CoreError::ProgrammerNotReady)
-    }
-
-    async fn erase(&mut self, _addr: u32, _len: u32) -> CoreResult<()> {
-        Err(CoreError::ProgrammerNotReady)
-    }
-}
-
-#[cfg(not(all(feature = "std", target_os = "linux")))]
-impl SpiMaster for InternalProgrammer {
-    fn features(&self) -> SpiFeatures {
-        SpiFeatures::empty()
-    }
-
-    fn max_read_len(&self) -> usize {
-        0
-    }
-
-    fn max_write_len(&self) -> usize {
-        0
-    }
-
-    async fn execute(&mut self, _cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        Err(CoreError::ProgrammerNotReady)
-    }
-
-    fn probe_opcode(&self, _opcode: u8) -> bool {
-        false
-    }
-
-    async fn delay_us(&mut self, _us: u32) {}
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
+    fn amd_reads_use_the_mapping_and_large_chip_writes_use_native_spi() {
+        use crate::amd_spi100::tests::{context, mapped_controller};
+        use futures_lite::future::block_on;
+        use rflasher_core::flash::{FlashDevice, SpiFlashDevice};
+
+        let programmer = InternalSpi {
+            controller: Box::new(mapped_controller()),
+        };
+        let ctx = context();
+        let addr = ctx.chip.total_size - 256;
+        let mut device = SpiFlashDevice::new(programmer, ctx);
+        let mut data = [0; 4];
+        block_on(device.read(addr, &mut data)).unwrap();
+        assert_eq!(data, [0, 17, 34, 51]);
+        block_on(device.write(0x0100_1234, &[0xab])).unwrap();
+    }
 
     #[test]
     fn test_programmer_info() {

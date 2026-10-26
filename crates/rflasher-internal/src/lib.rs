@@ -72,7 +72,9 @@ pub use pci::{
     find_intel_chipset_in_iter, scan_for_amd_chipsets, scan_for_intel_chipsets, scan_pci_bus,
 };
 pub use physmap::PhysMap;
-pub use programmer::{InternalOptions, InternalProgrammer, programmer_info};
+#[cfg(all(feature = "std", target_os = "linux"))]
+pub use programmer::{HwseqFlash, InternalProgrammer, InternalSpi};
+pub use programmer::{InternalOptions, programmer_info};
 
 // Re-export AnyDetectedChipset at crate root for convenience
 pub use AnyDetectedChipset as AnyChipset;

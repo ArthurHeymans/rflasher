@@ -19,7 +19,7 @@ those layers without the core knowing about them.
 
 ## Async, executor-independent core
 
-All operational APIs (`SpiMaster`, `OpaqueMaster`, `FlashDevice`, probing,
+All operational APIs (`SpiMaster`, `FlashDevice`, probing,
 flash operations) are async on every target, and the core requires no runtime:
 
 - **Native CLI** blocks exactly once, in `main`, with
@@ -33,6 +33,45 @@ Because `async fn` traits are not object-safe, runtime programmer selection
 goes through object-erasure adapters (`ErasedFlashDevice`,
 `ErasedSpiMaster`) in `rflasher-programmers`. The one boxed future per
 operation is negligible next to USB and flash latency.
+
+## SPI and opaque access
+
+`FlashDevice` is the address-level interface used by every high-level
+operation. Every programmer provides it in one of two ways:
+
+- `SpiMaster` executes SPI transactions; the core owns chip protocols.
+  `SpiFlashDevice` combines a `SpiMaster` with the probed `FlashContext`.
+  USB bulk transport or a memory-mapped window does not make a programmer
+  opaque.
+- Programmers without raw SPI access run the protocol themselves and
+  implement `FlashDevice` directly, including their own size and erase
+  geometry (`HwseqFlash` for Intel hardware sequencing, `LinuxMtd`).
+
+Programmers with a faster route to the flash override the provided
+`SpiMaster::read_flash` and `SpiMaster::program_flash` methods. Their
+defaults are the generic protocol (`flash::spi_read`, `flash::spi_program`),
+and an override receives the chip context on every call, so it decides per
+chip and per range, and falls back by calling the generic function. No
+configuration step is needed after probing, and erasure through
+`ErasedSpiMaster` keeps the overrides.
+
+The core keeps everything around the fast path: bounds checks, the
+preflight that the generic protocol could perform the write, temporary
+unprotection and its restoration, erase, status registers and write
+protection. A fast path may only be faster than the generic protocol, never
+more capable.
+
+| Backend | Access |
+|---|---|
+| AMD SPI100 | SPI; reads through the checked memory window where the chip allows it |
+| Dediprog | SPI; CMD_READ/CMD_WRITE bulk transfers for aligned blocks; chips over 16 MiB need native four-byte modes (protocol V2/V3) |
+| sunxi FEL | SPI; payload bulk reads and page programs for compatible chips |
+| Intel software sequencing | SPI |
+| Intel hardware sequencing, Linux MTD | Opaque |
+| CH341A/CH347, FTDI/FT4222, Raiden, serprog, spidev/GPIO, ATI SPI, dummy | SPI |
+
+Fallback is selected from known capabilities, never by retrying a failed fast
+transfer as a generic one.
 
 ## Firmware reuse of the internal programmer
 

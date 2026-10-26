@@ -1150,11 +1150,27 @@ where
     Ok(result)
 }
 
-/// Read flash contents
+/// Read flash contents through the programmer's fastest read path
+/// ([`SpiMaster::read_flash`]).
+pub async fn read<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    buf: &mut [u8],
+) -> Result<()> {
+    if !ctx.is_valid_range(addr, buf.len()) {
+        return Err(Error::AddressOutOfBounds);
+    }
+    master.read_flash(ctx, addr, buf).await
+}
+
+/// Read flash contents with generic SPI read commands.
 ///
 /// Automatically selects the best I/O mode based on programmer and chip capabilities.
 /// Uses dual or quad I/O when both the programmer and chip support it.
-pub async fn read<M: SpiMaster + ?Sized>(
+/// This is the default [`SpiMaster::read_flash`] and the fallback for
+/// programmer fast paths.
+pub async fn spi_read<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
@@ -1205,12 +1221,9 @@ pub async fn read<M: SpiMaster + ?Sized>(
 
 /// Write data to flash
 ///
-/// This function handles page alignment and splitting large writes
-/// into page-sized chunks. The target region must be erased first.
-///
-/// Respects the programmer's `max_write_len()` to avoid sending chunks
-/// larger than the hardware can handle (e.g., Intel swseq is limited to
-/// 64 bytes).
+/// Validates that the generic SPI protocol could program the range, then
+/// temporarily lifts chip protection around [`SpiMaster::program_flash`].
+/// The target region must be erased first.
 pub async fn write<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -1254,7 +1267,7 @@ pub async fn write<M: SpiMaster + ?Sized>(
         return Err(Error::OpcodeNotSupported);
     }
     let saved = super::protection::prepare(master, ctx).await?;
-    let result = match write_unprotected(master, ctx, addr, data).await {
+    let result = match master.program_flash(ctx, addr, data).await {
         Ok(()) => super::protection::check_result(master, ctx, addr, false).await,
         Err(error) => Err(error),
     };
@@ -1268,12 +1281,22 @@ pub async fn write<M: SpiMaster + ?Sized>(
     .await
 }
 
-async fn write_unprotected<M: SpiMaster + ?Sized>(
+/// Program already-erased flash with generic SPI page-program commands.
+///
+/// Handles page alignment and splits writes into chunks that respect the
+/// programmer's `max_write_len()` (e.g., Intel swseq is limited to 64 bytes).
+/// This is the default [`SpiMaster::program_flash`] and the fallback for
+/// programmer fast paths; it does not lift chip protection, so call
+/// [`write`] for a complete write.
+pub async fn spi_program<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
     data: &[u8],
 ) -> Result<()> {
+    if !ctx.is_valid_range(addr, data.len()) {
+        return Err(Error::AddressOutOfBounds);
+    }
     let features = ctx.chip.features;
     let write_granularity = ctx.chip.write_granularity;
     let page_size = ctx.page_size();
@@ -1401,8 +1424,8 @@ pub async fn check_erased_range<M: SpiMaster + ?Sized>(
     Ok(())
 }
 
-/// Erase through SPI for both SPI-only and hybrid devices. The physical
-/// geometry is measured from chip address zero, including across region changes.
+/// Erase through SPI commands. The physical geometry is measured from chip
+/// address zero, including across region changes.
 pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -1813,22 +1836,6 @@ mod tests {
         async fn delay_us(&mut self, _us: u32) {}
     }
 
-    impl crate::programmer::OpaqueMaster for EraseMaster {
-        fn size(&self) -> usize {
-            48
-        }
-        async fn read(&mut self, _addr: u32, buf: &mut [u8]) -> Result<()> {
-            buf.fill(0xff);
-            Ok(())
-        }
-        async fn write(&mut self, _addr: u32, _data: &[u8]) -> Result<()> {
-            Ok(())
-        }
-        async fn erase(&mut self, _addr: u32, _len: u32) -> Result<()> {
-            Err(Error::ProgrammerError)
-        }
-    }
-
     fn nonuniform_context() -> FlashContext {
         use crate::chip::{ChipTestStatus, EraseRegion, FlashChip};
         FlashContext::new(FlashChip {
@@ -1852,65 +1859,49 @@ mod tests {
     }
 
     #[test]
-    fn spi_and_hybrid_fallback_use_physical_nonuniform_boundaries() {
-        use crate::flash::{FlashDevice, HybridFlashDevice, SpiFlashDevice};
+    fn spi_erase_uses_physical_nonuniform_boundaries() {
+        use crate::flash::{FlashDevice, SpiFlashDevice};
         use futures_lite::future::block_on;
-        for hybrid in [false, true] {
-            let master = EraseMaster {
-                commands: vec![],
-                fail_erase: false,
-            };
-            let commands = if hybrid {
-                let mut device = HybridFlashDevice::new(master, nonuniform_context());
-                block_on(device.erase(8, 24)).unwrap();
-                device.into_parts().0.commands
-            } else {
-                let mut device = SpiFlashDevice::new(master, nonuniform_context());
-                block_on(device.erase(8, 24)).unwrap();
-                device.into_parts().0.commands
-            };
-            let erases: Vec<_> = commands
-                .iter()
-                .filter(|(opcode, _)| *opcode == 0x20)
-                .collect();
-            assert_eq!(
-                erases.iter().map(|(_, addr)| *addr).collect::<Vec<_>>(),
-                vec![Some(8), Some(16)]
-            );
-        }
+        let master = EraseMaster {
+            commands: vec![],
+            fail_erase: false,
+        };
+        let mut device = SpiFlashDevice::new(master, nonuniform_context());
+        block_on(device.erase(8, 24)).unwrap();
+        let erases: Vec<_> = device
+            .into_parts()
+            .0
+            .commands
+            .into_iter()
+            .filter(|(opcode, _)| *opcode == 0x20)
+            .map(|(_, addr)| addr)
+            .collect();
+        assert_eq!(erases, vec![Some(8), Some(16)]);
     }
 
     #[test]
-    fn exact_planned_opcode_survives_spi_and_hybrid_dispatch() {
-        use crate::flash::{FlashDevice, HybridFlashDevice, SpiFlashDevice};
+    fn exact_planned_opcode_survives_dispatch() {
+        use crate::flash::{FlashDevice, SpiFlashDevice};
         use futures_lite::future::block_on;
-        for hybrid in [false, true] {
-            let mut ctx = nonuniform_context();
-            ctx.chip.erase_blocks = vec![
-                EraseBlock::with_count(0x20, 16, 3),
-                EraseBlock::new(0xc7, 48),
-            ];
-            let op = OptimalEraseOp {
-                start: 0,
-                size: 48,
-                erase_block: ctx.chip.erase_blocks[0].clone(),
-            };
-            let master = EraseMaster {
-                commands: vec![],
-                fail_erase: false,
-            };
-            let commands = if hybrid {
-                let mut device = HybridFlashDevice::new(master, ctx);
-                block_on(device.erase_operation(&op)).unwrap();
-                device.into_parts().0.commands
-            } else {
-                let mut device = SpiFlashDevice::new(master, ctx);
-                block_on(device.erase_operation(&op)).unwrap();
-                device.into_parts().0.commands
-            };
-            assert_eq!(commands.iter().filter(|(code, _)| *code == 0x20).count(), 3);
-            assert!(!commands.iter().any(|(code, _)| *code == 0xc7));
-        }
+        let mut ctx = nonuniform_context();
+        ctx.chip.erase_blocks = vec![
+            EraseBlock::with_count(0x20, 16, 3),
+            EraseBlock::new(0xc7, 48),
+        ];
+        let op = OptimalEraseOp {
+            start: 0,
+            size: 48,
+            erase_block: ctx.chip.erase_blocks[0].clone(),
+        };
+        let master = EraseMaster {
+            commands: vec![],
+            fail_erase: false,
+        };
+        let mut device = SpiFlashDevice::new(master, ctx);
+        block_on(device.erase_operation(&op)).unwrap();
+        let commands = device.into_parts().0.commands;
+        assert_eq!(commands.iter().filter(|(code, _)| *code == 0x20).count(), 3);
+        assert!(!commands.iter().any(|(code, _)| *code == 0xc7));
     }
 
     #[test]

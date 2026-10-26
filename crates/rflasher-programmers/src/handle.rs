@@ -72,7 +72,7 @@ impl From<ProbeResult> for ChipInfo {
 ///
 /// This abstraction hides whether the underlying programmer is SPI-based
 /// (CH341A, FTDI, etc.) or opaque (Intel internal). The CLI works only
-/// with this type and never needs to know about SpiMaster or OpaqueMaster.
+/// with this type and never needs to know about SpiMaster or backend types.
 ///
 /// Similar to flashprog's `struct flashctx`.
 ///
@@ -94,7 +94,7 @@ impl FlashHandle {
     }
 
     /// Create a new handle without chip information (opaque programmers)
-    #[cfg(any(feature = "linux-mtd", feature = "internal"))]
+    #[cfg(any(feature = "linux-mtd", all(feature = "internal", target_os = "linux")))]
     pub(crate) fn without_chip_info(device: ErasedFlashDevice) -> Self {
         Self {
             device,

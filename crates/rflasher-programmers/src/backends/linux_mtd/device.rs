@@ -2,6 +2,10 @@
 
 use super::error::{LinuxMtdError, Result};
 use log::{debug, info, warn};
+use rflasher_core::chip::{EraseBlock, WriteGranularity};
+use rflasher_core::error::{EraseFailure, Error as CoreError, Result as CoreResult};
+use rflasher_core::flash::FlashDevice;
+use rflasher_core::spi::opcodes;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::io::AsRawFd;
@@ -54,7 +58,7 @@ pub struct MtdInfo {
 
 /// Linux MTD device handle
 ///
-/// This struct wraps a Linux MTD device and implements the OpaqueMaster trait.
+/// This struct wraps a Linux MTD device and implements `FlashDevice`.
 /// Linux MTD provides high-level read/write/erase operations, abstracting
 /// away the underlying flash protocol.
 ///
@@ -68,13 +72,15 @@ pub struct MtdInfo {
 ///
 /// // Read flash contents
 /// let mut buffer = vec![0u8; 4096];
-/// mtd.read(0, &mut buffer)?;
+/// mtd.read(0, &mut buffer).await?;
 /// ```
 pub struct LinuxMtd {
     /// Device file handle
     file: File,
     /// Device information
     info: MtdInfo,
+    /// The device's uniform erase geometry
+    erase_blocks: [EraseBlock; 1],
 }
 
 impl LinuxMtd {
@@ -136,6 +142,14 @@ impl LinuxMtd {
             return Err(LinuxMtdError::InvalidEraseSize(info.erase_size));
         }
 
+        // Flash addresses are 32-bit
+        let (Ok(total_size), Ok(erase_size)) = (
+            u32::try_from(info.total_size),
+            u32::try_from(info.erase_size),
+        ) else {
+            return Err(LinuxMtdError::InvalidSize(info.total_size));
+        };
+
         // Non-uniform erase regions are not supported
         if info.num_erase_regions != 0 {
             return Err(LinuxMtdError::NonUniformEraseRegions(
@@ -159,22 +173,21 @@ impl LinuxMtd {
             dev_path, info.name, info.total_size, info.erase_size
         );
 
-        Ok(Self { file, info })
+        Ok(Self {
+            file,
+            info,
+            // The opcode is never sent; MEMERASE picks its own.
+            erase_blocks: [EraseBlock::with_count(
+                opcodes::SE_20,
+                erase_size,
+                total_size / erase_size,
+            )],
+        })
     }
 
     /// Get the device information
     pub fn info(&self) -> &MtdInfo {
         &self.info
-    }
-
-    /// Get the total flash size in bytes
-    pub fn size(&self) -> u64 {
-        self.info.total_size
-    }
-
-    /// Get the erase block size in bytes
-    pub fn erase_size(&self) -> u64 {
-        self.info.erase_size
     }
 }
 
@@ -254,16 +267,31 @@ struct EraseInfo {
 // Using nix ioctl macros
 nix::ioctl_write_ptr!(memerase, b'M', 2, EraseInfo);
 
-impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
-    fn size(&self) -> usize {
-        self.info.total_size as usize
+impl FlashDevice for LinuxMtd {
+    fn size(&self) -> u32 {
+        self.info.total_size as u32
     }
 
-    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> rflasher_core::error::Result<()> {
+    fn erase_granularity(&self) -> u32 {
+        self.info.erase_size as u32
+    }
+
+    fn write_granularity(&self) -> WriteGranularity {
+        WriteGranularity::Bit
+    }
+
+    fn erase_blocks(&self) -> &[EraseBlock] {
+        &self.erase_blocks
+    }
+
+    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
+        if !self.is_valid_range(addr, buf.len()) {
+            return Err(CoreError::AddressOutOfBounds);
+        }
         // Seek to the address
         self.file
             .seek(SeekFrom::Start(addr as u64))
-            .map_err(|_| rflasher_core::error::Error::ReadError { addr })?;
+            .map_err(|_| CoreError::ReadError { addr })?;
 
         // Read in chunks aligned to erase block size for better performance
         let eb_size = self.info.erase_size as usize;
@@ -276,7 +304,7 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
 
             self.file
                 .read_exact(&mut buf[offset..offset + step])
-                .map_err(|_| rflasher_core::error::Error::ReadError {
+                .map_err(|_| CoreError::ReadError {
                     addr: addr + offset as u32,
                 })?;
 
@@ -286,15 +314,18 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
         Ok(())
     }
 
-    async fn write(&mut self, addr: u32, data: &[u8]) -> rflasher_core::error::Result<()> {
+    async fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
+        if !self.is_valid_range(addr, data.len()) {
+            return Err(CoreError::AddressOutOfBounds);
+        }
         if !self.info.is_writable {
-            return Err(rflasher_core::error::Error::WriteProtected);
+            return Err(CoreError::WriteProtected);
         }
 
         // Seek to the address
         self.file
             .seek(SeekFrom::Start(addr as u64))
-            .map_err(|_| rflasher_core::error::Error::WriteError { addr })?;
+            .map_err(|_| CoreError::WriteError { addr })?;
 
         // Write in chunks aligned to erase block size for better performance
         let chunksize = self.info.erase_size as usize;
@@ -307,16 +338,14 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
 
             self.file
                 .write_all(&data[offset..offset + step])
-                .map_err(|_| rflasher_core::error::Error::WriteError {
+                .map_err(|_| CoreError::WriteError {
                     addr: addr + offset as u32,
                 })?;
 
             // Flush after each chunk
-            self.file
-                .flush()
-                .map_err(|_| rflasher_core::error::Error::WriteError {
-                    addr: addr + offset as u32,
-                })?;
+            self.file.flush().map_err(|_| CoreError::WriteError {
+                addr: addr + offset as u32,
+            })?;
 
             offset += step;
         }
@@ -324,16 +353,22 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
         Ok(())
     }
 
-    async fn erase(&mut self, addr: u32, len: u32) -> rflasher_core::error::Result<()> {
+    async fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
+        if !self.is_valid_range(addr, len as usize) {
+            return Err(CoreError::AddressOutOfBounds);
+        }
+        // MEMERASE works on whole blocks; never erase past the request.
+        let block = self.erase_granularity();
+        if !addr.is_multiple_of(block) || !len.is_multiple_of(block) {
+            return Err(CoreError::InvalidAlignment);
+        }
         if !self.info.requires_erase {
             // Device doesn't require erase (e.g., RAM-backed MTD)
             return Ok(());
         }
 
         if self.info.num_erase_regions != 0 {
-            return Err(rflasher_core::error::Error::EraseError(
-                rflasher_core::error::EraseFailure::Unknown,
-            ));
+            return Err(CoreError::EraseError(EraseFailure::Unknown));
         }
 
         let erase_size = self.info.erase_size as u32;
@@ -350,11 +385,9 @@ impl rflasher_core::programmer::OpaqueMaster for LinuxMtd {
             // a properly initialized EraseInfo struct
             unsafe {
                 memerase(self.file.as_raw_fd(), &erase_info).map_err(|_| {
-                    rflasher_core::error::Error::EraseError(
-                        rflasher_core::error::EraseFailure::CommandFailed {
-                            addr: addr + offset,
-                        },
-                    )
+                    CoreError::EraseError(EraseFailure::CommandFailed {
+                        addr: addr + offset,
+                    })
                 })?;
             }
 

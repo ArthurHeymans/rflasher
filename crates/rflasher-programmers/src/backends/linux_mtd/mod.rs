@@ -14,13 +14,13 @@
 //! - NOR flash on embedded systems
 //!
 //! Unlike `linux_spi`, which provides raw SPI access, `linux_mtd` provides
-//! an opaque interface with higher-level operations.
+//! address-based access: `LinuxMtd` implements `FlashDevice` directly.
 //!
 //! # Example
 //!
 //! ```ignore
 //! use rflasher_programmers::linux_mtd::{LinuxMtd, LinuxMtdConfig};
-//! use rflasher_core::programmer::OpaqueMaster;
+//! use rflasher_core::flash::FlashDevice;
 //!
 //! // Open MTD device 0
 //! let config = LinuxMtdConfig::new(0);
@@ -28,7 +28,7 @@
 //!
 //! // Read first 4KB
 //! let mut buffer = vec![0u8; 4096];
-//! mtd.read(0, &mut buffer)?;
+//! mtd.read(0, &mut buffer).await?;
 //!
 //! // Get device info
 //! let info = mtd.info();

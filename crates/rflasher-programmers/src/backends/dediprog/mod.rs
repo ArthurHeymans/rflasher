@@ -48,7 +48,8 @@
 //! - `target=1|2`: Select target flash for dual-chip programmers
 //! - `spispeed=24M|12M|8M|3M|2.18M|1.5M|750k|375k`: SPI clock speed
 //! - `voltage=0|1.8|2.5|3.5` or `1800mV`: Target voltage
-//! - `iomode=single|dual|quad`: Maximum I/O mode (SF600+ only)
+//! - `iomode=single|dual|quad`: Accepted for compatibility; multi-I/O is not
+//!   implemented yet, so transfers use single I/O
 //!
 //! # Example with options
 //!
@@ -160,7 +161,7 @@ pub mod schema {
         OptionSpec {
             key: "iomode",
             label: "I/O mode",
-            help: "Maximum I/O mode (SF600 and newer)",
+            help: "Not implemented yet; transfers use single I/O",
             kind: OptionKind::Choice(IO_MODES),
             default: None,
             scope: Scope::Any,

@@ -119,5 +119,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
 futures-lite = "2"
+rflasher-chips = { workspace = true, features = ["static-chips"] }
 tempfile = "3"
 proptest = "1"

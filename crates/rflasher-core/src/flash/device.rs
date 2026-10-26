@@ -2,7 +2,7 @@
 //!
 //! This module provides the `FlashDevice` trait that abstracts over both
 //! SPI-based flash chips (via `SpiMaster` + `FlashContext`) and opaque
-//! programmers (via `OpaqueMaster`).
+//! programmers, which implement it directly.
 //!
 //! The API is async on every target.
 

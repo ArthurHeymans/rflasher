@@ -168,6 +168,19 @@ impl PhysMap {
         unsafe { core::ptr::read_volatile(self.ptr.add(offset) as *const u32) }
     }
 
+    /// Reads an aligned 64-bit value from a mapped data window.
+    #[inline(always)]
+    pub fn read64(&self, offset: usize) -> u64 {
+        assert!(
+            offset.checked_add(8).is_some_and(|end| end <= self.size),
+            "64-bit MMIO read out of range"
+        );
+        assert!(offset & 7 == 0, "unaligned 64-bit MMIO read");
+        // SAFETY: bounds/alignment are checked above; MMIO validity is a
+        // constructor invariant. Callers use this only for flash data windows.
+        unsafe { core::ptr::read_volatile(self.ptr.add(offset) as *const u64) }
+    }
+
     /// Writes an 8-bit value to the mapped region.
     #[inline(always)]
     pub fn write8(&self, offset: usize, value: u8) {
@@ -247,6 +260,10 @@ impl crate::host::MmioAccess for PhysMap {
 
     fn read32(&self, offset: usize) -> u32 {
         self.read32(offset)
+    }
+
+    fn read64(&self, offset: usize) -> u64 {
+        self.read64(offset)
     }
 
     fn write8(&self, offset: usize, value: u8) {

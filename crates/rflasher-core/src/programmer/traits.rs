@@ -5,6 +5,7 @@
 //! in the CLI); WASM drives them from the browser event loop.
 
 use crate::error::Result;
+use crate::flash::FlashContext;
 use crate::spi::SpiCommand;
 use bitflags::bitflags;
 
@@ -47,6 +48,19 @@ impl Default for SpiFeatures {
 ///
 /// This trait represents a programmer that can execute SPI commands.
 /// Operational methods are async; metadata queries are synchronous.
+///
+/// ## Fast paths
+///
+/// [`read_flash`](Self::read_flash) and [`program_flash`](Self::program_flash)
+/// default to the generic SPI protocol ([`crate::flash::spi_read`],
+/// [`crate::flash::spi_program`]). Programmers with a faster route to the
+/// flash (bulk USB commands, a memory-mapped window, an on-target helper)
+/// override them and call the generic functions for anything the fast path
+/// cannot handle. A fast path must not be more capable than the generic
+/// protocol: callers validate operations against the plain SPI path first.
+///
+/// Never call [`crate::flash::read`] or [`crate::flash::write`] from an
+/// override; those dispatch back into these methods.
 ///
 /// ## Multi-I/O Support
 ///
@@ -125,37 +139,22 @@ pub trait SpiMaster {
 
     /// Delay for the specified number of microseconds
     async fn delay_us(&mut self, us: u32);
-}
 
-/// Opaque master trait for programmers with restricted access
-///
-/// Some programmers (like Intel internal flash controller) don't expose
-/// raw SPI access. Instead, they provide higher-level read/write/erase
-/// operations that handle the protocol internally.
-pub trait OpaqueMaster {
-    /// Get the total flash size in bytes
-    fn size(&self) -> usize;
-
-    /// Read flash contents into the provided buffer
+    /// Read `buf.len()` bytes of the probed chip starting at `addr`.
     ///
-    /// # Arguments
-    /// * `addr` - Starting address to read from
-    /// * `buf` - Buffer to read into
-    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()>;
+    /// The range has already been bounds-checked against `ctx`.
+    async fn read_flash(&mut self, ctx: &FlashContext, addr: u32, buf: &mut [u8]) -> Result<()> {
+        crate::flash::spi_read(self, ctx, addr, buf).await
+    }
 
-    /// Write data to flash (assumes the region is already erased)
+    /// Program already-erased flash starting at `addr`.
     ///
-    /// # Arguments
-    /// * `addr` - Starting address to write to
-    /// * `data` - Data to write
-    async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()>;
-
-    /// Erase a region of flash
-    ///
-    /// # Arguments
-    /// * `addr` - Starting address to erase
-    /// * `len` - Number of bytes to erase
-    async fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
+    /// Called by [`crate::flash::write`] after it has validated the write
+    /// and temporarily lifted chip protection, so overrides only move data.
+    /// Return with the chip idle.
+    async fn program_flash(&mut self, ctx: &FlashContext, addr: u32, data: &[u8]) -> Result<()> {
+        crate::flash::spi_program(self, ctx, addr, data).await
+    }
 }
 
 // Note: `SpiMaster` uses `async fn` and is therefore not directly usable as

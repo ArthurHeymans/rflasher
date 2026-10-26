@@ -250,7 +250,9 @@ All operational APIs are async and executor-independent on every target: the CLI
 ### Adding a programmer
 
 1. Add a module under `crates/rflasher-programmers/src/backends/`.
-2. Implement the `SpiMaster` or `OpaqueMaster` trait from `rflasher-core`.
+2. Implement `SpiMaster` from `rflasher-core` (overriding `read_flash` /
+   `program_flash` if the hardware has a faster flash path), or `FlashDevice`
+   if it has no raw SPI access.
 3. Add a feature and optional dependencies in `crates/rflasher-programmers/Cargo.toml`.
 4. Register the programmer in `rflasher-programmers/src/registry.rs`.
 5. Update the CLI/WASM feature forwarding.

@@ -1,4 +1,4 @@
-//! Stateful protection emulator driving the real SPI, hybrid and erased APIs.
+//! Stateful protection emulator driving the real SPI, fast-path and erased APIs.
 #![cfg(feature = "std")]
 
 use futures_lite::future::block_on;
@@ -7,8 +7,8 @@ use rflasher_core::chip::{
 };
 use rflasher_core::error::{EraseFailure, Error, Result};
 use rflasher_core::flash::unified::{self, NoProgress};
-use rflasher_core::flash::{FlashContext, FlashDevice, HybridFlashDevice, SpiFlashDevice};
-use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
+use rflasher_core::flash::{self, FlashContext, FlashDevice, SpiFlashDevice};
+use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::SpiCommand;
 use rflasher_programmers::ErasedFlashDevice;
 use std::sync::{Arc, Mutex};
@@ -30,7 +30,10 @@ struct State {
     deny_opcode: Option<u8>,
     fail_restore: bool,
     error_flag: u8,
+    fast_read: bool,
+    fast_write: bool,
     bulk_writes: usize,
+    bulk_reads: usize,
     bulk_aai: bool,
     aai_next: Option<usize>,
     fail_aai_at: Option<usize>,
@@ -224,17 +227,19 @@ impl SpiMaster for Master {
         }
         Ok(())
     }
-}
-impl OpaqueMaster for Master {
-    fn size(&self) -> usize {
-        self.0.lock().unwrap().data.len()
-    }
-    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
-        let s = self.0.lock().unwrap();
+    async fn read_flash(&mut self, ctx: &FlashContext, addr: u32, buf: &mut [u8]) -> Result<()> {
+        if !self.0.lock().unwrap().fast_read {
+            return flash::spi_read(self, ctx, addr, buf).await;
+        }
+        let mut s = self.0.lock().unwrap();
+        s.bulk_reads += 1;
         buf.copy_from_slice(&s.data[addr as usize..addr as usize + buf.len()]);
         Ok(())
     }
-    async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+    async fn program_flash(&mut self, ctx: &FlashContext, addr: u32, data: &[u8]) -> Result<()> {
+        if !self.0.lock().unwrap().fast_write {
+            return flash::spi_program(self, ctx, addr, data).await;
+        }
         let aai = {
             let mut s = self.0.lock().unwrap();
             s.bulk_writes += 1;
@@ -246,9 +251,15 @@ impl OpaqueMaster for Master {
             self.0.lock().unwrap().program(addr as usize, data)
         }
     }
-    async fn erase(&mut self, _: u32, _: u32) -> Result<()> {
-        panic!("hybrid must erase through SPI")
-    }
+}
+
+/// Enable the master's bulk read and program fast paths.
+fn with_fast_paths(master: Master) -> Master {
+    let mut s = master.0.lock().unwrap();
+    s.fast_read = true;
+    s.fast_write = true;
+    drop(s);
+    master
 }
 
 fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master, FlashContext) {
@@ -279,7 +290,10 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
         deny_opcode: None,
         fail_restore: false,
         error_flag: 0,
+        fast_read: false,
+        fast_write: false,
         bulk_writes: 0,
+        bulk_reads: 0,
         bulk_aai: false,
         aai_next: None,
         fail_aai_at: None,
@@ -311,14 +325,15 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
 #[test]
 fn protected_at25df321_bios_update_works_through_erased_spi_and_bulk_devices() {
     block_on(async {
-        for hybrid in [false, true] {
+        for (fast_read, fast_write) in [(false, false), (true, false), (true, true)] {
             let (master, ctx) = fixture(Unlock::At2x, 0x80, Features::WRSR_WREN, 4 * 1024 * 1024);
             let state = master.0.clone();
-            let mut device = if hybrid {
-                ErasedFlashDevice::new(HybridFlashDevice::new(master, ctx))
-            } else {
-                ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx))
-            };
+            {
+                let mut s = state.lock().unwrap();
+                s.fast_read = fast_read;
+                s.fast_write = fast_write;
+            }
+            let mut device = ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx));
             // Erasing a sector must preserve descriptor/GbE and data elsewhere.
             let target = vec![0x5f; 4096];
             let mut policy = rflasher_core::flash::MutationPolicy::default();
@@ -342,7 +357,8 @@ fn protected_at25df321_bios_update_works_through_erased_spi_and_bulk_devices() {
                     .iter()
                     .any(|(op, data)| *op == 0x01 && data == &[0])
             );
-            assert_eq!(s.bulk_writes > 0, hybrid);
+            assert_eq!(s.bulk_writes > 0, fast_write);
+            assert_eq!(s.bulk_reads > 0, fast_read);
             assert!(!device.wp_supported());
         }
     });
@@ -435,7 +451,7 @@ fn sst26_registers_are_unlocked_and_restored_at_each_documented_width() {
                     s.fail_mutation = fail;
                     s.bpr.clone()
                 };
-                let mut device = HybridFlashDevice::new(master, ctx);
+                let mut device = SpiFlashDevice::new(with_fast_paths(master), ctx);
                 assert_eq!(
                     device.erase(0, 4096).await,
                     if fail {
@@ -605,7 +621,7 @@ fn erase_and_bulk_program_error_flags_are_reported_and_protection_restored() {
                 let (master, ctx) = fixture(unlock, sr1, Features::WRSR_WREN, 8192);
                 let state = master.0.clone();
                 state.lock().unwrap().error_flag = flag;
-                let mut device = HybridFlashDevice::new(master, ctx);
+                let mut device = SpiFlashDevice::new(with_fast_paths(master), ctx);
                 let result = if erase {
                     device.erase(0, 4096).await
                 } else {
@@ -640,7 +656,7 @@ fn ready_is_not_a_substitute_for_erase_verification() {
             s.data.fill(0x5f);
             s.ignore_erase = true;
         }
-        let mut device = HybridFlashDevice::new(master, ctx);
+        let mut device = SpiFlashDevice::new(with_fast_paths(master), ctx);
         assert_eq!(
             device.erase(4096, 4096).await,
             Err(Error::EraseError(EraseFailure::VerifyFailed {
@@ -704,7 +720,7 @@ fn undocumented_read_locks_and_winbond_complement_protection_are_not_cleared() {
         let (master, ctx) = fixture(Unlock::Status, 0, features, 8192);
         let state = master.0.clone();
         state.lock().unwrap().sr2 |= 0x40;
-        let mut device = HybridFlashDevice::new(master, ctx);
+        let mut device = SpiFlashDevice::new(with_fast_paths(master), ctx);
         assert_eq!(device.erase(0, 4096).await, Err(Error::WriteProtected));
         assert!(
             !state
@@ -723,15 +739,18 @@ fn audited_cmp_and_srl_are_refused_before_status_or_array_mutations() {
         for unlock in [Unlock::Status, Unlock::Bp4Srwd] {
             for sr1 in [0, 0x1c] {
                 for sr2 in [0x40, 0x01, 0x41] {
-                    for hybrid in [false, true] {
+                    for fast in [false, true] {
                         for erase in [false, true] {
                             let features =
                                 Features::WRSR_WREN | Features::WP_CMP | Features::WP_CMP_SR2;
                             let (master, ctx) = fixture(unlock, sr1, features, 8192);
                             let state = master.0.clone();
                             state.lock().unwrap().sr2 = sr2;
-                            let mut device = if hybrid {
-                                ErasedFlashDevice::new(HybridFlashDevice::new(master, ctx))
+                            let mut device = if fast {
+                                ErasedFlashDevice::new(SpiFlashDevice::new(
+                                    with_fast_paths(master),
+                                    ctx,
+                                ))
                             } else {
                                 ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx))
                             };
@@ -767,7 +786,7 @@ fn cmp_register_read_does_not_change_status_write_width() {
             };
             let (master, ctx) = fixture(Unlock::Bp4Srwd, 0x1c, features, 8192);
             let state = master.0.clone();
-            let mut device = HybridFlashDevice::new(master, ctx);
+            let mut device = SpiFlashDevice::new(with_fast_paths(master), ctx);
             device.erase(0, 4096).await.unwrap();
             device.write(0, &[0x5a]).await.unwrap();
             let s = state.lock().unwrap();
@@ -840,7 +859,7 @@ fn spi_and_bulk_aai_programming_preserve_protection_and_adjacent_bytes() {
                     s.bulk_aai = bulk;
                 }
                 let mut device = if bulk {
-                    ErasedFlashDevice::new(HybridFlashDevice::new(master, ctx))
+                    ErasedFlashDevice::new(SpiFlashDevice::new(with_fast_paths(master), ctx))
                 } else {
                     ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx))
                 };
@@ -878,9 +897,9 @@ fn spi_and_bulk_aai_programming_preserve_protection_and_adjacent_bytes() {
 #[test]
 fn aai_transfer_failures_exit_mode_before_restoring_protection() {
     block_on(async {
-        for (hybrid, fail_at) in [false, true]
+        for (fast, fail_at) in [false, true]
             .into_iter()
-            .flat_map(|hybrid| [0, 2].map(|addr| (hybrid, addr)))
+            .flat_map(|fast| [0, 2].map(|addr| (fast, addr)))
         {
             let features = Features::WRSR_WREN | Features::AAI_WORD;
             let (master, ctx) = fixture(Unlock::Status, 0x3c, features, 8192);
@@ -889,10 +908,10 @@ fn aai_transfer_failures_exit_mode_before_restoring_protection() {
                 let mut s = state.lock().unwrap();
                 s.data.fill(0xff);
                 s.fail_aai_at = Some(fail_at);
-                s.bulk_aai = hybrid;
+                s.bulk_aai = fast;
             }
-            let mut device = if hybrid {
-                ErasedFlashDevice::new(HybridFlashDevice::new(master, ctx))
+            let mut device = if fast {
+                ErasedFlashDevice::new(SpiFlashDevice::new(with_fast_paths(master), ctx))
             } else {
                 ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx))
             };

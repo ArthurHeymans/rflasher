@@ -32,7 +32,9 @@ use crate::error::InternalError;
 #[cfg(all(feature = "std", target_os = "linux"))]
 use crate::host::LinuxHost;
 use crate::host::{HostAccess, MmioAccess};
+use rflasher_core::chip::FlashChip;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
+use rflasher_core::flash::{self, FlashContext};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{IoMode, SpiCommand, opcodes};
 
@@ -327,9 +329,7 @@ impl<H: HostAccess> Spi100Controller<H> {
 
     /// Read multiple bytes from SPI register (FIFO).
     fn readn(&self, reg: usize, data: &mut [u8]) {
-        for (offset, byte) in data.iter_mut().enumerate() {
-            *byte = self.read8(reg + offset);
-        }
+        self.spibar.read_aligned(reg, data, 4);
     }
 
     /// Check read/write byte counts
@@ -422,19 +422,81 @@ impl<H: HostAccess> Spi100Controller<H> {
             .as_ref()
             .ok_or(InternalError::Io("No memory mapping available"))?;
 
-        for (offset, byte) in dst.iter_mut().enumerate() {
-            *byte = memory.read8(start + offset);
-        }
+        memory.read_aligned(start, dst, 8);
 
         Ok(())
+    }
+
+    /// Whether [`Self::mapped_read`] can serve reads of this chip. Otherwise
+    /// the generic SPI protocol is used.
+    fn can_map_reads(&self, ctx: &FlashContext) -> bool {
+        // The command fallback for unmapped data needs native 4BA reads.
+        self.memory.is_some()
+            && (ctx.chip.total_size <= 16 * 1024 * 1024 || ctx.chip.features.supports_4ba_read())
+    }
+
+    /// Read through the checked mapping, falling back to native commands.
+    /// Leave the chip in 4BA mode when firmware's 32-bit mapping requires it,
+    /// as flashprog does.
+    fn mapped_read(&self, ctx: &FlashContext, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
+        use rflasher_core::chip::Features;
+
+        let chip_size = u64::from(ctx.chip.total_size);
+        let features = ctx.chip.features;
+        if u64::from(addr) + buf.len() as u64 > chip_size {
+            return Err(CoreError::AddressOutOfBounds);
+        }
+        if buf.is_empty() {
+            return Ok(());
+        }
+
+        let mapped_start = chip_size as i64 - self.mapped_len as i64;
+        let uses_4ba_mapping = chip_size > 16 * 1024 * 1024
+            && self.memory.is_some()
+            && !self.no_4ba_mmap
+            && i64::from(addr) + buf.len() as i64 > mapped_start;
+        if uses_4ba_mapping {
+            // The configured memory-read opcode may require persistent 4BA
+            // mode; native READ_4B in the command fallback does not.
+            if !features.contains(Features::FOUR_BYTE_ENTER) {
+                if !features.contains(Features::FOUR_BYTE_ENTER_WREN) {
+                    return self
+                        .default_spi_read(chip_size, addr, buf)
+                        .map_err(InternalError::to_core_error);
+                }
+                self.write_enable().map_err(InternalError::to_core_error)?;
+            }
+            self.send_command(&[opcodes::EN4B], &mut [])
+                .map_err(InternalError::to_core_error)?;
+        }
+
+        self.read_sized(chip_size, addr, buf)
+            .map_err(InternalError::to_core_error)
     }
 
     /// Read data from flash
     ///
     /// This uses memory-mapped access when available and falls back to
-    /// SPI commands for data outside the mapped range.
-    pub fn read(&self, chip_size: u64, start: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+    /// SPI commands for data outside the mapped range. Chips beyond 16 MiB
+    /// must support the native READ_4B command, and the caller must ensure
+    /// the chip address mode matches the controller's memory mapping.
+    pub fn read(&self, chip: &FlashChip, start: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+        let chip_size = u64::from(chip.total_size);
+        if chip_size > 16 * 1024 * 1024 && !chip.features.supports_4ba_read() {
+            // Extended-address-register and mode-switch addressing don't work.
+            return Err(InternalError::NotSupported(
+                "AMD SPI100 needs native 4-byte reads for chips over 16 MiB",
+            ));
+        }
+        self.read_sized(chip_size, start, buf)
+    }
+
+    /// [`Self::read`] once the chip's addressing is known to work.
+    fn read_sized(&self, chip_size: u64, start: u32, buf: &mut [u8]) -> Result<(), InternalError> {
         let len = buf.len();
+        if u64::from(start) + len as u64 > chip_size {
+            return Err(InternalError::Io("Flash read outside chip bounds"));
+        }
 
         // Don't consider memory mapping at all if 4BA chips are not mapped as expected
         if chip_size > 16 * 1024 * 1024 && self.no_4ba_mmap {
@@ -456,8 +518,11 @@ impl<H: HostAccess> Spi100Controller<H> {
                 current_start,
                 &mut buf[offset..offset + unmapped_len],
             )?;
-            current_start += unmapped_len as u32;
             offset += unmapped_len;
+            if offset == len {
+                return Ok(());
+            }
+            current_start += unmapped_len as u32;
         }
 
         // Use memory-mapped access for the rest
@@ -733,6 +798,10 @@ impl<H: HostAccess> Spi100Controller<H> {
         if cmd.io_mode != IoMode::Single {
             return Err(CoreError::IoModeNotSupported);
         }
+        // Dummy cycles are sent as FIFO bytes, so only whole bytes are exact.
+        if !cmd.dummy_cycles.is_multiple_of(8) {
+            return Err(CoreError::OpcodeNotSupported);
+        }
 
         let write_len = cmd.header_len().saturating_add(cmd.write_data.len());
         self.check_readwritecnt(write_len, cmd.read_buf.len())
@@ -775,18 +844,31 @@ impl<H: HostAccess> Controller for Spi100Controller<H> {
     }
 
     fn controller_read(&mut self, addr: u32, buf: &mut [u8], chip_size: usize) -> CoreResult<()> {
-        // AMD read needs chip_size parameter, use provided chip_size or default
-        let chip_size_u64 = if chip_size > 0 {
-            chip_size as u64
+        // Without the chip's features, only three-byte reads are known to work.
+        let chip_size = if chip_size > 0 {
+            chip_size
         } else {
             16 * 1024 * 1024 // Default to 16MB if not yet probed
         };
-        self.read(chip_size_u64, addr, buf)
+        if chip_size > 16 * 1024 * 1024 {
+            return Err(CoreError::ChipNotSupported);
+        }
+        self.read_sized(chip_size as u64, addr, buf)
             .map_err(InternalError::to_core_error)
     }
 
+    fn fast_read(
+        &mut self,
+        ctx: &FlashContext,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> Option<CoreResult<()>> {
+        self.can_map_reads(ctx)
+            .then(|| self.mapped_read(ctx, addr, buf))
+    }
+
     fn controller_write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
-        self.write(addr, data).map_err(|e| match e {
+        Spi100Controller::write(self, addr, data).map_err(|e| match e {
             InternalError::AccessDenied { .. } => CoreError::RegionProtected,
             InternalError::Io(_) => CoreError::WriteError { addr },
             InternalError::NotSupported(_) => CoreError::AddressOutOfBounds,
@@ -795,7 +877,7 @@ impl<H: HostAccess> Controller for Spi100Controller<H> {
     }
 
     fn controller_erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
-        self.erase(addr, len).map_err(|e| match e {
+        Spi100Controller::erase(self, addr, len).map_err(|e| match e {
             InternalError::AccessDenied { .. } => CoreError::RegionProtected,
             InternalError::Io(_) => {
                 CoreError::EraseError(rflasher_core::error::EraseFailure::CommandFailed { addr })
@@ -855,7 +937,12 @@ impl Spi100Controller {
         ))
     }
 
-    pub fn read(&self, _chip_size: u64, _start: u32, _buf: &mut [u8]) -> Result<(), InternalError> {
+    pub fn read(
+        &self,
+        _chip: &FlashChip,
+        _start: u32,
+        _buf: &mut [u8],
+    ) -> Result<(), InternalError> {
         Err(InternalError::NotSupported(
             "AMD SPI100 controller not available on this target",
         ))
@@ -900,7 +987,21 @@ impl<H: HostAccess> SpiMaster for Spi100Controller<H> {
     async fn delay_us(&mut self, us: u32) {
         self.host.delay_us(us);
     }
+
+    /// Memory-mapped reads where the controller window and chip allow it.
+    async fn read_flash(
+        &mut self,
+        ctx: &FlashContext,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> CoreResult<()> {
+        if self.can_map_reads(ctx) {
+            self.mapped_read(ctx, addr, buf)
+        } else {
+            flash::spi_read(self, ctx, addr, buf).await
+        }
+    }
 }
 
 #[cfg(all(test, feature = "std", target_os = "linux"))]
-mod tests;
+pub(crate) mod tests;

@@ -1,7 +1,7 @@
 //! Programmer registry and initialization
 //!
 //! This module handles opening programmers by name and creating FlashHandles.
-//! It completely hides SpiMaster and OpaqueMaster from the public API.
+//! It completely hides SpiMaster and the backend types from the public API.
 
 #[cfg(feature = "usb")]
 use crate::UsbProgrammer;
@@ -13,15 +13,7 @@ use crate::usb::ChooseUsbDevice;
 use rflasher_core::chip::ChipProvider;
 #[allow(unused_imports)] // Used in feature-gated code
 use rflasher_core::flash::FlashDevice;
-#[cfg(any(feature = "dediprog", feature = "sunxi-fel"))]
-use rflasher_core::flash::HybridFlashDevice;
-#[cfg(any(feature = "linux-mtd", feature = "internal"))]
-use rflasher_core::flash::OpaqueFlashDevice;
 use rflasher_core::flash::{ProbeOptions, ProbeResult, SpiFlashDevice, probe_with_options};
-#[cfg(feature = "internal")]
-use rflasher_core::layout::parse_ifd;
-#[cfg(feature = "internal")]
-use rflasher_core::programmer::OpaqueMaster;
 use rflasher_core::sfdp::SfdpMismatch;
 
 /// Log any SFDP mismatches as warnings
@@ -93,7 +85,7 @@ pub struct OpenOptions<'a> {
 /// The chip database together with the user's probing choices
 ///
 /// Threaded through the per-programmer openers so that every probe path
-/// (raw SPI, hybrid, opaque) applies the same selection and safety policy.
+/// applies the same selection and safety policy.
 struct Probing<'a> {
     db: &'a dyn ChipProvider,
     options: ProbeOptions<'a>,
@@ -335,8 +327,10 @@ pub async fn open_flash_with_options(
             open_linux_gpio_spi(&params, db).await
         }
 
-        #[cfg(feature = "internal")]
+        #[cfg(all(feature = "internal", target_os = "linux"))]
         "internal" => open_internal(&params, db).await,
+        #[cfg(all(feature = "internal", not(target_os = "linux")))]
+        "internal" => Err("The internal programmer is only supported on Linux".into()),
 
         #[cfg(feature = "raiden")]
         "raiden_debug_spi" | "raiden" | "raiden_spi" => {
@@ -353,29 +347,6 @@ pub async fn open_flash_with_options(
 
         _ => Err(format!("Unknown programmer: {}", params.name).into()),
     }
-}
-
-// Helper to get flash size from IFD for opaque programmers
-#[cfg(feature = "internal")]
-async fn get_flash_size_from_ifd<M: OpaqueMaster>(
-    master: &mut M,
-) -> Result<u32, Box<dyn std::error::Error>> {
-    let mut header = [0u8; 4096];
-    master.read(0, &mut header).await?;
-
-    if let Ok(layout) = parse_ifd(&header) {
-        let size = layout.regions.iter().map(|r| r.end + 1).max().unwrap_or(0);
-        if size > 0 {
-            return Ok(size);
-        }
-    }
-
-    let size = master.size();
-    if size > 0 {
-        return Ok(size as u32);
-    }
-
-    Err("Cannot determine flash size".into())
 }
 
 // Programmer-specific open functions
@@ -492,24 +463,7 @@ async fn open_dediprog(
     db: &Probing<'_>,
     choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    let mut master = open_dediprog_master(params, choose).await?;
-
-    // Probe the flash chip via SpiMaster
-    let result = db.probe(&mut master).await?;
-    log_probe_result(&result);
-    let chip_info = ChipInfo::from(result);
-    let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
-
-    // Configure bulk bounds and programming mode from the probed chip.
-    master.set_flash_chip(&ctx.chip);
-
-    // Use HybridFlashDevice: OpaqueMaster for fast bulk read/write (CMD_READ/CMD_WRITE),
-    // SpiMaster for erase, status register access, and write protection
-    let device = HybridFlashDevice::new(master, ctx);
-    Ok(FlashHandle::with_chip_info(
-        ErasedFlashDevice::new(device),
-        chip_info,
-    ))
+    probe_and_create_handle(open_dediprog_master(params, choose).await?, db).await
 }
 
 #[cfg(feature = "serprog-native")]
@@ -713,21 +667,15 @@ async fn open_linux_mtd(
         )
     })?;
 
-    let flash_size = mtd.size() as u32;
-    let erase_size = mtd.erase_size() as u32;
-
+    let info = mtd.info();
     log::info!(
         "MTD device: {} ({} bytes, erase size {} bytes)",
-        mtd.info().name,
-        flash_size,
-        erase_size
+        info.name,
+        info.total_size,
+        info.erase_size
     );
 
-    let mut device = OpaqueFlashDevice::new(mtd, flash_size);
-    device.set_erase_block_size(erase_size);
-    Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(
-        device,
-    )))
+    Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(mtd)))
 }
 
 #[cfg(feature = "linux-gpio")]
@@ -763,7 +711,7 @@ async fn open_linux_gpio_spi(
     probe_and_create_handle(open_linux_gpio_spi_master(params).await?, db).await
 }
 
-#[cfg(feature = "internal")]
+#[cfg(all(feature = "internal", target_os = "linux"))]
 fn restricted_resource_hint(resource: &rflasher_internal::RestrictedResource) -> &'static str {
     use rflasher_internal::RestrictedResource;
 
@@ -775,7 +723,7 @@ fn restricted_resource_hint(resource: &rflasher_internal::RestrictedResource) ->
     }
 }
 
-#[cfg(feature = "internal")]
+#[cfg(all(feature = "internal", target_os = "linux"))]
 fn format_internal_init_error(error: &rflasher_internal::InternalError) -> String {
     use rflasher_internal::InternalError;
 
@@ -796,7 +744,7 @@ fn format_internal_init_error(error: &rflasher_internal::InternalError) -> Strin
     format!("Failed to initialize internal programmer: {error}\n{hint}")
 }
 
-#[cfg(all(test, feature = "internal"))]
+#[cfg(all(test, feature = "internal", target_os = "linux"))]
 mod internal_error_tests {
     use super::format_internal_init_error;
     use rflasher_internal::{InternalError, PciAccessError, RestrictedResource};
@@ -858,7 +806,7 @@ mod internal_error_tests {
     }
 }
 
-#[cfg(feature = "internal")]
+#[cfg(all(feature = "internal", target_os = "linux"))]
 async fn open_internal(
     params: &ProgrammerParams,
     db: &Probing<'_>,
@@ -876,36 +824,22 @@ async fn open_internal(
         log::info!("Using ich_spi_mode={}", internal_opts.mode);
     }
 
-    let mut programmer = InternalProgrammer::with_options(internal_opts)
-        .map_err(|error| format_internal_init_error(&error))?;
-
-    // Software sequencing: can probe chip via SPI
-    // Hardware sequencing: opaque operations only
-    if programmer.mode() == SpiMode::SoftwareSequencing {
-        log::info!("Using SPI mode (swseq allows chip probing)");
-        probe_and_create_handle(programmer, db).await
-    } else {
-        if db.options.chip.is_some() || db.options.force {
-            return Err("--chip and --force apply to SPI probing, not opaque hardware sequencing; use ich_spi_mode=swseq or remove them".into());
+    match InternalProgrammer::open(internal_opts)
+        .map_err(|error| format_internal_init_error(&error))?
+    {
+        InternalProgrammer::Spi(spi) => {
+            log::info!("Using SPI mode (swseq allows chip probing)");
+            probe_and_create_handle(spi, db).await
         }
-        log::info!("Using opaque mode (hwseq - no chip probing available)");
-        let flash_size = get_flash_size_from_ifd(&mut programmer).await?;
-        log::info!("Flash size: {} bytes (from IFD)", flash_size);
-
-        // The controller erases whole hardware blocks (BERASE), so erases must
-        // be planned with the block size it reports, not an assumed 4 KiB.
-        let erase_size = programmer
-            .erase_block_size(flash_size)
-            .map_err(|e| format!("Cannot determine the hardware erase block size: {}", e))?;
-
-        let mut device = OpaqueFlashDevice::new(programmer, flash_size);
-        if let Some(size) = erase_size {
-            log::info!("Hardware sequencing erase block size: {} bytes", size);
-            device.set_erase_block_size(size);
+        InternalProgrammer::HardwareSequencing(flash) => {
+            if db.options.chip.is_some() || db.options.force {
+                return Err("--chip and --force apply to SPI probing, not opaque hardware sequencing; use ich_spi_mode=swseq or remove them".into());
+            }
+            log::info!("Using opaque mode (hwseq - no chip probing available)");
+            Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(
+                flash,
+            )))
         }
-        Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(
-            device,
-        )))
     }
 }
 
@@ -975,31 +909,7 @@ async fn open_sunxi_fel(
     db: &Probing<'_>,
     choose: Option<ChooseUsbDevice<'_>>,
 ) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    let mut master = open_sunxi_fel_master(params, choose).await?;
-
-    // Probe the flash chip via SpiMaster
-    let result = db.probe(&mut master).await?;
-    log_probe_result(&result);
-    let chip_info = ChipInfo::from(result);
-    let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
-
-    // Configure OpaqueMaster with chip info discovered during probe
-    master.set_use_4byte_addr(ctx.total_size() > 16 * 1024 * 1024);
-    master.set_erase_blocks(ctx.chip.erase_blocks().to_vec());
-
-    // FEL's bulk writer implements only 256-byte page programming.
-    let device = if ctx
-        .chip
-        .features
-        .contains(rflasher_core::chip::Features::AAI_WORD)
-        || ctx.chip.write_granularity == rflasher_core::chip::WriteGranularity::Byte
-        || ctx.chip.page_size != 256
-    {
-        ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx))
-    } else {
-        ErasedFlashDevice::new(HybridFlashDevice::new(master, ctx))
-    };
-    Ok(FlashHandle::with_chip_info(device, chip_info))
+    probe_and_create_handle(open_sunxi_fel_master(params, choose).await?, db).await
 }
 
 #[cfg(all(test, feature = "dummy"))]
