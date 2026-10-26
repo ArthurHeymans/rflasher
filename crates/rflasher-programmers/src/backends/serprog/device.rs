@@ -116,18 +116,14 @@ impl<T: Transport> Serprog<T> {
         }
 
         // Enable output drivers if supported
-        if serprog.info.supports_cmd(S_CMD_S_PIN_STATE)
-            && serprog
-                .do_command(S_CMD_S_PIN_STATE, &[1], &mut [])
-                .await
-                .is_ok()
-        {
+        if serprog.info.supports_cmd(S_CMD_S_PIN_STATE) {
+            serprog.do_command(S_CMD_S_PIN_STATE, &[1], &mut []).await?;
             log::debug!("serprog: Output drivers enabled");
         }
 
         // Set bus type to all supported types
         let bt = serprog.info.bustypes;
-        let _ = serprog.do_command(S_CMD_S_BUSTYPE, &[bt], &mut []).await;
+        serprog.do_command(S_CMD_S_BUSTYPE, &[bt], &mut []).await?;
 
         Ok(serprog)
     }
@@ -437,4 +433,69 @@ impl<T: Transport> SpiMaster for Serprog<T> {
 /// Convert a 24-bit little-endian value to u32
 fn u24_to_u32(buf: &[u8; 3]) -> u32 {
     (buf[0] as u32) | ((buf[1] as u32) << 8) | ((buf[2] as u32) << 16)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    struct ScriptedTransport(VecDeque<u8>);
+
+    impl Transport for ScriptedTransport {
+        async fn write(&mut self, _: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        async fn read(&mut self, buf: &mut [u8]) -> Result<()> {
+            for byte in buf {
+                *byte = self.0.pop_front().unwrap_or(S_ACK);
+            }
+            Ok(())
+        }
+        async fn read_nonblock(&mut self, buf: &mut [u8], _: u32) -> Result<usize> {
+            self.read(buf).await?;
+            Ok(buf.len())
+        }
+        async fn write_nonblock(&mut self, _: &[u8], _: u32) -> Result<bool> {
+            Ok(true)
+        }
+        async fn flush(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn initialization(
+        pin_supported: bool,
+        pin_response: u8,
+        final_bus_response: u8,
+    ) -> Result<Serprog<ScriptedTransport>> {
+        let mut map = CommandMap::new();
+        for cmd in [S_CMD_Q_BUSTYPE, S_CMD_S_BUSTYPE, S_CMD_O_SPIOP] {
+            map.set_supported(cmd);
+        }
+        if pin_supported {
+            map.set_supported(S_CMD_S_PIN_STATE);
+        }
+        let mut replies = vec![S_NAK, S_ACK, S_NAK, S_ACK, S_ACK, 1, 0, S_ACK];
+        replies.extend_from_slice(&map.bitmap);
+        replies.extend_from_slice(&[S_ACK, bus::SPI, S_ACK]);
+        if pin_supported {
+            replies.push(pin_response);
+        }
+        replies.push(final_bus_response);
+        futures_lite::future::block_on(Serprog::new(ScriptedTransport(replies.into())))
+    }
+
+    #[test]
+    fn initialization_propagates_advertised_command_failures() {
+        assert!(matches!(
+            initialization(true, S_NAK, S_ACK),
+            Err(SerprogError::Nak(S_CMD_S_PIN_STATE))
+        ));
+        assert!(matches!(
+            initialization(true, S_ACK, S_NAK),
+            Err(SerprogError::Nak(S_CMD_S_BUSTYPE))
+        ));
+        assert!(initialization(false, S_NAK, S_ACK).is_ok());
+    }
 }
