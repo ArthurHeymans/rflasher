@@ -962,14 +962,35 @@ fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::
         return None;
     }
     profile.features = chips.iter().fold(first.features, |f, c| f & c.features);
+    // WRSR_EXT describes a required wire format, not an optional command.
+    // Intersecting it away would turn an extended write into a one-byte WRSR.
+    // If any alias may have SR2, retain that hazard even when another alias
+    // lacks the descriptive flag. It is not evidence that one-byte WRSR is safe.
+    if chips.iter().any(|c| {
+        c.features
+            .intersects(Features::STATUS_REG_2 | Features::QE_SR2)
+    }) {
+        profile.features |= Features::STATUS_REG_2;
+    }
+    if chips.iter().any(|c| {
+        c.features.contains(Features::WRSR_EXT) != first.features.contains(Features::WRSR_EXT)
+    }) {
+        profile.features.remove(
+            Features::WRSR_WREN
+                | Features::WRSR_EWSR
+                | Features::WRSR_VOLATILE_WREN
+                | Features::WRSR_PERSISTENT_EWSR,
+        );
+        profile.features |= Features::WP_UNRESOLVED;
+    }
     // Only flags that change the WP register bit map count (see
     // `SpiFlashDevice::wp_bit_map`); SST26_BPR is already required to match.
     // Descriptive flags such as STATUS_REG_2 or WP_TB are not used by WP
     // access, so differences there must not disable it.
-    if chips
-        .iter()
-        .any(|c| c.features & Features::WP_BP3 != first.features & Features::WP_BP3)
-    {
+    if chips.iter().any(|c| {
+        let layout = Features::WP_BP3 | Features::WP_WPS;
+        c.features & layout != first.features & layout
+    }) {
         profile.features |= Features::WP_UNRESOLVED;
     }
     profile
@@ -1803,6 +1824,57 @@ mod tests {
             other.features.remove(remove);
             assert!(common_operation_profile(&[chip, &other]).is_none());
             assert!(common_operation_profile(&[&other, chip]).is_none());
+        }
+    }
+
+    #[test]
+    fn aliases_with_different_wrsr_lengths_cannot_write_status() {
+        let db = rflasher_chips::ChipDatabase::new();
+        let chip = db.find_by_jedec_id(0xef, 0x4017).unwrap();
+        let mut other = chip.clone();
+        other.features.toggle(Features::WRSR_EXT);
+        for pair in [[chip, &other], [&other, chip]] {
+            let profile = common_operation_profile(&pair).unwrap();
+            assert!(profile.features.contains(Features::WP_UNRESOLVED));
+            assert!(
+                crate::wp::WriteOptions::default()
+                    .for_features(profile.features)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_retain_possible_second_status_register() {
+        let db = rflasher_chips::ChipDatabase::new();
+        let chip = db.find_by_jedec_id(0xef, 0x4017).unwrap();
+        let mut other = chip.clone();
+        other
+            .features
+            .remove(Features::STATUS_REG_2 | Features::QE_SR2);
+        for pair in [[chip, &other], [&other, chip]] {
+            assert!(
+                common_operation_profile(&pair)
+                    .unwrap()
+                    .features
+                    .contains(Features::STATUS_REG_2)
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_with_different_wps_layouts_cannot_report_wp() {
+        let db = rflasher_chips::ChipDatabase::new();
+        let chip = db.find_by_jedec_id(0xef, 0x4017).unwrap();
+        let mut other = chip.clone();
+        other.features.toggle(Features::WP_WPS);
+        for pair in [[chip, &other], [&other, chip]] {
+            assert!(
+                common_operation_profile(&pair)
+                    .unwrap()
+                    .features
+                    .contains(Features::WP_UNRESOLVED)
+            );
         }
     }
 

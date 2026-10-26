@@ -189,7 +189,10 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
 impl<M: SpiMaster> SpiFlashDevice<M> {
     fn has_wp_layout(&self) -> bool {
         let features = self.ctx.chip.features;
-        features.contains(crate::chip::Features::WP_WINBOND)
+        // W25Q128.V includes older parts and JV parts with individual locks;
+        // their shared ID does not establish whether SR3/WPS exists.
+        (self.ctx.chip.jedec_id() != 0xef4018 || features.contains(crate::chip::Features::WP_WPS))
+            && features.contains(crate::chip::Features::WP_WINBOND)
             && !features
                 .intersects(crate::chip::Features::WP_UNRESOLVED | crate::chip::Features::SST26_BPR)
     }
@@ -200,11 +203,16 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     fn wp_bit_map(&self) -> WpRegBitMap {
         // Check if chip has BP3 (4 BP bits)
         let features = self.ctx.chip.features;
-        if features.contains(crate::chip::Features::WP_BP3) {
+        let mut map = if features.contains(crate::chip::Features::WP_BP3) {
             WpRegBitMap::winbond_with_bp3()
         } else {
             WpRegBitMap::winbond_standard()
+        };
+        if features.contains(crate::chip::Features::WP_WPS) {
+            map.wps =
+                wp::RegBitInfo::new(wp::StatusRegister::Status3, 2, wp::BitWritability::ReadOnly);
         }
+        map
     }
 
     /// Get the range decoder for this chip
@@ -305,6 +313,9 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// Get all available protection ranges
     #[cfg(feature = "alloc")]
     pub fn get_available_wp_ranges(&self) -> alloc::vec::Vec<WpRange> {
+        if !self.has_wp_layout() {
+            return alloc::vec::Vec::new();
+        }
         let bit_map = self.wp_bit_map();
         let decoder = self.wp_decoder();
         let total_size = self.ctx.chip.total_size;

@@ -129,14 +129,18 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
         let sr1 = protocol::read_status1(master).await?;
         let features = ctx.chip.features;
         if features.contains(Features::WP_CMP)
-            && !features.intersects(Features::WP_CMP_SR2 | Features::WP_WINBOND)
+            && !features
+                .intersects(Features::WP_CMP_SR2 | Features::WP_WINBOND | Features::WRSR_EXT)
         {
             // CMP availability alone does not identify its register/bit.
             return Err(Error::ChipNotSupported);
         }
-        let sr2 = if features
-            .intersects(Features::WP_CMP_SR2 | Features::WP_WINBOND | Features::WRSR_EXT)
-        {
+        let needs_cmp_check =
+            features.intersects(Features::WP_CMP_SR2 | Features::WP_WINBOND | Features::WRSR_EXT);
+        if sr1 & bp == 0 && !needs_cmp_check {
+            return Ok(SavedProtection::Unchanged);
+        }
+        let sr2 = if needs_cmp_check || features.contains(Features::WRSR_EXT) {
             if !master.probe_opcode(0x35) {
                 return Err(Error::OpcodeNotSupported);
             }
@@ -152,6 +156,10 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
         };
         if sr1 & bp == 0 {
             return Ok(SavedProtection::Unchanged);
+        }
+        if sr2.is_none() && features.intersects(Features::STATUS_REG_2 | Features::QE_SR2) {
+            // These flags do not identify either RDSR2 or the WRSR wire format.
+            return Err(Error::ChipNotSupported);
         }
         let enable = match temporary_write_enable(ctx.chip.features) {
             Some(RegisterWriteEnable::Wren) => 0x06,
@@ -204,6 +212,9 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
                     return Err(Error::ChipNotSupported);
                 }
                 sr2
+            } else if sr2.is_some() {
+                // A readable SR2 alone does not document a safe WRSR format.
+                return Err(Error::ChipNotSupported);
             } else {
                 None
             };

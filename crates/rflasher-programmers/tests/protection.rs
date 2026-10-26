@@ -17,6 +17,7 @@ struct State {
     unlock: Unlock,
     sr1: u8,
     sr2: u8,
+    sr3: u8,
     wp_high: bool,
     wel: bool,
     ewsr: bool,
@@ -127,6 +128,12 @@ impl SpiMaster for Master {
                 cmd.read_buf.fill(s.status());
             }
             0x35 => cmd.read_buf.fill(s.sr2),
+            0x15 => {
+                if s.deny_opcode == Some(0x15) {
+                    return Err(Error::OpcodeNotSupported);
+                }
+                cmd.read_buf.fill(s.sr3);
+            }
             0x01 => {
                 if !s.wel && !s.ewsr {
                     return Ok(());
@@ -277,6 +284,7 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
         unlock,
         sr1,
         sr2: 0x02,
+        sr3: 0,
         wp_high: true,
         wel: false,
         ewsr: false,
@@ -775,7 +783,156 @@ fn audited_cmp_and_srl_are_refused_before_status_or_array_mutations() {
 }
 
 #[test]
-fn cmp_register_read_does_not_change_status_write_width() {
+fn w25q128_array_mutations_preserve_status_registers() {
+    block_on(async {
+        for sr1 in [0, 0x1c] {
+            let (master, mut ctx) = fixture(
+                Unlock::Status,
+                sr1,
+                Features::WRSR_WREN | Features::WRSR_EXT | Features::WP_WINBOND,
+                8192,
+            );
+            ctx.chip.jedec_manufacturer = 0xef;
+            ctx.chip.jedec_device = 0x4018;
+            let state = master.0.clone();
+            let mut device = SpiFlashDevice::new(with_fast_paths(master), ctx);
+            device.erase(0, 4096).await.unwrap();
+            device.write(0, &[0x5a]).await.unwrap();
+            let state = state.lock().unwrap();
+            assert_eq!((state.sr1, state.sr2), (sr1, 0x02));
+            assert_eq!(state.data[0], 0x5a);
+            assert!(
+                state
+                    .commands
+                    .iter()
+                    .filter(|(op, _)| *op == 0x01)
+                    .all(|(_, bytes)| bytes.len() == 2)
+            );
+        }
+    });
+}
+
+#[test]
+fn known_wps_is_checked_and_ambiguous_shared_id_fails_closed() {
+    block_on(async {
+        let features = Features::WRSR_WREN | Features::WRSR_EXT | Features::WP_WINBOND;
+        for (wps_known, sr3, fail) in [
+            (false, 0, false),
+            (true, 0, false),
+            (true, 4, false),
+            (true, 0, true),
+            (true, 0xff, false),
+        ] {
+            let (master, mut ctx) = fixture(
+                Unlock::Status,
+                0,
+                features
+                    | if wps_known {
+                        Features::WP_WPS
+                    } else {
+                        Features::empty()
+                    },
+                8192,
+            );
+            ctx.chip.jedec_manufacturer = 0xef;
+            ctx.chip.jedec_device = 0x4018;
+            let state = master.0.clone();
+            state.lock().unwrap().sr3 = sr3;
+            if fail {
+                state.lock().unwrap().deny_opcode = Some(0x15);
+            }
+            let mut device = SpiFlashDevice::new(master, ctx);
+            let result = device.read_wp_config().await;
+            assert_eq!(result.is_ok(), wps_known && sr3 == 0 && !fail);
+            assert_eq!(
+                state
+                    .lock()
+                    .unwrap()
+                    .commands
+                    .iter()
+                    .any(|(op, _)| *op == 0x15),
+                wps_known
+            );
+        }
+    });
+}
+
+#[test]
+fn readable_sr2_without_documented_width_is_not_overwritten() {
+    block_on(async {
+        for sr2 in [0, 2] {
+            let (master, ctx) = fixture(
+                Unlock::Status,
+                0x1c,
+                Features::WRSR_WREN | Features::STATUS_REG_2,
+                8192,
+            );
+            let state = master.0.clone();
+            state.lock().unwrap().sr2 = sr2;
+            let mut device = SpiFlashDevice::new(master, ctx);
+            assert_eq!(device.erase(0, 4096).await, Err(Error::ChipNotSupported));
+            let state = state.lock().unwrap();
+            assert_eq!(state.sr2, sr2);
+            assert!(!state.commands.iter().any(|(op, _)| *op == 0x01));
+        }
+    });
+}
+
+#[test]
+fn extended_status_still_checks_cmp_and_srl() {
+    block_on(async {
+        for sr1 in [0, 0x1c] {
+            for sr2 in [0x01, 0x40] {
+                let features = Features::WRSR_WREN | Features::WRSR_EXT | Features::WP_CMP;
+                let (master, ctx) = fixture(Unlock::Bp2Srwd, sr1, features, 8192);
+                let state = master.0.clone();
+                state.lock().unwrap().sr2 = sr2;
+                let mut device = SpiFlashDevice::new(master, ctx);
+                assert_eq!(device.erase(0, 4096).await, Err(Error::WriteProtected));
+                assert!(
+                    state
+                        .lock()
+                        .unwrap()
+                        .commands
+                        .iter()
+                        .all(|(op, _)| matches!(op, 0x05 | 0x35))
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn macronix_qpi_does_not_receive_rdsr2_opcode() {
+    block_on(async {
+        for sr1 in [0, 0x1c] {
+            let features = Features::WRSR_WREN | Features::STATUS_REG_2 | Features::QE_SR2;
+            let (master, mut ctx) = fixture(Unlock::Bp2Srwd, sr1, features, 8192);
+            ctx.chip.jedec_manufacturer = 0xc2;
+            let state = master.0.clone();
+            let mut device = SpiFlashDevice::new(master, ctx);
+            let result = device.erase(0, 4096).await;
+            assert_eq!(
+                result,
+                if sr1 == 0 {
+                    Ok(())
+                } else {
+                    Err(Error::ChipNotSupported)
+                }
+            );
+            let state = state.lock().unwrap();
+            assert!(
+                !state
+                    .commands
+                    .iter()
+                    .any(|(op, _)| *op == 0x35 || *op == 0x01)
+            );
+        }
+    });
+}
+
+#[test]
+fn cmp_register_requires_documented_extended_status_write() {
     block_on(async {
         for extended in [false, true] {
             let features = Features::WRSR_WREN | Features::WP_CMP | Features::WP_CMP_SR2;
@@ -787,7 +944,15 @@ fn cmp_register_read_does_not_change_status_write_width() {
             let (master, ctx) = fixture(Unlock::Bp4Srwd, 0x1c, features, 8192);
             let state = master.0.clone();
             let mut device = SpiFlashDevice::new(with_fast_paths(master), ctx);
-            device.erase(0, 4096).await.unwrap();
+            let result = device.erase(0, 4096).await;
+            if !extended {
+                assert_eq!(result, Err(Error::ChipNotSupported));
+                let s = state.lock().unwrap();
+                assert_eq!((s.sr1, s.sr2), (0x1c, 0x02));
+                assert!(s.commands.iter().all(|(op, _)| *op != 0x01));
+                continue;
+            }
+            result.unwrap();
             device.write(0, &[0x5a]).await.unwrap();
             let s = state.lock().unwrap();
             assert_eq!((s.sr1, s.sr2), (0x1c, 0x02));
@@ -795,11 +960,7 @@ fn cmp_register_read_does_not_change_status_write_width() {
             assert_eq!(s.bulk_writes, 1);
             let writes: Vec<_> = s.commands.iter().filter(|(op, _)| *op == 0x01).collect();
             assert!(!writes.is_empty());
-            assert!(
-                writes
-                    .iter()
-                    .all(|(_, bytes)| bytes.len() == if extended { 2 } else { 1 })
-            );
+            assert!(writes.iter().all(|(_, bytes)| bytes.len() == 2));
         }
     });
 }
