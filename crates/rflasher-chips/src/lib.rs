@@ -350,6 +350,19 @@ mod tests {
     }
 
     #[test]
+    fn micron_small_rdid_names_identify_a_variants() {
+        let mut databases = vec![ChipDatabase::from_dir(&vendors_dir()).unwrap()];
+        if cfg!(feature = "static-chips") {
+            databases.push(ChipDatabase::new());
+        }
+        for db in databases {
+            for (id, name) in [(0x2010, "M25P05-A"), (0x2011, "M25P10-A")] {
+                assert_eq!(db.find_by_jedec_id(0x20, id).unwrap().name(), name);
+            }
+        }
+    }
+
+    #[test]
     fn standalone_res2_is_excluded_from_rdid_lookup() {
         let ron = fs::read_to_string(vendors_dir().join("pmc.ron"))
             .unwrap()
