@@ -148,7 +148,8 @@ pub enum Commands {
     ///
     /// Reads the whole chip (or the selected regions) into FILE. With
     /// --region/--include NAME:FILE, each named region is additionally
-    /// written to its own file; FILE may then be omitted.
+    /// written to its own file; FILE may then be omitted. Output files must
+    /// refer to distinct paths.
     #[command(visible_alias = "r")]
     Read {
         /// Output file for the (0xFF-padded) full image. Optional when every
@@ -161,6 +162,8 @@ pub enum Commands {
 
     /// Write file to flash
     ///
+    /// Without a layout, FILE must be exactly the full chip size.
+    ///
     /// When writing with a layout (--ifd, --fmap, or --layout), region data
     /// can come from per-region files (--region/--include NAME:FILE) and/or
     /// from FILE:
@@ -168,7 +171,8 @@ pub enum Commands {
     /// - Per-region files: each file is written starting at its region's base
     ///   address and must not exceed the region size. FILE may be omitted if
     ///   every selected region has its own file; if FILE is also given it must
-    ///   be a full chip image providing data for the remaining regions.
+    ///   be a full chip image providing data for the remaining regions. A short
+    ///   region file writes only its prefix, leaving the remainder untouched.
     ///
     /// - FILE only, multiple regions: FILE must be full chip size. Data is
     ///   extracted from the file at each region's offset.

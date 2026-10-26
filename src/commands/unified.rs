@@ -130,19 +130,79 @@ pub(crate) fn validate_region_files(
     let mut seen = HashSet::new();
 
     for (name, _) in region_files {
-        if !seen.insert(name.as_str()) {
-            return Err(format!("Region '{}' was given more than one file", name).into());
-        }
-
         let region = layout
             .find_region(name)
             .ok_or_else(|| format!("Region '{}' not found in layout", name))?;
+        if !seen.insert(region.name.as_str()) {
+            return Err(format!("Region '{}' was given more than one file", name).into());
+        }
         if !region.included {
             return Err(format!("Region '{}' has a file assignment but is excluded", name).into());
         }
     }
 
     Ok(())
+}
+
+/// Open destinations without truncating, and compare the identities of the
+/// actual files that will be written. Newly created empty files are left in
+/// place on error: removing by path could delete a concurrently replaced file.
+fn open_output_files(
+    output: Option<&Path>,
+    region_files: &RegionFiles,
+) -> Result<Vec<File>, Box<dyn std::error::Error>> {
+    struct CreatedOutputs<'a>(Vec<&'a Path>);
+    impl Drop for CreatedOutputs<'_> {
+        fn drop(&mut self) {
+            if !self.0.is_empty() {
+                eprintln!(
+                    "Output validation failed; newly created files were left in place: {:?}",
+                    self.0
+                );
+            }
+        }
+    }
+
+    let paths = output
+        .into_iter()
+        .chain(region_files.iter().map(|(_, path)| path.as_path()));
+    let mut created = CreatedOutputs(Vec::new());
+    let mut files = Vec::new();
+    let mut identities = Vec::new();
+    for path in paths {
+        // create_new refuses dangling symlinks; the fallback opens only an
+        // existing target and never creates through a dangling symlink.
+        let file = match File::options().write(true).create_new(true).open(path) {
+            Ok(file) => {
+                created.0.push(path);
+                file
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                File::options().write(true).open(path)?
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let identity = same_file::Handle::from_file(file.try_clone()?)?;
+        if let Some((other, _)) = identities.iter().find(|(_, id)| *id == identity) {
+            return Err(format!(
+                "Output paths {:?} and {:?} refer to the same file",
+                other, path
+            )
+            .into());
+        }
+        identities.push((path, identity));
+        files.push(file);
+    }
+    created.0.clear();
+    Ok(files)
+}
+
+/// Truncate regular files only; devices and pipes do not support set_len.
+fn write_output(file: &mut File, data: &[u8]) -> std::io::Result<()> {
+    if file.metadata()?.is_file() {
+        file.set_len(0)?;
+    }
+    file.write_all(data)
 }
 
 /// Ensure every included region has a per-region file assigned.
@@ -156,7 +216,11 @@ fn require_full_region_file_coverage(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let missing: Vec<_> = included
         .iter()
-        .filter(|r| !region_files.iter().any(|(name, _)| *name == r.name))
+        .filter(|r| {
+            !region_files
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(&r.name))
+        })
         .map(|r| r.name.as_str())
         .collect();
     if missing.is_empty() {
@@ -236,6 +300,18 @@ fn build_image(
     included: &[&rflasher_core::layout::Region],
     flash_size: u32,
 ) -> Result<(Vec<u8>, Layout, usize), Box<dyn std::error::Error>> {
+    build_image_with_size_requirement(input, layout, region_files, included, flash_size, false)
+}
+
+fn build_image_with_size_requirement(
+    input: Option<&Path>,
+    layout: &Layout,
+    region_files: &RegionFiles,
+    included: &[&rflasher_core::layout::Region],
+    flash_size: u32,
+    require_full_image: bool,
+) -> Result<(Vec<u8>, Layout, usize), Box<dyn std::error::Error>> {
+    validate_region_files(layout, region_files)?;
     if !region_files.is_empty() {
         // Per-region files, optionally on top of a full chip image
         let mut image = match input {
@@ -277,6 +353,14 @@ fn build_image(
         return Err(format!(
             "File size ({} bytes) exceeds flash size ({} bytes)",
             file_size, flash_size
+        )
+        .into());
+    }
+
+    if require_full_image && file_size != flash_size as usize {
+        return Err(format!(
+            "Without a layout, file must be exactly flash size ({} bytes), got {} bytes",
+            flash_size, file_size
         )
         .into());
     }
@@ -461,7 +545,8 @@ pub async fn run_read<D: FlashDevice + ?Sized>(
 ///
 /// `output` receives the full (0xFF-padded) image when given. Each entry in
 /// `region_files` additionally gets that region's data written to its own
-/// file. At least one destination must cover every included region.
+/// file. At least one destination must cover every included region. Destinations
+/// are opened before reading; newly created empty files remain if reading fails.
 pub async fn run_read_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     output: Option<&Path>,
@@ -486,6 +571,11 @@ pub async fn run_read_with_layout<D: FlashDevice + ?Sized>(
     if output.is_none() {
         require_full_region_file_coverage(&included, region_files, "output")?;
     }
+
+    // Validate all destinations before accessing flash, retaining the handles
+    // through writing to avoid path replacement races.
+    let mut files = open_output_files(output, region_files)?.into_iter();
+    let mut image_file = output.map(|_| files.next().expect("image output was opened"));
 
     display_included_regions(&included, "Reading");
 
@@ -519,12 +609,12 @@ pub async fn run_read_with_layout<D: FlashDevice + ?Sized>(
     pb.finish_with_message("Read complete");
 
     // Write per-region files
-    for (name, path) in region_files {
+    for ((name, path), mut file) in region_files.iter().zip(files) {
         let region = layout
             .find_region(name)
             .ok_or_else(|| format!("Region '{}' not found in layout", name))?;
         let region_data = &data[region.start as usize..=region.end as usize];
-        std::fs::write(path, region_data)?;
+        write_output(&mut file, region_data)?;
         println!(
             "Wrote region '{}' ({} bytes) to {:?}",
             name,
@@ -534,9 +624,8 @@ pub async fn run_read_with_layout<D: FlashDevice + ?Sized>(
     }
 
     // Write full image
-    if let Some(output) = output {
-        let mut file = File::create(output)?;
-        file.write_all(&data)?;
+    if let (Some(output), Some(file)) = (output, &mut image_file) {
+        write_output(file, &data)?;
 
         println!("Wrote {} bytes to {:?}", data.len(), output);
         println!(
@@ -563,7 +652,10 @@ fn check_dangerous_regions(
     action: &str,
     force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let dangerous = layout.dangerous_included();
+    let dangerous: Vec<_> = layout
+        .regions_overlapping_included()
+        .filter(|r| r.dangerous)
+        .collect();
     if dangerous.is_empty() {
         return Ok(());
     }
@@ -593,7 +685,16 @@ pub async fn run_write<D: FlashDevice + ?Sized>(
     policy: &mut MutationPolicy<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut layout = full_flash_layout(device.size());
-    run_write_with_layout(device, Some(input), &mut layout, &[], do_verify, policy).await
+    run_write_impl(
+        device,
+        Some(input),
+        &mut layout,
+        &[],
+        do_verify,
+        policy,
+        true,
+    )
+    .await
 }
 
 /// Run the unified write command with layout
@@ -609,6 +710,27 @@ pub async fn run_write_with_layout<D: FlashDevice + ?Sized>(
     region_files: &RegionFiles,
     do_verify: bool,
     policy: &mut MutationPolicy<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_write_impl(
+        device,
+        input,
+        layout,
+        region_files,
+        do_verify,
+        policy,
+        false,
+    )
+    .await
+}
+
+async fn run_write_impl<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    input: Option<&Path>,
+    layout: &mut Layout,
+    region_files: &RegionFiles,
+    do_verify: bool,
+    policy: &mut MutationPolicy<'_>,
+    require_full_image: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let flash_size = device.size();
 
@@ -626,16 +748,25 @@ pub async fn run_write_with_layout<D: FlashDevice + ?Sized>(
 
     display_included_regions(&included, "Writing");
 
-    // Check for readonly regions
-    let readonly = layout.readonly_included();
+    // Check every region touched by the selection, including unselected parents.
+    let readonly: Vec<_> = layout
+        .regions_overlapping_included()
+        .filter(|r| r.readonly)
+        .collect();
     if !readonly.is_empty() {
         let names: Vec<_> = readonly.iter().map(|r| r.name.as_str()).collect();
         return Err(format!("Cannot write to readonly region(s): {}", names.join(", ")).into());
     }
     check_dangerous_regions(layout, "write to", policy.allow_dangerous)?;
 
-    let (image, effective_layout, effective_write_size) =
-        build_image(input, layout, region_files, &included, flash_size)?;
+    let (image, effective_layout, effective_write_size) = build_image_with_size_requirement(
+        input,
+        layout,
+        region_files,
+        &included,
+        flash_size,
+        require_full_image,
+    )?;
 
     // Smart write using layout
     let mut progress = IndicatifProgress::new();
@@ -686,7 +817,10 @@ pub async fn run_erase_with_layout<D: FlashDevice + ?Sized>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     validate_layout(layout, device.size())?;
 
-    let readonly = layout.readonly_included();
+    let readonly: Vec<_> = layout
+        .regions_overlapping_included()
+        .filter(|r| r.readonly)
+        .collect();
     if !readonly.is_empty() {
         let names: Vec<_> = readonly.iter().map(|r| r.name.as_str()).collect();
         return Err(format!("Cannot erase readonly region(s): {}", names.join(", ")).into());
@@ -943,6 +1077,141 @@ mod tests {
     }
 
     #[test]
+    fn plain_write_requires_full_image_but_explicit_region_allows_short_image() {
+        let path = temp_file("short-plain.bin", &[0x42; 8]);
+        let mut device = TestFlash::new();
+        let mut policy = MutationPolicy::default();
+        let err = futures_lite::future::block_on(run_write(&mut device, &path, false, &mut policy))
+            .unwrap_err();
+        assert!(err.to_string().contains("Without a layout"));
+        assert_eq!(device.mutations, 0);
+        let layout = full_flash_layout(FLASH_SIZE);
+        let included: Vec<_> = layout.included_regions().collect();
+        let (_, effective, covered) =
+            build_image(Some(&path), &layout, &[], &included, FLASH_SIZE).unwrap();
+        assert_eq!(covered, 8);
+        assert_eq!(effective.included_regions().next().unwrap().end, 7);
+        std::fs::write(&path, vec![0xff; FLASH_SIZE as usize]).unwrap();
+        assert!(
+            build_image_with_size_requirement(
+                Some(&path),
+                &layout,
+                &[],
+                &included,
+                FLASH_SIZE,
+                true
+            )
+            .is_ok()
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn region_file_names_use_case_insensitive_identity() {
+        let layout = two_region_layout();
+        let included: Vec<_> = layout.included_regions().collect();
+        let files = vec![
+            ("A".into(), PathBuf::from("a")),
+            ("B".into(), PathBuf::from("b")),
+        ];
+        assert!(require_full_region_file_coverage(&included, &files, "input").is_ok());
+        let duplicates = vec![
+            ("a".into(), PathBuf::from("missing")),
+            ("A".into(), PathBuf::from("missing2")),
+        ];
+        let err = build_image(
+            Some(Path::new("also-missing")),
+            &layout,
+            &duplicates,
+            &included,
+            FLASH_SIZE,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("more than one file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_paths_reject_dangling_symlink_chains() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("rflasher-symlinks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = dir.join("link");
+        let chain = dir.join("chain");
+        symlink("target", &link).unwrap();
+        symlink("link", &chain).unwrap();
+        for alias in [&link, &chain] {
+            assert!(open_output_files(Some(alias), &[]).is_err());
+        }
+        std::fs::remove_file(chain).unwrap();
+        std::fs::remove_file(link).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn output_paths_must_not_collide() {
+        let path = temp_file("output-collision.bin", b"original");
+        let alias = path
+            .parent()
+            .unwrap()
+            .join(".")
+            .join(path.file_name().unwrap());
+        let files = vec![("a".into(), alias)];
+        assert!(open_output_files(Some(&path), &files).is_err());
+        #[cfg(unix)]
+        {
+            let link = path.with_extension("link");
+            let hardlink = path.with_extension("hardlink");
+            let _ = std::fs::remove_file(&link);
+            let _ = std::fs::remove_file(&hardlink);
+            std::os::unix::fs::symlink(&path, &link).unwrap();
+            std::fs::hard_link(&path, &hardlink).unwrap();
+            assert!(open_output_files(Some(&path), &[("a".into(), link.clone())]).is_err());
+            assert!(open_output_files(Some(&path), &[("a".into(), hardlink.clone())]).is_err());
+            std::fs::remove_file(link).unwrap();
+            std::fs::remove_file(hardlink).unwrap();
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn newly_created_outputs_are_checked_by_identity() {
+        let path = temp_file("new-output-case", b"");
+        std::fs::remove_file(&path).unwrap();
+        let alias = path.with_file_name(path.file_name().unwrap().to_string_lossy().to_uppercase());
+        let files = vec![("a".into(), alias.clone())];
+        let result = open_output_files(Some(&path), &files);
+        let case_insensitive = same_file::is_same_file(&path, &alias).unwrap();
+        assert_eq!(result.is_err(), case_insensitive);
+        drop(result);
+        std::fs::remove_file(&path).unwrap();
+        if !case_insensitive {
+            std::fs::remove_file(&alias).unwrap();
+        }
+
+        assert!(open_output_files(Some(&path), &[("a".into(), path.clone())]).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opened_output_survives_path_replacement() {
+        let path = temp_file("replaced-output", b"original");
+        let moved = path.with_extension("moved");
+        let mut files = open_output_files(Some(&path), &[]).unwrap();
+        std::fs::rename(&path, &moved).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+        files[0].set_len(0).unwrap();
+        files[0].write_all(b"result").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+        assert_eq!(std::fs::read(&moved).unwrap(), b"result");
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(moved).unwrap();
+    }
+
+    #[test]
     fn recovery_file_is_persisted_and_never_overwritten() {
         let path = temp_file("recovery.bin", &[]);
         std::fs::remove_file(&path).unwrap();
@@ -955,6 +1224,8 @@ mod tests {
     }
 
     struct TestFlash {
+        reads: usize,
+        fail_read: bool,
         mutations: usize,
         blocks: Vec<rflasher_core::chip::EraseBlock>,
     }
@@ -962,6 +1233,8 @@ mod tests {
     impl TestFlash {
         fn new() -> Self {
             Self {
+                reads: 0,
+                fail_read: false,
                 mutations: 0,
                 blocks: vec![rflasher_core::chip::EraseBlock::with_count(
                     0x20,
@@ -986,6 +1259,10 @@ mod tests {
             &self.blocks
         }
         async fn read(&mut self, _: u32, buf: &mut [u8]) -> rflasher_core::Result<()> {
+            self.reads += 1;
+            if self.fail_read {
+                return Err(rflasher_core::Error::IoError);
+            }
             buf.fill(0xff);
             Ok(())
         }
@@ -1000,6 +1277,65 @@ mod tests {
     }
 
     #[test]
+    fn read_failure_leaves_new_empty_outputs_and_preserves_existing_files() {
+        let existing = temp_file("read-failure-existing", b"original");
+        let missing = existing.with_extension("missing");
+        let _ = std::fs::remove_file(&missing);
+        let mut device = TestFlash::new();
+        device.fail_read = true;
+        let layout = full_flash_layout(FLASH_SIZE);
+        let files = vec![(
+            layout.included_regions().next().unwrap().name.clone(),
+            missing.clone(),
+        )];
+        assert!(
+            futures_lite::future::block_on(run_read_with_layout(
+                &mut device,
+                Some(&existing),
+                &layout,
+                &files
+            ))
+            .is_err()
+        );
+        assert_eq!(std::fs::read(&existing).unwrap(), b"original");
+        assert_eq!(std::fs::read(&missing).unwrap(), b"");
+        std::fs::remove_file(missing).unwrap();
+        std::fs::remove_file(existing).unwrap();
+    }
+
+    #[test]
+    fn invalid_output_fails_before_flash_read_without_truncation() {
+        let existing = temp_file("invalid-output-existing", b"original");
+        let missing_parent = existing.with_extension("missing-dir");
+        let mut device = TestFlash::new();
+        let layout = full_flash_layout(FLASH_SIZE);
+        let files = vec![(
+            layout.included_regions().next().unwrap().name.clone(),
+            missing_parent.join("output"),
+        )];
+        assert!(
+            futures_lite::future::block_on(run_read_with_layout(
+                &mut device,
+                Some(&existing),
+                &layout,
+                &files
+            ))
+            .is_err()
+        );
+        assert_eq!(device.reads, 0);
+        assert_eq!(std::fs::read(&existing).unwrap(), b"original");
+        std::fs::remove_file(existing).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_to_dev_null() {
+        let mut device = TestFlash::new();
+        futures_lite::future::block_on(run_read(&mut device, Path::new("/dev/null"))).unwrap();
+        assert!(device.reads > 0);
+    }
+
+    #[test]
     fn empty_selection_read_errors_without_device_access() {
         let mut device = TestFlash::new();
         let layout = Layout::with_source(LayoutSource::Manual);
@@ -1008,6 +1344,63 @@ mod tests {
                 .unwrap_err();
         assert!(err.to_string().contains("No regions selected"));
         assert_eq!(device.mutations, 0);
+    }
+
+    #[test]
+    fn overlapping_parent_is_checked_before_cli_write_and_erase() {
+        for readonly in [true, false] {
+            for allow in [false, true] {
+                let mut layout = Layout::new();
+                let mut parent = Region::new("parent", 0, FLASH_SIZE - 1);
+                parent.readonly = readonly;
+                parent.dangerous = !readonly;
+                layout.add_region(parent);
+                let mut child = Region::new("child", 16, 31);
+                child.included = true;
+                layout.add_region(child);
+                let mut device = TestFlash::new();
+                let mut policy = MutationPolicy {
+                    allow_dangerous: allow,
+                    ..Default::default()
+                };
+                let erase = futures_lite::future::block_on(run_erase_with_layout(
+                    &mut device,
+                    &layout,
+                    &mut policy,
+                ));
+                if !readonly && allow {
+                    assert!(erase.is_ok());
+                    let input = temp_file("allowed-parent.bin", &[0xff; 16]);
+                    let write = futures_lite::future::block_on(run_write_with_layout(
+                        &mut device,
+                        Some(&input),
+                        &mut layout,
+                        &[],
+                        false,
+                        &mut policy,
+                    ));
+                    std::fs::remove_file(input).unwrap();
+                    assert!(write.is_ok());
+                } else {
+                    let message = if readonly {
+                        "readonly region(s): parent"
+                    } else {
+                        "dangerous region(s): parent"
+                    };
+                    assert!(erase.unwrap_err().to_string().contains(message));
+                    let write = futures_lite::future::block_on(run_write_with_layout(
+                        &mut device,
+                        Some(Path::new("/nonexistent/image")),
+                        &mut layout,
+                        &[],
+                        false,
+                        &mut policy,
+                    ));
+                    assert!(write.unwrap_err().to_string().contains(message));
+                    assert_eq!(device.mutations, 0);
+                }
+            }
+        }
     }
 
     #[test]

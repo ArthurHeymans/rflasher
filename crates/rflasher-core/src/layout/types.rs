@@ -186,6 +186,14 @@ impl Layout {
         self.regions.iter().filter(|r| r.included)
     }
 
+    /// Regions touched by any included range, including unselected overlapping regions.
+    pub fn regions_overlapping_included(&self) -> impl Iterator<Item = &Region> {
+        self.regions.iter().filter(|region| {
+            self.included_regions()
+                .any(|selected| region.overlaps(selected))
+        })
+    }
+
     /// Check if any regions are included
     pub fn has_included_regions(&self) -> bool {
         self.regions.iter().any(|r| r.included)
@@ -206,7 +214,7 @@ impl Layout {
         self.regions.sort_by_key(|r| r.start);
     }
 
-    /// Validate the layout against a chip size
+    /// Validate all region bounds and names, and reject overlapping selected regions.
     pub fn validate(&self, chip_size: u32) -> Result<(), LayoutError> {
         // Check chip size matches if specified
         if let Some(expected) = self.chip_size
@@ -228,14 +236,15 @@ impl Layout {
             }
         }
 
-        // Check for overlapping regions and duplicate names
+        // FMAPs commonly contain nested regions; only selected ranges conflict.
+        // Names must be unique even when unselected because lookup ignores case.
         for (i, r1) in self.regions.iter().enumerate() {
             for r2 in self.regions.iter().skip(i + 1) {
-                if r1.overlaps(r2) {
-                    return Err(LayoutError::OverlappingRegions);
-                }
                 if r1.name.eq_ignore_ascii_case(&r2.name) {
                     return Err(LayoutError::DuplicateRegionName);
+                }
+                if r1.included && r2.included && r1.overlaps(r2) {
+                    return Err(LayoutError::OverlappingRegions);
                 }
             }
         }
@@ -340,3 +349,25 @@ impl std::fmt::Display for LayoutError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for LayoutError {}
+
+#[cfg(all(test, feature = "alloc"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_regions_validate_only_when_selected_ranges_do_not_overlap() {
+        let mut layout = Layout::with_source(LayoutSource::Fmap);
+        layout.add_region(Region::new("whole", 0, 255));
+        layout.add_region(Region::new("child", 32, 63));
+        layout.include_region("child").unwrap();
+        assert_eq!(layout.validate(256), Ok(()));
+        layout.include_region("whole").unwrap();
+        assert_eq!(layout.validate(256), Err(LayoutError::OverlappingRegions));
+        layout.exclude_region("whole").unwrap();
+        layout.regions[0].end = 256;
+        assert_eq!(layout.validate(256), Err(LayoutError::RegionOutOfBounds));
+        layout.regions[0].end = 255;
+        layout.regions[0].name = "CHILD".into();
+        assert_eq!(layout.validate(256), Err(LayoutError::DuplicateRegionName));
+    }
+}
