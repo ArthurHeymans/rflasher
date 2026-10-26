@@ -359,9 +359,15 @@ pub(crate) mod tests {
         erase_cycles: RefCell<Vec<u32>>,
         spi_commands: RefCell<Vec<FakeSpiCommand>>,
         spi_response: RefCell<Vec<u8>>,
+        descriptor: RefCell<Option<(usize, BTreeMap<u32, u32>)>>,
     }
 
     impl FakeMmio {
+        pub(crate) fn set_descriptor(&self, fdoc: usize, signature: u32, map: u32, comp: u32) {
+            *self.descriptor.borrow_mut() =
+                Some((fdoc, [(0, signature), (4, map), (0x1000, comp)].into()));
+        }
+
         /// Set the BERASE encodings reported below and from the FPB boundary
         pub(crate) fn set_berase(&self, low: u16, high: u16) {
             *self.berase.borrow_mut() = [low, high];
@@ -434,6 +440,11 @@ pub(crate) mod tests {
         }
         fn read32(&self, offset: usize) -> u32 {
             self.reads.borrow_mut().push((offset, 4));
+            if let Some((fdoc, values)) = &*self.descriptor.borrow()
+                && offset == fdoc + 4
+            {
+                return values.get(&self.reg(*fdoc)).copied().unwrap_or(0);
+            }
             if self.bytes.borrow().contains_key(&offset) {
                 u32::from_le_bytes(core::array::from_fn(|i| self.byte(offset + i)))
             } else {

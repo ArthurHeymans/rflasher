@@ -1375,6 +1375,77 @@ impl<H: HostAccess> IchSpiController<H> {
     // Hardware Sequencing Operations
     // ========================================================================
 
+    /// Read the descriptor through the controller's observability registers.
+    /// Only generations whose FLCOMP encoding is documented by flashprog are
+    /// handled; later engines retain the region-based fallback.
+    fn descriptor_flash_size(&self) -> Result<Option<u32>, InternalError> {
+        if !self.desc_valid {
+            return Err(InternalError::InvalidDescriptor);
+        }
+        let new_density = match self.generation {
+            IchChipset::Ich9
+            | IchChipset::Ich10
+            | IchChipset::Series5IbexPeak
+            | IchChipset::Series6CougarPoint
+            | IchChipset::Series7PantherPoint
+            | IchChipset::BayTrail => false,
+            IchChipset::Series8LynxPoint
+            | IchChipset::Series8LynxPointLp
+            | IchChipset::Series8Wellsburg
+            | IchChipset::Series9WildcatPoint
+            | IchChipset::Series9WildcatPointLp
+            | IchChipset::Series100SunrisePoint => true,
+            _ => return Ok(None),
+        };
+        let (fdoc, fdod) = if self.generation.is_pch100_compatible() {
+            (0xb4, 0xb8)
+        } else {
+            (0xb0, 0xb4)
+        };
+        let read = |selector| {
+            self.spibar.write32(fdoc, selector);
+            self.spibar.read32(fdod)
+        };
+        let saved_selector = self.spibar.read32(fdoc);
+        let signature = read(0);
+        let map = read(4);
+        let comp = read(1 << 12);
+        self.spibar.write32(fdoc, saved_selector);
+        if signature != 0x0ff0_a55a {
+            return Err(InternalError::InvalidDescriptor);
+        }
+        let count = (map >> 8) & 3;
+        if count > 1 {
+            return Err(InternalError::InvalidDescriptor);
+        }
+        let width = if new_density { 4 } else { 3 };
+        let mask = (1 << width) - 1;
+        let max = if new_density { 7 } else { 5 };
+        let density = |index: u32| -> Option<u32> {
+            let code = (comp >> (index * width)) & mask;
+            if code > max {
+                None
+            } else {
+                Some(1u32 << (19 + code))
+            }
+        };
+        let first = density(0).ok_or(InternalError::InvalidDescriptor)?;
+        let second = if count == 1 {
+            density(1).ok_or(InternalError::InvalidDescriptor)?
+        } else {
+            0
+        };
+        let size = first
+            .checked_add(second)
+            .ok_or(InternalError::InvalidDescriptor)?;
+        if u64::from(size) > u64::from(self.hwseq.addr_mask) + 1 {
+            return Err(InternalError::NotSupported(
+                "Flash exceeds hardware sequencing address range",
+            ));
+        }
+        Ok(Some(size))
+    }
+
     /// Reject ranges that FADDR would truncate before touching controller registers.
     fn hwseq_check_range(&self, addr: u32, len: usize) -> Result<(), InternalError> {
         let end = u64::try_from(len)
@@ -2679,6 +2750,14 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         "Intel ICH/PCH"
     }
 
+    fn physical_flash_size(&self) -> Result<Option<u32>, InternalError> {
+        if self.mode == SpiMode::HardwareSequencing {
+            self.descriptor_flash_size()
+        } else {
+            Ok(None)
+        }
+    }
+
     fn erase_block_size(&self, flash_size: u32) -> Result<Option<u32>, InternalError> {
         if self.mode == SpiMode::HardwareSequencing {
             self.hwseq_erase_geometry(flash_size).map(Some)
@@ -2864,6 +2943,43 @@ mod tests {
             pending_preop: None,
             bbar: 0,
         }
+    }
+
+    #[test]
+    fn descriptor_densities_and_controller_limits() {
+        let mut c = test_controller();
+        c.desc_valid = true;
+        c.spibar.set32(0xb4, 0x20);
+        // 8 MiB component, ignoring the unused second density field.
+        c.spibar.set_descriptor(0xb4, 0x0ff0_a55a, 0, 0xf4);
+        assert_eq!(c.descriptor_flash_size().unwrap(), Some(8 << 20));
+        assert_eq!(c.spibar.read32(0xb4), 0x20);
+        // 8 + 16 MiB, even if descriptor regions leave a trailing gap.
+        c.spibar.set_descriptor(0xb4, 0x0ff0_a55a, 1 << 8, 0x54);
+        assert_eq!(c.descriptor_flash_size().unwrap(), Some(24 << 20));
+        c.spibar.set_descriptor(0xb4, 0x0ff0_a55a, 2 << 8, 0x54);
+        assert!(c.descriptor_flash_size().is_err());
+        c.spibar.set_descriptor(0xb4, 0x0ff0_a55a, 1 << 8, 0x84);
+        assert!(c.descriptor_flash_size().is_err());
+        c.spibar.set_descriptor(0xb4, 0, 0, 4);
+        assert!(c.descriptor_flash_size().is_err());
+        c.desc_valid = false;
+        assert!(c.descriptor_flash_size().is_err());
+        c.desc_valid = true;
+        c.spibar.set_descriptor(0xb4, 0x0ff0_a55a, 1 << 8, 0x77);
+        assert_eq!(c.descriptor_flash_size().unwrap(), Some(128 << 20));
+        c.hwseq.addr_mask = ICH9_FADDR_FLA;
+        assert!(c.descriptor_flash_size().is_err()); // 128 MiB > SPI limit
+
+        c.generation = IchChipset::BayTrail;
+        c.hwseq.addr_mask = ICH9_FADDR_FLA;
+        c.spibar
+            .set_descriptor(0xb0, 0x0ff0_a55a, 1 << 8, 4 | (5 << 3));
+        assert_eq!(c.descriptor_flash_size().unwrap(), Some(24 << 20));
+        c.spibar.set_descriptor(0xb0, 0x0ff0_a55a, 0, 6);
+        assert!(c.descriptor_flash_size().is_err());
+        c.generation = IchChipset::ApolloLake;
+        assert_eq!(c.descriptor_flash_size().unwrap(), None);
     }
 
     #[test]
