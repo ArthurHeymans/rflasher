@@ -64,6 +64,17 @@ pub struct Ch341a {
     in_ep: Endpoint<Bulk, In>,
     /// Accumulated delay for CS handling
     stored_delay_us: u32,
+    /// Do not issue more commands after an incomplete USB/SPI transfer.
+    failed: bool,
+}
+
+fn check_out_length(expected: usize, actual: usize) -> Result<()> {
+    if actual != expected {
+        return Err(Ch341aError::TransferFailed(format!(
+            "short OUT transfer: expected {expected} bytes, got {actual}"
+        )));
+    }
+    Ok(())
 }
 
 /// USB devices this backend drives.
@@ -105,6 +116,7 @@ impl Ch341a {
             out_ep,
             in_ep,
             stored_delay_us: 0,
+            failed: false,
         };
 
         ch341a.configure().await?;
@@ -232,16 +244,21 @@ impl Ch341a {
 
     /// Write data to USB endpoint
     async fn usb_write(&mut self, data: &[u8]) -> Result<()> {
+        self.check_usable()?;
         let buf = Buffer::from(data.to_vec());
         self.out_ep.submit(buf);
 
-        let completion = ep_wait!(self.out_ep, Duration::from_secs(5))
-            .ok_or_else(|| Ch341aError::TransferFailed("USB write timed out".into()))?;
-
-        completion
-            .status
-            .map_err(|e| Ch341aError::TransferFailed(e.to_string()))?;
-
+        let result = match ep_wait!(self.out_ep, Duration::from_secs(5)) {
+            Some(completion) => completion
+                .status
+                .map_err(|e| Ch341aError::TransferFailed(e.to_string()))
+                .and_then(|()| check_out_length(data.len(), completion.actual_len)),
+            None => Err(Ch341aError::TransferFailed("USB write timed out".into())),
+        };
+        if result.is_err() {
+            self.abort_transfers().await;
+        }
+        result?;
         log::trace!("USB write {} bytes", data.len());
         Ok(())
     }
@@ -258,6 +275,7 @@ impl Ch341a {
     /// IN responses as it processes each SPI_STREAM packet from the OUT data,
     /// and having multiple IN transfers pre-queued ensures we never miss data.
     async fn spi_transfer(&mut self, write_data: &[u8], read_len: usize) -> Result<Vec<u8>> {
+        self.check_usable()?;
         let writecnt = write_data.len();
         let readcnt = read_len;
         let total_spi_bytes = writecnt + readcnt;
@@ -355,13 +373,13 @@ impl Ch341a {
                 let completion = match ep_wait!(self.in_ep, Duration::from_secs(5)) {
                     Some(c) => c,
                     None => {
-                        self.drain_all_pending().await;
+                        self.abort_transfers().await;
                         return Err(Ch341aError::TransferFailed("IN transfer timed out".into()));
                     }
                 };
 
                 if let Err(e) = completion.status {
-                    self.drain_all_pending().await;
+                    self.abort_transfers().await;
                     return Err(Ch341aError::TransferFailed(format!(
                         "IN transfer failed: {e}"
                     )));
@@ -369,7 +387,7 @@ impl Ch341a {
 
                 let expected = in_flight_sizes[complete_idx];
                 if completion.actual_len < expected {
-                    self.drain_all_pending().await;
+                    self.abort_transfers().await;
                     return Err(Ch341aError::TransferFailed(format!(
                         "short IN transfer: expected {expected} bytes, got {}",
                         completion.actual_len
@@ -383,20 +401,34 @@ impl Ch341a {
                 complete_idx = (complete_idx + 1) % USB_IN_TRANSFERS;
             }
 
-            // Check OUT completion (non-blocking: just check if it's done)
-            if !out_done && self.out_ep.pending() > 0 {
-                if let Some(c) = ep_try!(self.out_ep) {
+            // Poll while IN transfers remain; otherwise wait with a deadline.
+            if !out_done {
+                let completion = if self.in_ep.pending() > 0 {
+                    ep_try!(self.out_ep)
+                } else {
+                    match ep_wait!(self.out_ep, Duration::from_secs(5)) {
+                        Some(c) => Some(c),
+                        None => {
+                            self.abort_transfers().await;
+                            return Err(Ch341aError::TransferFailed(
+                                "OUT transfer timed out".into(),
+                            ));
+                        }
+                    }
+                };
+                if let Some(c) = completion {
                     if let Err(e) = c.status {
-                        self.drain_all_pending().await;
+                        self.abort_transfers().await;
                         return Err(Ch341aError::TransferFailed(format!(
                             "OUT transfer failed: {e}"
                         )));
                     }
+                    if let Err(e) = check_out_length(out_len, c.actual_len) {
+                        self.abort_transfers().await;
+                        return Err(e);
+                    }
                     out_done = true;
                 }
-            } else if !out_done {
-                // OUT endpoint has 0 pending but we never saw completion - shouldn't happen
-                out_done = true;
             }
         }
 
@@ -412,8 +444,30 @@ impl Ch341a {
         Ok(result)
     }
 
-    /// Cancel and drain all pending transfers on both endpoints.
+    fn check_usable(&self) -> Result<()> {
+        if self.failed {
+            Err(Ch341aError::TransferFailed(
+                "device unusable after USB failure; disconnect the programmer".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn abort_transfers(&mut self) {
+        self.failed = true;
+        self.drain_all_pending().await;
+    }
+
+    /// Cancel and drain pending transfers where cancellation is available.
     async fn drain_all_pending(&mut self) {
+        // WebUSB cannot cancel transfers. A timed-out promise may never resolve;
+        // waiting again would hang both the error return and browser shutdown.
+        #[cfg(target_arch = "wasm32")]
+        if self.out_ep.pending() > 0 || self.in_ep.pending() > 0 {
+            self.failed = true;
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.out_ep.cancel_all();
         while self.out_ep.pending() > 0 {
@@ -539,5 +593,14 @@ impl SpiMaster for Ch341a {
         } else {
             self.stored_delay_us += us;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn out_transfer_must_send_the_whole_command() {
+        assert!(super::check_out_length(32, 32).is_ok());
+        assert!(super::check_out_length(32, 31).is_err());
     }
 }
