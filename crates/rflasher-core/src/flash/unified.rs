@@ -941,6 +941,64 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_unselected_parent_protects_aligned_child() {
+        for readonly in [true, false] {
+            for allow in [false, true] {
+                let mut flash = FakeFlash::new(64);
+                let mut layout = Layout::new();
+                let mut parent = Region::new("parent", 0, 63);
+                parent.readonly = readonly;
+                parent.dangerous = !readonly;
+                layout.add_region(parent);
+                let mut child = Region::new("child", 16, 31);
+                child.included = true;
+                layout.add_region(child);
+                let mut policy = MutationPolicy {
+                    allow_dangerous: allow,
+                    ..Default::default()
+                };
+                let expected = if readonly {
+                    crate::Refusal::ReadOnlyRegion
+                } else {
+                    crate::Refusal::DangerousRegion
+                };
+                let erase = block_on(erase_by_layout_with_policy(
+                    &mut flash,
+                    &layout,
+                    &mut policy,
+                ));
+                if !readonly && allow {
+                    assert_eq!(erase, Ok(()));
+                    flash.bytes.fill(0);
+                    block_on(smart_write_by_layout_with_policy(
+                        &mut flash,
+                        &layout,
+                        &[0xff; 64],
+                        &mut NoProgress,
+                        &mut policy,
+                    ))
+                    .unwrap();
+                    assert!(flash.mutations > 0);
+                } else {
+                    assert_eq!(erase, Err(Error::MutationRefused(expected)));
+                    assert_eq!(
+                        block_on(smart_write_by_layout_with_policy(
+                            &mut flash,
+                            &layout,
+                            &[0xff; 64],
+                            &mut NoProgress,
+                            &mut policy
+                        ))
+                        .unwrap_err(),
+                        Error::MutationRefused(expected)
+                    );
+                    assert_eq!(flash.mutations, 0);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn whole_chip_erase_only_needs_authorization_for_dangerous_regions() {
         let mut flash = FakeFlash::new(64);
         let mut region = Region::new("whole", 0, 63);
