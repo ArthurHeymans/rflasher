@@ -19,19 +19,31 @@
 //!   xfel's `spinor_helper_write` approach.
 //!
 //! Use with `HybridFlashDevice` for optimal performance:
-//! - read/write/erase → OpaqueMaster (firmware-accelerated)
-//! - WP/status regs   → SpiMaster (generic SPI commands)
+//! - reads and compatible writes → OpaqueMaster (firmware-accelerated)
+//! - other writes, erase, WP/status → SpiMaster (generic SPI commands)
 
 use nusb::transfer::{Bulk, In, Out};
-use rflasher_core::chip::EraseBlock;
+use rflasher_core::chip::{EraseBlock, Features, FlashChip, WriteGranularity};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
-use rflasher_core::flash::select_erase_block;
+use rflasher_core::flash::{FlashContext, select_erase_block};
 use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
-use rflasher_core::spi::SpiCommand;
+use rflasher_core::spi::{AddressWidth, SpiCommand, opcodes};
 
 use super::chips::{self, ChipFamily, SpiPayloadInfo, spi_cmd};
 use super::error::{Error, Result};
 use super::protocol::{FEL_PID, FEL_VID, FelTransport, FelVersion};
+
+fn addressed_header(opcode: u8, opcode_4b: u8, addr: u32, four_byte: bool) -> ([u8; 5], usize) {
+    let width = if four_byte {
+        AddressWidth::FourByte
+    } else {
+        AddressWidth::ThreeByte
+    };
+    let mut header = [0; 5];
+    header[0] = if four_byte { opcode_4b } else { opcode };
+    width.encode(addr, &mut header[1..]);
+    (header, 1 + width.bytes() as usize)
+}
 
 /// Allwinner FEL SPI programmer
 pub struct SunxiFel {
@@ -47,6 +59,8 @@ pub struct SunxiFel {
     /// Used by `OpaqueMaster::erase()` to select the correct opcode and
     /// block size from the chip's actual capabilities (from RON database or SFDP).
     erase_blocks: Vec<EraseBlock>,
+    /// Probed geometry and protocol capabilities for opaque access.
+    flash: Option<FlashContext>,
 }
 
 impl crate::UsbProgrammer for SunxiFel {
@@ -145,25 +159,34 @@ impl SunxiFel {
             _interface: interface,
             use_4byte_addr: false,
             erase_blocks: Vec::new(),
+            flash: None,
         })
     }
 
     /// Set the chip's erase block table for `OpaqueMaster::erase()`.
     ///
     /// Call this after probing with the chip's erase blocks from the RON
-    /// database or SFDP. Without this, `OpaqueMaster::erase()` will return
-    /// an error and the hybrid adapter falls back to SPI-based erase.
+    /// database or SFDP. This configures direct `OpaqueMaster::erase()` calls;
+    /// the hybrid adapter always uses the validated SPI erase path.
     pub fn set_erase_blocks(&mut self, blocks: Vec<EraseBlock>) {
         self.erase_blocks = blocks;
     }
 
-    /// Set whether to use 4-byte addressing for bulk read/write operations.
+    /// Set whether to use native 4-byte commands for bulk read/write operations.
     ///
     /// Call this after probing if the flash chip requires 4-byte addressing
     /// (i.e., capacity >16 MiB). This affects `OpaqueMaster::read()` and
     /// `OpaqueMaster::write()`.
     pub fn set_use_4byte_addr(&mut self, use_4byte: bool) {
         self.use_4byte_addr = use_4byte;
+    }
+
+    /// Whether the payload's native page-program loop supports this chip.
+    pub(crate) fn supports_bulk_write(chip: &FlashChip) -> bool {
+        !chip.features.contains(Features::AAI_WORD)
+            && chip.write_granularity != WriteGranularity::Byte
+            && chip.page_size == 256
+            && (!chip.requires_4byte_addr() || chip.features.supports_4ba_program())
     }
 
     /// Get the detected SoC name
@@ -343,7 +366,6 @@ impl SunxiFel {
         use_4byte: bool,
     ) -> Result<()> {
         let addr_len: usize = if use_4byte { 4 } else { 3 };
-        let pp_opcode: u8 = 0x02; // Page Program
         let wren_opcode: u8 = 0x06;
 
         // Per-page overhead:
@@ -399,13 +421,9 @@ impl SunxiFel {
                 cbuf.push(spi_cmd::DESELECT);
 
                 // TX data: PP opcode + address + page data
-                txbuf.push(pp_opcode);
-                if use_4byte {
-                    txbuf.push((current_addr >> 24) as u8);
-                }
-                txbuf.push((current_addr >> 16) as u8);
-                txbuf.push((current_addr >> 8) as u8);
-                txbuf.push(current_addr as u8);
+                let (header, len) =
+                    addressed_header(opcodes::PP, opcodes::PP_4B, current_addr, use_4byte);
+                txbuf.extend_from_slice(&header[..len]);
                 txbuf.extend_from_slice(&data[data_offset..data_offset + n]);
 
                 current_addr += n as u32;
@@ -432,7 +450,6 @@ impl SunxiFel {
     fn fast_read(&mut self, addr: u32, buf: &mut [u8], use_4byte: bool) -> Result<()> {
         let swapbuf = self.spi_info.swapbuf;
         let swaplen = self.spi_info.swaplen as usize;
-        let read_opcode: u8 = 0x03; // READ
         let addr_len: usize = if use_4byte { 4 } else { 3 };
 
         let mut offset = 0usize;
@@ -447,13 +464,9 @@ impl SunxiFel {
             cbuf.push(spi_cmd::SELECT);
             cbuf.push(spi_cmd::FAST);
             cbuf.push(fast_len);
-            cbuf.push(read_opcode);
-            if use_4byte {
-                cbuf.push((current_addr >> 24) as u8);
-            }
-            cbuf.push((current_addr >> 16) as u8);
-            cbuf.push((current_addr >> 8) as u8);
-            cbuf.push(current_addr as u8);
+            let (header, len) =
+                addressed_header(opcodes::READ, opcodes::READ_4B, current_addr, use_4byte);
+            cbuf.extend_from_slice(&header[..len]);
             cbuf.push(spi_cmd::RXBUF);
             cbuf.extend_from_slice(&swapbuf.to_le_bytes());
             cbuf.extend_from_slice(&(chunk_len as u32).to_le_bytes());
@@ -507,23 +520,48 @@ impl SpiMaster for SunxiFel {
     }
 }
 
+#[cfg(test)]
+mod tests;
+
 // =============================================================================
 // OpaqueMaster implementation (for fast bulk read/write via HybridFlashDevice)
 // =============================================================================
 
 impl OpaqueMaster for SunxiFel {
+    fn set_flash_chip(&mut self, chip: &FlashChip) {
+        self.set_use_4byte_addr(chip.requires_4byte_addr());
+        self.set_erase_blocks(chip.erase_blocks().to_vec());
+        self.flash = Some(FlashContext::new(chip.clone()));
+    }
+
     fn size(&self) -> usize {
-        // Size is determined by FlashContext after probing; HybridFlashDevice
-        // uses FlashContext::total_size(), not this method.
-        0
+        self.flash.as_ref().map_or(0, FlashContext::total_size)
     }
 
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
+        if let Some(ctx) = &self.flash {
+            if !ctx.is_valid_range(addr, buf.len()) {
+                return Err(CoreError::AddressOutOfBounds);
+            }
+            if ctx.chip.requires_4byte_addr() && !ctx.chip.features.supports_4ba_read() {
+                // Mode-switch/EAR chips need the generic protocol's preparation.
+                let ctx = ctx.clone();
+                return rflasher_core::flash::read(self, &ctx, addr, buf).await;
+            }
+        }
         self.fast_read(addr, buf, self.use_4byte_addr)
             .map_err(|_| CoreError::ReadError { addr })
     }
 
     async fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
+        if let Some(ctx) = &self.flash {
+            if !ctx.is_valid_range(addr, data.len()) {
+                return Err(CoreError::AddressOutOfBounds);
+            }
+            if !Self::supports_bulk_write(&ctx.chip) {
+                return Err(CoreError::OpcodeNotSupported);
+            }
+        }
         // Batched page program with on-SoC busy-wait.
         // Page size is always 256 for standard SPI NOR.
         self.batched_write(addr, data, 256, self.use_4byte_addr)
@@ -532,8 +570,13 @@ impl OpaqueMaster for SunxiFel {
 
     async fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
         // Use the chip's actual erase block table (from RON/SFDP) to select
-        // the right opcode and block size. If no erase blocks are configured,
-        // return Err so the hybrid adapter falls back to SPI-based erase.
+        // the right opcode and block size for direct opaque calls. The hybrid
+        // adapter always erases through SPI, not this legacy entry point.
+        if self.use_4byte_addr {
+            // This legacy helper has no native 4BA erase-opcode selection.
+            // Hybrid devices use the validated, chip-aware SPI erase path.
+            return Err(CoreError::OpcodeNotSupported);
+        }
         if self.erase_blocks.is_empty() {
             return Err(CoreError::ProgrammerError);
         }

@@ -14,7 +14,7 @@
 //!
 //! ```text
 //!   FlashDevice::read()  ──► OpaqueMaster::read()   (CMD_READ + bulk IN)
-//!   FlashDevice::write() ──► OpaqueMaster::write() (chip-configured programming)
+//!   FlashDevice::write() ──► OpaqueMaster::write() or SpiMaster (selected at construction)
 //!   FlashDevice::erase() ──► SpiMaster (WREN + SE/BE + RDSR polling)
 //!   FlashDevice::wp_*()  ──► SpiMaster (status register access)
 //! ```
@@ -32,8 +32,9 @@ use crate::wp::{
 
 /// Flash device adapter for hybrid programmers (SpiMaster + OpaqueMaster)
 ///
-/// Uses `OpaqueMaster` for reads and writes, and `SpiMaster` for probe, erase
-/// and write protection. The master must be configured for the probed chip.
+/// Uses `OpaqueMaster` for reads and, by default, writes; probing, erasing,
+/// and write protection use `SpiMaster`. Use [`Self::with_spi_writes`] when
+/// only reads are accelerated. Construction configures the master for the chip.
 ///
 /// # Example
 ///
@@ -44,7 +45,6 @@ use crate::wp::{
 ///
 /// let mut master = Dediprog::open().unwrap();
 /// let ctx = probe(&mut master, &db).unwrap();
-/// master.set_flash_chip(&ctx.chip);
 /// let mut device = HybridFlashDevice::new(master, ctx);
 /// ```
 pub struct HybridFlashDevice<M: SpiMaster + OpaqueMaster> {
@@ -52,6 +52,8 @@ pub struct HybridFlashDevice<M: SpiMaster + OpaqueMaster> {
     master: M,
     /// Flash chip context (from probing via SpiMaster)
     ctx: FlashContext,
+    /// Whether writes should use the chip-aware SPI protocol instead of opaque I/O.
+    spi_writes: bool,
 }
 
 impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
@@ -60,8 +62,22 @@ impl<M: SpiMaster + OpaqueMaster> HybridFlashDevice<M> {
     /// # Arguments
     /// * `master` - The programmer (must implement both SpiMaster and OpaqueMaster)
     /// * `ctx` - Flash context with chip metadata (from probing via SpiMaster)
-    pub fn new(master: M, ctx: FlashContext) -> Self {
-        HybridFlashDevice { master, ctx }
+    pub fn new(mut master: M, ctx: FlashContext) -> Self {
+        // The chip is owned with alloc and already borrowed without it.
+        #[allow(clippy::needless_borrow)]
+        master.set_flash_chip(&ctx.chip);
+        HybridFlashDevice {
+            master,
+            ctx,
+            spi_writes: false,
+        }
+    }
+
+    /// Keep accelerated opaque reads, but use the normal SPI write path,
+    /// including chip-specific programming and protection handling.
+    pub fn with_spi_writes(mut self) -> Self {
+        self.spi_writes = true;
+        self
     }
 
     /// Get a mutable reference to the underlying master
@@ -170,6 +186,9 @@ impl<M: SpiMaster + OpaqueMaster> FlashDevice for HybridFlashDevice<M> {
             return Err(Error::AddressOutOfBounds);
         }
 
+        if self.spi_writes {
+            return operations::write(&mut self.master, &self.ctx, addr, data).await;
+        }
         if data.is_empty() {
             return Ok(());
         }

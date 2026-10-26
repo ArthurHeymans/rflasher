@@ -34,6 +34,31 @@ goes through object-erasure adapters (`ErasedFlashDevice`,
 `ErasedSpiMaster`) in `rflasher-programmers`. The one boxed future per
 operation is negligible next to USB and flash latency.
 
+## SPI, opaque, and hybrid access
+
+`SpiMaster` executes SPI transactions; the core owns chip protocols. USB bulk
+transport alone does not make a programmer opaque. `OpaqueMaster` instead
+accepts flash addresses and handles the protocol inside the backend. A
+programmer may implement both interfaces.
+
+`HybridFlashDevice::new` configures the opaque backend with the probed chip
+through `OpaqueMaster::set_flash_chip`. It uses opaque reads, SPI erase and
+protection, and opaque writes by default. `.with_spi_writes()` keeps accelerated
+reads while using chip-aware SPI programming, including protection handling.
+
+| Backend | Flash adapter |
+|---|---|
+| AMD SPI100 | Hybrid with SPI writes; checked mmap reads with native-command fallback |
+| Dediprog | Hybrid with backend bulk reads and writes |
+| sunxi FEL | Hybrid; SPI writes for unsupported page geometry, AAI, or addressing |
+| Intel software sequencing | SPI |
+| Intel hardware sequencing, Linux MTD | Opaque |
+| CH341A/CH347, FTDI/FT4222, Raiden, serprog, spidev/GPIO, ATI SPI | SPI |
+
+Fallback belongs in the backend and is selected from known capabilities, not
+by retrying transport errors as a different operation. The generic SPI protocol
+and its object-erasure adapter do not need a separate bulk-flash-read hook.
+
 ## Firmware reuse of the internal programmer
 
 The Intel ICH/PCH and AMD SPI100 controller code in `rflasher-internal` is

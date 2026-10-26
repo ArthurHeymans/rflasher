@@ -1,7 +1,7 @@
 use super::*;
 use crate::host::tests::{FakeHost, FakeSpiCommand};
 use futures_lite::future::block_on;
-use rflasher_core::flash::{FlashContext, FlashDevice, SpiFlashDevice};
+use rflasher_core::flash::{FlashContext, FlashDevice, HybridFlashDevice, SpiFlashDevice};
 
 fn controller() -> Spi100Controller<FakeHost> {
     Spi100Controller::new_with_host(FakeHost::default(), 0xfed8_0200, None, 0).unwrap()
@@ -77,7 +77,7 @@ fn controller_read_fallback_uses_chip_size_for_addressing() {
         for no_4ba_mmap in [false, true] {
             let mut controller = controller();
             controller.no_4ba_mmap = no_4ba_mmap;
-            controller.read(chip_size, addr, &mut [0; 4]).unwrap();
+            Spi100Controller::read(&controller, chip_size, addr, &mut [0; 4]).unwrap();
             assert_eq!(
                 controller.spibar.spi_commands(),
                 vec![FakeSpiCommand {
@@ -177,7 +177,8 @@ fn flash_device_reads_use_the_checked_mapping_and_prepare_chip_mode() {
             ctx.chip.features.insert(Features::FOUR_BYTE_ENTER_WREN);
         }
         let addr = ctx.chip.total_size - 255;
-        let mut device = SpiFlashDevice::new(mapped_controller(), ctx);
+        let mut device = HybridFlashDevice::new(mapped_controller(), ctx).with_spi_writes();
+        assert_eq!(OpaqueMaster::size(device.master()), 32 << 20);
         let mut data = [0; 75];
         block_on(device.read(addr, &mut data)).unwrap();
         let expected: Vec<u8> = (1..76).map(|i| (i * 17) as u8).collect();
@@ -215,7 +216,7 @@ fn reads_crossing_the_mapping_boundary_use_spi_only_for_the_prefix() {
     controller.spibar.set_spi_response(&[0x5a; 17]);
     let ctx = context();
     let addr = ctx.chip.total_size - 256 - 17;
-    let mut device = SpiFlashDevice::new(controller, ctx);
+    let mut device = HybridFlashDevice::new(controller, ctx).with_spi_writes();
     let mut data = [0; 67];
     block_on(device.read(addr, &mut data)).unwrap();
     assert_eq!(&data[..17], &[0x5a; 17]);
@@ -271,7 +272,7 @@ fn unsafe_or_unusable_mappings_keep_using_native_spi_reads() {
         } else {
             ctx.chip.total_size - 256
         };
-        let mut device = SpiFlashDevice::new(controller, ctx);
+        let mut device = HybridFlashDevice::new(controller, ctx).with_spi_writes();
         let mut data = [0; 16];
         block_on(device.read(addr, &mut data)).unwrap();
         assert_eq!(data, [0xcc; 16]);
@@ -296,7 +297,7 @@ fn mapped_read_errors_are_not_retried_as_spi_reads() {
         .set32(regs::SPI_CNTRL0, spi_cntrl0_bits::ILLEGAL_ACCESS);
     let ctx = context();
     let addr = ctx.chip.total_size - 256;
-    let mut device = SpiFlashDevice::new(controller, ctx);
+    let mut device = HybridFlashDevice::new(controller, ctx).with_spi_writes();
     assert_eq!(
         block_on(device.read(addr, &mut [0; 16])),
         Err(CoreError::IoError)
@@ -310,7 +311,7 @@ fn mapped_read_errors_are_not_retried_as_spi_reads() {
 fn mapped_reads_validate_bounds_and_capabilities_before_preparing_chip_mode() {
     let ctx = context();
     let addr = ctx.chip.total_size - 1;
-    let mut device = SpiFlashDevice::new(mapped_controller(), ctx);
+    let mut device = HybridFlashDevice::new(mapped_controller(), ctx).with_spi_writes();
     assert_eq!(
         block_on(device.read(addr, &mut [0; 2])),
         Err(CoreError::AddressOutOfBounds)
@@ -324,7 +325,7 @@ fn mapped_reads_validate_bounds_and_capabilities_before_preparing_chip_mode() {
         .features
         .remove(rflasher_core::chip::Features::FOUR_BYTE_READ);
     let addr = ctx.chip.total_size - 256;
-    let mut device = SpiFlashDevice::new(mapped_controller(), ctx);
+    let mut device = HybridFlashDevice::new(mapped_controller(), ctx).with_spi_writes();
     assert_eq!(
         block_on(device.read(addr, &mut [0; 16])),
         Err(CoreError::ChipNotSupported)

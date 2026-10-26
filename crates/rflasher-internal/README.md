@@ -32,3 +32,9 @@ Firmware can pass its own PCI scan results to
 `find_intel_chipset_in_devices` / `find_amd_chipset_in_devices`, then
 construct controllers with `IchSpiController::new_with_host(...)` or
 `AmdSpi100Info::create_controller_with_host(...)`.
+
+For AMD SPI100, use `HybridFlashDevice::new(controller, ctx).with_spi_writes()`
+with the probed `FlashContext`. Construction configures opaque reads with the
+chip's size and addressing capabilities; reads use the checked memory window
+or native SPI commands, while writes and erases keep the chip-aware SPI path.
+Raw `SpiMaster` commands remain available for probing and status access.

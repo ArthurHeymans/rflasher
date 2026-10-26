@@ -160,7 +160,9 @@ impl InternalProgrammer {
         Self::from_intel_chipset(chipset, options)
     }
 
-    /// Set the flash size (should be called after probing)
+    /// Set the size discovered through hardware sequencing.
+    /// SPI-probed devices should use `OpaqueMaster::set_flash_chip` so that
+    /// addressing capabilities are configured along with the size.
     pub fn set_flash_size(&mut self, size: usize) {
         self.flash_size = size;
     }
@@ -183,6 +185,11 @@ impl InternalProgrammer {
         self.controller.spi_mode()
     }
 
+    /// Whether SPI probing should be followed by controller-specific reads.
+    pub fn has_read_acceleration(&self) -> bool {
+        self.controller.has_read_acceleration()
+    }
+
     /// Check if writes are enabled (internal helper)
     fn writes_enabled(&self) -> bool {
         self.controller.writes_enabled()
@@ -191,6 +198,11 @@ impl InternalProgrammer {
 
 #[cfg(all(feature = "std", target_os = "linux"))]
 impl OpaqueMaster for InternalProgrammer {
+    fn set_flash_chip(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        self.flash_size = chip.total_size as usize;
+        self.controller.set_flash_chip(chip);
+    }
+
     fn size(&self) -> usize {
         self.flash_size
     }
@@ -246,15 +258,6 @@ impl SpiMaster for InternalProgrammer {
         self.controller.execute(cmd)
     }
 
-    async fn read_bulk(
-        &mut self,
-        chip: &rflasher_core::chip::FlashChip,
-        addr: u32,
-        buf: &mut [u8],
-    ) -> Option<CoreResult<()>> {
-        self.controller.read_bulk(chip, addr, buf)
-    }
-
     fn probe_opcode(&self, opcode: u8) -> bool {
         self.controller.probe_opcode(opcode)
     }
@@ -292,6 +295,10 @@ impl InternalProgrammer {
         Err(InternalError::NotSupported(
             "Internal programmer only supported on Linux",
         ))
+    }
+
+    pub fn has_read_acceleration(&self) -> bool {
+        false
     }
 }
 
@@ -342,6 +349,36 @@ impl SpiMaster for InternalProgrammer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
+    fn amd_hybrid_configures_controller_and_keeps_large_chip_writes_on_spi() {
+        use crate::amd_spi100::Spi100Controller;
+        use crate::host::tests::FakeHost;
+        use futures_lite::future::block_on;
+        use rflasher_core::flash::{FlashContext, FlashDevice, HybridFlashDevice};
+
+        let controller =
+            Spi100Controller::new_with_host(FakeHost::default(), 0xfed8_0200, None, 0).unwrap();
+        let programmer = InternalProgrammer {
+            controller: Box::new(controller),
+            flash_size: 0,
+        };
+        assert!(programmer.has_read_acceleration());
+        let db = rflasher_chips::ChipDatabase::new();
+        let ctx = FlashContext::new(db.find_by_name("W25Q256JW")[0].clone());
+        let mut device = HybridFlashDevice::new(programmer, ctx).with_spi_writes();
+        assert_eq!(OpaqueMaster::size(device.master()), 32 << 20);
+        let mut data = [0xff; 8];
+        block_on(device.read(0x0100_1234, &mut data)).unwrap();
+        assert_eq!(data, [0; 8]);
+        // The opaque AMD writer rejects this address; the SPI writer uses PP_4B.
+        assert_eq!(
+            block_on(OpaqueMaster::write(device.master(), 0x0100_1234, &[0xab])),
+            Err(CoreError::OpcodeNotSupported)
+        );
+        block_on(device.write(0x0100_1234, &[0xab])).unwrap();
+    }
 
     #[test]
     fn test_programmer_info() {

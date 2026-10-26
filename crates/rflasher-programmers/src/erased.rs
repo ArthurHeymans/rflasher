@@ -14,7 +14,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use rflasher_core::chip::{EraseBlock, FlashChip, WriteGranularity};
+use rflasher_core::chip::{EraseBlock, WriteGranularity};
 use rflasher_core::error::Result;
 use rflasher_core::flash::{FlashDevice, OptimalEraseOp};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
@@ -215,12 +215,6 @@ trait DynSpiMaster {
     fn max_write_len(&self) -> usize;
     fn probe_opcode(&self, opcode: u8) -> bool;
     fn execute<'a>(&'a mut self, cmd: &'a mut SpiCommand<'_>) -> BoxFuture<'a, Result<()>>;
-    fn read_bulk<'a>(
-        &'a mut self,
-        chip: &'a FlashChip,
-        addr: u32,
-        buf: &'a mut [u8],
-    ) -> BoxFuture<'a, Option<Result<()>>>;
     fn delay_us(&mut self, us: u32) -> BoxFuture<'_, ()>;
 }
 
@@ -239,14 +233,6 @@ impl<M: SpiMaster> DynSpiMaster for M {
     }
     fn execute<'a>(&'a mut self, cmd: &'a mut SpiCommand<'_>) -> BoxFuture<'a, Result<()>> {
         Box::pin(SpiMaster::execute(self, cmd))
-    }
-    fn read_bulk<'a>(
-        &'a mut self,
-        chip: &'a FlashChip,
-        addr: u32,
-        buf: &'a mut [u8],
-    ) -> BoxFuture<'a, Option<Result<()>>> {
-        Box::pin(SpiMaster::read_bulk(self, chip, addr, buf))
     }
     fn delay_us(&mut self, us: u32) -> BoxFuture<'_, ()> {
         Box::pin(SpiMaster::delay_us(self, us))
@@ -285,14 +271,6 @@ impl SpiMaster for ErasedSpiMaster {
     }
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
         self.inner.execute(cmd).await
-    }
-    async fn read_bulk(
-        &mut self,
-        chip: &FlashChip,
-        addr: u32,
-        buf: &mut [u8],
-    ) -> Option<Result<()>> {
-        self.inner.read_bulk(chip, addr, buf).await
     }
     async fn delay_us(&mut self, us: u32) {
         self.inner.delay_us(us).await

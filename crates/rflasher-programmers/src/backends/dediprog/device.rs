@@ -1202,6 +1202,10 @@ impl Dediprog {
 // ---------------------------------------------------------------------------
 
 impl OpaqueMaster for Dediprog {
+    fn set_flash_chip(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        Dediprog::set_flash_chip(self, chip);
+    }
+
     fn size(&self) -> usize {
         self.flash_size.unwrap_or(0) as usize
     }

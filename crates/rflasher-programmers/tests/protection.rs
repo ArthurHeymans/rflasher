@@ -31,6 +31,8 @@ struct State {
     fail_restore: bool,
     error_flag: u8,
     bulk_writes: usize,
+    opaque_reads: usize,
+    configured_size: Option<u32>,
     bulk_aai: bool,
     aai_next: Option<usize>,
     fail_aai_at: Option<usize>,
@@ -226,11 +228,15 @@ impl SpiMaster for Master {
     }
 }
 impl OpaqueMaster for Master {
+    fn set_flash_chip(&mut self, chip: &FlashChip) {
+        self.0.lock().unwrap().configured_size = Some(chip.total_size);
+    }
     fn size(&self) -> usize {
         self.0.lock().unwrap().data.len()
     }
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
-        let s = self.0.lock().unwrap();
+        let mut s = self.0.lock().unwrap();
+        s.opaque_reads += 1;
         buf.copy_from_slice(&s.data[addr as usize..addr as usize + buf.len()]);
         Ok(())
     }
@@ -280,6 +286,8 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
         fail_restore: false,
         error_flag: 0,
         bulk_writes: 0,
+        opaque_reads: 0,
+        configured_size: None,
         bulk_aai: false,
         aai_next: None,
         fail_aai_at: None,
@@ -311,11 +319,16 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
 #[test]
 fn protected_at25df321_bios_update_works_through_erased_spi_and_bulk_devices() {
     block_on(async {
-        for hybrid in [false, true] {
+        for (hybrid, spi_writes) in [(false, false), (true, false), (true, true)] {
             let (master, ctx) = fixture(Unlock::At2x, 0x80, Features::WRSR_WREN, 4 * 1024 * 1024);
             let state = master.0.clone();
             let mut device = if hybrid {
-                ErasedFlashDevice::new(HybridFlashDevice::new(master, ctx))
+                let device = HybridFlashDevice::new(master, ctx);
+                ErasedFlashDevice::new(if spi_writes {
+                    device.with_spi_writes()
+                } else {
+                    device
+                })
             } else {
                 ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx))
             };
@@ -342,7 +355,9 @@ fn protected_at25df321_bios_update_works_through_erased_spi_and_bulk_devices() {
                     .iter()
                     .any(|(op, data)| *op == 0x01 && data == &[0])
             );
-            assert_eq!(s.bulk_writes > 0, hybrid);
+            assert_eq!(s.bulk_writes > 0, hybrid && !spi_writes);
+            assert_eq!(s.opaque_reads > 0, hybrid);
+            assert_eq!(s.configured_size, hybrid.then_some(4 * 1024 * 1024));
             assert!(!device.wp_supported());
         }
     });

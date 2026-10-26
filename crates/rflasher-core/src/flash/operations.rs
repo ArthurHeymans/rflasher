@@ -1179,12 +1179,6 @@ pub async fn read<M: SpiMaster + ?Sized>(
         (CommandAddressing::ThreeByte, false)
     };
 
-    // With alloc the chip is owned; without alloc it is already a reference.
-    #[allow(clippy::needless_borrow)]
-    if let Some(result) = master.read_bulk(&ctx.chip, addr, buf).await {
-        return result;
-    }
-
     if enter_exit_4byte {
         protocol::enter_4byte_mode_with_features(master, features).await?;
     }

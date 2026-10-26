@@ -13,7 +13,7 @@ use crate::usb::ChooseUsbDevice;
 use rflasher_core::chip::ChipProvider;
 #[allow(unused_imports)] // Used in feature-gated code
 use rflasher_core::flash::FlashDevice;
-#[cfg(any(feature = "dediprog", feature = "sunxi-fel"))]
+#[cfg(any(feature = "dediprog", feature = "sunxi-fel", feature = "internal"))]
 use rflasher_core::flash::HybridFlashDevice;
 #[cfg(any(feature = "linux-mtd", feature = "internal"))]
 use rflasher_core::flash::OpaqueFlashDevice;
@@ -500,9 +500,6 @@ async fn open_dediprog(
     let chip_info = ChipInfo::from(result);
     let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
 
-    // Configure bulk bounds and programming mode from the probed chip.
-    master.set_flash_chip(&ctx.chip);
-
     // Use HybridFlashDevice: OpaqueMaster for fast bulk read/write (CMD_READ/CMD_WRITE),
     // SpiMaster for erase, status register access, and write protection
     let device = HybridFlashDevice::new(master, ctx);
@@ -883,7 +880,19 @@ async fn open_internal(
     // Hardware sequencing: opaque operations only
     if programmer.mode() == SpiMode::SoftwareSequencing {
         log::info!("Using SPI mode (swseq allows chip probing)");
-        probe_and_create_handle(programmer, db).await
+        if !programmer.has_read_acceleration() {
+            return probe_and_create_handle(programmer, db).await;
+        }
+
+        let result = db.probe(&mut programmer).await?;
+        log_probe_result(&result);
+        let chip_info = ChipInfo::from(result);
+        let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
+        let device = HybridFlashDevice::new(programmer, ctx).with_spi_writes();
+        Ok(FlashHandle::with_chip_info(
+            ErasedFlashDevice::new(device),
+            chip_info,
+        ))
     } else {
         if db.options.chip.is_some() || db.options.force {
             return Err("--chip and --force apply to SPI probing, not opaque hardware sequencing; use ich_spi_mode=swseq or remove them".into());
@@ -983,23 +992,18 @@ async fn open_sunxi_fel(
     let chip_info = ChipInfo::from(result);
     let ctx = rflasher_core::flash::FlashContext::new(chip_info.chip.clone());
 
-    // Configure OpaqueMaster with chip info discovered during probe
-    master.set_use_4byte_addr(ctx.total_size() > 16 * 1024 * 1024);
-    master.set_erase_blocks(ctx.chip.erase_blocks().to_vec());
-
-    // FEL's bulk writer implements only 256-byte page programming.
-    let device = if ctx
-        .chip
-        .features
-        .contains(rflasher_core::chip::Features::AAI_WORD)
-        || ctx.chip.write_granularity == rflasher_core::chip::WriteGranularity::Byte
-        || ctx.chip.page_size != 256
-    {
-        ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx))
+    // Keep accelerated reads even when this chip needs SPI programming.
+    let spi_writes = !crate::sunxi_fel::SunxiFel::supports_bulk_write(&ctx.chip);
+    let device = HybridFlashDevice::new(master, ctx);
+    let device = if spi_writes {
+        device.with_spi_writes()
     } else {
-        ErasedFlashDevice::new(HybridFlashDevice::new(master, ctx))
+        device
     };
-    Ok(FlashHandle::with_chip_info(device, chip_info))
+    Ok(FlashHandle::with_chip_info(
+        ErasedFlashDevice::new(device),
+        chip_info,
+    ))
 }
 
 #[cfg(all(test, feature = "dummy"))]

@@ -3245,6 +3245,7 @@ dependencies = [
  "nix 0.29.0",
  "nusb",
  "proptest",
+ "rflasher-chips",
  "rflasher-core",
  "rflasher-internal",
  "rflasher-pci",

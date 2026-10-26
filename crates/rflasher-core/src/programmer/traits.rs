@@ -115,21 +115,6 @@ pub trait SpiMaster {
     /// to single I/O mode and optionally log a warning.
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()>;
 
-    /// Optional accelerated flash read (for example, a checked memory mapping).
-    ///
-    /// Called after range and addressing-capability validation, with no SPI
-    /// address-mode transition performed. The implementation is responsible for
-    /// any preparation its accelerated path requires. Return `None` to use the
-    /// normal SPI read; `Some(Err(_))` is propagated without retrying.
-    async fn read_bulk(
-        &mut self,
-        _chip: &crate::chip::FlashChip,
-        _addr: u32,
-        _buf: &mut [u8],
-    ) -> Option<Result<()>> {
-        None
-    }
-
     /// Check if an opcode is supported by this programmer
     ///
     /// Some programmers (like Intel internal) have restrictions on which
@@ -142,12 +127,16 @@ pub trait SpiMaster {
     async fn delay_us(&mut self, us: u32);
 }
 
-/// Opaque master trait for programmers with restricted access
+/// Address-based flash access with protocol handling inside the backend.
 ///
-/// Some programmers (like Intel internal flash controller) don't expose
-/// raw SPI access. Instead, they provide higher-level read/write/erase
-/// operations that handle the protocol internally.
+/// A backend may also implement [`SpiMaster`]. Hybrid devices use opaque
+/// reads and optionally writes while keeping other operations on raw SPI.
 pub trait OpaqueMaster {
+    /// Configure address-based access using the probed chip's metadata.
+    /// Called by `HybridFlashDevice::new`; purely opaque backends that discover
+    /// their geometry independently may leave the default implementation.
+    fn set_flash_chip(&mut self, _chip: &crate::chip::FlashChip) {}
+
     /// Get the total flash size in bytes
     fn size(&self) -> usize;
 

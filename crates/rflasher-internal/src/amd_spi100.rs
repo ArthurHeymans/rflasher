@@ -33,7 +33,7 @@ use crate::error::InternalError;
 use crate::host::LinuxHost;
 use crate::host::{HostAccess, MmioAccess};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
-use rflasher_core::programmer::{SpiFeatures, SpiMaster};
+use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
 use rflasher_core::spi::{IoMode, SpiCommand, opcodes};
 
 /// SPI100 FIFO size (in bytes)
@@ -204,6 +204,8 @@ pub struct Spi100Controller<H: HostAccess> {
     mapped_len: usize,
     /// Whether 4-byte addressing memory map is disabled
     no_4ba_mmap: bool,
+    /// Probed size and addressing capabilities for opaque reads.
+    flash_chip: Option<(u32, rflasher_core::chip::Features)>,
     /// Original alternate speed (for restoration on shutdown)
     altspeed: u8,
 }
@@ -265,6 +267,7 @@ impl<H: HostAccess> Spi100Controller<H> {
             memory,
             mapped_len,
             no_4ba_mmap: false,
+            flash_chip: None,
             altspeed: 0,
         };
 
@@ -425,47 +428,46 @@ impl<H: HostAccess> Spi100Controller<H> {
         Ok(())
     }
 
-    /// Try the checked memory window, using native SPI commands for any
-    /// unmapped prefix. Leave the chip in 4BA mode when the hardware mapping
-    /// requires it, as flashprog does: firmware's 32-bit mapping needs that mode.
-    fn try_read_bulk(
-        &self,
-        chip: &rflasher_core::chip::FlashChip,
-        addr: u32,
-        buf: &mut [u8],
-    ) -> Option<CoreResult<()>> {
+    /// Read through the checked mapping, falling back to native commands.
+    /// Leave the chip in 4BA mode when firmware's 32-bit mapping requires it,
+    /// as flashprog does.
+    fn read_configured(&self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
         use rflasher_core::chip::Features;
 
-        let chip_size = u64::from(chip.total_size);
+        let (chip_size, features) = self.flash_chip.ok_or(CoreError::ProgrammerNotReady)?;
+        let chip_size = u64::from(chip_size);
+        if u64::from(addr) + buf.len() as u64 > chip_size {
+            return Err(CoreError::AddressOutOfBounds);
+        }
+        if chip_size > 16 * 1024 * 1024 && !features.supports_4ba_read() {
+            return Err(CoreError::ChipNotSupported);
+        }
+        if buf.is_empty() {
+            return Ok(());
+        }
+
         let mapped_start = chip_size as i64 - self.mapped_len as i64;
-        if buf.is_empty()
-            || self.memory.is_none()
-            || (chip_size > 16 * 1024 * 1024 && self.no_4ba_mmap)
-            || i64::from(addr) + buf.len() as i64 <= mapped_start
-        {
-            return None;
+        let uses_4ba_mapping = chip_size > 16 * 1024 * 1024
+            && self.memory.is_some()
+            && !self.no_4ba_mmap
+            && i64::from(addr) + buf.len() as i64 > mapped_start;
+        if uses_4ba_mapping {
+            // The configured memory-read opcode may require persistent 4BA
+            // mode; native READ_4B in the command fallback does not.
+            if !features.contains(Features::FOUR_BYTE_ENTER) {
+                if !features.contains(Features::FOUR_BYTE_ENTER_WREN) {
+                    return self
+                        .default_spi_read(chip_size, addr, buf)
+                        .map_err(InternalError::to_core_error);
+                }
+                self.write_enable().map_err(InternalError::to_core_error)?;
+            }
+            self.send_command(&[opcodes::EN4B], &mut [])
+                .map_err(InternalError::to_core_error)?;
         }
 
-        if chip_size > 16 * 1024 * 1024 {
-            // Native READ_4B works regardless of chip mode, but the memory
-            // controller's configured read opcode can require 4BA mode.
-            if !chip.features.contains(Features::FOUR_BYTE_ENTER) {
-                if !chip.features.contains(Features::FOUR_BYTE_ENTER_WREN) {
-                    return None;
-                }
-                if let Err(error) = self.write_enable() {
-                    return Some(Err(error.to_core_error()));
-                }
-            }
-            if let Err(error) = self.send_command(&[opcodes::EN4B], &mut []) {
-                return Some(Err(error.to_core_error()));
-            }
-        }
-
-        Some(
-            self.read(chip_size, addr, buf)
-                .map_err(InternalError::to_core_error),
-        )
+        self.read(chip_size, addr, buf)
+            .map_err(InternalError::to_core_error)
     }
 
     /// Read data from flash
@@ -820,28 +822,26 @@ impl<H: HostAccess> Controller for Spi100Controller<H> {
         Ok(())
     }
 
-    fn controller_read(&mut self, addr: u32, buf: &mut [u8], chip_size: usize) -> CoreResult<()> {
-        // AMD read needs chip_size parameter, use provided chip_size or default
-        let chip_size_u64 = if chip_size > 0 {
-            chip_size as u64
-        } else {
-            16 * 1024 * 1024 // Default to 16MB if not yet probed
-        };
-        self.read(chip_size_u64, addr, buf)
-            .map_err(InternalError::to_core_error)
+    fn controller_read(&mut self, addr: u32, buf: &mut [u8], _chip_size: usize) -> CoreResult<()> {
+        self.read_configured(addr, buf)
     }
 
-    fn read_bulk(
-        &mut self,
-        chip: &rflasher_core::chip::FlashChip,
-        addr: u32,
-        buf: &mut [u8],
-    ) -> Option<CoreResult<()>> {
-        self.try_read_bulk(chip, addr, buf)
+    fn set_flash_chip(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        OpaqueMaster::set_flash_chip(self, chip);
+    }
+
+    fn has_read_acceleration(&self) -> bool {
+        true
     }
 
     fn controller_write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
-        self.write(addr, data).map_err(|e| match e {
+        if self
+            .flash_chip
+            .is_some_and(|(size, _)| size > 16 * 1024 * 1024)
+        {
+            return Err(CoreError::OpcodeNotSupported);
+        }
+        Spi100Controller::write(self, addr, data).map_err(|e| match e {
             InternalError::AccessDenied { .. } => CoreError::RegionProtected,
             InternalError::Io(_) => CoreError::WriteError { addr },
             InternalError::NotSupported(_) => CoreError::AddressOutOfBounds,
@@ -850,7 +850,13 @@ impl<H: HostAccess> Controller for Spi100Controller<H> {
     }
 
     fn controller_erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
-        self.erase(addr, len).map_err(|e| match e {
+        if self
+            .flash_chip
+            .is_some_and(|(size, _)| size > 16 * 1024 * 1024)
+        {
+            return Err(CoreError::OpcodeNotSupported);
+        }
+        Spi100Controller::erase(self, addr, len).map_err(|e| match e {
             InternalError::AccessDenied { .. } => CoreError::RegionProtected,
             InternalError::Io(_) => {
                 CoreError::EraseError(rflasher_core::error::EraseFailure::CommandFailed { addr })
@@ -947,15 +953,6 @@ impl<H: HostAccess> SpiMaster for Spi100Controller<H> {
         self.execute_spi_command(cmd)
     }
 
-    async fn read_bulk(
-        &mut self,
-        chip: &rflasher_core::chip::FlashChip,
-        addr: u32,
-        buf: &mut [u8],
-    ) -> Option<CoreResult<()>> {
-        self.try_read_bulk(chip, addr, buf)
-    }
-
     fn probe_opcode(&self, _opcode: u8) -> bool {
         // AMD SPI100 doesn't have opcode restrictions like Intel
         true
@@ -963,6 +960,30 @@ impl<H: HostAccess> SpiMaster for Spi100Controller<H> {
 
     async fn delay_us(&mut self, us: u32) {
         self.host.delay_us(us);
+    }
+}
+
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+impl<H: HostAccess> OpaqueMaster for Spi100Controller<H> {
+    fn set_flash_chip(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        self.flash_chip = Some((chip.total_size, chip.features));
+    }
+
+    fn size(&self) -> usize {
+        self.flash_chip.map_or(0, |(size, _)| size as usize)
+    }
+
+    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
+        self.read_configured(addr, buf)
+    }
+
+    // Acceleration is read-only; the hybrid adapter uses SPI for mutations.
+    async fn write(&mut self, _addr: u32, _data: &[u8]) -> CoreResult<()> {
+        Err(CoreError::OpcodeNotSupported)
+    }
+
+    async fn erase(&mut self, _addr: u32, _len: u32) -> CoreResult<()> {
+        Err(CoreError::OpcodeNotSupported)
     }
 }
 
