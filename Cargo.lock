@@ -3211,8 +3211,10 @@ dependencies = [
 name = "rflasher-internal"
 version = "0.1.0"
 dependencies = [
+ "futures-lite",
  "libc",
  "log",
+ "rflasher-chips",
  "rflasher-core",
  "rflasher-pci",
  "thiserror 2.0.19",

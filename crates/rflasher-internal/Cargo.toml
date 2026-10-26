@@ -17,3 +17,7 @@ rflasher-pci.workspace = true
 log.workspace = true
 thiserror = { workspace = true, optional = true }
 libc = { version = "0.2", optional = true }
+
+[dev-dependencies]
+futures-lite.workspace = true
+rflasher-chips = { workspace = true, features = ["static-chips"] }
