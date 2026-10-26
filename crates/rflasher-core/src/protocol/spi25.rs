@@ -95,12 +95,16 @@ impl CommandAddressing {
 
 /// Read the JEDEC ID from a flash chip
 ///
-/// Returns (manufacturer_id, device_id) on success.
+/// Returns the first byte and the following two bytes as a big-endian value.
+/// A leading 0x7f is a continuation code, not a manufacturer ID; this API
+/// does not decode continuation-prefixed or shorter device identities.
 pub async fn read_jedec_id<M: SpiMaster + ?Sized>(master: &mut M) -> Result<(u8, u16)> {
     let mut buf = [0u8; 3];
     let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut buf);
     master.execute(&mut cmd).await?;
 
+    // Preserve the raw three-byte response even when it begins with a
+    // continuation code. Callers must not use that as a manufacturer ID.
     let manufacturer = buf[0];
     let device = ((buf[1] as u16) << 8) | (buf[2] as u16);
 

@@ -56,6 +56,8 @@ fn features_from(def: FeaturesDef) -> Features {
         (def.wrsr_persistent_ewsr, Features::WRSR_PERSISTENT_EWSR),
         (def.wp_winbond, Features::WP_WINBOND),
         (def.at25f_id, Features::AT25F_ID),
+        (def.rdid_continuation, Features::RDID_CONTINUATION),
+        (def.res2_id, Features::RES2_ID),
         (def.wrsr_ext, Features::WRSR_EXT),
         (def.fast_read, Features::FAST_READ),
         (def.dual_io, Features::DUAL_IO),
@@ -155,6 +157,33 @@ pub struct ChipDatabase {
 impl ChipProvider for ChipDatabase {
     fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
         ChipDatabase::find_by_jedec_id(self, manufacturer, device)
+    }
+
+    fn find_nth_by_banked_jedec_id(
+        &self,
+        bank: u8,
+        manufacturer: u8,
+        device: &[u8],
+        index: usize,
+    ) -> Option<&FlashChip> {
+        // These are the audited bank-one catalog identities. Length matters:
+        // PMC sends a single device byte (and may repeat it), AMIC sends two.
+        let id = match (bank, manufacturer, device) {
+            (1, 0x9d, [id]) => u16::from(*id),
+            (1, 0x37, [hi, lo]) => u16::from_be_bytes([*hi, *lo]),
+            _ => return None,
+        };
+        self.chips
+            .iter()
+            .filter(|c| {
+                c.jedec_manufacturer == manufacturer
+                    && c.jedec_device == id
+                    && c.features.contains(Features::RDID_CONTINUATION)
+                    && !c
+                        .features
+                        .intersects(Features::RES2_ID | Features::AT25F_ID)
+            })
+            .nth(index)
     }
 
     fn find_nth_by_jedec_id(
@@ -318,6 +347,133 @@ mod tests {
 
     fn vendors_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/vendors")
+    }
+
+    #[test]
+    fn standalone_res2_is_excluded_from_rdid_lookup() {
+        let ron = fs::read_to_string(vendors_dir().join("pmc.ron"))
+            .unwrap()
+            .replace("rdid_continuation: true, res2_id: true", "res2_id: true");
+        let mut runtime = ChipDatabase::empty();
+        runtime.load_ron(&ron).unwrap();
+        let mut databases = vec![runtime];
+        if cfg!(feature = "static-chips") {
+            let mut db = ChipDatabase::new();
+            for chip in &mut db.chips {
+                if chip.features.contains(Features::RES2_ID) {
+                    chip.features.remove(Features::RDID_CONTINUATION);
+                }
+            }
+            databases.push(db);
+        }
+        for db in databases {
+            let chips: Vec<_> = db
+                .chips()
+                .iter()
+                .filter(|c| c.features.contains(Features::RES2_ID))
+                .collect();
+            assert!(!chips.is_empty());
+            for chip in chips {
+                assert!(!chip.features.contains(Features::RDID_CONTINUATION));
+                assert!(!chip.matches_jedec_id(chip.jedec_manufacturer, chip.jedec_device));
+                assert!(
+                    !(0..)
+                        .map_while(|i| db.find_nth_by_jedec_id(
+                            chip.jedec_manufacturer,
+                            chip.jedec_device,
+                            i
+                        ))
+                        .any(|c| c.name == chip.name)
+                );
+                assert_ne!(
+                    db.find_by_jedec_id(chip.jedec_manufacturer, chip.jedec_device)
+                        .map(|c| c.name()),
+                    Some(chip.name())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn continuation_ids_are_not_unprefixed_candidates() {
+        let mut databases = vec![ChipDatabase::from_dir(&vendors_dir()).unwrap()];
+        if cfg!(feature = "static-chips") {
+            databases.push(ChipDatabase::new());
+        }
+        for db in databases {
+            for chip in db.chips().iter().filter(|chip| {
+                chip.features.contains(Features::RDID_CONTINUATION)
+                    && !chip.features.contains(Features::RES2_ID)
+            }) {
+                assert!(
+                    matches!(chip.jedec_manufacturer, 0x37)
+                        || (chip.jedec_manufacturer == 0x9d && chip.jedec_device <= 0xff),
+                    "Unknown continuation framing for {}",
+                    chip.name
+                );
+            }
+            for name in [
+                "A25L05PT",
+                "A25L05PU",
+                "A25L10PT",
+                "A25L10PU",
+                "A25L20PT",
+                "A25L20PU",
+                "A25L40PT",
+                "A25L40PU",
+                "A25L80P",
+                "A25L16PT",
+                "A25L16PU",
+                "Pm25LD010(C)",
+                "Pm25LD020(C)",
+                "Pm25LD040(C)",
+                "Pm25LD256C",
+                "Pm25LD512(C)",
+                "Pm25LQ016",
+                "Pm25LQ020",
+                "Pm25LQ032C",
+                "Pm25LQ040",
+                "Pm25LQ080",
+                "Pm25LV010",
+                "Pm25LV010A",
+                "Pm25LV016B",
+                "Pm25LV020",
+                "Pm25LV040",
+                "Pm25LV080B",
+                "Pm25LV512(A)",
+            ] {
+                let chip = db.find_by_name(name)[0];
+                let (manufacturer, device) = (chip.jedec_manufacturer, chip.jedec_device);
+                assert!(chip.features.contains(Features::RDID_CONTINUATION));
+                assert!(!chip.matches_jedec_id(manufacturer, device));
+                assert!(
+                    !(0..)
+                        .map_while(|i| ChipProvider::find_nth_by_jedec_id(
+                            &db,
+                            manufacturer,
+                            device,
+                            i
+                        ))
+                        .any(|candidate| candidate.name == chip.name)
+                );
+            }
+            let names = |bank, manufacturer, device: &[u8]| {
+                (0..)
+                    .map_while(|i| db.find_nth_by_banked_jedec_id(bank, manufacturer, device, i))
+                    .map(|c| c.name())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(names(1, 0x37, &[0x20, 0x20]), ["A25L05PT"]);
+            assert_eq!(names(1, 0x9d, &[0x21]), ["Pm25LD010(C)"]);
+            assert!(names(1, 0x9d, &[0x7c]).contains(&"Pm25LV010A"));
+            assert!(!names(1, 0x9d, &[0x7c]).contains(&"Pm25LV010"));
+            assert!(names(1, 0x9d, &[0x7b]).is_empty());
+            assert!(names(0, 0x9d, &[0x21]).is_empty());
+            assert!(names(2, 0x37, &[0x20, 0x20]).is_empty());
+            assert!(names(1, 0x9d, &[0, 0x21]).is_empty());
+            assert!(names(1, 0x37, &[0x20]).is_empty());
+            assert!(db.find_by_jedec_id(0xef, 0x4018).is_some());
+        }
     }
 
     #[test]

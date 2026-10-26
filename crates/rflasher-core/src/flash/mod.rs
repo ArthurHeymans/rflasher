@@ -64,4 +64,6 @@ pub use operations::{OptimalEraseOp, read, select_erase_block, spi_program, spi_
 
 // Re-export detailed probe result
 #[cfg(feature = "std")]
+pub(crate) use operations::select_probed_chip;
+#[cfg(feature = "std")]
 pub use operations::{ProbeOptions, ProbeResult, probe_detailed, probe_with_options};

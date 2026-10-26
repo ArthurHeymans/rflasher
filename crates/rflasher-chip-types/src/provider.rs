@@ -18,6 +18,19 @@ pub trait ChipProvider {
     /// [`find_nth_by_jedec_id`]: ChipProvider::find_nth_by_jedec_id
     fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip>;
 
+    /// Find a candidate for an RDID identity in a JEDEC continuation bank.
+    /// `device` contains exactly the identity bytes, not trailing response bytes.
+    /// Providers that do not support banked identities return no candidates.
+    fn find_nth_by_banked_jedec_id(
+        &self,
+        _bank: u8,
+        _manufacturer: u8,
+        _device: &[u8],
+        _index: usize,
+    ) -> Option<&FlashChip> {
+        None
+    }
+
     /// Find the `index`-th (0-based, database order) chip with the given JEDEC IDs.
     ///
     /// Callers enumerate candidates by increasing `index` until `None`. The
