@@ -52,17 +52,6 @@ pub(crate) fn addressing_for_4byte_operation(
     }
 }
 
-pub(crate) fn read_dummy_cycles(io_mode: crate::spi::IoMode) -> u8 {
-    match io_mode {
-        crate::spi::IoMode::Single => 0,
-        crate::spi::IoMode::DualOut => 8,
-        crate::spi::IoMode::DualIo => 4,
-        crate::spi::IoMode::QuadOut => 8,
-        crate::spi::IoMode::QuadIo => 6,
-        crate::spi::IoMode::Qpi => 0,
-    }
-}
-
 // =============================================================================
 // Smart erase/write support
 // =============================================================================
@@ -1187,10 +1176,9 @@ pub async fn read<M: SpiMaster + ?Sized>(
 
 /// Read flash contents with generic SPI read commands.
 ///
-/// Automatically selects the best I/O mode based on programmer and chip capabilities.
-/// Uses dual or quad I/O when both the programmer and chip support it.
-/// This is the default [`SpiMaster::read_flash`] and the fallback for
-/// programmer fast paths.
+/// Uses single-I/O reads because chip capabilities do not describe the exact
+/// multi-I/O opcode, mode clocks, or quad-enable state. This is the default
+/// [`SpiMaster::read_flash`] and the fallback for programmer fast paths.
 pub async fn spi_read<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -1202,13 +1190,15 @@ pub async fn spi_read<M: SpiMaster + ?Sized>(
     }
     let features = ctx.chip.features;
     let master_features = master.features();
-    let try_native_4byte =
-        ctx.address_mode == AddressMode::FourByte && features.supports_4ba_read();
-
-    let (io_mode, opcode, native_4byte) =
-        protocol::select_read_mode(master_features, features, try_native_4byte, |opcode| {
-            master.probe_opcode(opcode)
-        });
+    let native_4byte = ctx.address_mode == AddressMode::FourByte
+        && features.supports_4ba_read()
+        && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
+        && master.probe_opcode(crate::spi::opcodes::READ_4B);
+    let opcode = if native_4byte {
+        crate::spi::opcodes::READ_4B
+    } else {
+        crate::spi::opcodes::READ
+    };
 
     let (addressing, enter_exit_4byte) = if ctx.address_mode == AddressMode::FourByte {
         addressing_for_4byte_operation(native_4byte, features, master_features)?
@@ -1220,21 +1210,18 @@ pub async fn spi_read<M: SpiMaster + ?Sized>(
         protocol::enter_4byte_mode_with_features(master, features).await?;
     }
 
-    let result = protocol::read_io_with_addressing(
-        master,
-        opcode,
-        addr,
-        buf,
-        addressing,
-        io_mode,
-        read_dummy_cycles(io_mode),
-    )
-    .await;
+    let result = protocol::read_with_addressing(master, opcode, addr, buf, addressing).await;
 
-    if enter_exit_4byte
-        && let Err(e) = protocol::exit_4byte_mode_with_features(master, features).await
-    {
-        log::warn!("Failed to exit 4-byte address mode: {}", e);
+    if enter_exit_4byte {
+        let exit_result = protocol::exit_4byte_mode_with_features(master, features).await;
+        if result.is_ok() {
+            exit_result?;
+        } else if let Err(e) = exit_result {
+            log::warn!(
+                "Failed to exit 4-byte address mode after read failure: {}",
+                e
+            );
+        }
     }
 
     result
@@ -1874,6 +1861,114 @@ mod tests {
                     .unwrap()
                     .features
                     .contains(Features::WP_UNRESOLVED)
+            );
+        }
+    }
+
+    #[derive(Default)]
+    struct ReadMaster {
+        commands: Vec<(u8, crate::spi::IoMode, crate::spi::AddressWidth, u8)>,
+        fail_read: bool,
+        fail_exit: bool,
+        reject_native: bool,
+    }
+
+    impl SpiMaster for ReadMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::FOUR_BYTE_ADDR | SpiFeatures::DUAL | SpiFeatures::QUAD
+        }
+        fn max_read_len(&self) -> usize {
+            256
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        fn probe_opcode(&self, opcode: u8) -> bool {
+            !(self.reject_native && opcode == opcodes::READ_4B)
+        }
+        async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
+            self.commands
+                .push((cmd.opcode, cmd.io_mode, cmd.address_width, cmd.dummy_cycles));
+            if self.fail_read && matches!(cmd.opcode, opcodes::READ | opcodes::READ_4B) {
+                return Err(Error::SpiTransferFailed);
+            }
+            if self.fail_exit && cmd.opcode == opcodes::EX4B {
+                return Err(Error::Timeout);
+            }
+            cmd.read_buf.fill(0x5a);
+            Ok(())
+        }
+        async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    #[test]
+    fn automatic_reads_use_only_single_io() {
+        use crate::spi::{AddressWidth, IoMode};
+        use futures_lite::future::block_on;
+        for native in [false, true] {
+            let mut ctx = nonuniform_context();
+            ctx.chip.features = Features::DUAL_IO
+                | Features::QUAD_IO
+                | Features::FOUR_BYTE_DUAL_OUT_READ
+                | Features::FOUR_BYTE_DUAL_IO_READ
+                | Features::FOUR_BYTE_QUAD_OUT_READ
+                | Features::FOUR_BYTE_QUAD_IO_READ;
+            if native {
+                ctx.address_mode = AddressMode::FourByte;
+                ctx.chip.features |= Features::FOUR_BYTE_READ;
+            }
+            let mut master = ReadMaster::default();
+            let mut buf = [0; 2];
+            block_on(spi_read(&mut master, &ctx, 0, &mut buf)).unwrap();
+            assert_eq!(buf, [0x5a; 2]);
+            assert_eq!(
+                master.commands,
+                vec![(
+                    if native {
+                        opcodes::READ_4B
+                    } else {
+                        opcodes::READ
+                    },
+                    IoMode::Single,
+                    if native {
+                        AddressWidth::FourByte
+                    } else {
+                        AddressWidth::ThreeByte
+                    },
+                    0,
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_read_exits_four_byte_mode_and_preserves_errors() {
+        use futures_lite::future::block_on;
+        for (fail_read, fail_exit, expected) in [
+            (false, false, Ok(())),
+            (false, true, Err(Error::Timeout)),
+            (true, false, Err(Error::SpiTransferFailed)),
+            (true, true, Err(Error::SpiTransferFailed)),
+        ] {
+            let mut ctx = nonuniform_context();
+            ctx.address_mode = AddressMode::FourByte;
+            ctx.chip.features = Features::FOUR_BYTE_ENTER
+                | Features::FOUR_BYTE_READ
+                | Features::DUAL_IO
+                | Features::QUAD_IO;
+            let mut master = ReadMaster {
+                fail_read,
+                fail_exit,
+                reject_native: true,
+                ..Default::default()
+            };
+            assert_eq!(
+                block_on(spi_read(&mut master, &ctx, 0, &mut [0; 1])),
+                expected
+            );
+            assert_eq!(
+                master.commands.iter().map(|c| c.0).collect::<Vec<_>>(),
+                vec![opcodes::EN4B, opcodes::READ, opcodes::EX4B]
             );
         }
     }

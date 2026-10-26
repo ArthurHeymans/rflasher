@@ -1048,6 +1048,10 @@ pub async fn exit_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) ->
 /// Returns the I/O mode, opcode, and whether the selected opcode is a native
 /// 4-byte-address opcode. Prefers higher bandwidth modes:
 /// Quad I/O > Quad Out > Dual I/O > Dual Out > Single.
+///
+/// This only compares capability flags; callers must independently validate
+/// the selected opcode, mode and dummy clocks, and quad-enable state. Generic
+/// automatic reads do not use this helper.
 pub fn select_read_mode(
     master_features: SpiFeatures,
     chip_features: crate::chip::Features,
