@@ -283,6 +283,13 @@ pub(crate) mod tests {
         }
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct FakeSpiCommand {
+        pub opcode: u8,
+        pub write_data: Vec<u8>,
+        pub read_len: usize,
+    }
+
     /// Register-backed fake controller window.
     ///
     /// Plain registers read back what was written (32-bit accesses share
@@ -291,12 +298,15 @@ pub(crate) mod tests {
     /// enough to observe erases: an erase cycle started through HSFC is
     /// recorded with the current FADDR and completes at once, and HSFS.BERASE
     /// reads back a per-partition value chosen through [`FakeMmio::set_berase`]
-    /// (partitions split at the FPB boundary).
+    /// (partitions split at the FPB boundary). SPI100 commands are recorded
+    /// on trigger and return the configured response at the FIFO receive offset.
     #[derive(Default)]
     pub(crate) struct FakeMmio {
         regs: RefCell<BTreeMap<usize, u32>>,
         berase: RefCell<[u16; 2]>,
         erase_cycles: RefCell<Vec<u32>>,
+        spi_commands: RefCell<Vec<FakeSpiCommand>>,
+        spi_response: RefCell<Vec<u8>>,
     }
 
     impl FakeMmio {
@@ -312,6 +322,14 @@ pub(crate) mod tests {
         /// FADDR of every erase cycle started so far
         pub(crate) fn erase_cycles(&self) -> Vec<u32> {
             self.erase_cycles.borrow().clone()
+        }
+
+        pub(crate) fn spi_commands(&self) -> Vec<FakeSpiCommand> {
+            self.spi_commands.borrow().clone()
+        }
+
+        pub(crate) fn set_spi_response(&self, data: &[u8]) {
+            self.spi_response.replace(data.to_vec());
         }
 
         fn reg(&self, offset: usize) -> u32 {
@@ -340,6 +358,24 @@ pub(crate) mod tests {
         }
         fn write8(&self, offset: usize, value: u8) {
             self.set32(offset, value as u32);
+            // SPI100 CMD_TRIGGER.Execute: consume TX bytes and place the
+            // response immediately after them, matching the hardware FIFO.
+            if offset == 0x47 && value & 0x80 != 0 {
+                let write_len = self.reg(0x48) as usize;
+                let read_len = self.reg(0x4b) as usize;
+                self.spi_commands.borrow_mut().push(FakeSpiCommand {
+                    opcode: self.reg(0x45) as u8,
+                    write_data: (0..write_len).map(|i| self.reg(0x80 + i) as u8).collect(),
+                    read_len,
+                });
+                let response = self.spi_response.borrow();
+                for i in 0..read_len {
+                    self.set32(
+                        0x80 + write_len + i,
+                        response.get(i).copied().unwrap_or(0) as u32,
+                    );
+                }
+            }
         }
         fn write16(&self, offset: usize, value: u16) {
             use crate::ich_regs::*;

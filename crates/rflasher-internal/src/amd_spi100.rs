@@ -34,7 +34,7 @@ use crate::host::LinuxHost;
 use crate::host::{HostAccess, MmioAccess};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::{AddressWidth, SpiCommand};
+use rflasher_core::spi::{IoMode, SpiCommand, opcodes};
 
 /// SPI100 FIFO size (in bytes)
 const SPI100_FIFO_SIZE: usize = 71;
@@ -438,7 +438,7 @@ impl<H: HostAccess> Spi100Controller<H> {
 
         // Don't consider memory mapping at all if 4BA chips are not mapped as expected
         if chip_size > 16 * 1024 * 1024 && self.no_4ba_mmap {
-            return self.default_spi_read(start, buf);
+            return self.default_spi_read(chip_size, start, buf);
         }
 
         // Where in the flash does the memory mapped part start?
@@ -451,7 +451,11 @@ impl<H: HostAccess> Spi100Controller<H> {
         // Use SPI100 engine for data outside the memory-mapped range
         if (current_start as i64) < mapped_start {
             let unmapped_len = len.min((mapped_start - current_start as i64) as usize);
-            self.default_spi_read(current_start, &mut buf[offset..offset + unmapped_len])?;
+            self.default_spi_read(
+                chip_size,
+                current_start,
+                &mut buf[offset..offset + unmapped_len],
+            )?;
             current_start += unmapped_len as u32;
             offset += unmapped_len;
         }
@@ -466,8 +470,15 @@ impl<H: HostAccess> Spi100Controller<H> {
     }
 
     /// Default SPI read using command interface
-    fn default_spi_read(&self, start: u32, buf: &mut [u8]) -> Result<(), InternalError> {
-        // Use standard SPI READ command (0x03)
+    fn default_spi_read(
+        &self,
+        chip_size: u64,
+        start: u32,
+        buf: &mut [u8],
+    ) -> Result<(), InternalError> {
+        // SPI100 requires native 4-byte opcodes for chips larger than 16 MiB;
+        // extended-address-register and address-mode compatibility don't work.
+        let four_byte = chip_size > 16 * 1024 * 1024;
         let len = buf.len();
         let mut offset = 0;
 
@@ -475,13 +486,24 @@ impl<H: HostAccess> Spi100Controller<H> {
             let chunk_len = (len - offset).min(SPI100_MAX_DATA_READ);
             let addr = start + offset as u32;
 
-            let mut writearr = [0u8; 4];
-            writearr[0] = 0x03; // READ command
-            writearr[1] = (addr >> 16) as u8;
-            writearr[2] = (addr >> 8) as u8;
-            writearr[3] = addr as u8;
+            let address = addr.to_be_bytes();
+            let address = if four_byte {
+                &address[..]
+            } else {
+                &address[1..]
+            };
+            let mut writearr = [0u8; 5];
+            writearr[0] = if four_byte {
+                opcodes::READ_4B
+            } else {
+                opcodes::READ
+            };
+            writearr[1..1 + address.len()].copy_from_slice(address);
 
-            self.send_command(&writearr, &mut buf[offset..offset + chunk_len])?;
+            self.send_command(
+                &writearr[..1 + address.len()],
+                &mut buf[offset..offset + chunk_len],
+            )?;
             offset += chunk_len;
         }
 
@@ -708,49 +730,19 @@ impl<H: HostAccess> Spi100Controller<H> {
     }
 
     fn execute_spi_command(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        // Build the write array: opcode + address + write data
+        if cmd.io_mode != IoMode::Single {
+            return Err(CoreError::IoModeNotSupported);
+        }
+
+        let write_len = cmd.header_len().saturating_add(cmd.write_data.len());
+        self.check_readwritecnt(write_len, cmd.read_buf.len())
+            .map_err(InternalError::to_core_error)?;
+
+        // The FIFO must include dummy bytes (e.g. for SFDP); the command
+        // engine does not insert them on our behalf.
         let mut writearr = [0u8; SPI100_FIFO_SIZE + 1];
-        let mut write_len = 1;
-
-        // Opcode
-        writearr[0] = cmd.opcode;
-
-        // Add address if present
-        match cmd.address_width {
-            AddressWidth::None => {}
-            AddressWidth::ThreeByte => {
-                let addr = cmd.address.unwrap_or(0);
-                writearr[1] = (addr >> 16) as u8;
-                writearr[2] = (addr >> 8) as u8;
-                writearr[3] = addr as u8;
-                write_len += 3;
-            }
-            AddressWidth::FourByte => {
-                let addr = cmd.address.unwrap_or(0);
-                writearr[1] = (addr >> 24) as u8;
-                writearr[2] = (addr >> 16) as u8;
-                writearr[3] = (addr >> 8) as u8;
-                writearr[4] = addr as u8;
-                write_len += 4;
-            }
-        }
-
-        // Add write data if present
-        let write_data = cmd.write_data;
-        if !write_data.is_empty() {
-            let data_len = write_data.len().min(SPI100_FIFO_SIZE - write_len + 1);
-            writearr[write_len..write_len + data_len].copy_from_slice(&write_data[..data_len]);
-            write_len += data_len;
-        }
-
-        // Dummy cycles are not directly supported by SPI100 FIFO interface.
-        // The controller handles this internally for known commands.
-        if cmd.dummy_cycles > 0 {
-            log::debug!(
-                "Dummy cycles ({}) will be handled by controller",
-                cmd.dummy_cycles
-            );
-        }
+        let header_len = cmd.encode_header(&mut writearr);
+        writearr[header_len..write_len].copy_from_slice(cmd.write_data);
 
         self.send_command(&writearr[..write_len], cmd.read_buf)
             .map_err(InternalError::to_core_error)
@@ -818,7 +810,8 @@ impl<H: HostAccess> Controller for Spi100Controller<H> {
     }
 
     fn features(&self) -> SpiFeatures {
-        SpiFeatures::empty()
+        // Native 4-byte commands work, but EAR and mode-switch addressing do not.
+        SpiFeatures::FOUR_BYTE_ADDR | SpiFeatures::NO_4BA_MODES
     }
 
     fn max_read_len(&self) -> usize {
@@ -884,8 +877,7 @@ impl Spi100Controller {
 #[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
 impl<H: HostAccess> SpiMaster for Spi100Controller<H> {
     fn features(&self) -> SpiFeatures {
-        // AMD SPI100 supports standard SPI only (no dual/quad modes exposed to software)
-        SpiFeatures::empty()
+        Controller::features(self)
     }
 
     fn max_read_len(&self) -> usize {
@@ -909,3 +901,6 @@ impl<H: HostAccess> SpiMaster for Spi100Controller<H> {
         self.host.delay_us(us);
     }
 }
+
+#[cfg(all(test, feature = "std", target_os = "linux"))]
+mod tests;
