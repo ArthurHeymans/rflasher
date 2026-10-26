@@ -136,6 +136,10 @@ pub struct FeaturesDef {
 
     /// Device ID uses legacy Atmel opcode 0x15 instead of JEDEC RDID.
     pub at25f_id: bool,
+    /// Exclude banked identities and legacy RES2 IDs from ordinary RDID lookup.
+    pub rdid_continuation: bool,
+    /// Identity uses RES2 rather than RDID.
+    pub res2_id: bool,
 }
 
 // ============================================================================

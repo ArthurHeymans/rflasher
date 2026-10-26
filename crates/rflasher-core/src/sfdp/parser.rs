@@ -906,10 +906,16 @@ where
     // Probe SFDP
     let sfdp = probe(master).await?;
 
-    // Look up in database
-    let database_chip = provider
-        .find_by_jedec_id(jedec_manufacturer, jedec_device)
-        .cloned();
+    // Use the same bank-aware collision resolution as the ordinary probe.
+    let database_chip = crate::flash::select_probed_chip(
+        master,
+        provider,
+        jedec_manufacturer,
+        jedec_device,
+        Some(&sfdp),
+        None,
+    )
+    .await?;
 
     // Compare if we have a database entry
     let mismatches = if let Some(ref chip) = database_chip {
@@ -1078,18 +1084,23 @@ mod tests {
     /// Mock SPI master that returns the MX25L6436E SFDP data
     struct MockSfdpFlash {
         sfdp_data: &'static [u8],
+        id: [u8; 3],
     }
 
     impl MockSfdpFlash {
         fn new() -> Self {
             Self {
                 sfdp_data: &MX25L6436E_SFDP,
+                id: [0xc2, 0x20, 0x17],
             }
         }
 
         /// A chip with the MX25L6436E JEDEC ID but no SFDP support
         fn without_sfdp() -> Self {
-            Self { sfdp_data: &[] }
+            Self {
+                sfdp_data: &[],
+                id: [0xc2, 0x20, 0x17],
+            }
         }
     }
 
@@ -1114,8 +1125,7 @@ mod tests {
 
             match cmd.opcode {
                 opcodes::RDID => {
-                    // Macronix MX25L6436E: C2 20 17
-                    cmd.read_buf[..3].copy_from_slice(&[0xC2, 0x20, 0x17]);
+                    cmd.read_buf[..3].copy_from_slice(&self.id);
                     Ok(())
                 }
                 opcodes::RDSFDP => {
@@ -1173,6 +1183,23 @@ mod tests {
                 .filter(|c| c.matches_jedec_id(m, d))
                 .nth(index)
         }
+    }
+
+    #[test]
+    fn unknown_continuation_id_still_uses_sfdp() {
+        let mut flash = MockSfdpFlash::new();
+        flash.id = [0x7f, 0x55, 0x12];
+        let db = rflasher_chips::ChipDatabase::new();
+        let result =
+            futures_lite::future::block_on(crate::flash::probe_detailed(&mut flash, &db)).unwrap();
+        assert!(!result.from_database);
+        assert!(result.sfdp.is_some());
+        assert_eq!(
+            (result.jedec_manufacturer, result.jedec_device),
+            (0x7f, 0x5512)
+        );
+        let result = futures_lite::future::block_on(probe_with_database(&mut flash, &db)).unwrap();
+        assert!(result.database_chip.is_none());
     }
 
     /// The MX25L6436E as SFDP describes it, under a different name

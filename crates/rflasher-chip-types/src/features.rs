@@ -123,6 +123,11 @@ bitflags! {
         /// Audited CMP at SR2 bit 6 (read 0x35); bit 0 is SRL or reserved-zero.
         /// Independent of the status-write protocol and WP range decoder.
         const WP_CMP_SR2              = 1 << 46;
+        /// Identity is excluded from the unprefixed RDID lookup (banked
+        /// identity or legacy PMC RES2 identity).
+        const RDID_CONTINUATION       = 1 << 47;
+        /// Legacy RES2 identity, not a banked RDID identity.
+        const RES2_ID                 = 1 << 48;
     }
 }
 

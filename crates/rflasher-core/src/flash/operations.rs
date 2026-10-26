@@ -705,9 +705,9 @@ pub struct WriteStats {
 #[cfg(feature = "std")]
 #[derive(Debug)]
 pub struct ProbeResult {
-    /// JEDEC manufacturer ID
+    /// First raw RDID byte (a continuation code for banked identities).
     pub jedec_manufacturer: u8,
-    /// JEDEC device ID
+    /// Second and third raw RDID bytes, in big-endian order.
     pub jedec_device: u16,
     /// The chip to use for operations
     pub chip: crate::chip::FlashChip,
@@ -777,9 +777,20 @@ fn select_database_chip<P>(
 where
     P: ChipProvider + ?Sized,
 {
-    let mut candidates: Vec<&crate::chip::FlashChip> = (0..)
+    let candidates = (0..)
         .map_while(|i| provider.find_nth_by_jedec_id(manufacturer, device, i))
         .collect();
+    select_candidates(candidates, manufacturer, device, sfdp, wanted)
+}
+
+#[cfg(feature = "std")]
+fn select_candidates(
+    mut candidates: Vec<&crate::chip::FlashChip>,
+    manufacturer: u8,
+    device: u16,
+    sfdp: Option<&crate::sfdp::SfdpInfo>,
+    wanted: Option<&str>,
+) -> Result<Option<crate::chip::FlashChip>> {
     let names = |chips: &[&crate::chip::FlashChip]| -> std::string::String {
         chips
             .iter()
@@ -1003,6 +1014,52 @@ fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::
     Some(profile)
 }
 
+/// Resolve a raw three-byte RDID, preserving the legacy representation for callers.
+#[cfg(feature = "std")]
+pub(crate) async fn select_probed_chip<M: SpiMaster + ?Sized, P: ChipProvider + ?Sized>(
+    master: &mut M,
+    provider: &P,
+    manufacturer: u8,
+    device: u16,
+    sfdp: Option<&crate::sfdp::SfdpInfo>,
+    wanted: Option<&str>,
+) -> Result<Option<crate::chip::FlashChip>> {
+    if manufacturer != 0x7f {
+        return select_database_chip(provider, manufacturer, device, sfdp, wanted);
+    }
+    let [manufacturer, first] = device.to_be_bytes();
+    let mut bytes = [first, 0];
+    let len = match manufacturer {
+        0x9d => 1,
+        0x37 if master.max_read_len() >= 4 => {
+            let mut response = [0; 4];
+            let mut cmd =
+                crate::spi::SpiCommand::read_reg(crate::spi::opcodes::RDID, &mut response);
+            master.execute(&mut cmd).await?;
+            if response[..3] != [0x7f, manufacturer, first] {
+                log::error!("AMIC four-byte RDID prefix changed: {:02X?}", response);
+                return Err(Error::SpiTransferFailed);
+            }
+            bytes[1] = response[3];
+            2
+        }
+        _ => 0,
+    };
+    let candidates = if len == 0 {
+        Vec::new()
+    } else {
+        (0..)
+            .map_while(|i| provider.find_nth_by_banked_jedec_id(1, manufacturer, &bytes[..len], i))
+            .collect()
+    };
+    let id = if len == 1 {
+        u16::from(first)
+    } else {
+        u16::from_be_bytes(bytes)
+    };
+    select_candidates(candidates, manufacturer, id, sfdp, wanted)
+}
+
 /// Probe for a flash chip with detailed results
 ///
 /// Equivalent to [`probe_with_options`] with default options.
@@ -1064,14 +1121,15 @@ where
         }
     };
 
-    // Look up in database
-    let db_chip = select_database_chip(
+    let db_chip = select_probed_chip(
+        master,
         provider,
         jedec_manufacturer,
         jedec_device,
         sfdp.as_ref(),
         options.chip,
-    )?;
+    )
+    .await?;
     if db_chip.is_some() {
         log::debug!("Chip found in database");
     } else {
@@ -1862,6 +1920,167 @@ mod tests {
                     .features
                     .contains(Features::WP_UNRESOLVED)
             );
+        }
+    }
+
+    struct IdMaster {
+        response: [u8; 4],
+        reread: Option<Result<[u8; 4]>>,
+        commands: Vec<(u8, usize)>,
+        max_read: usize,
+    }
+
+    impl SpiMaster for IdMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+        fn max_read_len(&self) -> usize {
+            self.max_read
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
+            self.commands.push((cmd.opcode, cmd.read_buf.len()));
+            if cmd.opcode == opcodes::RDID {
+                assert!(cmd.read_buf.len() <= self.max_read);
+                let response = if cmd.read_buf.len() == 4 {
+                    self.reread.unwrap_or(Ok(self.response))?
+                } else {
+                    self.response
+                };
+                cmd.read_buf
+                    .copy_from_slice(&response[..cmd.read_buf.len()]);
+            } else {
+                assert_eq!(cmd.opcode, opcodes::RDSFDP);
+                cmd.read_buf.fill(0xff);
+            }
+            Ok(())
+        }
+        async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    #[test]
+    fn continuation_probe_matches_banked_ids() {
+        use futures_lite::future::block_on;
+        let db = rflasher_chips::ChipDatabase::new();
+        for (response, expected, reads) in [
+            ([0x7f, 0x37, 0x20, 0x20], "A25L05PT", vec![3, 4]),
+            ([0x7f, 0x9d, 0x21, 0x21], "Pm25LD010(C)", vec![3]),
+            ([0x9d, 0x60, 0x15, 0], "IS25LP016D", vec![3]),
+            ([0x37, 0x40, 0x15, 0], "A25LQ16", vec![3]),
+        ] {
+            let mut master = IdMaster {
+                response,
+                reread: None,
+                commands: Vec::new(),
+                max_read: 256,
+            };
+            let result = block_on(probe_detailed(&mut master, &db)).unwrap();
+            assert!(result.from_database);
+            assert_eq!(result.chip.name(), expected);
+            assert_eq!(
+                master
+                    .commands
+                    .iter()
+                    .filter(|(op, _)| *op == opcodes::RDID)
+                    .map(|(_, len)| *len)
+                    .collect::<Vec<_>>(),
+                reads
+            );
+            assert!(master.commands.iter().any(|(op, _)| *op == opcodes::RDSFDP));
+        }
+        // The shared 0x7e identity must honor an explicit choice and must not
+        // allow selection of the legacy RES2 entry with a different ID.
+        let mut master = IdMaster {
+            response: [0x7f, 0x9d, 0x7e, 0x7e],
+            reread: None,
+            commands: Vec::new(),
+            max_read: 3,
+        };
+        let options = ProbeOptions {
+            chip: Some("Pm25LD040(C)"),
+            ..Default::default()
+        };
+        let result = block_on(probe_with_options(&mut master, &db, &options)).unwrap();
+        assert_eq!(result.chip.name(), "Pm25LD040(C)");
+        let options = ProbeOptions {
+            chip: Some("Pm25LV040"),
+            ..Default::default()
+        };
+        let result = block_on(probe_with_options(&mut master, &db, &options)).unwrap();
+        assert_eq!(result.chip.name(), "Pm25LV040");
+        let options = ProbeOptions {
+            chip: Some("Pm25LV512(A)"),
+            ..Default::default()
+        };
+        assert!(matches!(
+            block_on(probe_with_options(&mut master, &db, &options)),
+            Err(Error::ChipNotFound)
+        ));
+
+        for (response, max_read) in [
+            ([0x37, 0x20, 0x20, 0], 256),
+            ([0x7f, 0x37, 0x20, 0x20], 3),
+            ([0x7f, 0x9d, 0x7b, 0x7b], 256),
+        ] {
+            let mut master = IdMaster {
+                response,
+                reread: None,
+                commands: Vec::new(),
+                max_read,
+            };
+            assert!(matches!(
+                block_on(probe_detailed(&mut master, &db)),
+                Err(Error::ChipNotFound)
+            ));
+            assert_eq!(
+                master
+                    .commands
+                    .iter()
+                    .filter(|(op, _)| *op == opcodes::RDID)
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn continuation_reread_failures_abort_probe_and_sfdp_fallback() {
+        use futures_lite::future::block_on;
+        let db = rflasher_chips::ChipDatabase::new();
+        for reread in [Err(Error::SpiTransferFailed), Ok([0x7f, 0x37, 0x21, 0x20])] {
+            let mut master = IdMaster {
+                response: [0x7f, 0x37, 0x20, 0x20],
+                reread: Some(reread),
+                commands: Vec::new(),
+                max_read: 256,
+            };
+            assert!(matches!(
+                block_on(probe_detailed(&mut master, &db)),
+                Err(Error::SpiTransferFailed)
+            ));
+            assert_eq!(
+                master
+                    .commands
+                    .iter()
+                    .filter(|(op, _)| *op == opcodes::RDID)
+                    .map(|(_, len)| *len)
+                    .collect::<Vec<_>>(),
+                [3, 4]
+            );
+            let sfdp = crate::sfdp::SfdpInfo::default();
+            assert!(matches!(
+                block_on(select_probed_chip(
+                    &mut master,
+                    &db,
+                    0x7f,
+                    0x3720,
+                    Some(&sfdp),
+                    None,
+                )),
+                Err(Error::SpiTransferFailed)
+            ));
         }
     }
 
