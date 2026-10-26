@@ -12,6 +12,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::policy::{MutationPolicy, preflight, region_layout};
+use crate::chip::WriteGranularity;
 use crate::error::{EraseFailure, Error, Result};
 use crate::flash::device::FlashDevice;
 use crate::flash::operations::{
@@ -373,11 +374,14 @@ async fn smart_write_region_prepared<D: FlashDevice + ?Sized, P: WriteProgress>(
         stats.flash_modified = true;
     }
 
-    // Step 4: Write pages that differ
-    // Coalesce to page boundaries so bulk transfer paths are used.
+    // Byte-program devices can require every programmed byte to be erased,
+    // including unchanged bytes. Do not expand their writes to page boundaries.
     let write_ranges = get_all_write_ranges(&current, data);
-    let data_len = data.len() as u32;
-    let write_ranges = coalesce_write_ranges(&write_ranges, page_size, data_len);
+    let write_ranges = if granularity == WriteGranularity::Byte {
+        write_ranges
+    } else {
+        coalesce_write_ranges(&write_ranges, page_size, data.len() as u32)
+    };
 
     if !write_ranges.is_empty() {
         let bytes_to_write: usize = write_ranges.iter().map(|r| r.len as usize).sum();
@@ -758,6 +762,7 @@ mod tests {
         bytes: Vec<u8>,
         blocks: Vec<EraseBlock>,
         mutations: usize,
+        require_erased_writes: bool,
     }
 
     impl FakeFlash {
@@ -766,6 +771,7 @@ mod tests {
                 bytes: vec![0; size as usize],
                 blocks: vec![EraseBlock::with_count(0x20, 16, size / 16)],
                 mutations: 0,
+                require_erased_writes: false,
             }
         }
     }
@@ -788,6 +794,13 @@ mod tests {
             Ok(())
         }
         async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+            if self.require_erased_writes {
+                assert!(
+                    self.bytes[addr as usize..addr as usize + data.len()]
+                        .iter()
+                        .all(|byte| *byte == 0xff)
+                );
+            }
             self.mutations += 1;
             self.bytes[addr as usize..addr as usize + data.len()].copy_from_slice(data);
             Ok(())
@@ -797,6 +810,25 @@ mod tests {
             self.bytes[addr as usize..(addr + len) as usize].fill(0xff);
             Ok(())
         }
+    }
+
+    #[test]
+    fn byte_program_does_not_reprogram_unchanged_neighbors() {
+        let mut flash = FakeFlash::new(256);
+        flash.bytes[7] = 0xff;
+        flash.require_erased_writes = true;
+        let mut desired = flash.bytes.clone();
+        desired[7] = 0x7f;
+
+        block_on(smart_write_region_prepared(
+            &mut flash,
+            0,
+            &desired,
+            &mut NoProgress,
+        ))
+        .unwrap();
+        assert_eq!(flash.bytes, desired);
+        assert_eq!(flash.mutations, 1);
     }
 
     #[derive(Default)]
