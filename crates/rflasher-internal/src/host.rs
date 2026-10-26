@@ -24,6 +24,38 @@ pub trait MmioAccess {
     /// Reads a 32-bit MMIO value at `offset`.
     fn read32(&self, offset: usize) -> u32;
 
+    /// Reads a 64-bit value from a data window that permits wide reads.
+    /// Backends may override this with a single native 64-bit load.
+    fn read64(&self, offset: usize) -> u64 {
+        u64::from(self.read32(offset)) | (u64::from(self.read32(offset + 4)) << 32)
+    }
+
+    /// Copies from a data window using source-aligned 4- or 8-byte reads.
+    /// Unaligned leading and trailing bytes are read individually, never
+    /// accessing outside the requested range. Not for side-effecting registers.
+    fn read_aligned(&self, mut offset: usize, dst: &mut [u8], alignment: usize) {
+        assert!(matches!(alignment, 4 | 8));
+        let prefix = ((alignment - offset % alignment) % alignment).min(dst.len());
+        let (head, rest) = dst.split_at_mut(prefix);
+        for byte in head {
+            *byte = self.read8(offset);
+            offset += 1;
+        }
+        let mut chunks = rest.chunks_exact_mut(alignment);
+        for chunk in &mut chunks {
+            if alignment == 8 {
+                chunk.copy_from_slice(&self.read64(offset).to_le_bytes());
+            } else {
+                chunk.copy_from_slice(&self.read32(offset).to_le_bytes());
+            }
+            offset += alignment;
+        }
+        for byte in chunks.into_remainder() {
+            *byte = self.read8(offset);
+            offset += 1;
+        }
+    }
+
     /// Writes an 8-bit MMIO value at `offset`.
     fn write8(&self, offset: usize, value: u8);
     /// Writes a 16-bit MMIO value at `offset`.
@@ -207,7 +239,17 @@ impl HostAccess for LinuxHost {
     }
 
     fn delay_us(&self, us: u32) {
-        std::thread::sleep(std::time::Duration::from_micros(us as u64));
+        let duration = std::time::Duration::from_micros(u64::from(us));
+        // Scheduler sleeps can turn a 1 us SPI poll into tens of microseconds.
+        // Only busy-wait for short controller polls, not flash program/erase waits.
+        if us <= 10 {
+            let start = std::time::Instant::now();
+            while start.elapsed() < duration {
+                core::hint::spin_loop();
+            }
+        } else {
+            std::thread::sleep(duration);
+        }
     }
 }
 
@@ -303,6 +345,8 @@ pub(crate) mod tests {
     #[derive(Default)]
     pub(crate) struct FakeMmio {
         regs: RefCell<BTreeMap<usize, u32>>,
+        bytes: RefCell<BTreeMap<usize, u8>>,
+        reads: RefCell<Vec<(usize, usize)>>,
         berase: RefCell<[u16; 2]>,
         erase_cycles: RefCell<Vec<u32>>,
         spi_commands: RefCell<Vec<FakeSpiCommand>>,
@@ -332,6 +376,24 @@ pub(crate) mod tests {
             self.spi_response.replace(data.to_vec());
         }
 
+        pub(crate) fn set_bytes(&self, offset: usize, data: &[u8]) {
+            self.bytes
+                .borrow_mut()
+                .extend(data.iter().enumerate().map(|(i, &b)| (offset + i, b)));
+        }
+
+        pub(crate) fn reads(&self) -> Vec<(usize, usize)> {
+            self.reads.borrow().clone()
+        }
+
+        fn byte(&self, offset: usize) -> u8 {
+            self.bytes
+                .borrow()
+                .get(&offset)
+                .copied()
+                .unwrap_or_else(|| self.reg(offset) as u8)
+        }
+
         fn reg(&self, offset: usize) -> u32 {
             self.regs.borrow().get(&offset).copied().unwrap_or(0)
         }
@@ -339,7 +401,8 @@ pub(crate) mod tests {
 
     impl MmioAccess for FakeMmio {
         fn read8(&self, offset: usize) -> u8 {
-            self.reg(offset) as u8
+            self.reads.borrow_mut().push((offset, 1));
+            self.byte(offset)
         }
         fn read16(&self, offset: usize) -> u16 {
             let value = self.reg(offset) as u16;
@@ -354,10 +417,23 @@ pub(crate) mod tests {
                 | (self.berase.borrow()[partition] << crate::ich_regs::HSFS_BERASE_OFF)
         }
         fn read32(&self, offset: usize) -> u32 {
-            self.reg(offset)
+            self.reads.borrow_mut().push((offset, 4));
+            if self.bytes.borrow().contains_key(&offset) {
+                u32::from_le_bytes(core::array::from_fn(|i| self.byte(offset + i)))
+            } else {
+                self.reg(offset)
+            }
+        }
+        fn read64(&self, offset: usize) -> u64 {
+            self.reads.borrow_mut().push((offset, 8));
+            u64::from_le_bytes(core::array::from_fn(|i| self.byte(offset + i)))
         }
         fn write8(&self, offset: usize, value: u8) {
-            self.set32(offset, value as u32);
+            if offset >= 0x80 {
+                self.bytes.borrow_mut().insert(offset, value);
+            } else {
+                self.set32(offset, value as u32);
+            }
             // SPI100 CMD_TRIGGER.Execute: consume TX bytes and place the
             // response immediately after them, matching the hardware FIFO.
             if offset == 0x47 && value & 0x80 != 0 {
@@ -365,15 +441,14 @@ pub(crate) mod tests {
                 let read_len = self.reg(0x4b) as usize;
                 self.spi_commands.borrow_mut().push(FakeSpiCommand {
                     opcode: self.reg(0x45) as u8,
-                    write_data: (0..write_len).map(|i| self.reg(0x80 + i) as u8).collect(),
+                    write_data: (0..write_len).map(|i| self.byte(0x80 + i)).collect(),
                     read_len,
                 });
                 let response = self.spi_response.borrow();
                 for i in 0..read_len {
-                    self.set32(
-                        0x80 + write_len + i,
-                        response.get(i).copied().unwrap_or(0) as u32,
-                    );
+                    self.bytes
+                        .borrow_mut()
+                        .insert(0x80 + write_len + i, response.get(i).copied().unwrap_or(0));
                 }
             }
         }
@@ -427,6 +502,37 @@ pub(crate) mod tests {
         assert_eq!(bdf.bus(), 0);
         assert_eq!(bdf.device(), 0x1f);
         assert_eq!(bdf.function(), 5);
+    }
+
+    #[test]
+    fn aligned_data_reads_preserve_bytes_and_stay_within_the_requested_range() {
+        let source: Vec<u8> = (0..96).map(|i| (i * 17) as u8).collect();
+        for alignment in [4, 8] {
+            for start in 0..alignment {
+                for len in 0..=71 {
+                    let memory = FakeMmio::default();
+                    memory.set_bytes(0, &source);
+                    let mut data = vec![0xcc; len + 2];
+                    memory.read_aligned(start, &mut data[1..len + 1], alignment);
+                    assert_eq!(&data[1..len + 1], &source[start..start + len]);
+                    assert_eq!((data[0], data[len + 1]), (0xcc, 0xcc));
+                    let reads = memory.reads();
+                    assert!(reads.iter().all(|&(offset, width)| {
+                        offset >= start
+                            && offset + width <= start + len
+                            && (width == 1 || (width == alignment && offset % alignment == 0))
+                    }));
+                    let prefix = ((alignment - start % alignment) % alignment).min(len);
+                    assert_eq!(
+                        reads
+                            .iter()
+                            .filter(|&&(_, width)| width == alignment)
+                            .count(),
+                        (len - prefix) / alignment
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! Internal programmer wrapper implementing SpiMaster and OpaqueMaster
 //!
 //! This module provides the high-level programmer interface that wraps
-//! the low-level controllers (Intel ICH/PCH or AMD SPI100) and implements
-//! the appropriate trait (SpiMaster or OpaqueMaster).
+//! the low-level controllers (Intel ICH/PCH or AMD SPI100). Software
+//! sequencing uses `SpiMaster`, with controller fast paths for reads;
+//! Intel hardware sequencing uses `OpaqueMaster`.
 
 #![cfg_attr(not(all(feature = "std", target_os = "linux")), allow(unused_imports))]
 
@@ -14,6 +15,7 @@ use crate::ichspi::{IchSpiController, SpiMode};
 use crate::{AnyDetectedChipset, DetectedAmdChipset, DetectedChipset};
 
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
+use rflasher_core::flash::{self, FlashContext};
 use rflasher_core::programmer::{OpaqueMaster, SpiFeatures, SpiMaster};
 use rflasher_core::spi::SpiCommand;
 
@@ -221,7 +223,7 @@ impl OpaqueMaster for InternalProgrammer {
 /// This is only available in software sequencing mode. Hardware sequencing
 /// mode does not allow arbitrary SPI commands - use OpaqueMaster instead.
 ///
-/// # Limitations
+/// # Intel software-sequencing limitations
 ///
 /// - Only opcodes in the OPMENU table can be executed
 /// - Maximum 64 bytes per transfer
@@ -252,6 +254,18 @@ impl SpiMaster for InternalProgrammer {
 
     async fn delay_us(&mut self, us: u32) {
         std::thread::sleep(std::time::Duration::from_micros(us as u64));
+    }
+
+    async fn read_flash(
+        &mut self,
+        ctx: &FlashContext,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> CoreResult<()> {
+        match self.controller.fast_read(ctx, addr, buf) {
+            Some(result) => result,
+            None => flash::spi_read(self, ctx, addr, buf).await,
+        }
     }
 }
 
@@ -333,6 +347,26 @@ impl SpiMaster for InternalProgrammer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
+    fn amd_reads_use_the_mapping_and_large_chip_writes_use_native_spi() {
+        use crate::amd_spi100::tests::{context, mapped_controller};
+        use futures_lite::future::block_on;
+        use rflasher_core::flash::{FlashDevice, SpiFlashDevice};
+
+        let programmer = InternalProgrammer {
+            controller: Box::new(mapped_controller()),
+            flash_size: 0,
+        };
+        let ctx = context();
+        let addr = ctx.chip.total_size - 256;
+        let mut device = SpiFlashDevice::new(programmer, ctx);
+        let mut data = [0; 4];
+        block_on(device.read(addr, &mut data)).unwrap();
+        assert_eq!(data, [0, 17, 34, 51]);
+        block_on(device.write(0x0100_1234, &[0xab])).unwrap();
+    }
 
     #[test]
     fn test_programmer_info() {
