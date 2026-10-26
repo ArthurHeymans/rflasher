@@ -72,7 +72,7 @@ impl From<ProbeResult> for ChipInfo {
 ///
 /// This abstraction hides whether the underlying programmer is SPI-based
 /// (CH341A, FTDI, etc.) or opaque (Intel internal). The CLI works only
-/// with this type and never needs to know about SpiMaster or OpaqueMaster.
+/// with this type and never needs to know about SpiMaster or backend types.
 ///
 /// Similar to flashprog's `struct flashctx`.
 ///

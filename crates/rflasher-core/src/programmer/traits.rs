@@ -157,37 +157,6 @@ pub trait SpiMaster {
     }
 }
 
-/// Address-based flash access for programmers without raw SPI access.
-///
-/// The backend handles the flash protocol itself (Intel hardware
-/// sequencing, Linux MTD). Programmers that can send SPI commands implement
-/// [`SpiMaster`] instead, overriding its fast paths where they have them.
-pub trait OpaqueMaster {
-    /// Get the total flash size in bytes
-    fn size(&self) -> usize;
-
-    /// Read flash contents into the provided buffer
-    ///
-    /// # Arguments
-    /// * `addr` - Starting address to read from
-    /// * `buf` - Buffer to read into
-    async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()>;
-
-    /// Write data to flash (assumes the region is already erased)
-    ///
-    /// # Arguments
-    /// * `addr` - Starting address to write to
-    /// * `data` - Data to write
-    async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()>;
-
-    /// Erase a region of flash
-    ///
-    /// # Arguments
-    /// * `addr` - Starting address to erase
-    /// * `len` - Number of bytes to erase
-    async fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
-}
-
 // Note: `SpiMaster` uses `async fn` and is therefore not directly usable as
 // a trait object. Dynamic dispatch is provided by the object-erasure
 // adapters in `rflasher-programmers`.

@@ -19,7 +19,7 @@ those layers without the core knowing about them.
 
 ## Async, executor-independent core
 
-All operational APIs (`SpiMaster`, `OpaqueMaster`, `FlashDevice`, probing,
+All operational APIs (`SpiMaster`, `FlashDevice`, probing,
 flash operations) are async on every target, and the core requires no runtime:
 
 - **Native CLI** blocks exactly once, in `main`, with
@@ -36,17 +36,16 @@ operation is negligible next to USB and flash latency.
 
 ## SPI and opaque access
 
-There are two programmer traits, and every programmer implements exactly the
-one that matches its hardware:
+`FlashDevice` is the address-level interface used by every high-level
+operation. Every programmer provides it in one of two ways:
 
-- `SpiMaster` executes SPI transactions; the core owns chip protocols. USB
-  bulk transport or a memory-mapped window does not make a programmer opaque.
-- `OpaqueMaster` is for programmers without raw SPI access, which accept
-  flash addresses and run the protocol themselves.
-
-`SpiFlashDevice` wraps a `SpiMaster` and the probed `FlashContext`;
-`OpaqueFlashDevice` wraps an `OpaqueMaster`. Both implement `FlashDevice`,
-the address-level interface used by every high-level operation.
+- `SpiMaster` executes SPI transactions; the core owns chip protocols.
+  `SpiFlashDevice` combines a `SpiMaster` with the probed `FlashContext`.
+  USB bulk transport or a memory-mapped window does not make a programmer
+  opaque.
+- Programmers without raw SPI access run the protocol themselves and
+  implement `FlashDevice` directly, including their own size and erase
+  geometry (`HwseqFlash` for Intel hardware sequencing, `LinuxMtd`).
 
 Programmers with a faster route to the flash override the provided
 `SpiMaster::read_flash` and `SpiMaster::program_flash` methods. Their

@@ -16,9 +16,8 @@
 //!   [`SpiMaster::program_flash`](crate::programmer::SpiMaster::program_flash).
 //!
 //! - **Opaque programmers** (Intel hardware sequencing, Linux MTD) don't
-//!   expose raw SPI access. Instead, they provide address-based
-//!   read/write/erase operations where the hardware handles the protocol
-//!   internally.
+//!   expose raw SPI access. The hardware handles the protocol, so they
+//!   implement [`FlashDevice`] directly, including their own geometry.
 //!
 //! The [`FlashDevice`] trait abstracts over both types, allowing high-level
 //! operations (smart write, layout-based operations, verification) to work
@@ -27,7 +26,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use rflasher_core::flash::{FlashDevice, MutationPolicy, OpaqueFlashDevice, SpiFlashDevice};
+//! use rflasher_core::flash::{FlashDevice, MutationPolicy, SpiFlashDevice};
 //! use rflasher_core::flash::unified;
 //!
 //! let mut policy = MutationPolicy::default();
@@ -37,14 +36,12 @@
 //! let mut device = SpiFlashDevice::new(master, ctx);
 //! unified::smart_write_with_policy(&mut device, &data, &mut progress, &mut policy)?;
 //!
-//! // Using opaque programmer  
-//! let mut device = OpaqueFlashDevice::new(master);
-//! unified::smart_write_with_policy(&mut device, &data, &mut progress, &mut policy)?;
+//! // Using an opaque programmer, which is a FlashDevice itself
+//! unified::smart_write_with_policy(&mut mtd, &data, &mut progress, &mut policy)?;
 //! ```
 
 mod context;
 mod device;
-mod opaque_device;
 mod operations;
 #[cfg(feature = "alloc")]
 mod policy;
@@ -59,7 +56,6 @@ pub use context::{AddressMode, FlashContext};
 pub use device::FlashDevice;
 #[cfg(feature = "alloc")]
 pub use device::FlashDeviceExt;
-pub use opaque_device::OpaqueFlashDevice;
 pub use spi_device::SpiFlashDevice;
 
 // Re-export low-level SPI operations (work with SpiMaster directly)

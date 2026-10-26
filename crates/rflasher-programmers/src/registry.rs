@@ -1,7 +1,7 @@
 //! Programmer registry and initialization
 //!
 //! This module handles opening programmers by name and creating FlashHandles.
-//! It completely hides SpiMaster and OpaqueMaster from the public API.
+//! It completely hides SpiMaster and the backend types from the public API.
 
 #[cfg(feature = "usb")]
 use crate::UsbProgrammer;
@@ -13,8 +13,6 @@ use crate::usb::ChooseUsbDevice;
 use rflasher_core::chip::ChipProvider;
 #[allow(unused_imports)] // Used in feature-gated code
 use rflasher_core::flash::FlashDevice;
-#[cfg(feature = "linux-mtd")]
-use rflasher_core::flash::OpaqueFlashDevice;
 use rflasher_core::flash::{ProbeOptions, ProbeResult, SpiFlashDevice, probe_with_options};
 use rflasher_core::sfdp::SfdpMismatch;
 
@@ -669,21 +667,15 @@ async fn open_linux_mtd(
         )
     })?;
 
-    let flash_size = mtd.size() as u32;
-    let erase_size = mtd.erase_size() as u32;
-
+    let info = mtd.info();
     log::info!(
         "MTD device: {} ({} bytes, erase size {} bytes)",
-        mtd.info().name,
-        flash_size,
-        erase_size
+        info.name,
+        info.total_size,
+        info.erase_size
     );
 
-    let mut device = OpaqueFlashDevice::new(mtd, flash_size);
-    device.set_erase_block_size(erase_size);
-    Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(
-        device,
-    )))
+    Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(mtd)))
 }
 
 #[cfg(feature = "linux-gpio")]
