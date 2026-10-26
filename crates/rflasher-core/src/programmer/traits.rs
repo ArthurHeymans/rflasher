@@ -115,6 +115,21 @@ pub trait SpiMaster {
     /// to single I/O mode and optionally log a warning.
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()>;
 
+    /// Optional accelerated flash read (for example, a checked memory mapping).
+    ///
+    /// Called after range and addressing-capability validation, with no SPI
+    /// address-mode transition performed. The implementation is responsible for
+    /// any preparation its accelerated path requires. Return `None` to use the
+    /// normal SPI read; `Some(Err(_))` is propagated without retrying.
+    async fn read_bulk(
+        &mut self,
+        _chip: &crate::chip::FlashChip,
+        _addr: u32,
+        _buf: &mut [u8],
+    ) -> Option<Result<()>> {
+        None
+    }
+
     /// Check if an opcode is supported by this programmer
     ///
     /// Some programmers (like Intel internal) have restrictions on which

@@ -221,7 +221,7 @@ impl OpaqueMaster for InternalProgrammer {
 /// This is only available in software sequencing mode. Hardware sequencing
 /// mode does not allow arbitrary SPI commands - use OpaqueMaster instead.
 ///
-/// # Limitations
+/// # Intel software-sequencing limitations
 ///
 /// - Only opcodes in the OPMENU table can be executed
 /// - Maximum 64 bytes per transfer
@@ -244,6 +244,15 @@ impl SpiMaster for InternalProgrammer {
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         self.controller.execute(cmd)
+    }
+
+    async fn read_bulk(
+        &mut self,
+        chip: &rflasher_core::chip::FlashChip,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> Option<CoreResult<()>> {
+        self.controller.read_bulk(chip, addr, buf)
     }
 
     fn probe_opcode(&self, opcode: u8) -> bool {

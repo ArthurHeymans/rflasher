@@ -27,6 +27,17 @@ pub trait Controller {
     /// For AMD: uses memory-mapped reads when possible
     fn controller_read(&mut self, addr: u32, buf: &mut [u8], chip_size: usize) -> CoreResult<()>;
 
+    /// Optional checked read acceleration. Software-sequenced controllers
+    /// without a suitable memory window keep using the generic SPI read path.
+    fn read_bulk(
+        &mut self,
+        _chip: &rflasher_core::chip::FlashChip,
+        _addr: u32,
+        _buf: &mut [u8],
+    ) -> Option<CoreResult<()>> {
+        None
+    }
+
     /// Write to flash using controller-specific method
     ///
     /// For Intel: uses hwseq or swseq depending on mode

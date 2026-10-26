@@ -327,9 +327,7 @@ impl<H: HostAccess> Spi100Controller<H> {
 
     /// Read multiple bytes from SPI register (FIFO).
     fn readn(&self, reg: usize, data: &mut [u8]) {
-        for (offset, byte) in data.iter_mut().enumerate() {
-            *byte = self.read8(reg + offset);
-        }
+        self.spibar.read_aligned(reg, data, 4);
     }
 
     /// Check read/write byte counts
@@ -422,19 +420,64 @@ impl<H: HostAccess> Spi100Controller<H> {
             .as_ref()
             .ok_or(InternalError::Io("No memory mapping available"))?;
 
-        for (offset, byte) in dst.iter_mut().enumerate() {
-            *byte = memory.read8(start + offset);
-        }
+        memory.read_aligned(start, dst, 8);
 
         Ok(())
+    }
+
+    /// Try the checked memory window, using native SPI commands for any
+    /// unmapped prefix. Leave the chip in 4BA mode when the hardware mapping
+    /// requires it, as flashprog does: firmware's 32-bit mapping needs that mode.
+    fn try_read_bulk(
+        &self,
+        chip: &rflasher_core::chip::FlashChip,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> Option<CoreResult<()>> {
+        use rflasher_core::chip::Features;
+
+        let chip_size = u64::from(chip.total_size);
+        let mapped_start = chip_size as i64 - self.mapped_len as i64;
+        if buf.is_empty()
+            || self.memory.is_none()
+            || (chip_size > 16 * 1024 * 1024 && self.no_4ba_mmap)
+            || i64::from(addr) + buf.len() as i64 <= mapped_start
+        {
+            return None;
+        }
+
+        if chip_size > 16 * 1024 * 1024 {
+            // Native READ_4B works regardless of chip mode, but the memory
+            // controller's configured read opcode can require 4BA mode.
+            if !chip.features.contains(Features::FOUR_BYTE_ENTER) {
+                if !chip.features.contains(Features::FOUR_BYTE_ENTER_WREN) {
+                    return None;
+                }
+                if let Err(error) = self.write_enable() {
+                    return Some(Err(error.to_core_error()));
+                }
+            }
+            if let Err(error) = self.send_command(&[opcodes::EN4B], &mut []) {
+                return Some(Err(error.to_core_error()));
+            }
+        }
+
+        Some(
+            self.read(chip_size, addr, buf)
+                .map_err(InternalError::to_core_error),
+        )
     }
 
     /// Read data from flash
     ///
     /// This uses memory-mapped access when available and falls back to
-    /// SPI commands for data outside the mapped range.
+    /// SPI commands for data outside the mapped range. The caller must ensure
+    /// the chip address mode matches the controller's memory mapping.
     pub fn read(&self, chip_size: u64, start: u32, buf: &mut [u8]) -> Result<(), InternalError> {
         let len = buf.len();
+        if u64::from(start) + len as u64 > chip_size {
+            return Err(InternalError::Io("Flash read outside chip bounds"));
+        }
 
         // Don't consider memory mapping at all if 4BA chips are not mapped as expected
         if chip_size > 16 * 1024 * 1024 && self.no_4ba_mmap {
@@ -456,8 +499,11 @@ impl<H: HostAccess> Spi100Controller<H> {
                 current_start,
                 &mut buf[offset..offset + unmapped_len],
             )?;
-            current_start += unmapped_len as u32;
             offset += unmapped_len;
+            if offset == len {
+                return Ok(());
+            }
+            current_start += unmapped_len as u32;
         }
 
         // Use memory-mapped access for the rest
@@ -785,6 +831,15 @@ impl<H: HostAccess> Controller for Spi100Controller<H> {
             .map_err(InternalError::to_core_error)
     }
 
+    fn read_bulk(
+        &mut self,
+        chip: &rflasher_core::chip::FlashChip,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> Option<CoreResult<()>> {
+        self.try_read_bulk(chip, addr, buf)
+    }
+
     fn controller_write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
         self.write(addr, data).map_err(|e| match e {
             InternalError::AccessDenied { .. } => CoreError::RegionProtected,
@@ -890,6 +945,15 @@ impl<H: HostAccess> SpiMaster for Spi100Controller<H> {
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
         self.execute_spi_command(cmd)
+    }
+
+    async fn read_bulk(
+        &mut self,
+        chip: &rflasher_core::chip::FlashChip,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> Option<CoreResult<()>> {
+        self.try_read_bulk(chip, addr, buf)
     }
 
     fn probe_opcode(&self, _opcode: u8) -> bool {
