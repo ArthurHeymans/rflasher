@@ -352,6 +352,15 @@ impl Default for Opcodes {
     }
 }
 
+#[derive(Clone, Copy)]
+struct RegisterChange {
+    offset: usize,
+    width16: bool,
+    before: u32,
+    after: u32,
+    mask: u32,
+}
+
 /// Intel ICH/PCH SPI Controller
 #[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
 pub struct IchSpiController<H: HostAccess> {
@@ -374,6 +383,9 @@ pub struct IchSpiController<H: HostAccess> {
     silvermont_bcr: bool,
     /// Restore Silvermont BCR.WPD if this controller enabled it.
     restore_bcr_wpd: bool,
+    restore_pci_bwe: bool,
+    changes: [Option<RegisterChange>; 12],
+    change_count: usize,
     /// Whether software sequencing is locked (DLOCK.SSEQ_LOCKDN on PCH100+)
     swseq_locked: bool,
     /// Flash descriptor valid
@@ -400,11 +412,31 @@ pub struct IchSpiController<H: HostAccess> {
 #[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
 impl<H: HostAccess> Drop for IchSpiController<H> {
     fn drop(&mut self) {
+        if self.restore_pci_bwe {
+            let bdf = PciAddress::new(
+                self.lpc_segment,
+                self.lpc_bus,
+                self.lpc_device,
+                self.lpc_function,
+            );
+            match self.host.read8(bdf, PCI_REG_BIOS_CNTL as u16) {
+                Ok(value) => {
+                    if let Err(e) =
+                        self.host
+                            .write8(bdf, PCI_REG_BIOS_CNTL as u16, value & !BIOS_CNTL_BWE)
+                    {
+                        log::warn!("Failed to restore BIOS_CNTL.BWE: {}", e);
+                    }
+                }
+                Err(e) => log::warn!("Failed to read BIOS_CNTL for restore: {}", e),
+            }
+        }
         if self.restore_bcr_wpd {
             let bcr = self.spibar.read32(SILVERMONT_REG_BCR);
             self.spibar
                 .write32(SILVERMONT_REG_BCR, bcr & !u32::from(BIOS_CNTL_BWE));
         }
+        self.restore_registers();
     }
 }
 
@@ -493,6 +525,9 @@ impl<H: HostAccess> IchSpiController<H> {
             bios_writes_enabled: false,
             silvermont_bcr: uses_silvermont_sbase(chipset),
             restore_bcr_wpd: false,
+            restore_pci_bwe: false,
+            changes: [None; 12],
+            change_count: 0,
             swseq_locked: false,
             desc_valid: false,
             requested_mode: mode,
@@ -505,10 +540,129 @@ impl<H: HostAccess> IchSpiController<H> {
             bbar: 0,
         };
 
-        // Initialize the controller
+        // Do not alter controller configuration while a cycle is active.
+        controller.wait_configuration_idle()?;
+        // Initialize the controller. Drop also unwinds a partially failed init.
         controller.init()?;
 
         Ok(controller)
+    }
+
+    fn wait_configuration_idle(&self) -> Result<(), InternalError> {
+        if self.generation == IchChipset::Ich7 {
+            self.ich7_swseq_wait_idle(60_000)
+        } else {
+            self.swseq_wait_idle(60_000)?;
+            let mut deadline = Deadline::new(60_000);
+            loop {
+                if self.spibar.read16(ICH9_REG_HSFS) & HSFS_SCIP == 0 {
+                    return Ok(());
+                }
+                if deadline.expired() {
+                    return Err(InternalError::Io("hardware sequencing busy"));
+                }
+                spin_loop();
+            }
+        }
+    }
+
+    fn change_register(&mut self, offset: usize, width16: bool, value: u32, mask: u32) {
+        let before = if width16 {
+            u32::from(self.spibar.read16(offset))
+        } else {
+            self.spibar.read32(offset)
+        };
+        let after = (before & !mask) | (value & mask);
+        if before == after {
+            return;
+        }
+        if self.change_count == self.changes.len() {
+            log::warn!("SPI configuration journal full; not changing register {offset:#x}");
+            return;
+        }
+        self.changes[self.change_count] = Some(RegisterChange {
+            offset,
+            width16,
+            before,
+            after,
+            mask,
+        });
+        self.change_count += 1;
+        if width16 {
+            self.spibar.write16(offset, after as u16);
+        } else {
+            self.spibar.write32(offset, after);
+        }
+    }
+
+    fn restore_registers(&mut self) {
+        if self.change_count == 0 {
+            return;
+        }
+        if self.wait_configuration_idle().is_err() {
+            log::warn!("SPI controller busy; cannot restore configuration");
+            return;
+        }
+        let locked = if self.generation == IchChipset::Ich7 {
+            self.spibar.read16(ICH7_REG_SPIS) & (1 << 15) != 0
+        } else {
+            self.spibar.read16(ICH9_REG_HSFS) & HSFS_FLOCKDN != 0
+        };
+        if locked {
+            log::warn!("SPI configuration locked; cannot restore configuration");
+            return;
+        }
+        let dlock = if self.generation.is_pch100_compatible() {
+            self.spibar.read32(PCH100_REG_DLOCK)
+        } else {
+            0
+        };
+        for change in self.changes[..self.change_count].iter().rev().flatten() {
+            let pr_index = change
+                .offset
+                .checked_sub(PCH100_REG_FPR0)
+                .filter(|offset| *offset < 6 * 4 && *offset % 4 == 0)
+                .map(|offset| offset / 4);
+            let pr_locked = self.generation.is_pch100_compatible()
+                && pr_index.is_some_and(|index| dlock & (DLOCK_PR0_LOCKDN << index) != 0);
+            let menu_locked = self.generation.is_pch100_compatible()
+                && change.offset >= self.swseq.preop
+                && change.offset <= self.swseq.opmenu + 4
+                && dlock & DLOCK_SSEQ_LOCKDN != 0;
+            if pr_locked || menu_locked {
+                log::warn!(
+                    "SPI register {:#x} locked; cannot restore it",
+                    change.offset
+                );
+                continue;
+            }
+            let current = if change.width16 {
+                u32::from(self.spibar.read16(change.offset))
+            } else {
+                self.spibar.read32(change.offset)
+            };
+            if current & change.mask != change.after & change.mask {
+                log::warn!(
+                    "SPI register {:#x} changed externally; not restoring it",
+                    change.offset
+                );
+                continue;
+            }
+            let restored = (current & !change.mask) | (change.before & change.mask);
+            if change.width16 {
+                self.spibar.write16(change.offset, restored as u16);
+            } else {
+                self.spibar.write32(change.offset, restored);
+            }
+            let verified = if change.width16 {
+                u32::from(self.spibar.read16(change.offset))
+            } else {
+                self.spibar.read32(change.offset)
+            };
+            if verified & change.mask != restored & change.mask {
+                log::warn!("SPI register {:#x} restore failed", change.offset);
+            }
+        }
     }
 
     /// Initialize the SPI controller
@@ -635,7 +789,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Program opcodes to ICH7 hardware registers
-    fn program_ich7_opcodes(&self, opcodes: &Opcodes) -> Result<(), InternalError> {
+    fn program_ich7_opcodes(&mut self, opcodes: &Opcodes) -> Result<(), InternalError> {
         let preop = (opcodes.preop[0] as u16) | ((opcodes.preop[1] as u16) << 8);
 
         let mut optype: u16 = 0;
@@ -653,10 +807,10 @@ impl<H: HostAccess> IchSpiController<H> {
             opmenu_hi |= (opcodes.opcode[i].opcode as u32) << ((i - 4) * 8);
         }
 
-        self.spibar.write16(self.ich7_swseq.preop, preop);
-        self.spibar.write16(self.ich7_swseq.optype, optype);
-        self.spibar.write32(self.ich7_swseq.opmenu, opmenu_lo);
-        self.spibar.write32(self.ich7_swseq.opmenu + 4, opmenu_hi);
+        self.change_register(self.ich7_swseq.preop, true, preop.into(), 0xffff);
+        self.change_register(self.ich7_swseq.optype, true, optype.into(), 0xffff);
+        self.change_register(self.ich7_swseq.opmenu, false, opmenu_lo, u32::MAX);
+        self.change_register(self.ich7_swseq.opmenu + 4, false, opmenu_hi, u32::MAX);
 
         Ok(())
     }
@@ -688,6 +842,10 @@ impl<H: HostAccess> IchSpiController<H> {
             );
         }
 
+        // Read software-sequencing lock before touching its opcode menu.
+        if self.generation.is_pch100_compatible() {
+            self.swseq_locked = self.spibar.read32(PCH100_REG_DLOCK) & DLOCK_SSEQ_LOCKDN != 0;
+        }
         // Initialize opcodes
         self.init_opcodes()?;
 
@@ -750,7 +908,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
     /// Initialize opcodes for software sequencing
     fn init_opcodes(&mut self) -> Result<(), InternalError> {
-        if self.locked {
+        if self.locked || self.swseq_locked {
             // Read existing opcodes from hardware
             log::debug!("Reading OPCODES from locked controller...");
             self.opcodes = Some(self.generate_opcodes());
@@ -803,7 +961,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Program opcodes to hardware registers
-    fn program_opcodes(&self, opcodes: &Opcodes) -> Result<(), InternalError> {
+    fn program_opcodes(&mut self, opcodes: &Opcodes) -> Result<(), InternalError> {
         let preop = (opcodes.preop[0] as u16) | ((opcodes.preop[1] as u16) << 8);
 
         let mut optype: u16 = 0;
@@ -821,10 +979,10 @@ impl<H: HostAccess> IchSpiController<H> {
             opmenu_hi |= (opcodes.opcode[i].opcode as u32) << ((i - 4) * 8);
         }
 
-        self.spibar.write16(self.swseq.preop, preop);
-        self.spibar.write16(self.swseq.optype, optype);
-        self.spibar.write32(self.swseq.opmenu, opmenu_lo);
-        self.spibar.write32(self.swseq.opmenu + 4, opmenu_hi);
+        self.change_register(self.swseq.preop, true, preop.into(), 0xffff);
+        self.change_register(self.swseq.optype, true, optype.into(), 0xffff);
+        self.change_register(self.swseq.opmenu, false, opmenu_lo, u32::MAX);
+        self.change_register(self.swseq.opmenu + 4, false, opmenu_hi, u32::MAX);
 
         Ok(())
     }
@@ -933,7 +1091,9 @@ impl<H: HostAccess> IchSpiController<H> {
         for i in 0..num_pr {
             // Try to clear protection if not locked (as flashprog does). This
             // changes chipset state even for read-only operations, so say so.
-            if !self.locked {
+            let pr_locked = self.generation.is_pch100_compatible()
+                && self.spibar.read32(PCH100_REG_DLOCK) & (DLOCK_PR0_LOCKDN << i) != 0;
+            if !self.locked && !pr_locked {
                 let before = self.spibar.read32(reg_pr0 + i * 4);
                 self.set_pr(reg_pr0, i, false, false);
                 if (before >> PR_RP_OFF) & 1 != 0 || (before >> PR_WP_OFF) & 1 != 0 {
@@ -981,7 +1141,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Set protection range register
-    fn set_pr(&self, reg_pr0: usize, index: usize, read_prot: bool, write_prot: bool) {
+    fn set_pr(&mut self, reg_pr0: usize, index: usize, read_prot: bool, write_prot: bool) {
         let addr = reg_pr0 + index * 4;
         let mut pr = self.spibar.read32(addr);
 
@@ -993,7 +1153,9 @@ impl<H: HostAccess> IchSpiController<H> {
             pr |= 1 << PR_WP_OFF;
         }
 
-        self.spibar.write32(addr, pr);
+        // Treat the range and enable bits as one unit: a changed range must
+        // never receive protection bits belonging to the old range.
+        self.change_register(addr, false, pr, u32::MAX);
     }
 
     /// Set BBAR (BIOS Base Address Register)
@@ -1006,7 +1168,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
         let mut bbar = self.spibar.read32(bbar_off) & !BBAR_MASK;
         bbar |= min_addr & BBAR_MASK;
-        self.spibar.write32(bbar_off, bbar);
+        self.change_register(bbar_off, false, bbar, BBAR_MASK);
 
         self.bbar = self.spibar.read32(bbar_off) & BBAR_MASK;
         if self.bbar != (min_addr & BBAR_MASK) {
@@ -1313,6 +1475,7 @@ impl<H: HostAccess> IchSpiController<H> {
         // Enable BIOS Write Enable
         if bios_cntl & BIOS_CNTL_BWE == 0 {
             let new_val = bios_cntl | BIOS_CNTL_BWE;
+            self.restore_pci_bwe = true;
             self.host
                 .write8(lpc_bdf, PCI_REG_BIOS_CNTL as u16, new_val)?;
 
@@ -2911,6 +3074,9 @@ mod tests {
             bios_writes_enabled: false,
             silvermont_bcr: false,
             restore_bcr_wpd: false,
+            restore_pci_bwe: false,
+            changes: [None; 12],
+            change_count: 0,
             swseq_locked: false,
             desc_valid: false,
             requested_mode: SpiMode::HardwareSequencing,
@@ -2940,6 +3106,165 @@ mod tests {
             opcodes: None,
             pending_preop: None,
             bbar: 0,
+        }
+    }
+
+    #[test]
+    fn init_read_and_drop_restores_menu_and_protection() {
+        let mut c = test_controller();
+        let mmio = c.spibar.clone();
+        mmio.set32(ICH9_REG_HSFS, u32::from(HSFS_FDV));
+        mmio.set32(PCH100_REG_PREOP, 0x1234);
+        mmio.set32(PCH100_REG_FPR0, 0x8000_0001);
+        c.wait_configuration_idle().unwrap();
+        c.init().unwrap();
+        c.hwseq_read(0, &mut [0; 4]).unwrap();
+        drop(c);
+        assert_eq!(mmio.read16(PCH100_REG_PREOP), 0x1234);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0), 0x8000_0001);
+    }
+
+    #[test]
+    fn init_failure_restores_configuration_in_reverse() {
+        let mut c = test_controller();
+        c.requested_mode = SpiMode::HardwareSequencing; // descriptor invalid
+        let mmio = c.spibar.clone();
+        mmio.set32(PCH100_REG_PREOP, 0x1234);
+        mmio.set32(PCH100_REG_FPR0, 0x8000_0001);
+        assert!(c.init().is_err());
+        drop(c);
+        assert_eq!(mmio.read16(PCH100_REG_PREOP), 0x1234);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0), 0x8000_0001);
+        let writes = mmio.writes();
+        let pr = writes.iter().rposition(|w| w.0 == PCH100_REG_FPR0).unwrap();
+        let preop = writes
+            .iter()
+            .rposition(|w| w.0 == PCH100_REG_PREOP)
+            .unwrap();
+        assert!(pr < preop);
+    }
+
+    #[test]
+    fn restore_preserves_external_changes_and_bbar_unrelated_bits() {
+        let mut c = test_controller();
+        c.generation = IchChipset::Ich9;
+        let mmio = c.spibar.clone();
+        mmio.set32(ICH9_REG_BBAR, 0x123400 | 1);
+        c.set_bbar(0);
+        mmio.set32(ICH9_REG_BBAR, 2);
+        mmio.set32(ICH9_REG_PR0, 0x8000_0001);
+        c.set_pr(ICH9_REG_PR0, 0, false, false);
+        mmio.set32(ICH9_REG_PR0, 0x0000_0002);
+        drop(c);
+        assert_eq!(mmio.read32(ICH9_REG_BBAR), 0x123402);
+        assert_eq!(mmio.read32(ICH9_REG_PR0), 2);
+    }
+
+    #[test]
+    fn individual_locks_only_block_their_own_restoration() {
+        let mut c = test_controller();
+        let mmio = c.spibar.clone();
+        mmio.set32(PCH100_REG_FPR0, 0x8000_0001);
+        mmio.set32(PCH100_REG_FPR0 + 4, 0x8000_0002);
+        c.handle_protected_ranges();
+        mmio.set32(PCH100_REG_DLOCK, DLOCK_PR0_LOCKDN | DLOCK_SSEQ_LOCKDN);
+        drop(c);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0), 1);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 4), 0x8000_0002);
+    }
+
+    #[test]
+    fn restore_skips_locked_or_busy_controller() {
+        for busy in [false, true] {
+            let mut c = test_controller();
+            let mmio = c.spibar.clone();
+            mmio.set32(PCH100_REG_PREOP, 0x1234);
+            c.change_register(PCH100_REG_PREOP, true, 0x5678, 0xffff);
+            if busy {
+                mmio.set32(PCH100_REG_SSFSC, SSFS_SCIP);
+            } else {
+                mmio.set32(ICH9_REG_HSFS, u32::from(HSFS_FLOCKDN));
+            }
+            drop(c);
+            assert_eq!(mmio.read16(PCH100_REG_PREOP), 0x5678);
+        }
+    }
+
+    #[test]
+    fn drop_clears_owned_write_enable_even_when_busy() {
+        for silvermont in [false, true] {
+            for busy in [0, 1, 2] {
+                let mut c = test_controller();
+                c.silvermont_bcr = silvermont;
+                c.host.enable_write8_readback();
+                let host = c.host.clone();
+                let mmio = c.spibar.clone();
+                let bdf = PciAddress::new(0, 0, 0x1f, 0);
+                host.set_config32(bdf, PCI_REG_BIOS_CNTL as u16 & !3, 0);
+                mmio.set32(SILVERMONT_REG_BCR, 0);
+                mmio.set32(PCH100_REG_PREOP, 0x1234);
+                c.change_register(PCH100_REG_PREOP, true, 0x5678, 0xffff);
+                c.enable_bios_write().unwrap();
+                if busy == 1 {
+                    mmio.set32(PCH100_REG_SSFSC, SSFS_SCIP | SSFS_FDONE | SSFS_FCERR);
+                } else if busy == 2 {
+                    mmio.set32(
+                        ICH9_REG_HSFS,
+                        u32::from(HSFS_SCIP | HSFS_FDONE | HSFS_FCERR),
+                    );
+                }
+                let writes_before = mmio.writes().len();
+                drop(c);
+                assert_eq!(
+                    mmio.read16(PCH100_REG_PREOP),
+                    if busy == 0 { 0x1234 } else { 0x5678 }
+                );
+                if silvermont {
+                    assert_eq!(
+                        mmio.read32(SILVERMONT_REG_BCR) & u32::from(BIOS_CNTL_BWE),
+                        0
+                    );
+                } else {
+                    assert_eq!(
+                        host.read8(bdf, PCI_REG_BIOS_CNTL as u16).unwrap() & BIOS_CNTL_BWE,
+                        0
+                    );
+                    assert_eq!(
+                        host.writes().last().unwrap().2 & u32::from(BIOS_CNTL_BWE),
+                        0
+                    );
+                }
+                assert!(
+                    mmio.writes()[writes_before..]
+                        .iter()
+                        .all(
+                            |&(offset, _, _)| offset != ICH9_REG_HSFS && offset != PCH100_REG_SSFSC
+                        )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn configuration_wait_polls_hardware_sequencer_without_status_writes() {
+        let c = test_controller();
+        c.spibar.set_hsfs_busy_reads(3);
+        c.wait_configuration_idle().unwrap();
+        assert!(c.spibar.writes().is_empty());
+    }
+
+    #[test]
+    fn full_journal_never_makes_untracked_changes() {
+        let mut c = test_controller();
+        let mmio = c.spibar.clone();
+        for i in 0..c.changes.len() {
+            c.change_register(0x200 + i * 4, false, 1, u32::MAX);
+        }
+        c.change_register(0x300, false, 1, u32::MAX);
+        assert_eq!(mmio.read32(0x300), 0);
+        drop(c);
+        for i in 0..12 {
+            assert_eq!(mmio.read32(0x200 + i * 4), 0);
         }
     }
 
