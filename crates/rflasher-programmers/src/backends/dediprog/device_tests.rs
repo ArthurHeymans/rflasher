@@ -94,8 +94,7 @@ fn status_retries_are_bounded_and_preserve_failures() {
 }
 
 #[test]
-fn bulk_split_keeps_unaligned_and_four_byte_ranges_on_spi() {
-    const LIMIT: u32 = 1 << 24;
+fn bulk_split_keeps_unaligned_ranges_on_spi() {
     for (addr, len, block, expected) in [
         (0, 512, 512, (0, 512)),
         (1, 1024, 512, (511, 512)),
@@ -103,13 +102,21 @@ fn bulk_split_keeps_unaligned_and_four_byte_ranges_on_spi() {
         (1, 1, 256, (1, 0)),
         (1, 512, 256, (255, 256)),
         (0, 0, 256, (0, 0)),
-        // Bulk commands stop at the three-byte address limit.
-        (LIMIT - 512, 1024, 256, (0, 512)),
-        (LIMIT, 4096, 512, (4096, 0)),
         (u32::MAX, 1, 256, (1, 0)),
     ] {
         assert_eq!(bulk_split(addr, len, block), expected, "{addr:#x}+{len}");
     }
+}
+
+#[test]
+fn only_three_byte_chips_use_three_byte_bulk_commands() {
+    let db = rflasher_chips::ChipDatabase::new();
+    let context = |name| FlashContext::new(db.find_by_name(name)[0].clone());
+    // Generic accesses above 16 MiB may leave the chip in another address
+    // mode or extended-address bank, which three-byte bulk commands rely on.
+    assert!(bulk_addressable(Protocol::V3, &context("W25Q128.V")));
+    assert!(!bulk_addressable(Protocol::V3, &context("W25Q256JW")));
+    assert!(!bulk_addressable(Protocol::Unknown, &context("W25Q128.V")));
 }
 
 #[test]

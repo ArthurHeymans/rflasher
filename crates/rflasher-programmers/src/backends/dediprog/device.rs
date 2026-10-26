@@ -12,7 +12,7 @@ use nusb::Endpoint;
 use nusb::transfer::{Buffer, Bulk, In, Out, TransferError};
 use rflasher_core::chip::{Features, FlashChip, WriteGranularity};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
-use rflasher_core::flash::{self, FlashContext};
+use rflasher_core::flash::{self, AddressMode, FlashContext};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::{SpiCommand, check_io_mode_supported, opcodes};
 
@@ -1141,25 +1141,27 @@ impl Dediprog {
 /// Bytes per page in a CMD_WRITE bulk transfer.
 const BULK_PAGE_SIZE: usize = 256;
 
-/// The bulk commands are only used with three-byte addresses: the firmware
-/// needs dedicated modes and chip-specific opcodes beyond 16 MiB.
-const BULK_ADDRESS_LIMIT: u64 = 1 << 24;
-
 /// Split `len` bytes at `addr` into `(head, bulk)`: an unaligned head, then
-/// whole `block`-sized blocks below [`BULK_ADDRESS_LIMIT`]. The rest is the
-/// tail. Head and tail use generic SPI commands.
+/// whole `block`-sized blocks. The rest is the tail. Head and tail use
+/// generic SPI commands.
 fn bulk_split(addr: u32, len: usize, block: usize) -> (usize, usize) {
     let start = u64::from(addr);
-    let end = (start + len as u64).min(BULK_ADDRESS_LIMIT);
+    let end = start + len as u64;
     let bulk_start = start.next_multiple_of(block as u64);
-    if bulk_start >= end {
-        return (len, 0);
-    }
-    let bulk = (end - bulk_start) / block as u64 * block as u64;
+    let bulk = end.saturating_sub(bulk_start) / block as u64 * block as u64;
     if bulk == 0 {
         return (len, 0);
     }
     ((bulk_start - start) as usize, bulk as usize)
+}
+
+/// Whether the three-byte bulk commands can address this chip.
+///
+/// Beyond 16 MiB they would depend on the chip's address mode and extended
+/// address register, which generic SPI accesses change, so larger chips use
+/// generic SPI.
+fn bulk_addressable(protocol: Protocol, ctx: &FlashContext) -> bool {
+    protocol != Protocol::Unknown && ctx.address_mode == AddressMode::ThreeByte
 }
 
 /// Firmware programming algorithm for the chip, if its pages fit CMD_WRITE.
@@ -1271,11 +1273,10 @@ impl SpiMaster for Dediprog {
         addr: u32,
         buf: &mut [u8],
     ) -> CoreResult<()> {
-        let (head, bulk) = if self.protocol == Protocol::Unknown {
-            (buf.len(), 0)
-        } else {
-            bulk_split(addr, buf.len(), BULK_CHUNK_SIZE)
-        };
+        if !bulk_addressable(self.protocol, ctx) {
+            return flash::spi_read(self, ctx, addr, buf).await;
+        }
+        let (head, bulk) = bulk_split(addr, buf.len(), BULK_CHUNK_SIZE);
         let (head_buf, rest) = buf.split_at_mut(head);
         let (bulk_buf, tail_buf) = rest.split_at_mut(bulk);
         let bulk_addr = addr + head as u32;
@@ -1300,7 +1301,7 @@ impl SpiMaster for Dediprog {
         addr: u32,
         data: &[u8],
     ) -> CoreResult<()> {
-        let mode = bulk_write_mode(&ctx.chip).filter(|_| self.protocol != Protocol::Unknown);
+        let mode = bulk_write_mode(&ctx.chip).filter(|_| bulk_addressable(self.protocol, ctx));
         let Some(mode) = mode else {
             return flash::spi_program(self, ctx, addr, data).await;
         };
