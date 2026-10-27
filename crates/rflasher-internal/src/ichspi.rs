@@ -1889,17 +1889,23 @@ impl<H: HostAccess> IchSpiController<H> {
             if bcr & u32::from(BIOS_CNTL_BLE) != 0 {
                 log::warn!("BIOS Lock Enable is set - writes may trigger SMI");
             }
-            if bcr & u32::from(BIOS_CNTL_SMM_BWP) != 0 {
-                return Err(InternalError::AccessDenied { region: "BIOS" });
-            }
-            if bcr & u32::from(BIOS_CNTL_BWE) == 0 {
-                // Record ownership before the write so failed verification is cleaned up too.
-                self.restore_bcr_wpd = true;
-                self.spibar
-                    .write32(SILVERMONT_REG_BCR, bcr | u32::from(BIOS_CNTL_BWE));
-                if self.spibar.read32(SILVERMONT_REG_BCR) & u32::from(BIOS_CNTL_BWE) == 0 {
-                    return Err(InternalError::ChipsetEnable("Cannot enable BIOS writes"));
+            // Match the PCI path: try to clear SMM_BWP and verify only BWE.
+            let wanted = (bcr | u32::from(BIOS_CNTL_BWE)) & !u32::from(BIOS_CNTL_SMM_BWP);
+            let current = if wanted != bcr {
+                if bcr & u32::from(BIOS_CNTL_BWE) == 0 {
+                    // Failed verification must also clean up an attempted enable.
+                    self.restore_bcr_wpd = true;
                 }
+                self.spibar.write32(SILVERMONT_REG_BCR, wanted);
+                self.spibar.read32(SILVERMONT_REG_BCR)
+            } else {
+                bcr
+            };
+            if current & u32::from(BIOS_CNTL_SMM_BWP) != 0 {
+                log::warn!("SMM BIOS Write Protect is set - BIOS region writes may be rejected");
+            }
+            if current & u32::from(BIOS_CNTL_BWE) == 0 {
+                return Err(InternalError::ChipsetEnable("Cannot enable BIOS writes"));
             }
             self.bios_writes_enabled = true;
             return Ok(());
@@ -3995,8 +4001,16 @@ mod tests {
                     c.swseq_send_command_unchecked(&[0x35], &mut [0])
                 }
             };
-            assert!(matches!(result, Err(InternalError::AccessDenied { .. })));
-            assert!(c.host.writes().is_empty());
+            assert!(matches!(result, Err(InternalError::ChipsetEnable(_))));
+            assert_eq!(
+                c.host.writes(),
+                vec![(
+                    c.config_bdf,
+                    PCI_REG_BIOS_CNTL as u16,
+                    u32::from(BIOS_CNTL_BWE),
+                    1
+                )]
+            );
             assert!(c.spibar.writes().is_empty());
         }
     }
@@ -4207,11 +4221,8 @@ mod tests {
         let mut flash = HwseqFlash::with_size(Box::new(controller), 1 << 20).unwrap();
         assert_eq!(flash.erase_granularity(), 64 * 1024);
         assert_eq!(flash.erase_blocks()[0].total_size(), 1 << 20);
-        // SMM write protection prevents the lazy enable.
-        assert_eq!(
-            block_on(flash.erase(0, 64 * 1024)),
-            Err(CoreError::RegionProtected)
-        );
+        // Writable SMM_BWP must not prevent the lazy enable.
+        block_on(flash.erase(0, 64 * 1024)).unwrap();
         assert_eq!(
             block_on(flash.read(1 << 20, &mut [0])),
             Err(CoreError::AddressOutOfBounds)
@@ -4450,21 +4461,21 @@ mod tests {
     #[test]
     fn failed_write_enable_restores_cleared_ranges_at_once() {
         let bwe = u32::from(BIOS_CNTL_BWE);
-        for (silvermont, denied) in [(false, false), (false, true), (true, false), (true, true)] {
+        for (silvermont, protected) in [(false, false), (false, true), (true, false), (true, true)]
+        {
             let (mut c, ranges) = clearable_ranges_controller();
             c.silvermont_bcr = silvermont;
-            if denied {
-                let smm_bwp = u32::from(BIOS_CNTL_SMM_BWP);
-                c.spibar.set32(SILVERMONT_REG_BCR, smm_bwp);
-                c.host
-                    .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, smm_bwp);
+            let initial = if protected {
+                u32::from(BIOS_CNTL_SMM_BWP)
             } else {
-                // BIOS_CNTL.BWE and BCR.WPD do not take.
-                c.host = FakeHost::default();
-                c.host
-                    .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
-                c.spibar.block_write32(SILVERMONT_REG_BCR);
-            }
+                0
+            };
+            // Neither BIOS_CNTL.BWE nor BCR.WPD takes, with or without SMM_BWP.
+            c.host = FakeHost::default();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, initial);
+            c.spibar.set32(SILVERMONT_REG_BCR, initial);
+            c.spibar.block_write32(SILVERMONT_REG_BCR);
             assert!(c.hwseq_write(0x30000, &[0x5a]).is_err());
             // The controller is still open, and nothing is left changed.
             assert!(c.spibar.flash().iter().all(|b| *b == 0));
@@ -5160,16 +5171,36 @@ mod tests {
         drop(controller);
         assert!(mmio.writes().is_empty());
 
-        let mut controller = test_controller();
-        controller.silvermont_bcr = true;
-        let mmio = controller.spibar.clone();
-        mmio.set32(0xfc, u32::from(BIOS_CNTL_SMM_BWP));
-        assert!(matches!(
-            controller.enable_bios_write(),
-            Err(InternalError::AccessDenied { .. })
-        ));
-        drop(controller);
-        assert!(mmio.writes().is_empty());
+        for sticky in [false, true] {
+            for already_enabled in [false, true] {
+                let mut controller = test_controller();
+                controller.silvermont_bcr = true;
+                let mmio = controller.spibar.clone();
+                let smm_bwp = u32::from(BIOS_CNTL_SMM_BWP);
+                let bwe = u32::from(BIOS_CNTL_BWE);
+                let unrelated = 0x1234_5602;
+                mmio.set32(0xfc, unrelated | smm_bwp | u32::from(already_enabled));
+                if sticky {
+                    controller.spibar.on_write32(move |_, offset, _, value| {
+                        if offset == 0xfc {
+                            value | smm_bwp
+                        } else {
+                            value
+                        }
+                    });
+                }
+                controller.enable_bios_write().unwrap();
+                assert!(controller.writes_enabled());
+                let protection = if sticky { smm_bwp } else { 0 };
+                assert_eq!(mmio.read32(0xfc), unrelated | protection | bwe);
+                assert_eq!(mmio.writes(), vec![(0xfc, unrelated | bwe, 4)]);
+                drop(controller);
+                assert_eq!(
+                    mmio.read32(0xfc),
+                    unrelated | protection | u32::from(already_enabled)
+                );
+            }
+        }
 
         let mut controller = test_controller();
         controller.silvermont_bcr = true;
