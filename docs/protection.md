@@ -41,6 +41,24 @@ power or a disconnected programmer can prevent cleanup. Software protection may
 be temporarily removed outside the selected data region, but data mutation
 policy and verification still apply to the requested region.
 
+## Data sharing an erase block with the requested range
+
+Erase and smart write save data outside the requested range when it shares an
+erase block. After a verified erase, all neighbors are programmed before any
+are verified. If the erase completes but readback finds unerased bytes, the
+original erase mismatch is returned. Recovery reads the neighbors and programs
+saved data only over bytes verified as erased; other changed bytes are left
+alone and reported by verification. The requested range remains as the failed
+erase left it.
+
+If an erase, read, or program call fails, its device state may be unknown: this
+neighbor recovery stops without further device IO and reports unverified data
+at risk. A program failure can therefore leave another neighbor erased. This
+is best effort, not atomic: power loss, cancellation, or a failed restore can
+lose data. Restore affected ranges from an independent backup. These guarantees
+apply to neighbor recovery only; lower-level SPI protection and address-mode
+cleanup retain their existing behavior, including cleanup after an error.
+
 ## Covered procedures
 
 Catalog assignments follow flashprog's exact chip identity (manufacturer ID,
