@@ -62,6 +62,12 @@ fn features_to_tokens(def: FeaturesDef) -> TokenStream {
     if def.at25f_id {
         flags.push(quote!(Features::AT25F_ID));
     }
+    if def.res2_id {
+        flags.push(quote!(Features::RES2_ID));
+    }
+    if def.rdid_continuation {
+        flags.push(quote!(Features::RDID_CONTINUATION));
+    }
     if def.wrsr_persistent_ewsr {
         flags.push(quote!(Features::WRSR_PERSISTENT_EWSR));
     }

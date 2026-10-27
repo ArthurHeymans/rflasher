@@ -33,14 +33,14 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         .validate(device.size())
         .map_err(|_| Error::LayoutError)?;
     let regions: alloc::vec::Vec<_> = layout.included_regions().collect();
-    if let Some(r) = regions.iter().find(|r| r.readonly) {
+    if let Some(r) = layout.regions_overlapping_included().find(|r| r.readonly) {
         return Err(refuse(
             Refusal::ReadOnlyRegion,
             format_args!("region '{}' is read-only", r.name),
         ));
     }
-    if let Some(r) = regions
-        .iter()
+    if let Some(r) = layout
+        .regions_overlapping_included()
         .find(|r| r.dangerous && !policy.allow_dangerous)
     {
         return Err(refuse(

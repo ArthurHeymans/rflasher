@@ -7,7 +7,7 @@
     chips: [
         // M25P series - Standard SPI flash
         (
-            name: "M25P05",
+            name: "M25P05-A",
             unlock: Some(Bp3Srwd),
             device_id: 0x2010,
             total_size: KiB(64),
@@ -19,7 +19,7 @@
             ],
         ),
         (
-            name: "M25P10",
+            name: "M25P10-A",
             unlock: Some(Bp3Srwd),
             device_id: 0x2011,
             total_size: KiB(128),

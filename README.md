@@ -121,6 +121,8 @@ Intel Flash Descriptor (IFD) and FMAP layouts let you operate on specific flash 
 
 `--region`/`--include` accept `NAME[:FILE]`. With a `FILE`, each region reads to / writes from its own file instead of a full chip image, and the positional file can be omitted. Per-region files must not exceed their region's size; a smaller file covers only the start of the region. When a positional file is combined with per-region files, it must be a full chip image and supplies the data for regions without their own file.
 
+Read destinations are opened and checked before reading flash, without truncating existing files. If validation or the flash read fails, newly created empty destination files remain in place. Existing regular files are truncated only after the read succeeds; devices and pipes can also be used as destinations.
+
 ```bash
 # Extract a layout from an image
 rflasher layout ifd flash.bin -o layout.toml

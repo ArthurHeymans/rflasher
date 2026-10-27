@@ -95,12 +95,16 @@ impl CommandAddressing {
 
 /// Read the JEDEC ID from a flash chip
 ///
-/// Returns (manufacturer_id, device_id) on success.
+/// Returns the first byte and the following two bytes as a big-endian value.
+/// A leading 0x7f is a continuation code, not a manufacturer ID; this API
+/// does not decode continuation-prefixed or shorter device identities.
 pub async fn read_jedec_id<M: SpiMaster + ?Sized>(master: &mut M) -> Result<(u8, u16)> {
     let mut buf = [0u8; 3];
     let mut cmd = SpiCommand::read_reg(opcodes::RDID, &mut buf);
     master.execute(&mut cmd).await?;
 
+    // Preserve the raw three-byte response even when it begins with a
+    // continuation code. Callers must not use that as a manufacturer ID.
     let manufacturer = buf[0];
     let device = ((buf[1] as u16) << 8) | (buf[2] as u16);
 
@@ -1048,6 +1052,10 @@ pub async fn exit_qpi_mode<M: SpiMaster + ?Sized>(master: &mut M, opcode: u8) ->
 /// Returns the I/O mode, opcode, and whether the selected opcode is a native
 /// 4-byte-address opcode. Prefers higher bandwidth modes:
 /// Quad I/O > Quad Out > Dual I/O > Dual Out > Single.
+///
+/// This only compares capability flags; callers must independently validate
+/// the selected opcode, mode and dummy clocks, and quad-enable state. Generic
+/// automatic reads do not use this helper.
 pub fn select_read_mode(
     master_features: SpiFeatures,
     chip_features: crate::chip::Features,

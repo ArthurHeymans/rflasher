@@ -10,9 +10,10 @@
         (
             name: "A25L05PT",
             unlock: Some(Status),
+            // RDID is 7F 37 20 20, not 37 20 20.
             device_id: 0x2020,
             total_size: KiB(64),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, rdid_continuation: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [
@@ -31,7 +32,7 @@
             unlock: Some(Status),
             device_id: 0x2010,
             total_size: KiB(64),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, rdid_continuation: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [
@@ -50,7 +51,7 @@
             unlock: Some(Status),
             device_id: 0x2021,
             total_size: KiB(128),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, rdid_continuation: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [
@@ -70,7 +71,7 @@
             unlock: Some(Status),
             device_id: 0x2011,
             total_size: KiB(128),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, rdid_continuation: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [
@@ -90,7 +91,7 @@
             unlock: Some(Status),
             device_id: 0x2022,
             total_size: KiB(256),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, rdid_continuation: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [
@@ -110,7 +111,7 @@
             unlock: Some(Status),
             device_id: 0x2012,
             total_size: KiB(256),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, rdid_continuation: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [
@@ -130,7 +131,7 @@
             unlock: Some(Status),
             device_id: 0x2013,
             total_size: KiB(512),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, rdid_continuation: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [
@@ -151,7 +152,7 @@
             unlock: Some(Status),
             device_id: 0x2013,
             total_size: KiB(512),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, rdid_continuation: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [
@@ -171,7 +172,7 @@
             unlock: Some(Status),
             device_id: 0x2014,
             total_size: MiB(1),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, rdid_continuation: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [
@@ -191,7 +192,7 @@
             unlock: Some(Status),
             device_id: 0x2025,
             total_size: MiB(2),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, rdid_continuation: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [
@@ -212,7 +213,7 @@
             unlock: Some(Status),
             device_id: 0x2015,
             total_size: MiB(2),
-            features: (wrsr_wren: true),
+            features: (wrsr_wren: true, rdid_continuation: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD8, regions: [

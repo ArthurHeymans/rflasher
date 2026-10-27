@@ -355,10 +355,14 @@ impl FlashChip {
     }
 
     /// Check if this chip matches the given RDID manufacturer and device IDs.
-    /// Legacy Atmel opcode-0x15 identities must not enter RDID candidate lookup.
+    /// Legacy Atmel opcode-0x15, RES2, and continuation-prefixed identities
+    /// cannot be represented by this lookup and must not enter its candidates.
     #[must_use]
     pub fn matches_jedec_id(&self, manufacturer: u8, device: u16) -> bool {
-        !self.features.contains(Features::AT25F_ID)
+        manufacturer != 0x7f
+            && !self
+                .features
+                .intersects(Features::AT25F_ID | Features::RDID_CONTINUATION | Features::RES2_ID)
             && self.jedec_manufacturer == manufacturer
             && self.jedec_device == device
     }

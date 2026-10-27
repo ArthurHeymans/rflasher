@@ -3144,6 +3144,7 @@ dependencies = [
  "rflasher-core",
  "rflasher-programmers",
  "rflasher-repl",
+ "same-file",
  "thiserror 2.0.19",
 ]
 

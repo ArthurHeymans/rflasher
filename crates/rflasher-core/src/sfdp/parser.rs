@@ -906,10 +906,16 @@ where
     // Probe SFDP
     let sfdp = probe(master).await?;
 
-    // Look up in database
-    let database_chip = provider
-        .find_by_jedec_id(jedec_manufacturer, jedec_device)
-        .cloned();
+    // Use the same bank-aware collision resolution as the ordinary probe.
+    let database_chip = crate::flash::select_probed_chip(
+        master,
+        provider,
+        jedec_manufacturer,
+        jedec_device,
+        Some(&sfdp),
+        None,
+    )
+    .await?;
 
     // Compare if we have a database entry
     let mismatches = if let Some(ref chip) = database_chip {
@@ -1078,18 +1084,35 @@ mod tests {
     /// Mock SPI master that returns the MX25L6436E SFDP data
     struct MockSfdpFlash {
         sfdp_data: &'static [u8],
+        id: [u8; 3],
+        res: [u8; 2],
+        res_calls: usize,
+        sfdp_error: Option<crate::error::Error>,
+        res_error: Option<crate::error::Error>,
     }
 
     impl MockSfdpFlash {
         fn new() -> Self {
             Self {
                 sfdp_data: &MX25L6436E_SFDP,
+                id: [0xc2, 0x20, 0x17],
+                res: [0xff; 2],
+                res_calls: 0,
+                sfdp_error: None,
+                res_error: None,
             }
         }
 
         /// A chip with the MX25L6436E JEDEC ID but no SFDP support
         fn without_sfdp() -> Self {
-            Self { sfdp_data: &[] }
+            Self {
+                sfdp_data: &[],
+                id: [0xc2, 0x20, 0x17],
+                res: [0xff; 2],
+                res_calls: 0,
+                sfdp_error: None,
+                res_error: None,
+            }
         }
     }
 
@@ -1114,11 +1137,13 @@ mod tests {
 
             match cmd.opcode {
                 opcodes::RDID => {
-                    // Macronix MX25L6436E: C2 20 17
-                    cmd.read_buf[..3].copy_from_slice(&[0xC2, 0x20, 0x17]);
+                    cmd.read_buf[..3].copy_from_slice(&self.id);
                     Ok(())
                 }
                 opcodes::RDSFDP => {
+                    if let Some(e) = self.sfdp_error {
+                        return Err(e);
+                    }
                     // SFDP read: address is in cmd.address, dummy cycles expected
                     if let Some(addr) = cmd.address {
                         let addr = addr as usize;
@@ -1135,6 +1160,18 @@ mod tests {
                             cmd.read_buf.fill(0xFF);
                         }
                     }
+                    Ok(())
+                }
+                opcodes::RES => {
+                    self.res_calls += 1;
+                    assert_eq!(cmd.address, Some(0));
+                    assert_eq!(cmd.address_width.bytes(), 3);
+                    assert_eq!(cmd.dummy_cycles, 0);
+                    assert_eq!(cmd.read_buf.len(), 2);
+                    if let Some(e) = self.res_error {
+                        return Err(e);
+                    }
+                    cmd.read_buf.copy_from_slice(&self.res);
                     Ok(())
                 }
                 opcodes::RDSR => {
@@ -1173,6 +1210,111 @@ mod tests {
                 .filter(|c| c.matches_jedec_id(m, d))
                 .nth(index)
         }
+    }
+
+    #[test]
+    fn legacy_res2_probe_and_fallback_safety() {
+        use crate::error::Error;
+        let mut runtime = rflasher_chips::ChipDatabase::empty();
+        runtime
+            .load_ron(include_str!("../../../rflasher-chips/data/vendors/pmc.ron"))
+            .unwrap();
+        for db in [rflasher_chips::ChipDatabase::new(), runtime] {
+            for (id, name) in [(0x7c, "Pm25LV010"), (0x7b, "Pm25LV512(A)")] {
+                let mut flash = MockSfdpFlash::without_sfdp();
+                flash.id = [0xff; 3];
+                flash.res = [0x9d, id];
+                let result =
+                    futures_lite::future::block_on(crate::flash::probe_detailed(&mut flash, &db))
+                        .unwrap();
+                assert_eq!(result.chip.name, name);
+                assert_eq!(flash.res_calls, 1);
+            }
+            let mut normal = MockSfdpFlash::without_sfdp();
+            normal.id = [0x7f, 0x9d, 0x7c];
+            normal.res = [0x9d, 0x7b];
+            let result =
+                futures_lite::future::block_on(crate::flash::probe_detailed(&mut normal, &db))
+                    .unwrap();
+            assert_eq!(result.chip.name, "Pm25LV010A");
+            assert_eq!(normal.res_calls, 0);
+
+            let mut flash = MockSfdpFlash::new();
+            flash.id = [0xff; 3];
+            flash.res = [0x9d, 0x7c];
+            flash.res_error = Some(Error::OpcodeNotSupported);
+            let result =
+                futures_lite::future::block_on(crate::flash::probe_detailed(&mut flash, &db))
+                    .unwrap();
+            assert!(!result.from_database);
+            assert!(result.sfdp.is_some());
+            assert_eq!(flash.res_calls, 0);
+
+            let mut flash = MockSfdpFlash::without_sfdp();
+            flash.id = [0xff; 3];
+            flash.res = [0x9d, 0x7c];
+            flash.sfdp_error = Some(Error::SpiTransferFailed);
+            assert!(
+                futures_lite::future::block_on(crate::flash::probe_detailed(&mut flash, &db))
+                    .is_err()
+            );
+            assert_eq!(flash.res_calls, 0);
+            flash.sfdp_error = None;
+            flash.res_error = Some(Error::SpiTransferFailed);
+            assert_eq!(
+                futures_lite::future::block_on(crate::flash::probe_detailed(&mut flash, &db))
+                    .unwrap_err(),
+                Error::SpiTransferFailed
+            );
+        }
+    }
+
+    #[test]
+    fn res2_collisions_fail_closed() {
+        struct ResDb(Vec<FlashChip>);
+        impl ChipProvider for ResDb {
+            fn find_by_jedec_id(&self, _: u8, _: u16) -> Option<&FlashChip> {
+                None
+            }
+            fn find_nth_by_res2_id(&self, m: u8, d: u8, i: usize) -> Option<&FlashChip> {
+                if (m, d) == (0x9d, 0x7c) {
+                    self.0.get(i)
+                } else {
+                    None
+                }
+            }
+        }
+        let db = rflasher_chips::ChipDatabase::new();
+        let first = db.find_nth_by_res2_id(0x9d, 0x7c, 0).unwrap().clone();
+        let mut second = first.clone();
+        second.name = "conflict".into();
+        second.total_size *= 2;
+        let db = ResDb(vec![first, second]);
+        let mut flash = MockSfdpFlash::without_sfdp();
+        flash.id = [0xff; 3];
+        flash.res = [0x9d, 0x7c];
+        assert_eq!(
+            futures_lite::future::block_on(crate::flash::probe_detailed(&mut flash, &db))
+                .unwrap_err(),
+            crate::error::Error::ChipAmbiguous
+        );
+    }
+
+    #[test]
+    fn unknown_continuation_id_still_uses_sfdp() {
+        let mut flash = MockSfdpFlash::new();
+        flash.id = [0x7f, 0x55, 0x12];
+        let db = rflasher_chips::ChipDatabase::new();
+        let result =
+            futures_lite::future::block_on(crate::flash::probe_detailed(&mut flash, &db)).unwrap();
+        assert!(!result.from_database);
+        assert!(result.sfdp.is_some());
+        assert_eq!(
+            (result.jedec_manufacturer, result.jedec_device),
+            (0x7f, 0x5512)
+        );
+        let result = futures_lite::future::block_on(probe_with_database(&mut flash, &db)).unwrap();
+        assert!(result.database_chip.is_none());
     }
 
     /// The MX25L6436E as SFDP describes it, under a different name

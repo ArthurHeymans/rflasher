@@ -52,17 +52,6 @@ pub(crate) fn addressing_for_4byte_operation(
     }
 }
 
-pub(crate) fn read_dummy_cycles(io_mode: crate::spi::IoMode) -> u8 {
-    match io_mode {
-        crate::spi::IoMode::Single => 0,
-        crate::spi::IoMode::DualOut => 8,
-        crate::spi::IoMode::DualIo => 4,
-        crate::spi::IoMode::QuadOut => 8,
-        crate::spi::IoMode::QuadIo => 6,
-        crate::spi::IoMode::Qpi => 0,
-    }
-}
-
 // =============================================================================
 // Smart erase/write support
 // =============================================================================
@@ -716,9 +705,9 @@ pub struct WriteStats {
 #[cfg(feature = "std")]
 #[derive(Debug)]
 pub struct ProbeResult {
-    /// JEDEC manufacturer ID
+    /// First raw RDID byte (a continuation code for banked identities).
     pub jedec_manufacturer: u8,
-    /// JEDEC device ID
+    /// Second and third raw RDID bytes, in big-endian order.
     pub jedec_device: u16,
     /// The chip to use for operations
     pub chip: crate::chip::FlashChip,
@@ -788,9 +777,20 @@ fn select_database_chip<P>(
 where
     P: ChipProvider + ?Sized,
 {
-    let mut candidates: Vec<&crate::chip::FlashChip> = (0..)
+    let candidates = (0..)
         .map_while(|i| provider.find_nth_by_jedec_id(manufacturer, device, i))
         .collect();
+    select_candidates(candidates, manufacturer, device, sfdp, wanted)
+}
+
+#[cfg(feature = "std")]
+fn select_candidates(
+    mut candidates: Vec<&crate::chip::FlashChip>,
+    manufacturer: u8,
+    device: u16,
+    sfdp: Option<&crate::sfdp::SfdpInfo>,
+    wanted: Option<&str>,
+) -> Result<Option<crate::chip::FlashChip>> {
     let names = |chips: &[&crate::chip::FlashChip]| -> std::string::String {
         chips
             .iter()
@@ -962,14 +962,35 @@ fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::
         return None;
     }
     profile.features = chips.iter().fold(first.features, |f, c| f & c.features);
+    // WRSR_EXT describes a required wire format, not an optional command.
+    // Intersecting it away would turn an extended write into a one-byte WRSR.
+    // If any alias may have SR2, retain that hazard even when another alias
+    // lacks the descriptive flag. It is not evidence that one-byte WRSR is safe.
+    if chips.iter().any(|c| {
+        c.features
+            .intersects(Features::STATUS_REG_2 | Features::QE_SR2)
+    }) {
+        profile.features |= Features::STATUS_REG_2;
+    }
+    if chips.iter().any(|c| {
+        c.features.contains(Features::WRSR_EXT) != first.features.contains(Features::WRSR_EXT)
+    }) {
+        profile.features.remove(
+            Features::WRSR_WREN
+                | Features::WRSR_EWSR
+                | Features::WRSR_VOLATILE_WREN
+                | Features::WRSR_PERSISTENT_EWSR,
+        );
+        profile.features |= Features::WP_UNRESOLVED;
+    }
     // Only flags that change the WP register bit map count (see
     // `SpiFlashDevice::wp_bit_map`); SST26_BPR is already required to match.
     // Descriptive flags such as STATUS_REG_2 or WP_TB are not used by WP
     // access, so differences there must not disable it.
-    if chips
-        .iter()
-        .any(|c| c.features & Features::WP_BP3 != first.features & Features::WP_BP3)
-    {
+    if chips.iter().any(|c| {
+        let layout = Features::WP_BP3 | Features::WP_WPS;
+        c.features & layout != first.features & layout
+    }) {
         profile.features |= Features::WP_UNRESOLVED;
     }
     profile
@@ -991,6 +1012,52 @@ fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::
         return None;
     }
     Some(profile)
+}
+
+/// Resolve a raw three-byte RDID, preserving the legacy representation for callers.
+#[cfg(feature = "std")]
+pub(crate) async fn select_probed_chip<M: SpiMaster + ?Sized, P: ChipProvider + ?Sized>(
+    master: &mut M,
+    provider: &P,
+    manufacturer: u8,
+    device: u16,
+    sfdp: Option<&crate::sfdp::SfdpInfo>,
+    wanted: Option<&str>,
+) -> Result<Option<crate::chip::FlashChip>> {
+    if manufacturer != 0x7f {
+        return select_database_chip(provider, manufacturer, device, sfdp, wanted);
+    }
+    let [manufacturer, first] = device.to_be_bytes();
+    let mut bytes = [first, 0];
+    let len = match manufacturer {
+        0x9d => 1,
+        0x37 if master.max_read_len() >= 4 => {
+            let mut response = [0; 4];
+            let mut cmd =
+                crate::spi::SpiCommand::read_reg(crate::spi::opcodes::RDID, &mut response);
+            master.execute(&mut cmd).await?;
+            if response[..3] != [0x7f, manufacturer, first] {
+                log::error!("AMIC four-byte RDID prefix changed: {:02X?}", response);
+                return Err(Error::SpiTransferFailed);
+            }
+            bytes[1] = response[3];
+            2
+        }
+        _ => 0,
+    };
+    let candidates = if len == 0 {
+        Vec::new()
+    } else {
+        (0..)
+            .map_while(|i| provider.find_nth_by_banked_jedec_id(1, manufacturer, &bytes[..len], i))
+            .collect()
+    };
+    let id = if len == 1 {
+        u16::from(first)
+    } else {
+        u16::from_be_bytes(bytes)
+    };
+    select_candidates(candidates, manufacturer, id, sfdp, wanted)
 }
 
 /// Probe for a flash chip with detailed results
@@ -1039,6 +1106,7 @@ where
     // Try SFDP probing
     log::debug!("Attempting SFDP probe...");
 
+    let mut sfdp_absent = false;
     let sfdp = match crate::sfdp::probe(master).await {
         Ok(info) => {
             log::info!(
@@ -1050,18 +1118,67 @@ where
         }
         Err(e) => {
             log::debug!("SFDP probe failed: {:?}", e);
+            // A transport failure does not prove that SFDP is absent.
+            sfdp_absent = e == Error::ChipNotSupported;
             None
         }
     };
 
-    // Look up in database
-    let db_chip = select_database_chip(
+    let selection = select_probed_chip(
+        master,
         provider,
         jedec_manufacturer,
         jedec_device,
         sfdp.as_ref(),
         options.chip,
-    )?;
+    )
+    .await;
+    let mut db_chip = match selection {
+        Err(Error::ChipNotFound) if options.chip.is_some() && sfdp.is_none() && sfdp_absent => {
+            // A requested name may refer to a legacy identity, but never let
+            // it override an identifiable RDID chip.
+            match select_probed_chip(
+                master,
+                provider,
+                jedec_manufacturer,
+                jedec_device,
+                None,
+                None,
+            )
+            .await
+            {
+                Ok(None) => None,
+                _ => return Err(Error::ChipNotFound),
+            }
+        }
+        other => other?,
+    };
+    // A controller limited to three-byte reads cannot resolve AMIC's four-byte
+    // continuation ID. Do not turn that uncertainty into a legacy match.
+    if db_chip.is_none()
+        && sfdp.is_none()
+        && sfdp_absent
+        && !(jedec_manufacturer == 0x7f && jedec_device >> 8 == 0x37)
+    {
+        // RES2 is 0xAB followed by three zero bytes and two response bytes.
+        // Never interpret a failed transfer as an identity.
+        let mut id = [0; 2];
+        let mut cmd = crate::spi::SpiCommand::read_3b(crate::spi::opcodes::RES, 0, &mut id);
+        match master.execute(&mut cmd).await {
+            Ok(()) if id != [0, 0] && id != [0xff, 0xff] => {
+                let candidates: Vec<_> = (0..)
+                    .map_while(|i| provider.find_nth_by_res2_id(id[0], id[1], i))
+                    .collect();
+                if candidates.len() > 1 && options.chip.is_none() {
+                    return Err(Error::ChipAmbiguous);
+                }
+                db_chip =
+                    select_candidates(candidates, id[0], u16::from(id[1]), None, options.chip)?;
+            }
+            Ok(()) | Err(Error::OpcodeNotSupported) => {}
+            Err(e) => return Err(e),
+        }
+    }
     if db_chip.is_some() {
         log::debug!("Chip found in database");
     } else {
@@ -1166,10 +1283,9 @@ pub async fn read<M: SpiMaster + ?Sized>(
 
 /// Read flash contents with generic SPI read commands.
 ///
-/// Automatically selects the best I/O mode based on programmer and chip capabilities.
-/// Uses dual or quad I/O when both the programmer and chip support it.
-/// This is the default [`SpiMaster::read_flash`] and the fallback for
-/// programmer fast paths.
+/// Uses single-I/O reads because chip capabilities do not describe the exact
+/// multi-I/O opcode, mode clocks, or quad-enable state. This is the default
+/// [`SpiMaster::read_flash`] and the fallback for programmer fast paths.
 pub async fn spi_read<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -1181,13 +1297,15 @@ pub async fn spi_read<M: SpiMaster + ?Sized>(
     }
     let features = ctx.chip.features;
     let master_features = master.features();
-    let try_native_4byte =
-        ctx.address_mode == AddressMode::FourByte && features.supports_4ba_read();
-
-    let (io_mode, opcode, native_4byte) =
-        protocol::select_read_mode(master_features, features, try_native_4byte, |opcode| {
-            master.probe_opcode(opcode)
-        });
+    let native_4byte = ctx.address_mode == AddressMode::FourByte
+        && features.supports_4ba_read()
+        && master_features.contains(SpiFeatures::FOUR_BYTE_ADDR)
+        && master.probe_opcode(crate::spi::opcodes::READ_4B);
+    let opcode = if native_4byte {
+        crate::spi::opcodes::READ_4B
+    } else {
+        crate::spi::opcodes::READ
+    };
 
     let (addressing, enter_exit_4byte) = if ctx.address_mode == AddressMode::FourByte {
         addressing_for_4byte_operation(native_4byte, features, master_features)?
@@ -1199,21 +1317,18 @@ pub async fn spi_read<M: SpiMaster + ?Sized>(
         protocol::enter_4byte_mode_with_features(master, features).await?;
     }
 
-    let result = protocol::read_io_with_addressing(
-        master,
-        opcode,
-        addr,
-        buf,
-        addressing,
-        io_mode,
-        read_dummy_cycles(io_mode),
-    )
-    .await;
+    let result = protocol::read_with_addressing(master, opcode, addr, buf, addressing).await;
 
-    if enter_exit_4byte
-        && let Err(e) = protocol::exit_4byte_mode_with_features(master, features).await
-    {
-        log::warn!("Failed to exit 4-byte address mode: {}", e);
+    if enter_exit_4byte {
+        let exit_result = protocol::exit_4byte_mode_with_features(master, features).await;
+        if result.is_ok() {
+            exit_result?;
+        } else if let Err(e) = exit_result {
+            log::warn!(
+                "Failed to exit 4-byte address mode after read failure: {}",
+                e
+            );
+        }
     }
 
     result
@@ -1803,6 +1918,326 @@ mod tests {
             other.features.remove(remove);
             assert!(common_operation_profile(&[chip, &other]).is_none());
             assert!(common_operation_profile(&[&other, chip]).is_none());
+        }
+    }
+
+    #[test]
+    fn aliases_with_different_wrsr_lengths_cannot_write_status() {
+        let db = rflasher_chips::ChipDatabase::new();
+        let chip = db.find_by_jedec_id(0xef, 0x4017).unwrap();
+        let mut other = chip.clone();
+        other.features.toggle(Features::WRSR_EXT);
+        for pair in [[chip, &other], [&other, chip]] {
+            let profile = common_operation_profile(&pair).unwrap();
+            assert!(profile.features.contains(Features::WP_UNRESOLVED));
+            assert!(
+                crate::wp::WriteOptions::default()
+                    .for_features(profile.features)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_retain_possible_second_status_register() {
+        let db = rflasher_chips::ChipDatabase::new();
+        let chip = db.find_by_jedec_id(0xef, 0x4017).unwrap();
+        let mut other = chip.clone();
+        other
+            .features
+            .remove(Features::STATUS_REG_2 | Features::QE_SR2);
+        for pair in [[chip, &other], [&other, chip]] {
+            assert!(
+                common_operation_profile(&pair)
+                    .unwrap()
+                    .features
+                    .contains(Features::STATUS_REG_2)
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_with_different_wps_layouts_cannot_report_wp() {
+        let db = rflasher_chips::ChipDatabase::new();
+        let chip = db.find_by_jedec_id(0xef, 0x4017).unwrap();
+        let mut other = chip.clone();
+        other.features.toggle(Features::WP_WPS);
+        for pair in [[chip, &other], [&other, chip]] {
+            assert!(
+                common_operation_profile(&pair)
+                    .unwrap()
+                    .features
+                    .contains(Features::WP_UNRESOLVED)
+            );
+        }
+    }
+
+    struct IdMaster {
+        response: [u8; 4],
+        reread: Option<Result<[u8; 4]>>,
+        commands: Vec<(u8, usize)>,
+        max_read: usize,
+    }
+
+    impl SpiMaster for IdMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+        fn max_read_len(&self) -> usize {
+            self.max_read
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
+            self.commands.push((cmd.opcode, cmd.read_buf.len()));
+            if cmd.opcode == opcodes::RDID {
+                assert!(cmd.read_buf.len() <= self.max_read);
+                let response = if cmd.read_buf.len() == 4 {
+                    self.reread.unwrap_or(Ok(self.response))?
+                } else {
+                    self.response
+                };
+                cmd.read_buf
+                    .copy_from_slice(&response[..cmd.read_buf.len()]);
+            } else {
+                assert!(matches!(cmd.opcode, opcodes::RDSFDP | opcodes::RES));
+                cmd.read_buf.fill(0xff);
+            }
+            Ok(())
+        }
+        async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    #[test]
+    fn continuation_probe_matches_banked_ids() {
+        use futures_lite::future::block_on;
+        let db = rflasher_chips::ChipDatabase::new();
+        for (response, expected, reads) in [
+            ([0x7f, 0x37, 0x20, 0x20], "A25L05PT", vec![3, 4]),
+            ([0x7f, 0x9d, 0x21, 0x21], "Pm25LD010(C)", vec![3]),
+            ([0x9d, 0x60, 0x15, 0], "IS25LP016D", vec![3]),
+            ([0x37, 0x40, 0x15, 0], "A25LQ16", vec![3]),
+        ] {
+            let mut master = IdMaster {
+                response,
+                reread: None,
+                commands: Vec::new(),
+                max_read: 256,
+            };
+            let result = block_on(probe_detailed(&mut master, &db)).unwrap();
+            assert!(result.from_database);
+            assert_eq!(result.chip.name(), expected);
+            assert_eq!(
+                master
+                    .commands
+                    .iter()
+                    .filter(|(op, _)| *op == opcodes::RDID)
+                    .map(|(_, len)| *len)
+                    .collect::<Vec<_>>(),
+                reads
+            );
+            assert!(master.commands.iter().any(|(op, _)| *op == opcodes::RDSFDP));
+        }
+        // The shared 0x7e identity must honor an explicit choice and must not
+        // allow selection of the legacy RES2 entry with a different ID.
+        let mut master = IdMaster {
+            response: [0x7f, 0x9d, 0x7e, 0x7e],
+            reread: None,
+            commands: Vec::new(),
+            max_read: 3,
+        };
+        let options = ProbeOptions {
+            chip: Some("Pm25LD040(C)"),
+            ..Default::default()
+        };
+        let result = block_on(probe_with_options(&mut master, &db, &options)).unwrap();
+        assert_eq!(result.chip.name(), "Pm25LD040(C)");
+        let options = ProbeOptions {
+            chip: Some("Pm25LV040"),
+            ..Default::default()
+        };
+        let result = block_on(probe_with_options(&mut master, &db, &options)).unwrap();
+        assert_eq!(result.chip.name(), "Pm25LV040");
+        let options = ProbeOptions {
+            chip: Some("Pm25LV512(A)"),
+            ..Default::default()
+        };
+        assert!(matches!(
+            block_on(probe_with_options(&mut master, &db, &options)),
+            Err(Error::ChipNotFound)
+        ));
+
+        for (response, max_read) in [
+            ([0x37, 0x20, 0x20, 0], 256),
+            ([0x7f, 0x37, 0x20, 0x20], 3),
+            ([0x7f, 0x9d, 0x7b, 0x7b], 256),
+        ] {
+            let mut master = IdMaster {
+                response,
+                reread: None,
+                commands: Vec::new(),
+                max_read,
+            };
+            assert!(matches!(
+                block_on(probe_detailed(&mut master, &db)),
+                Err(Error::ChipNotFound)
+            ));
+            assert_eq!(
+                master
+                    .commands
+                    .iter()
+                    .filter(|(op, _)| *op == opcodes::RDID)
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn continuation_reread_failures_abort_probe_and_sfdp_fallback() {
+        use futures_lite::future::block_on;
+        let db = rflasher_chips::ChipDatabase::new();
+        for reread in [Err(Error::SpiTransferFailed), Ok([0x7f, 0x37, 0x21, 0x20])] {
+            let mut master = IdMaster {
+                response: [0x7f, 0x37, 0x20, 0x20],
+                reread: Some(reread),
+                commands: Vec::new(),
+                max_read: 256,
+            };
+            assert!(matches!(
+                block_on(probe_detailed(&mut master, &db)),
+                Err(Error::SpiTransferFailed)
+            ));
+            assert_eq!(
+                master
+                    .commands
+                    .iter()
+                    .filter(|(op, _)| *op == opcodes::RDID)
+                    .map(|(_, len)| *len)
+                    .collect::<Vec<_>>(),
+                [3, 4]
+            );
+            let sfdp = crate::sfdp::SfdpInfo::default();
+            assert!(matches!(
+                block_on(select_probed_chip(
+                    &mut master,
+                    &db,
+                    0x7f,
+                    0x3720,
+                    Some(&sfdp),
+                    None,
+                )),
+                Err(Error::SpiTransferFailed)
+            ));
+        }
+    }
+
+    #[derive(Default)]
+    struct ReadMaster {
+        commands: Vec<(u8, crate::spi::IoMode, crate::spi::AddressWidth, u8)>,
+        fail_read: bool,
+        fail_exit: bool,
+        reject_native: bool,
+    }
+
+    impl SpiMaster for ReadMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::FOUR_BYTE_ADDR | SpiFeatures::DUAL | SpiFeatures::QUAD
+        }
+        fn max_read_len(&self) -> usize {
+            256
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        fn probe_opcode(&self, opcode: u8) -> bool {
+            !(self.reject_native && opcode == opcodes::READ_4B)
+        }
+        async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
+            self.commands
+                .push((cmd.opcode, cmd.io_mode, cmd.address_width, cmd.dummy_cycles));
+            if self.fail_read && matches!(cmd.opcode, opcodes::READ | opcodes::READ_4B) {
+                return Err(Error::SpiTransferFailed);
+            }
+            if self.fail_exit && cmd.opcode == opcodes::EX4B {
+                return Err(Error::Timeout);
+            }
+            cmd.read_buf.fill(0x5a);
+            Ok(())
+        }
+        async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    #[test]
+    fn automatic_reads_use_only_single_io() {
+        use crate::spi::{AddressWidth, IoMode};
+        use futures_lite::future::block_on;
+        for native in [false, true] {
+            let mut ctx = nonuniform_context();
+            ctx.chip.features = Features::DUAL_IO
+                | Features::QUAD_IO
+                | Features::FOUR_BYTE_DUAL_OUT_READ
+                | Features::FOUR_BYTE_DUAL_IO_READ
+                | Features::FOUR_BYTE_QUAD_OUT_READ
+                | Features::FOUR_BYTE_QUAD_IO_READ;
+            if native {
+                ctx.address_mode = AddressMode::FourByte;
+                ctx.chip.features |= Features::FOUR_BYTE_READ;
+            }
+            let mut master = ReadMaster::default();
+            let mut buf = [0; 2];
+            block_on(spi_read(&mut master, &ctx, 0, &mut buf)).unwrap();
+            assert_eq!(buf, [0x5a; 2]);
+            assert_eq!(
+                master.commands,
+                vec![(
+                    if native {
+                        opcodes::READ_4B
+                    } else {
+                        opcodes::READ
+                    },
+                    IoMode::Single,
+                    if native {
+                        AddressWidth::FourByte
+                    } else {
+                        AddressWidth::ThreeByte
+                    },
+                    0,
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_read_exits_four_byte_mode_and_preserves_errors() {
+        use futures_lite::future::block_on;
+        for (fail_read, fail_exit, expected) in [
+            (false, false, Ok(())),
+            (false, true, Err(Error::Timeout)),
+            (true, false, Err(Error::SpiTransferFailed)),
+            (true, true, Err(Error::SpiTransferFailed)),
+        ] {
+            let mut ctx = nonuniform_context();
+            ctx.address_mode = AddressMode::FourByte;
+            ctx.chip.features = Features::FOUR_BYTE_ENTER
+                | Features::FOUR_BYTE_READ
+                | Features::DUAL_IO
+                | Features::QUAD_IO;
+            let mut master = ReadMaster {
+                fail_read,
+                fail_exit,
+                reject_native: true,
+                ..Default::default()
+            };
+            assert_eq!(
+                block_on(spi_read(&mut master, &ctx, 0, &mut [0; 1])),
+                expected
+            );
+            assert_eq!(
+                master.commands.iter().map(|c| c.0).collect::<Vec<_>>(),
+                vec![opcodes::EN4B, opcodes::READ, opcodes::EX4B]
+            );
         }
     }
 
