@@ -53,9 +53,9 @@ pub mod unified;
 pub use policy::{MutationPolicy, RecoveryBackup};
 
 pub use context::{AddressMode, FlashContext};
-pub use device::FlashDevice;
 #[cfg(feature = "alloc")]
 pub use device::FlashDeviceExt;
+pub use device::{EraseOutcome, FlashDevice};
 pub use spi_device::SpiFlashDevice;
 
 // Re-export low-level SPI operations (work with SpiMaster directly)

@@ -55,6 +55,8 @@ fn features_from(def: FeaturesDef) -> Features {
         (def.wrsr_ewsr, Features::WRSR_EWSR),
         (def.wrsr_persistent_ewsr, Features::WRSR_PERSISTENT_EWSR),
         (def.wp_winbond, Features::WP_WINBOND),
+        (def.wp_wps, Features::WP_WPS),
+        (def.explicit_profile, Features::EXPLICIT_PROFILE),
         (def.at25f_id, Features::AT25F_ID),
         (def.rdid_continuation, Features::RDID_CONTINUATION),
         (def.res2_id, Features::RES2_ID),

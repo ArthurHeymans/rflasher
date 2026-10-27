@@ -128,6 +128,8 @@ bitflags! {
         const RDID_CONTINUATION       = 1 << 47;
         /// Legacy RES2 identity, not a banked RDID identity.
         const RES2_ID                 = 1 << 48;
+        /// Variant profile requiring an exact, explicit user selection.
+        const EXPLICIT_PROFILE        = 1 << 49;
     }
 }
 

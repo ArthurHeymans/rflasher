@@ -933,7 +933,7 @@ where
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 
@@ -1433,6 +1433,43 @@ mod tests {
             probe_db(no_sfdp(), &db, &pick("W25Q64FV")).unwrap_err(),
             Error::ChipNotFound
         );
+    }
+
+    #[test]
+    fn winbond_variants_require_explicit_selection_and_matching_id() {
+        let mut runtime = rflasher_chips::ChipDatabase::empty();
+        runtime
+            .load_ron(include_str!(
+                "../../../rflasher-chips/data/vendors/winbond.ron"
+            ))
+            .unwrap();
+        for db in [rflasher_chips::ChipDatabase::new(), runtime] {
+            let probe = |id, chip| {
+                let mut flash = MockSfdpFlash::without_sfdp();
+                flash.id = id;
+                futures_lite::future::block_on(probe_with_options(
+                    &mut flash,
+                    &db,
+                    &ProbeOptions {
+                        chip,
+                        ..Default::default()
+                    },
+                ))
+            };
+            let id = [0xef, 0x40, 0x18];
+            assert_eq!(probe(id, None).unwrap().chip.name, "W25Q128.V");
+            assert_eq!(probe(id, Some("W25Q128BV")).unwrap().chip.name, "W25Q128.V");
+            for (name, wps) in [("W25Q128BV-WP", false), ("W25Q128FVJV-WP", true)] {
+                let chip = probe(id, Some(name)).unwrap().chip;
+                assert_eq!(chip.name, name);
+                assert!(chip.features.contains(Features::EXPLICIT_PROFILE));
+                assert_eq!(chip.features.contains(Features::WP_WPS), wps);
+                assert!(matches!(
+                    probe([0xef, 0x40, 0x17], Some(name)),
+                    Err(Error::ChipNotFound)
+                ));
+            }
+        }
     }
 
     #[test]

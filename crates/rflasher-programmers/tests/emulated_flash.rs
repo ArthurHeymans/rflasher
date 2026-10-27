@@ -26,6 +26,8 @@ use rflasher_core::flash::unified::{self, NoProgress};
 use rflasher_core::flash::{self, FlashContext, FlashDevice, SpiFlashDevice};
 use rflasher_core::spi::opcodes;
 use rflasher_programmers::dummy::{DummyConfig, DummyFlash};
+use rflasher_programmers::{ErasedFlashDevice, ErasedSpiMaster};
+use std::sync::{Arc, Mutex};
 
 /// Simulated durable storage for the in-memory emulator (not production I/O).
 #[derive(Default)]
@@ -272,6 +274,108 @@ fn erase_of_a_protected_chip_is_reported() {
         );
     }
     assert!(device.master().data().iter().all(|&b| b == 0x00));
+}
+
+#[derive(Default)]
+struct ReadFailureTrace {
+    commands: Vec<(u8, Option<u32>)>,
+    failed_at: Option<usize>,
+    block_at_failure: Vec<u8>,
+}
+
+struct FailPostEraseRead {
+    chip: DummyFlash,
+    trace: Arc<Mutex<ReadFailureTrace>>,
+    erased: bool,
+}
+
+impl rflasher_core::programmer::SpiMaster for FailPostEraseRead {
+    fn features(&self) -> rflasher_core::programmer::SpiFeatures {
+        self.chip.features()
+    }
+    fn max_read_len(&self) -> usize {
+        self.chip.max_read_len()
+    }
+    fn max_write_len(&self) -> usize {
+        self.chip.max_write_len()
+    }
+    async fn execute(
+        &mut self,
+        cmd: &mut rflasher_core::spi::SpiCommand<'_>,
+    ) -> rflasher_core::Result<()> {
+        {
+            let mut trace = self.trace.lock().unwrap();
+            trace.commands.push((cmd.opcode, cmd.address));
+            // An addressed read after the erase is the device's verification,
+            // not the neighbor reads before the erase or its status polls.
+            if self.erased
+                && trace.failed_at.is_none()
+                && cmd.address.is_some()
+                && !cmd.read_buf.is_empty()
+            {
+                trace.failed_at = Some(trace.commands.len() - 1);
+                trace.block_at_failure = self.chip.data()[0x1000..0x2000].to_vec();
+                return Err(Error::SpiTransferFailed);
+            }
+        }
+        self.chip.execute(cmd).await?;
+        if cmd.opcode == opcodes::SE_20 {
+            self.erased = true;
+        }
+        Ok(())
+    }
+    async fn delay_us(&mut self, us: u32) {
+        self.chip.delay_us(us).await
+    }
+}
+
+#[test]
+fn erased_adapter_propagates_device_verify_read_failure_without_neighbor_restore() {
+    use rflasher_core::flash::MutationPolicy;
+    use rflasher_core::layout::Region;
+
+    let db = rflasher_chips::ChipDatabase::new();
+    let chip = db.find_by_name("W25Q128.V")[0].clone();
+    let trace = Arc::new(Mutex::new(ReadFailureTrace::default()));
+    let master = FailPostEraseRead {
+        chip: emulator(chip.total_size, 2, &vec![0; chip.total_size as usize]),
+        trace: trace.clone(),
+        erased: false,
+    };
+    let mut device = ErasedFlashDevice::new(SpiFlashDevice::new(
+        ErasedSpiMaster::new(master),
+        FlashContext::new(chip),
+    ));
+
+    // Both blocks have neighbors to preserve; the second erase must not begin.
+    let error = block_on(unified::erase_region_with_policy(
+        &mut device,
+        &Region::new("partial blocks", 0x1800, 0x27ff),
+        &mut MutationPolicy::default(),
+    ))
+    .unwrap_err();
+    assert_eq!(error, Error::SpiTransferFailed);
+
+    let trace = trace.lock().unwrap();
+    let failed_at = trace.failed_at.expect("post-erase read was attempted");
+    assert_eq!(failed_at + 1, trace.commands.len(), "I/O after failed read");
+    assert_eq!(trace.commands[failed_at].1, Some(0x1000));
+    assert!(
+        trace.commands[..failed_at]
+            .iter()
+            .any(|&(op, addr)| { op == opcodes::READ && addr == Some(0x1000) }),
+        "neighbor read before erase"
+    );
+    assert_eq!(
+        trace
+            .commands
+            .iter()
+            .filter(|&&(op, _)| op == opcodes::SE_20)
+            .count(),
+        1
+    );
+    assert!(trace.commands.iter().all(|&(op, _)| op != opcodes::PP));
+    assert!(trace.block_at_failure.iter().all(|&byte| byte == 0xff));
 }
 
 /// A programmer that, like Intel software sequencing with a locked opcode

@@ -16,7 +16,7 @@ use std::pin::Pin;
 
 use rflasher_core::chip::{EraseBlock, WriteGranularity};
 use rflasher_core::error::Result;
-use rflasher_core::flash::{FlashContext, FlashDevice, OptimalEraseOp};
+use rflasher_core::flash::{EraseOutcome, FlashContext, FlashDevice, OptimalEraseOp};
 use rflasher_core::programmer::{FlashAccess, SpiFeatures, SpiMaster};
 use rflasher_core::spi::SpiCommand;
 use rflasher_core::wp::{WpConfig, WpMode, WpRange, WpResult, WriteOptions};
@@ -39,7 +39,10 @@ trait DynFlashDevice {
     fn read<'a>(&'a mut self, addr: u32, buf: &'a mut [u8]) -> BoxFuture<'a, Result<()>>;
     fn write<'a>(&'a mut self, addr: u32, data: &'a [u8]) -> BoxFuture<'a, Result<()>>;
     fn erase(&mut self, addr: u32, len: u32) -> BoxFuture<'_, Result<()>>;
-    fn erase_operation<'a>(&'a mut self, op: &'a OptimalEraseOp) -> BoxFuture<'a, Result<()>>;
+    fn erase_operation<'a>(
+        &'a mut self,
+        op: &'a OptimalEraseOp,
+    ) -> BoxFuture<'a, Result<EraseOutcome>>;
     fn validate_erase_operation(&self, op: &OptimalEraseOp) -> Result<()>;
     fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()>;
     fn read_unique_id(&mut self) -> BoxFuture<'_, Result<Vec<u8>>>;
@@ -91,7 +94,10 @@ impl<D: FlashDevice> DynFlashDevice for D {
     fn erase(&mut self, addr: u32, len: u32) -> BoxFuture<'_, Result<()>> {
         Box::pin(FlashDevice::erase(self, addr, len))
     }
-    fn erase_operation<'a>(&'a mut self, op: &'a OptimalEraseOp) -> BoxFuture<'a, Result<()>> {
+    fn erase_operation<'a>(
+        &'a mut self,
+        op: &'a OptimalEraseOp,
+    ) -> BoxFuture<'a, Result<EraseOutcome>> {
         Box::pin(FlashDevice::erase_operation(self, op))
     }
     fn validate_erase_operation(&self, op: &OptimalEraseOp) -> Result<()> {
@@ -183,7 +189,7 @@ impl FlashDevice for ErasedFlashDevice {
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
         self.inner.erase(addr, len).await
     }
-    async fn erase_operation(&mut self, op: &OptimalEraseOp) -> Result<()> {
+    async fn erase_operation(&mut self, op: &OptimalEraseOp) -> Result<EraseOutcome> {
         self.inner.erase_operation(op).await
     }
     fn validate_erase_operation(&self, op: &OptimalEraseOp) -> Result<()> {
