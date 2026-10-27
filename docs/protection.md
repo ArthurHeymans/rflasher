@@ -138,6 +138,42 @@ protection modes are not automatically cleared.
 Micron sector locks, Atmel security locks and PMC safeguards remain unresolved;
 array verification still detects ignored mutations.
 
+## Controller restrictions (Intel internal programmer)
+
+At open, unlocked protected ranges are still cleared (journaled and restored on
+close), as flashprog does. What remains restricted for the BIOS master is
+mirrored: locked PRx (ICH8+), FPRx and GPR0 (PCH100+) and PBRx (ICH7, write
+only), whose bits enable protection; descriptor regions without BIOS master
+read or write access, whose FRAP or BIOS_BM_RAP/WAP bits grant access, unless
+the descriptor override strap is set; and, in software sequencing, addresses
+below BBAR. Regions above the permission bits FRAP covers (8) are assumed
+accessible, as in flashprog.
+
+Before the first destructive command, mutations ask the device
+(`FlashDevice::check_access`, forwarded by `SpiFlashDevice`, the internal
+programmer and the type-erased and web adapters) about what their actual plan
+reads and changes, for every selected region: each erase block, including the
+neighboring data that is saved, erased, restored and verified, and each program
+range. A smart write also reads its whole regions. Unchanged data that a smart
+write neither erases nor programs is not checked, so it may be restricted.
+Direct `FlashDevice` writes and erases, and the controller's own address-based
+writes and erases, check their range before their first command.
+
+This is an early refusal, not an enforcement mechanism. The controller enforces
+restrictions itself, per cycle, against the cycle's address. It cannot know how
+much a raw software-sequencing erase command erases, so neither can the
+controller-level check, which, like the hardware, judges an erase by its
+address. In software sequencing, the erase block sizes used for planned erases
+come from the chip metadata (catalog, SFDP or the caller's chip selection) and
+are trusted; hardware sequencing plans with the controller's own block size.
+Software-sequencing addresses are three bytes and assumed to reach the chip
+unchanged: it is assumed to be in its initial 3-byte address mode with its
+extended address register at zero. Raw chip erase and unclassified commands
+(only reachable through the `unsafe` unchecked paths) are refused while any
+flash range is write-restricted. Status register writes do not touch the
+array. Plain reads are not checked in advance; a restricted read fails with the
+controller's cycle error.
+
 ## References
 
 - flashprog `flashchips.c` and `spi25_statusreg.c`: per-chip assignments, masks,

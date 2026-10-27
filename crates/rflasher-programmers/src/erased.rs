@@ -17,7 +17,7 @@ use std::pin::Pin;
 use rflasher_core::chip::{EraseBlock, WriteGranularity};
 use rflasher_core::error::Result;
 use rflasher_core::flash::{FlashContext, FlashDevice, OptimalEraseOp};
-use rflasher_core::programmer::{SpiFeatures, SpiMaster};
+use rflasher_core::programmer::{FlashAccess, SpiFeatures, SpiMaster};
 use rflasher_core::spi::SpiCommand;
 use rflasher_core::wp::{WpConfig, WpMode, WpRange, WpResult, WriteOptions};
 
@@ -41,6 +41,7 @@ trait DynFlashDevice {
     fn erase(&mut self, addr: u32, len: u32) -> BoxFuture<'_, Result<()>>;
     fn erase_operation<'a>(&'a mut self, op: &'a OptimalEraseOp) -> BoxFuture<'a, Result<()>>;
     fn validate_erase_operation(&self, op: &OptimalEraseOp) -> Result<()>;
+    fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()>;
     fn read_unique_id(&mut self) -> BoxFuture<'_, Result<Vec<u8>>>;
     fn wp_supported(&self) -> bool;
     fn read_wp_config(&mut self) -> BoxFuture<'_, WpResult<WpConfig>>;
@@ -95,6 +96,9 @@ impl<D: FlashDevice> DynFlashDevice for D {
     }
     fn validate_erase_operation(&self, op: &OptimalEraseOp) -> Result<()> {
         FlashDevice::validate_erase_operation(self, op)
+    }
+    fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()> {
+        FlashDevice::check_access(self, access, addr, len)
     }
     fn read_unique_id(&mut self) -> BoxFuture<'_, Result<Vec<u8>>> {
         Box::pin(FlashDevice::read_unique_id(self))
@@ -185,6 +189,10 @@ impl FlashDevice for ErasedFlashDevice {
     fn validate_erase_operation(&self, op: &OptimalEraseOp) -> Result<()> {
         self.inner.validate_erase_operation(op)
     }
+    // Forward access restrictions, or erased devices would bypass them.
+    fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()> {
+        self.inner.check_access(access, addr, len)
+    }
     async fn read_unique_id(&mut self) -> Result<Vec<u8>> {
         self.inner.read_unique_id().await
     }
@@ -222,6 +230,7 @@ trait DynSpiMaster {
     fn max_write_len(&self) -> usize;
     fn probe_opcode(&self, opcode: u8) -> bool;
     fn execute<'a>(&'a mut self, cmd: &'a mut SpiCommand<'_>) -> BoxFuture<'a, Result<()>>;
+    fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()>;
     fn delay_us(&mut self, us: u32) -> BoxFuture<'_, ()>;
     fn read_flash<'a>(
         &'a mut self,
@@ -252,6 +261,9 @@ impl<M: SpiMaster> DynSpiMaster for M {
     }
     fn execute<'a>(&'a mut self, cmd: &'a mut SpiCommand<'_>) -> BoxFuture<'a, Result<()>> {
         Box::pin(SpiMaster::execute(self, cmd))
+    }
+    fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()> {
+        SpiMaster::check_access(self, access, addr, len)
     }
     fn delay_us(&mut self, us: u32) -> BoxFuture<'_, ()> {
         Box::pin(SpiMaster::delay_us(self, us))
@@ -307,6 +319,10 @@ impl SpiMaster for ErasedSpiMaster {
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
         self.inner.execute(cmd).await
     }
+    // Forward access restrictions, or erased masters would bypass them.
+    fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()> {
+        self.inner.check_access(access, addr, len)
+    }
     async fn delay_us(&mut self, us: u32) {
         self.inner.delay_us(us).await
     }
@@ -345,6 +361,75 @@ mod tests {
             buf.fill(0xa5);
             Ok(())
         }
+    }
+
+    /// Restricts modifying 0x1000..0x2000 and counts the commands it is sent.
+    #[derive(Default)]
+    struct Restricted {
+        commands: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl SpiMaster for Restricted {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+        fn max_read_len(&self) -> usize {
+            64
+        }
+        fn max_write_len(&self) -> usize {
+            64
+        }
+        async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+            self.commands
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            cmd.read_buf.fill(0);
+            Ok(())
+        }
+        fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()> {
+            if access == FlashAccess::Modify && addr < 0x2000 && addr as u64 + len as u64 > 0x1000 {
+                return Err(rflasher_core::error::Error::RegionProtected);
+            }
+            Ok(())
+        }
+        async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    #[test]
+    fn erased_adapters_forward_access_restrictions() {
+        use rflasher_core::error::Error;
+        let db = rflasher_chips::ChipDatabase::new();
+        let mut chip = db.find_by_name("W25Q128.V")[0].clone();
+        chip.erase_blocks.retain(|b| b.opcode == 0x20);
+        chip.unlock = rflasher_core::chip::Unlock::None;
+        let erase_block = chip.erase_blocks[0].clone();
+        let master = Restricted::default();
+        let commands = master.commands.clone();
+        let mut device = ErasedFlashDevice::new(rflasher_core::flash::SpiFlashDevice::new(
+            ErasedSpiMaster::new(master),
+            FlashContext::new(chip),
+        ));
+        let modify = |addr, len| FlashDevice::check_access(&device, FlashAccess::Modify, addr, len);
+        assert_eq!(modify(0, 0x1000), Ok(()));
+        assert_eq!(modify(0xfff, 2), Err(Error::RegionProtected));
+        assert_eq!(
+            FlashDevice::check_access(&device, FlashAccess::Read, 0x1000, 1),
+            Ok(())
+        );
+        // Direct mutations are refused before their first command.
+        let op = OptimalEraseOp {
+            start: 0x1000,
+            size: 0x1000,
+            erase_block,
+        };
+        assert_eq!(
+            block_on(FlashDevice::erase_operation(&mut device, &op)),
+            Err(Error::RegionProtected)
+        );
+        assert_eq!(
+            block_on(FlashDevice::write(&mut device, 0xff0, &[0; 0x20])),
+            Err(Error::RegionProtected)
+        );
+        assert_eq!(commands.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
     #[test]

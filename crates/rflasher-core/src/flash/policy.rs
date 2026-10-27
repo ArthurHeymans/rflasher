@@ -1,7 +1,11 @@
 //! Shared preflight for CLI, web and library mutations.
 
-use super::{FlashDevice, operations::plan_optimal_erase_region};
+use super::{
+    FlashDevice,
+    operations::{OptimalEraseOp, plan_optimal_erase_region},
+};
 use crate::layout::{Layout, Region};
+use crate::programmer::FlashAccess;
 use crate::{Error, Refusal, Result};
 use alloc::vec;
 
@@ -150,9 +154,37 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
     Ok(())
 }
 
+/// Refuse an erase whose block the device restricts. The whole block is
+/// read (neighbors are saved before the erase, which is verified after it),
+/// erased, and partly reprogrammed (the restored neighbors).
+pub(super) fn check_erase_access<D: FlashDevice + ?Sized>(
+    device: &D,
+    op: &OptimalEraseOp,
+) -> Result<()> {
+    device.check_access(FlashAccess::Read, op.start, op.size)?;
+    device.check_access(FlashAccess::Modify, op.start, op.size)
+}
+
+/// Check the erase plan of every included region before the first erase.
+pub(super) fn check_erase_plan_access<D: FlashDevice + ?Sized>(
+    device: &D,
+    layout: &Layout,
+) -> Result<()> {
+    layout.included_regions().try_for_each(|region| {
+        plan_optimal_erase_region(
+            device.erase_blocks(),
+            device.size(),
+            region.start,
+            region.end,
+        )?
+        .iter()
+        .try_for_each(|op| check_erase_access(device, op))
+    })
+}
+
 pub(super) fn validate_neighbors<D: FlashDevice + ?Sized>(
     device: &D,
-    op: &super::operations::OptimalEraseOp,
+    op: &OptimalEraseOp,
     start: u32,
     end: u32,
 ) -> Result<()> {

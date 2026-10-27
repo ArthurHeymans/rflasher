@@ -373,6 +373,9 @@ pub(crate) mod tests {
         pub read_len: usize,
     }
 
+    /// SSFS/SSFC offset and OPMENU of a modelled software sequencer.
+    type SwseqMenu = Option<(usize, [u8; 8])>;
+
     /// Register-backed fake controller window.
     ///
     /// Plain registers read back what was written (32-bit accesses share
@@ -381,8 +384,12 @@ pub(crate) mod tests {
     /// enough to observe erases: an erase cycle started through HSFC is
     /// recorded with the current FADDR and completes at once, and HSFS.BERASE
     /// reads back a per-partition value chosen through [`FakeMmio::set_berase`]
-    /// (partitions split at the FPB boundary). SPI100 commands are recorded
-    /// on trigger and return the configured response at the FIFO receive offset.
+    /// (partitions split at the FPB boundary). With [`FakeMmio::set_flash`],
+    /// hardware sequencing cycles also read, program (AND) and erase
+    /// (BERASE-sized blocks of) that flash image, and, after
+    /// [`FakeMmio::set_swseq_menu`], so do software sequencing cycles, which
+    /// complete at once. SPI100 commands are recorded on trigger and return
+    /// the configured response at the FIFO receive offset.
     #[derive(Default, Clone)]
     pub(crate) struct FakeMmio {
         regs: Arc<Mutex<BTreeMap<usize, u32>>>,
@@ -396,6 +403,8 @@ pub(crate) mod tests {
         spi_response: RefCell<Vec<u8>>,
         descriptor: RefCell<Option<(usize, BTreeMap<u32, u32>)>>,
         hsfs_busy_reads: Cell<usize>,
+        flash: Arc<Mutex<Vec<u8>>>,
+        swseq_menu: Arc<Mutex<SwseqMenu>>,
     }
 
     impl FakeMmio {
@@ -411,6 +420,104 @@ pub(crate) mod tests {
         /// Set the BERASE encodings reported below and from the FPB boundary
         pub(crate) fn set_berase(&self, low: u16, high: u16) {
             *self.berase.borrow_mut() = [low, high];
+        }
+
+        /// Contents behind sequencing cycles
+        pub(crate) fn set_flash(&self, data: Vec<u8>) {
+            *self.flash.lock().unwrap() = data;
+        }
+
+        pub(crate) fn flash(&self) -> Vec<u8> {
+            self.flash.lock().unwrap().clone()
+        }
+
+        /// Run software sequencing cycles started through `ssfsc` with the
+        /// opcodes of `menu` on the flash image.
+        pub(crate) fn set_swseq_menu(&self, ssfsc: usize, menu: [u8; 8]) {
+            *self.swseq_menu.lock().unwrap() = Some((ssfsc, menu));
+        }
+
+        /// Run a hardware sequencing cycle on the flash image, if one is set.
+        fn hwseq_cycle(&self, fcycle: u16, hsfc: u16) {
+            use crate::ich_regs::*;
+            let mut flash = self.flash.lock().unwrap();
+            if flash.is_empty() {
+                return;
+            }
+            let addr = (self.reg(ICH9_REG_FADDR) & ICH9_FADDR_FLA) as usize;
+            let len = usize::from((hsfc & HSFC_FDBC) >> HSFC_FDBC_OFF) + 1;
+            match fcycle {
+                0 => self.set_fdata(&flash[addr..addr + len]),
+                2 => {
+                    let data = self.fdata(len);
+                    flash[addr..addr + len]
+                        .iter_mut()
+                        .zip(data)
+                        .for_each(|(byte, new)| *byte &= new);
+                }
+                3 => {
+                    let size = [256, 4096, 8192, 65536][usize::from(
+                        (self.read16(ICH9_REG_HSFS) & HSFS_BERASE) >> HSFS_BERASE_OFF,
+                    )];
+                    let start = addr & !(size - 1);
+                    flash[start..start + size].fill(0xff);
+                }
+                _ => {}
+            }
+        }
+
+        /// Run a software sequencing cycle started with `ssfc`: a page
+        /// program, 4/32/64 KiB or chip erase with an atomic WREN, a read or
+        /// a status read (never busy).
+        fn swseq_cycle(&self, menu: &[u8; 8], ssfc: u32) {
+            use crate::ich_regs::*;
+            let mut flash = self.flash.lock().unwrap();
+            let opcode = menu[((ssfc & SSFC_COP) >> SSFC_COP_OFF) as usize];
+            let len = if ssfc & SSFC_DS != 0 {
+                ((ssfc & SSFC_DBC) >> SSFC_DBC_OFF) as usize + 1
+            } else {
+                0
+            };
+            let addr = (self.reg(ICH9_REG_FADDR) & 0x00ff_ffff) as usize;
+            let wren = ssfc & SSFC_ACS != 0;
+            match opcode {
+                JEDEC_READ => self.set_fdata(&flash[addr..addr + len]),
+                JEDEC_RDSR => self.set_fdata(&[0]),
+                JEDEC_BYTE_PROGRAM if wren => {
+                    let data = self.fdata(len);
+                    flash[addr..addr + len]
+                        .iter_mut()
+                        .zip(data)
+                        .for_each(|(byte, new)| *byte &= new);
+                }
+                JEDEC_SE | JEDEC_BE_52 | JEDEC_BE_D8 if wren => {
+                    let size = match opcode {
+                        JEDEC_SE => 0x1000,
+                        JEDEC_BE_52 => 0x8000,
+                        _ => 0x10000,
+                    };
+                    let start = addr & !(size - 1);
+                    flash[start..start + size].fill(0xff);
+                }
+                JEDEC_CE_C7 | JEDEC_CE_60 if wren => flash.fill(0xff),
+                _ => {}
+            }
+        }
+
+        fn fdata(&self, len: usize) -> Vec<u8> {
+            use crate::ich_regs::ICH9_REG_FDATA0;
+            (0..len)
+                .map(|i| (self.reg(ICH9_REG_FDATA0 + (i & !3)) >> (8 * (i % 4))) as u8)
+                .collect()
+        }
+
+        fn set_fdata(&self, data: &[u8]) {
+            use crate::ich_regs::ICH9_REG_FDATA0;
+            for (word, bytes) in data.chunks(4).enumerate() {
+                let mut value = [0; 4];
+                value[..bytes.len()].copy_from_slice(bytes);
+                self.set32(ICH9_REG_FDATA0 + word * 4, u32::from_le_bytes(value));
+            }
         }
 
         pub(crate) fn block_write32(&self, offset: usize) {
@@ -548,6 +655,7 @@ pub(crate) mod tests {
                                 .borrow_mut()
                                 .push(self.reg(ICH9_REG_FADDR) & ICH9_FADDR_FLA);
                         }
+                        self.hwseq_cycle(fcycle, value);
                         self.set32(
                             ICH9_REG_HSFS,
                             self.reg(ICH9_REG_HSFS) | u32::from(HSFS_FDONE),
@@ -558,9 +666,26 @@ pub(crate) mod tests {
             }
         }
         fn write32(&self, offset: usize, value: u32) {
+            use crate::ich_regs::*;
             self.writes.lock().unwrap().push((offset, value, 4));
-            if *self.blocked_write32.borrow() != Some(offset) {
-                self.set32(offset, value);
+            if *self.blocked_write32.borrow() == Some(offset) {
+                return;
+            }
+            let menu = *self.swseq_menu.lock().unwrap();
+            match menu {
+                // Status bits are write-1-to-clear; SCGO runs the cycle.
+                Some((ssfsc, menu)) if offset == ssfsc => {
+                    let status = SSFS_FDONE | SSFS_FCERR;
+                    let kept = self.reg(offset) & status & !value;
+                    let done = if value & SSFC_SCGO != 0 {
+                        self.swseq_cycle(&menu, value);
+                        SSFS_FDONE
+                    } else {
+                        0
+                    };
+                    self.set32(offset, (value & !(status | SSFC_SCGO)) | kept | done);
+                }
+                _ => self.set32(offset, value),
             }
         }
     }

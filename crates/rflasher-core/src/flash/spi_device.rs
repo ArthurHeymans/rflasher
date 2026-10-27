@@ -166,6 +166,15 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         operations::validate_spi_erase_operation(&self.master, &self.ctx, op)
     }
 
+    fn check_access(
+        &self,
+        access: crate::programmer::FlashAccess,
+        addr: u32,
+        len: u32,
+    ) -> Result<()> {
+        self.master.check_access(access, addr, len)
+    }
+
     async fn erase_operation(&mut self, op: &operations::OptimalEraseOp) -> Result<()> {
         // Callers verify the erased range (see `unified`), so do not read it twice.
         operations::erase_spi_operation(&mut self.master, &self.ctx, op).await

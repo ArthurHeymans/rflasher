@@ -7,7 +7,7 @@
 use crate::error::InternalError;
 use crate::ichspi::SpiMode;
 use rflasher_core::error::Result as CoreResult;
-use rflasher_core::programmer::SpiFeatures;
+use rflasher_core::programmer::{FlashAccess, SpiFeatures};
 use rflasher_core::spi::SpiCommand;
 
 /// Unified trait for SPI controllers (Intel ICH/PCH or AMD SPI100)
@@ -89,6 +89,12 @@ pub trait Controller {
 
     /// Execute a raw SPI command
     fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()>;
+
+    /// Refuse, without side effects, an access the controller restricts
+    /// (see `SpiMaster::check_access`), for raw SPI and address-based access.
+    fn check_access(&self, _access: FlashAccess, _addr: u32, _len: u32) -> CoreResult<()> {
+        Ok(())
+    }
 
     /// Check if an opcode is available
     fn probe_opcode(&self, opcode: u8) -> bool;
