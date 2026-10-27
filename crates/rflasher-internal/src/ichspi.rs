@@ -1382,13 +1382,6 @@ impl<H: HostAccess> IchSpiController<H> {
             .position(|op| op.opcode == opcode)
     }
 
-    /// Check if an opcode is available in the OPMENU table
-    ///
-    /// This is used internally for the Controller trait's `probe_opcode` method.
-    fn has_opcode(&self, opcode: u8) -> bool {
-        self.find_opcode_index(opcode).is_some()
-    }
-
     /// Get the opcode type for an opcode in the table
     ///
     /// Returns the SPI opcode type (read/write, with/without address) if found.
@@ -1396,6 +1389,40 @@ impl<H: HostAccess> IchSpiController<H> {
     fn get_opcode_type(&self, opcode: u8) -> Option<u8> {
         let idx = self.find_opcode_index(opcode)?;
         self.opcodes.as_ref().map(|ops| ops.opcode[idx].spi_type)
+    }
+
+    fn framing_fits(opcode: u8, spi_type: u8) -> bool {
+        match opcode {
+            JEDEC_READ | JEDEC_FAST_READ | JEDEC_REMS | JEDEC_RES => {
+                spi_type == SPI_OPCODE_TYPE_READ_WITH_ADDRESS
+            }
+            JEDEC_RDSR | 0x15 | JEDEC_RDID => spi_type == SPI_OPCODE_TYPE_READ_NO_ADDRESS,
+            0x4b => matches!(
+                spi_type,
+                SPI_OPCODE_TYPE_READ_NO_ADDRESS | SPI_OPCODE_TYPE_READ_WITH_ADDRESS
+            ),
+            JEDEC_BYTE_PROGRAM | JEDEC_SE | JEDEC_BE_52 | JEDEC_BE_D8 => {
+                spi_type == SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS
+            }
+            JEDEC_CE_C7 | JEDEC_CE_60 | JEDEC_WRSR | 0x31 | 0x11 => {
+                spi_type == SPI_OPCODE_TYPE_WRITE_NO_ADDRESS
+            }
+            _ => true,
+        }
+    }
+
+    fn menu_type(&self, opcode: u8) -> Result<u8, InternalError> {
+        let spi_type = self
+            .get_opcode_type(opcode)
+            .ok_or(InternalError::NotSupported(
+                "Opcode not available in OPMENU",
+            ))?;
+        if !Self::framing_fits(opcode, spi_type) {
+            return Err(InternalError::NotSupported(
+                "OPMENU frames the opcode wrongly",
+            ));
+        }
+        Ok(spi_type)
     }
 
     /// Find if an opcode is in the preop table
@@ -1420,10 +1447,10 @@ impl<H: HostAccess> IchSpiController<H> {
     /// - 0 = no preop needed
     /// - 1 = use preop[0] (typically WREN)
     /// - 2 = use preop[1] (typically EWSR)
-    fn get_atomic_for_opcode(&self, opcode: u8) -> u8 {
+    fn get_atomic_for_opcode(&self, opcode: u8) -> Result<u8, InternalError> {
         let opcodes = match &self.opcodes {
             Some(ops) => ops,
-            None => return 0,
+            None => return Err(InternalError::NotSupported("No PREOP table")),
         };
 
         // List of opcodes that require WREN (preop[0])
@@ -1442,30 +1469,41 @@ impl<H: HostAccess> IchSpiController<H> {
         if needs_wren {
             // Check if WREN is in preop[0] position
             if opcodes.preop[0] == JEDEC_WREN {
-                return 1; // Use preop[0]
+                return Ok(1); // Use preop[0]
             }
             // Check if WREN is in preop[1] position
             if opcodes.preop[1] == JEDEC_WREN {
-                return 2; // Use preop[1]
+                return Ok(2); // Use preop[1]
             }
-            // WREN not in preop table - this is a problem but log and continue
-            log::warn!(
-                "WREN (0x06) not in preop table, atomic mode not available for opcode {:#04x}",
-                opcode
-            );
+            return Err(InternalError::NotSupported("WREN not in the PREOP table"));
         }
 
-        0 // No preop needed
+        Ok(0) // No preop needed
     }
 
     /// Atomic mode for a write `opcode`. A preop the caller sent first
     /// (`SpiMaster::execute`) selects its PREOP slot, so chips whose WRSR
     /// needs EWSR (older SST25) get it; otherwise WREN as needed.
     fn select_atomic(&self, opcode: u8, preop: Option<u8>) -> Result<u8, InternalError> {
+        if preop == Some(JEDEC_EWSR)
+            && matches!(
+                opcode,
+                JEDEC_BYTE_PROGRAM
+                    | JEDEC_SE
+                    | JEDEC_BE_52
+                    | JEDEC_BE_D8
+                    | JEDEC_CE_C7
+                    | JEDEC_CE_60
+            )
+        {
+            return Err(InternalError::NotSupported(
+                "Program and erase require WREN",
+            ));
+        }
         match preop.map(|preop| (preop, self.find_preop(preop))) {
             Some((_, Some(index))) => Ok(index as u8 + 1),
-            Some((JEDEC_EWSR, None)) => Err(InternalError::Io("EWSR not in the PREOP table")),
-            _ => Ok(self.get_atomic_for_opcode(opcode)),
+            Some((_, None)) => Err(InternalError::NotSupported("Preop not in the PREOP table")),
+            None => self.get_atomic_for_opcode(opcode),
         }
     }
 
@@ -2490,6 +2528,7 @@ impl<H: HostAccess> IchSpiController<H> {
         let writecnt = writearr.len();
         let readcnt = readarr.len();
 
+        self.menu_type(opcode)?;
         // Find opcode in table
         let opcode_index = self.find_opcode_index(opcode).ok_or_else(|| {
             log::debug!("ICH7: Opcode {:#04x} not found in opcode table", opcode);
@@ -2780,6 +2819,7 @@ impl<H: HostAccess> IchSpiController<H> {
         let writecnt = writearr.len();
         let readcnt = readarr.len();
 
+        self.menu_type(opcode)?;
         // Find opcode in table
         let opcode_index = self.find_opcode_index(opcode).ok_or_else(|| {
             log::debug!("Opcode {:#04x} not found in opcode table", opcode);
@@ -3122,6 +3162,10 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         // The higher-level protocol sends them separately; remember which one
         // and send it atomically with the next command.
         if cmd.opcode == JEDEC_WREN || cmd.opcode == JEDEC_EWSR {
+            self.pending_preop = None;
+            if self.find_preop(cmd.opcode).is_none() {
+                return Err(CoreError::OpcodeNotSupported);
+            }
             log::trace!("Deferring preop {:#04x} to the next command", cmd.opcode);
             self.pending_preop = Some(cmd.opcode);
             return Ok(());
@@ -3199,7 +3243,7 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         }
 
         // OPMENU opcodes, or WREN/EWSR sent atomically from the PREOP table.
-        (Self::opcode_intent(opcode).is_some() && self.has_opcode(opcode))
+        (Self::opcode_intent(opcode).is_some() && self.menu_type(opcode).is_ok())
             || ((opcode == JEDEC_WREN || opcode == JEDEC_EWSR) && self.find_preop(opcode).is_some())
     }
 }
@@ -3433,7 +3477,7 @@ mod tests {
             assert!(host.writes().is_empty());
             let _ = send(&mut c, &[JEDEC_RDSR], &mut [0]);
             assert!(host.writes().is_empty());
-            // SMM protection is checked before issuing even a read-framed mutation.
+            // A wrongly framed mutation is rejected before enabling writes.
             c.opcodes.as_mut().unwrap().opcode[0] = Opcode {
                 opcode: JEDEC_CE_C7,
                 spi_type: SPI_OPCODE_TYPE_READ_NO_ADDRESS,
@@ -3446,16 +3490,59 @@ mod tests {
             );
             assert!(matches!(
                 send(&mut c, &[JEDEC_CE_C7], &mut [0]),
-                Err(InternalError::AccessDenied { .. })
+                Err(InternalError::NotSupported(_))
             ));
             assert!(host.writes().is_empty());
             host.set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            c.opcodes.as_mut().unwrap().opcode[0].spi_type = SPI_OPCODE_TYPE_WRITE_NO_ADDRESS;
             // Cycle may fail in the fake, but enable must precede it and be restored.
-            let _ = send(&mut c, &[JEDEC_CE_C7], &mut [0]);
+            let _ = send(&mut c, &[JEDEC_CE_C7], &mut []);
             assert_eq!(host.writes().len(), 1);
             drop(c);
             assert_eq!(host.writes().len(), 2);
             assert_eq!(host.writes()[1].2 & 1, 0);
+        }
+    }
+
+    #[test]
+    fn locked_menu_refuses_missing_preop_and_bad_framing() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.locked = true;
+            c.mode = SpiMode::SoftwareSequencing;
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            c.opcodes = Some(Opcodes::default());
+            c.opcodes.as_mut().unwrap().preop = [0, 0];
+            c.opcodes.as_mut().unwrap().opcode[0] = Opcode {
+                opcode: JEDEC_BYTE_PROGRAM,
+                spi_type: SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS,
+                atomic: 0,
+            };
+            let host = c.host.clone();
+            let mmio = c.spibar.clone();
+            for opcode in [JEDEC_WREN, JEDEC_EWSR] {
+                let mut preop = SpiCommand::simple(opcode);
+                assert!(c.execute(&mut preop).is_err());
+                assert!(c.pending_preop.is_none());
+            }
+            let send = |c: &mut IchSpiController<FakeHost>| {
+                if ich7 {
+                    c.ich7_swseq_send_command(&[JEDEC_BYTE_PROGRAM, 0, 0, 0, 0xaa], &mut [])
+                } else {
+                    c.swseq_send_command(&[JEDEC_BYTE_PROGRAM, 0, 0, 0, 0xaa], &mut [])
+                }
+            };
+            assert!(send(&mut c).is_err());
+            c.opcodes.as_mut().unwrap().preop = [JEDEC_WREN, 0];
+            c.opcodes.as_mut().unwrap().opcode[0].spi_type = SPI_OPCODE_TYPE_WRITE_NO_ADDRESS;
+            assert!(!c.probe_opcode(JEDEC_BYTE_PROGRAM));
+            assert!(send(&mut c).is_err());
+            assert!(host.writes().is_empty());
+            assert!(mmio.writes().is_empty());
         }
     }
 
