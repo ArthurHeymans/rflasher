@@ -1345,41 +1345,9 @@ pub async fn write<M: SpiMaster + ?Sized>(
     addr: u32,
     data: &[u8],
 ) -> Result<()> {
-    if !ctx.is_valid_range(addr, data.len()) {
-        return Err(Error::AddressOutOfBounds);
-    }
+    validate_spi_program(master, ctx, addr, data.len())?;
     if data.is_empty() {
         return Ok(());
-    }
-    if master.max_write_len() == 0 {
-        return Err(Error::ProgrammerError);
-    }
-    let native = ctx.address_mode == AddressMode::FourByte
-        && ctx.chip.features.supports_4ba_program()
-        && master.features().contains(SpiFeatures::FOUR_BYTE_ADDR)
-        && master.probe_opcode(crate::spi::opcodes::PP_4B);
-    if ctx.address_mode == AddressMode::FourByte {
-        addressing_for_4byte_operation(native, ctx.chip.features, master.features())?;
-    }
-    let aai = ctx.chip.features.contains(Features::AAI_WORD) && master.max_write_len() >= 2;
-    if aai {
-        let leading_byte = usize::from(!addr.is_multiple_of(2));
-        let remaining = data.len() - leading_byte;
-        let has_words = remaining >= 2;
-        let has_bytes = leading_byte != 0 || !remaining.is_multiple_of(2);
-        if (has_words
-            && (!master.probe_opcode(crate::spi::opcodes::AAI_WP)
-                || !master.probe_opcode(crate::spi::opcodes::WRDI)))
-            || (has_bytes && !master.probe_opcode(crate::spi::opcodes::PP))
-        {
-            return Err(Error::OpcodeNotSupported);
-        }
-    } else if !master.probe_opcode(if native {
-        crate::spi::opcodes::PP_4B
-    } else {
-        crate::spi::opcodes::PP
-    }) {
-        return Err(Error::OpcodeNotSupported);
     }
     let saved = super::protection::prepare(master, ctx).await?;
     let result = match master.program_flash(ctx, addr, data).await {
@@ -1396,6 +1364,63 @@ pub async fn write<M: SpiMaster + ?Sized>(
     .await
 }
 
+fn check_mutation_opcodes<M: SpiMaster + ?Sized>(master: &M) -> Result<()> {
+    if [crate::spi::opcodes::WREN, crate::spi::opcodes::RDSR]
+        .into_iter()
+        .all(|opcode| master.probe_opcode(opcode))
+    {
+        Ok(())
+    } else {
+        Err(Error::OpcodeNotSupported)
+    }
+}
+
+fn validate_spi_program<M: SpiMaster + ?Sized>(
+    master: &M,
+    ctx: &FlashContext,
+    addr: u32,
+    len: usize,
+) -> Result<()> {
+    if !ctx.is_valid_range(addr, len) {
+        return Err(Error::AddressOutOfBounds);
+    }
+    if len == 0 {
+        return Ok(());
+    }
+    check_mutation_opcodes(master)?;
+    if master.max_write_len() == 0 {
+        return Err(Error::ProgrammerError);
+    }
+    let native = ctx.address_mode == AddressMode::FourByte
+        && ctx.chip.features.supports_4ba_program()
+        && master.features().contains(SpiFeatures::FOUR_BYTE_ADDR)
+        && master.probe_opcode(crate::spi::opcodes::PP_4B);
+    if ctx.address_mode == AddressMode::FourByte {
+        addressing_for_4byte_operation(native, ctx.chip.features, master.features())?;
+    }
+    let aai = ctx.chip.features.contains(Features::AAI_WORD) && master.max_write_len() >= 2;
+    if aai {
+        let leading_byte = usize::from(!addr.is_multiple_of(2));
+        let remaining = len - leading_byte;
+        let has_words = remaining >= 2;
+        let has_bytes = leading_byte != 0 || !remaining.is_multiple_of(2);
+        if (has_words
+            && (!master.probe_opcode(crate::spi::opcodes::AAI_WP)
+                || !master.probe_opcode(crate::spi::opcodes::WRDI)))
+            || (has_bytes && !master.probe_opcode(crate::spi::opcodes::PP))
+        {
+            return Err(Error::OpcodeNotSupported);
+        }
+    } else if !master.probe_opcode(if native {
+        crate::spi::opcodes::PP_4B
+    } else {
+        crate::spi::opcodes::PP
+    }) {
+        return Err(Error::OpcodeNotSupported);
+    }
+    Ok(())
+}
+
 /// Program already-erased flash with generic SPI page-program commands.
 ///
 /// Handles page alignment and splits writes into chunks that respect the
@@ -1409,8 +1434,9 @@ pub async fn spi_program<M: SpiMaster + ?Sized>(
     addr: u32,
     data: &[u8],
 ) -> Result<()> {
-    if !ctx.is_valid_range(addr, data.len()) {
-        return Err(Error::AddressOutOfBounds);
+    validate_spi_program(master, ctx, addr, data.len())?;
+    if data.is_empty() {
+        return Ok(());
     }
     let features = ctx.chip.features;
     let write_granularity = ctx.chip.write_granularity;
@@ -1582,6 +1608,7 @@ pub(crate) fn validate_spi_erase_operation<M: SpiMaster + ?Sized>(
     {
         return Err(Error::InvalidAlignment);
     }
+    check_mutation_opcodes(master)?;
     let block = &op.erase_block;
     if block.is_chip_erase() {
         if op.start != 0 || op.size != ctx.chip.total_size || block.total_size() != op.size {
@@ -2139,6 +2166,7 @@ mod tests {
         fail_read: bool,
         fail_exit: bool,
         reject_native: bool,
+        reject_opcode: Option<u8>,
     }
 
     impl SpiMaster for ReadMaster {
@@ -2153,6 +2181,7 @@ mod tests {
         }
         fn probe_opcode(&self, opcode: u8) -> bool {
             !(self.reject_native && opcode == opcodes::READ_4B)
+                && self.reject_opcode != Some(opcode)
         }
         async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
             self.commands
@@ -2167,6 +2196,52 @@ mod tests {
             Ok(())
         }
         async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    #[test]
+    fn program_preflight_checks_every_needed_opcode_before_commands() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.chip.features |= Features::AAI_WORD;
+        for opcode in [
+            opcodes::WREN,
+            opcodes::RDSR,
+            opcodes::AAI_WP,
+            opcodes::WRDI,
+            opcodes::PP,
+        ] {
+            let mut master = ReadMaster {
+                reject_opcode: Some(opcode),
+                ..Default::default()
+            };
+            assert!(matches!(
+                block_on(spi_program(&mut master, &ctx, 0, &[1, 2, 3])),
+                Err(Error::OpcodeNotSupported)
+            ));
+            assert!(master.commands.is_empty());
+        }
+    }
+
+    #[test]
+    fn erase_preflight_checks_prerequisites_before_commands() {
+        use futures_lite::future::block_on;
+        let ctx = nonuniform_context();
+        let op = OptimalEraseOp {
+            start: 0,
+            size: 8,
+            erase_block: ctx.chip.erase_blocks[0].clone(),
+        };
+        for opcode in [opcodes::WREN, opcodes::RDSR, 0x20] {
+            let mut master = ReadMaster {
+                reject_opcode: Some(opcode),
+                ..Default::default()
+            };
+            assert!(matches!(
+                block_on(erase_spi_operation(&mut master, &ctx, &op)),
+                Err(Error::OpcodeNotSupported)
+            ));
+            assert!(master.commands.is_empty());
+        }
     }
 
     #[test]
