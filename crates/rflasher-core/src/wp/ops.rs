@@ -36,6 +36,9 @@ pub enum WpError {
     VolatileUnsupported,
     /// No documented persistent status-register write procedure.
     PersistentUnsupported,
+    /// Readable status registers may hold volatile overrides, so the persistent
+    /// state a persistent write would build on is unknown.
+    PersistentStateUnknown,
     /// SPI communication error
     SpiError(Error),
 }
@@ -66,6 +69,13 @@ impl core::fmt::Display for WpError {
                 write!(
                     f,
                     "chip has no documented persistent status register write procedure"
+                )
+            }
+            WpError::PersistentStateUnknown => {
+                write!(
+                    f,
+                    "persistent write refused: status registers may hold volatile overrides \
+                     of unknown persistent values; use a temporary write"
                 )
             }
             WpError::SpiError(e) => write!(f, "SPI error: {}", e),
@@ -139,6 +149,9 @@ pub async fn read_wp_bits<M: SpiMaster + ?Sized>(
         return Err(WpError::UnsupportedState);
     }
 
+    if bit_map.sector_bp6_undefined && bits.sec == Some(1) && bits.bp_value() == 6 {
+        return Err(WpError::UnsupportedState);
+    }
     Ok(bits)
 }
 
@@ -385,6 +398,9 @@ pub async fn write_wp_bits<M: SpiMaster + ?Sized>(
     // Merge new values with current values (preserving non-WP bits)
     let final_sr1 = (curr_sr1 & !mask1) | (new_sr1 & mask1);
     let final_sr2 = (curr_sr2 & !mask2) | (new_sr2 & mask2);
+    if bit_map.sector_bp6_undefined && final_sr1 & 0x5c == 0x58 {
+        return Err(WpError::UnsupportedState);
+    }
 
     // Determine which registers need to be written
     let need_sr1 = mask1 != 0;

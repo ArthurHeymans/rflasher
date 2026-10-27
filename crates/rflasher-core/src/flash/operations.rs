@@ -804,7 +804,9 @@ fn select_candidates(
             .iter()
             .copied()
             .filter(|c| {
-                c.name().eq_ignore_ascii_case(wanted) || crate::chip::name_matches(c.name(), wanted)
+                c.name().eq_ignore_ascii_case(wanted)
+                    || (!c.features.contains(Features::EXPLICIT_PROFILE)
+                        && crate::chip::name_matches(c.name(), wanted))
             })
             .collect();
         if matching.is_empty() {
@@ -838,6 +840,7 @@ fn select_candidates(
             .ok_or(Error::ChipAmbiguous);
     }
 
+    candidates.retain(|c| !c.features.contains(Features::EXPLICIT_PROFILE));
     let Some(&first) = candidates.first() else {
         return Ok(None);
     };
@@ -1346,7 +1349,9 @@ pub async fn spi_read<M: SpiMaster + ?Sized>(
 ///
 /// Validates that the generic SPI protocol could program the range, then
 /// temporarily lifts chip protection around [`SpiMaster::program_flash`].
-/// The target region must be erased first.
+/// The target region must be erased first. On the generic W25Q128.V profile,
+/// whose possible WPS individual locks ignore programs without an error, the
+/// range is read back and a mismatch is reported as [`Error::VerifyError`].
 pub async fn write<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
@@ -1359,6 +1364,10 @@ pub async fn write<M: SpiMaster + ?Sized>(
     }
     // In range, so the length fits. Refuse before the first page, not after.
     master.check_access(FlashAccess::Modify, addr, data.len() as u32)?;
+    let read_back = super::protection::wps_unknown(ctx);
+    if read_back {
+        master.check_access(FlashAccess::Read, addr, data.len() as u32)?;
+    }
     let saved = super::protection::prepare(master, ctx).await?;
     let result = match master.program_flash(ctx, addr, data).await {
         Ok(()) => super::protection::check_result(master, ctx, addr, false).await,
@@ -1371,7 +1380,36 @@ pub async fn write<M: SpiMaster + ?Sized>(
         result,
         (protocol::WRSR_POLL_US, protocol::WRSR_TIMEOUT_US),
     )
-    .await
+    .await?;
+    if read_back {
+        check_programmed_range(master, ctx, addr, data).await?;
+    }
+    Ok(())
+}
+
+/// Read `data`'s range back and report the first byte that differs.
+async fn check_programmed_range<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    data: &[u8],
+) -> Result<()> {
+    const CHUNK_SIZE: usize = 4096;
+    let mut buf = [0u8; CHUNK_SIZE];
+    for (i, expected) in data.chunks(CHUNK_SIZE).enumerate() {
+        let chunk_addr = addr + (i * CHUNK_SIZE) as u32;
+        let actual = &mut buf[..expected.len()];
+        read(master, ctx, chunk_addr, actual).await?;
+        if let Some(pos) = actual.iter().zip(expected).position(|(a, b)| a != b) {
+            let addr = chunk_addr + pos as u32;
+            log::error!(
+                "Program at 0x{addr:08X} was ignored or incomplete; WPS individual \
+                 locks may protect it. Select W25Q128BV-WP or W25Q128FVJV-WP if the marking is known"
+            );
+            return Err(Error::VerifyError { addr });
+        }
+    }
+    Ok(())
 }
 
 fn check_mutation_opcodes<M: SpiMaster + ?Sized>(master: &M) -> Result<()> {
@@ -2435,7 +2473,10 @@ mod tests {
             fail_erase: false,
         };
         let mut device = SpiFlashDevice::new(master, ctx);
-        block_on(device.erase_operation(&op)).unwrap();
+        assert_eq!(
+            block_on(device.erase_operation(&op)),
+            Ok(crate::flash::EraseOutcome::Unverified)
+        );
         let commands = device.into_parts().0.commands;
         assert_eq!(commands.iter().filter(|(code, _)| *code == 0x20).count(), 3);
         assert!(!commands.iter().any(|(code, _)| *code == 0xc7));

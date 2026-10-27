@@ -11,6 +11,16 @@ use crate::error::Result;
 #[cfg(feature = "alloc")]
 use crate::wp::{WpConfig, WpError, WpMode, WpRange, WpResult, WriteOptions};
 
+/// What a successful [`FlashDevice::erase_operation`] established.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EraseOutcome {
+    /// The erase completed; the range was not read back.
+    Unverified,
+    /// The device read the whole range back as erased.
+    VerifiedErased,
+}
+
 /// Unified trait for flash devices
 ///
 /// This trait abstracts over both SPI-based flash chips (where we have raw SPI
@@ -107,6 +117,8 @@ pub trait FlashDevice {
     /// # Errors
     /// * `AddressOutOfBounds` - If the write extends beyond flash size
     /// * `WriteError` - If the write operation fails
+    /// * `VerifyError` - If the device reads the range back (e.g. the generic
+    ///   W25Q128.V profile) and it does not match
     async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()>;
 
     /// Erase a region of flash
@@ -178,13 +190,20 @@ pub trait FlashDevice {
     /// Execute the exact eraser selected by a plan. The default is only valid
     /// for devices with a single hardware geometry; SPI implementations override it.
     /// Implementations need not verify the result: the unified operations
-    /// read the erased range back once for every device type.
-    async fn erase_operation(&mut self, op: &super::operations::OptimalEraseOp) -> Result<()> {
+    /// read the range back unless it is reported as
+    /// [`EraseOutcome::VerifiedErased`]. A device that verifies should report
+    /// a mismatch as `EraseFailure::VerifyFailed`, which the unified
+    /// operations recover from like their own.
+    async fn erase_operation(
+        &mut self,
+        op: &super::operations::OptimalEraseOp,
+    ) -> Result<EraseOutcome> {
         self.validate_erase_operation(op)?;
         if self.erase_blocks().len() != 1 {
             return Err(crate::Error::IoModeNotSupported);
         }
-        self.erase(op.start, op.size).await
+        self.erase(op.start, op.size).await?;
+        Ok(EraseOutcome::Unverified)
     }
 
     /// Read the chip's unique ID, if supported

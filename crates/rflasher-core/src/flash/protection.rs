@@ -85,10 +85,31 @@ async fn sector_protection<M: SpiMaster + ?Sized>(
         .await
 }
 
+/// The shared W25Q128.V ID (EF:4018) covers BV, which has no SR3, and FV/JV,
+/// whose WPS=1 individual locks silently ignore program and erase. Only an
+/// explicitly selected profile establishes whether SR3/WPS exists, so the
+/// generic profile can neither check WPS nor report a WP layout. Its array
+/// mutations are read back instead, whether or not the caller verifies.
+pub(crate) fn wps_unknown(ctx: &FlashContext) -> bool {
+    ctx.chip.jedec_id() == 0xef4018 && !ctx.chip.features.contains(Features::EXPLICIT_PROFILE)
+}
+
 pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
 ) -> Result<SavedProtection> {
+    if ctx.chip.features.contains(Features::WP_WPS) {
+        // WPS=1 selects individual block locks, which are neither read nor
+        // removed here and silently ignore program/erase. Fail closed rather
+        // than rely on a later verify that the caller may skip.
+        if !master.probe_opcode(0x15) {
+            return Err(Error::OpcodeNotSupported);
+        }
+        if protocol::read_status3(master).await? & 0x04 != 0 {
+            log::error!("WPS=1: individual block locks are not supported for mutation");
+            return Err(Error::WriteProtected);
+        }
+    }
     let unlock = ctx.chip.unlock;
     let bpr_len = match unlock {
         Unlock::Unknown | Unlock::None => return Ok(SavedProtection::Unchanged),

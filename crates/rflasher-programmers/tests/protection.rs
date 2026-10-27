@@ -7,7 +7,9 @@ use rflasher_core::chip::{
 };
 use rflasher_core::error::{EraseFailure, Error, Result};
 use rflasher_core::flash::unified::{self, NoProgress};
-use rflasher_core::flash::{self, FlashContext, FlashDevice, SpiFlashDevice};
+use rflasher_core::flash::{
+    self, EraseOutcome, FlashContext, FlashDevice, OptimalEraseOp, SpiFlashDevice,
+};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
 use rflasher_core::spi::SpiCommand;
 use rflasher_programmers::ErasedFlashDevice;
@@ -18,6 +20,7 @@ struct State {
     sr1: u8,
     sr2: u8,
     sr3: u8,
+    fail_sr3: bool,
     wp_high: bool,
     wel: bool,
     ewsr: bool,
@@ -25,6 +28,8 @@ struct State {
     bpr: Vec<u8>,
     data: Vec<u8>,
     commands: Vec<(u8, Vec<u8>)>,
+    /// Address and length of every 03h read since the last erase command.
+    reads_since_erase: Vec<(usize, usize)>,
     fail_mutation: bool,
     ignore_unlock: bool,
     ignore_erase: bool,
@@ -66,6 +71,11 @@ impl State {
                 .any(|p| *p)
         } else if !self.bpr.is_empty() {
             self.bpr.iter().any(|b| *b != 0)
+        } else if self.sr3 & 4 != 0 {
+            // WPS=1: individual block locks, all set at power-up by default.
+            self.sectors[addr / 4096..(addr + len).div_ceil(4096)]
+                .iter()
+                .any(|p| *p)
         } else {
             self.sr1 & self.unlock.status_masks().map_or(0x1c, |m| m.0) != 0
         }
@@ -132,6 +142,9 @@ impl SpiMaster for Master {
                 if s.deny_opcode == Some(0x15) {
                     return Err(Error::OpcodeNotSupported);
                 }
+                if s.fail_sr3 {
+                    return Err(Error::SpiTransferFailed);
+                }
                 cmd.read_buf.fill(s.sr3);
             }
             0x01 => {
@@ -188,9 +201,11 @@ impl SpiMaster for Master {
                 }
                 s.wel = false;
             }
-            0x03 => cmd
-                .read_buf
-                .copy_from_slice(&s.data[addr..addr + cmd.read_buf.len()]),
+            0x03 => {
+                s.reads_since_erase.push((addr, cmd.read_buf.len()));
+                cmd.read_buf
+                    .copy_from_slice(&s.data[addr..addr + cmd.read_buf.len()]);
+            }
             0x02 => {
                 if s.wel {
                     s.program(addr, cmd.write_data)?;
@@ -229,6 +244,7 @@ impl SpiMaster for Master {
                 s.wel = false;
                 s.sr1 |= s.error_flag;
                 s.busy_us = s.erase_busy_us;
+                s.reads_since_erase.clear();
             }
             _ => return Err(Error::OpcodeNotSupported),
         }
@@ -285,6 +301,7 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
         sr1,
         sr2: 0x02,
         sr3: 0,
+        fail_sr3: false,
         wp_high: true,
         wel: false,
         ewsr: false,
@@ -292,6 +309,7 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
         bpr,
         data: vec![0; size],
         commands: vec![],
+        reads_since_erase: vec![],
         fail_mutation: false,
         ignore_unlock: false,
         ignore_erase: false,
@@ -815,8 +833,9 @@ fn w25q128_array_mutations_preserve_status_registers() {
 #[test]
 fn known_wps_is_checked_and_ambiguous_shared_id_fails_closed() {
     block_on(async {
-        let features = Features::WRSR_WREN | Features::WRSR_EXT | Features::WP_WINBOND;
-        for (wps_known, sr3, fail) in [
+        let features =
+            Features::WRSR_WREN | Features::WRSR_EXT | Features::WP_WINBOND | Features::WP_WPS;
+        for (explicit, sr3, fail) in [
             (false, 0, false),
             (true, 0, false),
             (true, 4, false),
@@ -827,8 +846,8 @@ fn known_wps_is_checked_and_ambiguous_shared_id_fails_closed() {
                 Unlock::Status,
                 0,
                 features
-                    | if wps_known {
-                        Features::WP_WPS
+                    | if explicit {
+                        Features::EXPLICIT_PROFILE
                     } else {
                         Features::empty()
                     },
@@ -843,7 +862,7 @@ fn known_wps_is_checked_and_ambiguous_shared_id_fails_closed() {
             }
             let mut device = SpiFlashDevice::new(master, ctx);
             let result = device.read_wp_config().await;
-            assert_eq!(result.is_ok(), wps_known && sr3 == 0 && !fail);
+            assert_eq!(result.is_ok(), explicit && sr3 == 0 && !fail);
             assert_eq!(
                 state
                     .lock()
@@ -851,9 +870,209 @@ fn known_wps_is_checked_and_ambiguous_shared_id_fails_closed() {
                     .commands
                     .iter()
                     .any(|(op, _)| *op == 0x15),
-                wps_known
+                explicit
             );
         }
+    });
+}
+
+/// Array mutation on an explicit W25Q128 profile backed by the emulator.
+fn w25q128_profile(name: &str, sr1: u8) -> (Master, FlashContext) {
+    let (master, _) = fixture(Unlock::Status, sr1, Features::empty(), 16 * 1024 * 1024);
+    let db = rflasher_chips::ChipDatabase::new();
+    (master, FlashContext::new(db.find_by_name(name)[0].clone()))
+}
+
+#[test]
+fn wps_individual_locks_refuse_array_mutation_before_write_enable() {
+    block_on(async {
+        // WPS=1 makes the emulated chip ignore program/erase, so success would
+        // only be caught by a verify that `--no-verify` skips.
+        for (sr3, fail_sr3, deny, expected) in [
+            (4, false, false, Error::WriteProtected),
+            (0, true, false, Error::SpiTransferFailed),
+            (0, false, true, Error::OpcodeNotSupported),
+        ] {
+            for sr1 in [0, 0x1c] {
+                let (master, ctx) = w25q128_profile("W25Q128FVJV-WP", sr1);
+                let state = master.0.clone();
+                {
+                    let mut s = state.lock().unwrap();
+                    s.sr3 = sr3;
+                    s.fail_sr3 = fail_sr3;
+                    s.deny_opcode = deny.then_some(0x15);
+                    s.data[0] = 0xff;
+                }
+                let mut device = SpiFlashDevice::new(master, ctx);
+                assert_eq!(device.write(0, &[0x5a]).await, Err(expected));
+                assert_eq!(device.erase(0, 4096).await, Err(expected));
+                let s = state.lock().unwrap();
+                assert!(
+                    !s.commands
+                        .iter()
+                        .any(|(op, _)| [0x01, 0x02, 0x06, 0x20, 0x50].contains(op))
+                );
+                assert_eq!((s.sr1, s.sr2, s.data[0], s.data[1]), (sr1, 0x02, 0xff, 0));
+            }
+        }
+    });
+}
+
+#[test]
+fn explicit_profiles_unprotect_arrays_with_volatile_writes_only() {
+    block_on(async {
+        for name in ["W25Q128BV-WP", "W25Q128FVJV-WP"] {
+            let (master, ctx) = w25q128_profile(name, 0x1c);
+            let state = master.0.clone();
+            state.lock().unwrap().data[0] = 0xff;
+            let mut device = SpiFlashDevice::new(master, ctx);
+            device.write(0, &[0x5a]).await.unwrap();
+            let s = state.lock().unwrap();
+            assert_eq!((s.sr1, s.sr2, s.data[0]), (0x1c, 0x02, 0x5a));
+            let commands: Vec<u8> = s.commands.iter().map(|(op, _)| *op).collect();
+            // Every status write is a 50h volatile write of the current SR2.
+            assert!(
+                commands
+                    .windows(2)
+                    .filter(|w| w[1] == 0x01)
+                    .all(|w| w[0] == 0x50)
+            );
+            assert!(
+                s.commands
+                    .iter()
+                    .filter(|(op, _)| *op == 0x01)
+                    .all(|(_, bytes)| bytes.len() == 2 && bytes[1] == 0x02)
+            );
+            // BV has no SR3; FV/JV checks WPS before the first enable.
+            let first_enable = commands.iter().position(|op| [0x06, 0x50].contains(op));
+            let sr3 = commands.iter().position(|op| *op == 0x15);
+            assert_eq!(sr3.is_some(), name.contains("FVJV"));
+            assert!(sr3 < first_enable);
+        }
+    });
+}
+
+fn first_sector_op(ctx: &FlashContext, start: u32) -> OptimalEraseOp {
+    let erase_block = ctx.chip.erase_blocks()[0].clone();
+    assert_eq!(erase_block.min_block_size(), 4096);
+    OptimalEraseOp {
+        start,
+        size: 4096,
+        erase_block,
+    }
+}
+
+#[test]
+fn generic_w25q128_reads_back_mutations_ignored_by_wps_locks() {
+    block_on(async {
+        // FV/JV with WPS=1 behind the generic profile, which cannot read SR3.
+        // No surface may report success, whatever the caller verifies.
+        for sr1 in [0, 0x1c] {
+            let (mut master, ctx) = w25q128_profile("W25Q128.V", sr1);
+            let state = master.0.clone();
+            {
+                let mut s = state.lock().unwrap();
+                s.sr3 = 4;
+                s.data[..2].copy_from_slice(&[0x5a, 0xff]);
+            }
+            // The first byte already matches, so only the second can differ.
+            let ignored = Err(Error::VerifyError { addr: 1 });
+            assert_eq!(
+                flash::write(&mut master, &ctx, 0, &[0x5a, 0]).await,
+                ignored
+            );
+            let op = first_sector_op(&ctx, 0);
+            let mut device = ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx));
+            assert_eq!(device.write(0, &[0x5a, 0]).await, ignored);
+            let unerased = Err(Error::EraseError(EraseFailure::VerifyFailed {
+                addr: 0,
+                found: 0x5a,
+            }));
+            assert_eq!(device.erase(0, 4096).await, unerased);
+            assert_eq!(device.erase_operation(&op).await.map(drop), unerased);
+            let smart = unified::smart_write_region(&mut device, 0, &[0x11; 16], &mut NoProgress)
+                .await
+                .map(drop);
+            assert_eq!(smart, unerased);
+            let s = state.lock().unwrap();
+            assert_eq!((s.sr1, s.sr2), (sr1, 0x02));
+            assert_eq!(&s.data[..3], &[0x5a, 0xff, 0]);
+            assert!(!s.commands.iter().any(|(op, _)| *op == 0x15));
+        }
+
+        // Locks on only some blocks: the first ignored byte is reported.
+        let (master, ctx) = w25q128_profile("W25Q128.V", 0);
+        let state = master.0.clone();
+        {
+            let mut s = state.lock().unwrap();
+            s.sr3 = 4;
+            s.sectors[0] = false;
+            s.data[4090..4102].fill(0xff);
+        }
+        let mut device = SpiFlashDevice::new(master, ctx);
+        assert_eq!(
+            device.write(4090, &[0; 12]).await,
+            Err(Error::VerifyError { addr: 4096 })
+        );
+        let s = state.lock().unwrap();
+        assert_eq!(&s.data[4094..4098], &[0, 0, 0xff, 0xff]);
+    });
+}
+
+#[test]
+fn generic_w25q128_without_individual_locks_stays_usable() {
+    block_on(async {
+        // BV, or FV/JV with WPS=0: the generic profile never reads SR3.
+        for sr1 in [0, 0x1c] {
+            let (mut master, ctx) = w25q128_profile("W25Q128.V", sr1);
+            let state = master.0.clone();
+            state.lock().unwrap().data[4096..8192].fill(0xff);
+            flash::write(&mut master, &ctx, 4096, &[0x22])
+                .await
+                .unwrap();
+            let op = first_sector_op(&ctx, 8192);
+            let mut device = ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx));
+            device.write(4097, &[0x33]).await.unwrap();
+            assert_eq!(
+                device.erase_operation(&op).await,
+                Ok(EraseOutcome::VerifiedErased)
+            );
+            unified::smart_write_region(&mut device, 0, &[0x11; 16], &mut NoProgress)
+                .await
+                .unwrap();
+            let s = state.lock().unwrap();
+            assert_eq!((s.sr1, s.sr2), (sr1, 0x02));
+            assert_eq!(&s.data[..16], &[0x11; 16]);
+            assert!(s.data[16..4096].iter().all(|b| *b == 0));
+            assert_eq!(&s.data[4096..4099], &[0x22, 0x33, 0xff]);
+            assert!(s.data[8192..12288].iter().all(|b| *b == 0xff));
+            assert!(!s.commands.iter().any(|(op, _)| *op == 0x15));
+        }
+    });
+}
+
+#[test]
+fn generic_w25q128_partial_erase_reads_the_block_back_once() {
+    block_on(async {
+        let (master, ctx) = w25q128_profile("W25Q128.V", 0);
+        let state = master.0.clone();
+        let pattern: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
+        state.lock().unwrap().data[..4096].copy_from_slice(&pattern);
+        let mut device = ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx));
+        let region = rflasher_core::layout::Region::new("part", 16, 31);
+        unified::erase_region(&mut device, &region).await.unwrap();
+        let s = state.lock().unwrap();
+        assert!(s.data[16..32].iter().all(|b| *b == 0xff));
+        assert_eq!(&s.data[..16], &pattern[..16]);
+        assert_eq!(&s.data[32..4096], &pattern[32..]);
+        // The device's own check covers the erased bytes; unified does not
+        // read them a second time.
+        let erased_reads = s
+            .reads_since_erase
+            .iter()
+            .filter(|&&(addr, len)| addr < 32 && addr + len > 16)
+            .count();
+        assert_eq!(erased_reads, 1);
     });
 }
 

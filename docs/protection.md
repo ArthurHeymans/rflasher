@@ -125,16 +125,49 @@ Unlock masks are not range decoders. `wp` operations require `WP_WINBOND`, an
 explicit assertion of the supported SR1/SR2 map, SPI25 range decoder and combined
 status-write procedure. The bundled W25Q128.V profile carries this assertion,
 but the shared EF:4018 identity does not establish whether SR3 exists, so it
-cannot report or change WP configuration. Other unaudited layouts are refused. A profile explicitly asserting
-`WP_WPS` reads SR3 and refuses individual-lock mode and read failures. A
-floating-low response to an unsupported SR3 command is indistinguishable from
-WPS=0, so this assertion must only be assigned to a positively identified part.
-The RON schema exposes `WP_WINBOND` but not `WP_WPS`, so a custom RON
-profile cannot assert the SR3/WPS layout needed to enable WP configuration for
-the shared EF:4018 identity.
-Array operations on EF:4018 are allowed; individual locks are not removed and
-may prevent a mutation, which array verification detects. CMP/SRL and independent
-protection modes are not automatically cleared.
+cannot report or change WP configuration. If the chip marking is known, select
+`--chip W25Q128BV-WP` for BV or `--chip W25Q128FVJV-WP` for FV/JV. These
+opt-in profiles still require the matching JEDEC ID; the ID itself cannot verify
+the user's variant selection. Choosing the wrong profile is unsafe. The BV
+profile never reads SR3; FV/JV read SR3 and refuse individual-lock mode or read
+failures. A floating-low response to an unsupported SR3 command is
+indistinguishable from WPS=0, so selecting FV/JV requires independent knowledge
+of the part. Other unaudited layouts are refused.
+
+The profiles follow the [BV rev E](https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/1023/W25Q128BV.pdf)
+sections 7.1 and 7.2.9, [FV rev H](https://www.pjrc.com/teensy/W25Q128FV.pdf)
+and [JV rev F](https://cdn.sparkfun.com/assets/9/d/7/a/d/w25q128jv_revf_03272018_plus.pdf)
+sections 7.1 and 8.2.5. Both use a combined two-byte `01h` write preserving
+unmodified SR2 bits; WPS is not changed. SEC=1 with BP=110 is absent from
+these protection tables, so WP reporting and writes to that state are refused.
+
+These profiles only accept `--temporary` WP changes (`50h` + `01h`). All three
+parts support volatile status writes, and the read commands return the current
+values, which may be volatile overrides of the persistent ones. No command reads
+the persistent values. A persistent `06h` + `01h` write built on the current
+values could persist unrelated volatile SR2 bits, including the OTP LB bits. On
+FV/JV, a current WPS=0 may override a persistent WPS=1, so persistent ranges
+would be ignored after the next power-up. Persistent changes are therefore
+refused before any SPI command. A temporary change writes back the current
+values of unrelated bits and is lost at power-off.
+
+Array operations on EF:4018 are allowed. Temporary unprotection of the
+explicit profiles also uses volatile `50h` writes. Before any write enable,
+program or erase, the FV/JV profile reads SR3 and refuses the mutation when
+WPS=1 or SR3 cannot be read: individual locks would silently ignore it, and the
+array verification that would detect this can be skipped with `--no-verify`.
+The BV profile has no WPS and does not read SR3. The generic W25Q128.V profile
+never reads SR3, which BV lacks, so it cannot check WPS, and individual locks
+are not removed. Instead, the device layer reads back every program and erase it
+performs on this profile and reports a mismatch as an error, so neither
+`--no-verify` nor a direct `FlashDevice`/`flash::write` caller sees success for
+an ignored or partial mutation. This costs one extra read of each programmed
+range, and of each range a direct caller erases (the unified operations reuse
+the device's check instead of reading the range again); selecting an explicit
+profile avoids it. The raw
+`spi_program`/`program_flash` primitives are not covered: they also leave
+block protection to the caller. CMP/SRL and independent protection modes are
+not automatically cleared.
 Micron sector locks, Atmel security locks and PMC safeguards remain unresolved;
 array verification still detects ignored mutations.
 

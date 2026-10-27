@@ -297,6 +297,8 @@ pub struct WpRegBitMap {
     pub bp: [RegBitInfo; MAX_BP_BITS],
     /// Write Protect Selection (WPS) - indicates per-sector protection mode
     pub wps: RegBitInfo,
+    /// SEC=1, BP=110 is absent from the selected chip's protection table.
+    pub sector_bp6_undefined: bool,
 }
 
 impl WpRegBitMap {
@@ -310,6 +312,7 @@ impl WpRegBitMap {
             tb: RegBitInfo::not_present(),
             bp: [RegBitInfo::not_present(); MAX_BP_BITS],
             wps: RegBitInfo::not_present(),
+            sector_bp6_undefined: false,
         }
     }
 
@@ -331,6 +334,7 @@ impl WpRegBitMap {
                 RegBitInfo::not_present(),
             ],
             wps: RegBitInfo::not_present(),
+            sector_bp6_undefined: false,
         }
     }
 
@@ -349,6 +353,7 @@ impl WpRegBitMap {
                 RegBitInfo::new(StatusRegister::Status2, 2, BitWritability::ReadWrite),
             ],
             wps: RegBitInfo::not_present(),
+            sector_bp6_undefined: false,
         }
     }
 

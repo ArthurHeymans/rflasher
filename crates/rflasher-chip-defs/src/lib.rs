@@ -133,6 +133,10 @@ pub struct FeaturesDef {
     pub wp_cmp_sr2: bool,
     /// Audited Winbond map/range decoder and combined SR1/SR2 write procedure.
     pub wp_winbond: bool,
+    /// WPS is SR3 bit 2 and selects individual protection locks.
+    pub wp_wps: bool,
+    /// Only select this profile when its exact name is requested.
+    pub explicit_profile: bool,
 
     /// Device ID uses legacy Atmel opcode 0x15 instead of JEDEC RDID.
     pub at25f_id: bool,
