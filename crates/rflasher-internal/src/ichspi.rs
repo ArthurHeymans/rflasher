@@ -1391,6 +1391,19 @@ impl<H: HostAccess> IchSpiController<H> {
         self.opcodes.as_ref().map(|ops| ops.opcode[idx].spi_type)
     }
 
+    // Software sequencing emits only three address bytes. Validate the whole
+    // transfer before issuing any cycle, including when callers chunk it.
+    fn check_swseq_range(addr: u32, len: usize) -> Result<(), InternalError> {
+        const LIMIT: usize = 1 << 24;
+        let start = addr as usize;
+        if start >= LIMIT || len > LIMIT - start {
+            return Err(InternalError::NotSupported(
+                "Address exceeds 3-byte swseq range",
+            ));
+        }
+        Ok(())
+    }
+
     fn framing_fits(opcode: u8, spi_type: u8) -> bool {
         match opcode {
             JEDEC_READ | JEDEC_FAST_READ | JEDEC_REMS | JEDEC_RES => {
@@ -2601,6 +2614,16 @@ impl<H: HostAccess> IchSpiController<H> {
             _ => (0, &[], false),
         };
 
+        if data_slice.len() > Self::SWSEQ_MAX_DATA || readcnt > Self::SWSEQ_MAX_DATA {
+            return Err(InternalError::Io("Data length exceeds swseq maximum"));
+        }
+        if matches!(
+            spi_type,
+            SPI_OPCODE_TYPE_READ_WITH_ADDRESS | SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS
+        ) {
+            Self::check_swseq_range(addr, if is_write { data_slice.len() } else { readcnt })?;
+        }
+
         // Determine if we need atomic mode (preop + main op)
         let atomic = if is_write {
             self.select_atomic(opcode, preop)?
@@ -2624,6 +2647,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
     /// Read data using ICH7 software sequencing
     pub fn ich7_swseq_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+        Self::check_swseq_range(addr, buf.len())?;
         // Check we have a read opcode available
         let read_opcode = if self.find_opcode_index(JEDEC_READ).is_some() {
             JEDEC_READ
@@ -2665,6 +2689,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
     /// Write data using ICH7 software sequencing
     pub fn ich7_swseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+        Self::check_swseq_range(addr, data.len())?;
         // Check we have a program opcode available
         if self.find_opcode_index(JEDEC_BYTE_PROGRAM).is_none() {
             return Err(InternalError::NotSupported("No program opcode available"));
@@ -2701,44 +2726,11 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Erase a block using ICH7 software sequencing
-    pub fn ich7_swseq_erase(&mut self, addr: u32, len: u32) -> Result<(), InternalError> {
-        // Find an erase opcode - prefer 4KB sector erase for granularity
-        let (erase_opcode, erase_size) = if self.find_opcode_index(JEDEC_SE).is_some() {
-            (JEDEC_SE, 4096u32)
-        } else if self.find_opcode_index(JEDEC_BE_52).is_some() {
-            (JEDEC_BE_52, 32768u32)
-        } else if self.find_opcode_index(JEDEC_BE_D8).is_some() {
-            (JEDEC_BE_D8, 65536u32)
-        } else {
-            return Err(InternalError::NotSupported("No erase opcode available"));
-        };
-
-        // Verify alignment
-        if addr & (erase_size - 1) != 0 || len & (erase_size - 1) != 0 {
-            return Err(InternalError::Io("Erase address/length not aligned"));
-        }
-
-        let mut current_addr = addr;
-        let end_addr = addr + len;
-
-        while current_addr < end_addr {
-            // Build erase command: opcode + 3-byte address
-            let erase_arr = [
-                erase_opcode,
-                ((current_addr >> 16) & 0xff) as u8,
-                ((current_addr >> 8) & 0xff) as u8,
-                (current_addr & 0xff) as u8,
-            ];
-            self.ich7_swseq_send_command(&erase_arr, &mut [])?;
-
-            // Wait for erase to complete
-            self.ich7_swseq_wait_wip()?;
-
-            current_addr += erase_size;
-        }
-
-        Ok(())
+    /// Raw controller erase is unavailable without chip-specific geometry.
+    pub fn ich7_swseq_erase(&mut self, _addr: u32, _len: u32) -> Result<(), InternalError> {
+        Err(InternalError::NotSupported(
+            "Software erase requires chip-specific geometry",
+        ))
     }
 
     /// Wait for Write-In-Progress (WIP) bit to clear using ICH7 swseq
@@ -2892,6 +2884,16 @@ impl<H: HostAccess> IchSpiController<H> {
             _ => (0, &[], false),
         };
 
+        if data_slice.len() > Self::SWSEQ_MAX_DATA || readcnt > Self::SWSEQ_MAX_DATA {
+            return Err(InternalError::Io("Data length exceeds swseq maximum"));
+        }
+        if matches!(
+            spi_type,
+            SPI_OPCODE_TYPE_READ_WITH_ADDRESS | SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS
+        ) {
+            Self::check_swseq_range(addr, if is_write { data_slice.len() } else { readcnt })?;
+        }
+
         // Determine if we need atomic mode (preop + main op)
         // Write operations typically need WREN first
         let atomic = if is_write {
@@ -2919,6 +2921,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
     /// Read data using software sequencing
     pub fn swseq_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+        Self::check_swseq_range(addr, buf.len())?;
         // Check we have a read opcode available
         let read_opcode = if self.find_opcode_index(JEDEC_READ).is_some() {
             JEDEC_READ
@@ -2960,6 +2963,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
     /// Write data using software sequencing
     pub fn swseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+        Self::check_swseq_range(addr, data.len())?;
         // Check we have a program opcode available
         if self.find_opcode_index(JEDEC_BYTE_PROGRAM).is_none() {
             return Err(InternalError::NotSupported("No program opcode available"));
@@ -2996,45 +3000,11 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Erase a block using software sequencing
-    pub fn swseq_erase(&mut self, addr: u32, len: u32) -> Result<(), InternalError> {
-        // Find an erase opcode - prefer 4KB sector erase for granularity
-        let (erase_opcode, erase_size) = if self.find_opcode_index(JEDEC_SE).is_some() {
-            (JEDEC_SE, 4096u32)
-        } else if self.find_opcode_index(JEDEC_BE_52).is_some() {
-            (JEDEC_BE_52, 32768u32)
-        } else if self.find_opcode_index(JEDEC_BE_D8).is_some() {
-            (JEDEC_BE_D8, 65536u32)
-        } else {
-            return Err(InternalError::NotSupported("No erase opcode available"));
-        };
-
-        // Verify alignment
-        if addr & (erase_size - 1) != 0 || len & (erase_size - 1) != 0 {
-            return Err(InternalError::Io("Erase address/length not aligned"));
-        }
-
-        let mut current_addr = addr;
-        let end_addr = addr + len;
-
-        while current_addr < end_addr {
-            // Build erase command: opcode + 3-byte address
-            // WREN is handled automatically via atomic mode in swseq_send_command
-            let erase_arr = [
-                erase_opcode,
-                ((current_addr >> 16) & 0xff) as u8,
-                ((current_addr >> 8) & 0xff) as u8,
-                (current_addr & 0xff) as u8,
-            ];
-            self.swseq_send_command(&erase_arr, &mut [])?;
-
-            // Wait for erase to complete
-            self.swseq_wait_wip()?;
-
-            current_addr += erase_size;
-        }
-
-        Ok(())
+    /// Raw controller erase is unavailable without chip-specific geometry.
+    pub fn swseq_erase(&mut self, _addr: u32, _len: u32) -> Result<(), InternalError> {
+        Err(InternalError::NotSupported(
+            "Software erase requires chip-specific geometry",
+        ))
     }
 
     /// Wait for Write-In-Progress (WIP) bit to clear
@@ -3204,6 +3174,8 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         if let Some(addr) = cmd.address {
             match cmd.address_width {
                 AddressWidth::ThreeByte => {
+                    Self::check_swseq_range(addr, cmd.write_data.len().max(cmd.read_buf.len()))
+                        .map_err(InternalError::to_core_error)?;
                     writearr[1] = ((addr >> 16) & 0xff) as u8;
                     writearr[2] = ((addr >> 8) & 0xff) as u8;
                     writearr[3] = (addr & 0xff) as u8;
@@ -3451,6 +3423,84 @@ mod tests {
                         )
                 );
             }
+        }
+    }
+
+    #[test]
+    fn swseq_address_limits_and_erase_geometry() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.mode = SpiMode::SoftwareSequencing;
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            c.opcodes = Some(Opcodes::default());
+            let host = c.host.clone();
+            let mmio = c.spibar.clone();
+            let limit = 1 << 24;
+
+            // A later chunk would wrap to zero; reject the entire operation.
+            assert!(c.controller_read(limit - 64, &mut [0; 65], 0).is_err());
+            assert!(c.controller_write(limit - 64, &[0; 65]).is_err());
+            assert!(c.controller_read(limit, &mut [0; 1], 0).is_err());
+            assert!(c.controller_write(u32::MAX, &[0; 1]).is_err());
+            assert!(c.controller_erase(0, 4096).is_err());
+            assert!(c.controller_erase(limit - 4096, 8192).is_err());
+
+            let mut cmd = SpiCommand::write_3b(JEDEC_BYTE_PROGRAM, limit, &[1]);
+            assert!(c.execute(&mut cmd).is_err());
+            let mut cmd = SpiCommand::erase_3b(JEDEC_SE, limit);
+            assert!(c.execute(&mut cmd).is_err());
+            let mut buf = [0; 2];
+            let mut cmd = SpiCommand::read_3b(JEDEC_READ, limit - 1, &mut buf);
+            assert!(c.execute(&mut cmd).is_err());
+
+            let crossing = [JEDEC_BYTE_PROGRAM, 0xff, 0xff, 0xff, 1, 2];
+            let mut too_long = [0; 69];
+            too_long[0] = JEDEC_BYTE_PROGRAM;
+            for unchecked in [false, true] {
+                for bytes in [&crossing[..], &too_long[..]] {
+                    // SAFETY: the fake controller is not connected to flash.
+                    let result = unsafe {
+                        match (ich7, unchecked) {
+                            (true, true) => c.ich7_swseq_send_command_unchecked(bytes, &mut []),
+                            (false, true) => c.swseq_send_command_unchecked(bytes, &mut []),
+                            (true, false) => c.ich7_swseq_send_command(bytes, &mut []),
+                            (false, false) => c.swseq_send_command(bytes, &mut []),
+                        }
+                    };
+                    assert!(result.is_err());
+                }
+            }
+            assert!(host.writes().is_empty());
+            assert!(mmio.writes().is_empty());
+            assert!(IchSpiController::<FakeHost>::check_swseq_range(limit - 64, 64).is_ok());
+        }
+    }
+
+    #[test]
+    fn chip_specific_erase_still_uses_raw_command() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.mode = SpiMode::SoftwareSequencing;
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            c.opcodes = Some(Opcodes::default());
+            c.host.enable_write8_readback();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            let host = c.host.clone();
+            let mmio = c.spibar.clone();
+            c.execute(&mut SpiCommand::simple(JEDEC_WREN)).unwrap();
+            let _ = c.execute(&mut SpiCommand::erase_3b(JEDEC_SE, 0xfff000));
+            // The fake may report a cycle error, but the command was issued.
+            assert!(!host.writes().is_empty());
+            assert!(!mmio.writes().is_empty());
         }
     }
 
