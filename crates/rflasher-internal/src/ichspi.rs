@@ -1248,26 +1248,28 @@ impl<H: HostAccess> IchSpiController<H> {
             log::warn!("BIOS Lock Enable (BLE) is set - writes may trigger SMI");
         }
 
-        // Check if SMM BIOS Write Protect is set
-        if bios_cntl & BIOS_CNTL_SMM_BWP != 0 {
-            log::warn!("SMM BIOS Write Protect is set - cannot enable writes");
-            return Err(InternalError::AccessDenied { region: "BIOS" });
+        // Like flashprog, try to clear SMM_BWP (EISS on PCH100+) while
+        // setting BWE. Only BWE decides success: firmware may leave SMM_BWP
+        // writable, and if it stays set the controller rejects the cycles.
+        let wanted = (bios_cntl | BIOS_CNTL_BWE) & !BIOS_CNTL_SMM_BWP;
+        let current = if wanted != bios_cntl {
+            self.host
+                .write8(lpc_bdf, PCI_REG_BIOS_CNTL as u16, wanted)?;
+            self.host.read8(lpc_bdf, PCI_REG_BIOS_CNTL as u16)?
+        } else {
+            bios_cntl
+        };
+
+        if current & BIOS_CNTL_SMM_BWP != 0 {
+            log::warn!("SMM BIOS Write Protect is set - BIOS region writes may be rejected");
         }
 
-        // Enable BIOS Write Enable
+        if current & BIOS_CNTL_BWE == 0 {
+            log::error!("Failed to enable BIOS Write Enable");
+            return Err(InternalError::ChipsetEnable("Cannot enable BIOS writes"));
+        }
+
         if bios_cntl & BIOS_CNTL_BWE == 0 {
-            let new_val = bios_cntl | BIOS_CNTL_BWE;
-            self.host
-                .write8(lpc_bdf, PCI_REG_BIOS_CNTL as u16, new_val)?;
-
-            // Verify
-            let verify = self.host.read8(lpc_bdf, PCI_REG_BIOS_CNTL as u16)?;
-
-            if verify & BIOS_CNTL_BWE == 0 {
-                log::error!("Failed to enable BIOS Write Enable");
-                return Err(InternalError::ChipsetEnable("Cannot enable BIOS writes"));
-            }
-
             log::info!("BIOS Write Enable activated");
         } else {
             log::debug!("BIOS Write Enable already active");
@@ -3019,14 +3021,32 @@ mod tests {
         controller.enable_bios_write().unwrap();
         assert!(controller.writes_enabled());
 
+        // SMM_BWP/EISS is cleared alongside BWE; only BWE decides success.
+        let bios_cntl = BIOS_CNTL_SMM_BWP | BIOS_CNTL_BLE;
         controller
             .host
-            .set_config32(bdf, PCI_REG_BIOS_CNTL as u16, BIOS_CNTL_SMM_BWP as u32);
+            .set_config32(bdf, PCI_REG_BIOS_CNTL as u16, bios_cntl as u32);
         assert!(matches!(
             controller.enable_bios_write(),
-            Err(InternalError::AccessDenied { .. })
+            Err(InternalError::ChipsetEnable(_))
         ));
         assert!(!controller.writes_enabled());
+        let wanted = (BIOS_CNTL_BLE | BIOS_CNTL_BWE) as u32;
+        assert_eq!(
+            controller.host.config_writes().last(),
+            Some(&(bdf, PCI_REG_BIOS_CNTL as u16, wanted, 1))
+        );
+
+        controller.host.set_config32(
+            bdf,
+            PCI_REG_BIOS_CNTL as u16,
+            (bios_cntl | BIOS_CNTL_BWE) as u32,
+        );
+        controller.enable_bios_write().unwrap();
+        assert!(controller.writes_enabled());
+        let writes = controller.host.config_writes();
+        assert_eq!(writes.len(), 3);
+        assert_eq!(writes[2], (bdf, PCI_REG_BIOS_CNTL as u16, wanted, 1));
     }
     use crate::intel_pci::INTEL_CHIPSETS;
 

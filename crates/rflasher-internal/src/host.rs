@@ -276,6 +276,11 @@ pub(crate) mod tests {
         pub(crate) fn delay_log(&self) -> Vec<u32> {
             self.delays.borrow().clone()
         }
+
+        /// Config writes as `(bdf, offset, value, width)`.
+        pub(crate) fn config_writes(&self) -> Vec<(PciAddress, u16, u32, u8)> {
+            self.writes.borrow().clone()
+        }
     }
 
     impl PciConfigAccess for FakeHost {
