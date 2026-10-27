@@ -92,6 +92,9 @@ pub trait FlashDevice {
     /// * `ReadError` - If the read operation fails
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()>;
 
+    /// Validate that a write of this exact footprint can be executed without mutation.
+    fn validate_write(&self, addr: u32, len: usize) -> Result<()>;
+
     /// Write data to flash
     ///
     /// The target region should be erased first (all bytes 0xFF).

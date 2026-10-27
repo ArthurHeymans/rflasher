@@ -1056,6 +1056,46 @@ fn spi_and_bulk_aai_programming_preserve_protection_and_adjacent_bytes() {
 }
 
 #[test]
+fn restricted_menu_cannot_erase_when_programming_or_restoration_is_unavailable() {
+    block_on(async {
+        for (start, len, erase_only) in [(0, 4096, false), (100, 100, false), (100, 100, true)] {
+            let (master, ctx) = fixture(Unlock::None, 0, Features::empty(), 8192);
+            let state = master.0.clone();
+            {
+                let mut s = state.lock().unwrap();
+                s.data.fill(0);
+                s.deny_opcode = Some(0x02);
+            }
+            let mut device = ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx));
+            let result = if erase_only {
+                unified::erase_region(
+                    &mut device,
+                    &rflasher_core::layout::Region::new("part", start, start + len - 1),
+                )
+                .await
+            } else {
+                unified::smart_write_region(
+                    &mut device,
+                    start,
+                    &vec![0x7f; len as usize],
+                    &mut NoProgress,
+                )
+                .await
+                .map(|_| ())
+            };
+            assert_eq!(result, Err(Error::OpcodeNotSupported));
+            let s = state.lock().unwrap();
+            assert!(
+                !s.commands
+                    .iter()
+                    .any(|(op, _)| matches!(op, 0x20 | 0x52 | 0xd8 | 0xc7))
+            );
+            assert!(s.data.iter().all(|b| *b == 0));
+        }
+    });
+}
+
+#[test]
 fn aai_transfer_failures_exit_mode_before_restoring_protection() {
     block_on(async {
         for (fast, fail_at) in [false, true]
@@ -1100,7 +1140,8 @@ fn aai_preflight_checks_only_opcodes_used_by_each_segment() {
             (1, vec![0x55; 2], 0xad, true),
             (0, vec![0x55; 2], 0x02, true),
             (0, vec![0x55; 3], 0x02, false),
-            (1, vec![0x55; 3], 0xad, false),
+            (1, vec![0x55; 3], 0xad, true),
+            (1, vec![0x55; 3], 0x04, true),
             (1, vec![0x55; 4], 0x02, false),
         ] {
             let features = Features::WRSR_WREN | Features::AAI_WORD;
@@ -1125,6 +1166,15 @@ fn aai_preflight_checks_only_opcodes_used_by_each_segment() {
             if accepted {
                 assert_eq!(&s.data[addr as usize..addr as usize + data.len()], data);
                 assert!(!s.commands.iter().any(|(op, _)| *op == denied));
+                if matches!(denied, 0xad | 0x04) {
+                    assert!(!s.commands.iter().any(|(op, _)| *op == 0xad));
+                    assert!(
+                        s.commands
+                            .iter()
+                            .filter(|(op, _)| *op == 0x02)
+                            .all(|(_, bytes)| bytes.len() == 1)
+                    );
+                }
             } else {
                 assert!(s.commands.is_empty());
             }

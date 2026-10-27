@@ -141,6 +141,10 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         operations::read(&mut self.master, &self.ctx, addr, buf).await
     }
 
+    fn validate_write(&self, addr: u32, len: usize) -> Result<()> {
+        operations::validate_spi_program(&self.master, &self.ctx, addr, len)
+    }
+
     async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
         if !self.context().is_valid_range(addr, data.len()) {
             return Err(Error::AddressOutOfBounds);

@@ -283,6 +283,10 @@ mod linux {
                 .controller_read(addr, buf, self.size as usize)
         }
 
+        fn validate_write(&self, addr: u32, len: usize) -> CoreResult<()> {
+            self.check_writable(addr, len)
+        }
+
         async fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
             self.check_writable(addr, data.len())?;
             self.controller.controller_write(addr, data)

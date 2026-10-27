@@ -11,7 +11,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::policy::{MutationPolicy, preflight, region_layout};
+use super::policy::{MutationPolicy, preflight, region_layout, validate_neighbors};
 use crate::chip::WriteGranularity;
 use crate::error::{EraseFailure, Error, Result};
 use crate::flash::device::FlashDevice;
@@ -51,6 +51,7 @@ pub async fn smart_write_with_policy<D: FlashDevice + ?Sized, P: WriteProgress>(
     }
     let layout = region_layout(0, device.size())?;
     preflight(device, &layout, policy).await?;
+    validate_smart_plan(device, 0, data).await?;
     smart_write_region_prepared(device, 0, data, progress).await
 }
 
@@ -65,6 +66,7 @@ pub async fn smart_write_region_with_policy<D: FlashDevice + ?Sized, P: WritePro
     if !data.is_empty() {
         let len = u32::try_from(data.len()).map_err(|_| Error::AddressOutOfBounds)?;
         preflight(device, &region_layout(addr, len)?, policy).await?;
+        validate_smart_plan(device, addr, data).await?;
     }
     smart_write_region_prepared(device, addr, data, progress).await
 }
@@ -81,6 +83,14 @@ pub async fn smart_write_by_layout_with_policy<D: FlashDevice + ?Sized, P: Write
         return Err(Error::BufferTooSmall);
     }
     preflight(device, layout, policy).await?;
+    for region in layout.included_regions() {
+        validate_smart_plan(
+            device,
+            region.start,
+            &image[region.start as usize..=region.end as usize],
+        )
+        .await?;
+    }
     smart_write_by_layout_prepared(device, layout, image, progress).await
 }
 
@@ -212,6 +222,55 @@ pub async fn read_with_progress<D: FlashDevice, P: WriteProgress>(
         progress.read_progress(bytes_read);
     }
 
+    Ok(())
+}
+
+// Validate the content-dependent plan for every region before any mutation.
+// Earlier regions restore their neighbors, so later region contents are unchanged.
+async fn validate_smart_plan<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    addr: u32,
+    data: &[u8],
+) -> Result<()> {
+    if data.is_empty() {
+        return Ok(());
+    }
+    if !device.is_valid_range(addr, data.len()) {
+        return Err(Error::AddressOutOfBounds);
+    }
+    let mut current = vec![0; data.len()];
+    device.read(addr, &mut current).await?;
+    let ops = plan_optimal_erase(
+        device.erase_blocks(),
+        device.size(),
+        Some(&current),
+        Some(data),
+        addr,
+        addr + data.len() as u32 - 1,
+        device.write_granularity(),
+    )?;
+    for op in &ops {
+        device.validate_erase_operation(op)?;
+        validate_neighbors(device, op, addr, addr + data.len() as u32)?;
+        let start = op.start.saturating_sub(addr) as usize;
+        let end = ((op.start + op.size).saturating_sub(addr) as usize).min(current.len());
+        current[start..end].fill(ERASED_VALUE);
+    }
+    let ranges = get_all_write_ranges(&current, data);
+    let ranges = if device.write_granularity() == WriteGranularity::Byte {
+        ranges
+    } else {
+        coalesce_write_ranges(&ranges, device.page_size(), data.len() as u32)
+    };
+    for range in ranges {
+        let mut offset = range.start as usize;
+        let end = offset + range.len as usize;
+        while offset < end {
+            let len = (end - offset).min(WRITE_CHUNK_SIZE);
+            device.validate_write(addr + offset as u32, len)?;
+            offset += len;
+        }
+    }
     Ok(())
 }
 
@@ -763,6 +822,8 @@ mod tests {
         blocks: Vec<EraseBlock>,
         mutations: usize,
         require_erased_writes: bool,
+        reject_writes_from: Option<u32>,
+        reject_erase_opcode: Option<u8>,
     }
 
     impl FakeFlash {
@@ -772,6 +833,8 @@ mod tests {
                 blocks: vec![EraseBlock::with_count(0x20, 16, size / 16)],
                 mutations: 0,
                 require_erased_writes: false,
+                reject_writes_from: None,
+                reject_erase_opcode: None,
             }
         }
     }
@@ -793,6 +856,19 @@ mod tests {
             buf.copy_from_slice(&self.bytes[addr as usize..addr as usize + buf.len()]);
             Ok(())
         }
+        fn validate_write(&self, addr: u32, len: usize) -> Result<()> {
+            if self
+                .reject_writes_from
+                .is_some_and(|from| addr as u64 + len as u64 > from as u64)
+            {
+                return Err(Error::OpcodeNotSupported);
+            }
+            if self.is_valid_range(addr, len) {
+                Ok(())
+            } else {
+                Err(Error::AddressOutOfBounds)
+            }
+        }
         async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
             if self.require_erased_writes {
                 assert!(
@@ -805,11 +881,118 @@ mod tests {
             self.bytes[addr as usize..addr as usize + data.len()].copy_from_slice(data);
             Ok(())
         }
+        fn validate_erase_operation(
+            &self,
+            op: &crate::flash::operations::OptimalEraseOp,
+        ) -> Result<()> {
+            if self.reject_erase_opcode == Some(op.erase_block.opcode) {
+                return Err(Error::OpcodeNotSupported);
+            }
+            Ok(())
+        }
         async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
             self.mutations += 1;
             self.bytes[addr as usize..(addr + len) as usize].fill(0xff);
             Ok(())
         }
+    }
+
+    #[test]
+    fn missing_program_rejects_target_and_erase_neighbors_before_mutation() {
+        for erase_only in [false, true] {
+            let mut flash = FakeFlash::new(256);
+            flash.reject_writes_from = Some(0);
+            let region = Region::new("part", 2, 7);
+            let result = if erase_only {
+                block_on(erase_region(&mut flash, &region))
+            } else {
+                block_on(smart_write_region(
+                    &mut flash,
+                    2,
+                    &[0xff; 6],
+                    &mut NoProgress,
+                ))
+                .map(|_| ())
+            };
+            assert!(matches!(result, Err(Error::OpcodeNotSupported)));
+            assert_eq!(flash.mutations, 0);
+        }
+        let mut flash = FakeFlash::new(256);
+        flash.reject_writes_from = Some(0);
+        assert!(matches!(
+            block_on(smart_write_region(
+                &mut flash,
+                0,
+                &[0x7f; 16],
+                &mut NoProgress
+            )),
+            Err(Error::OpcodeNotSupported)
+        ));
+        assert_eq!(flash.mutations, 0);
+    }
+
+    #[test]
+    fn later_region_program_is_checked_before_first_region_mutates() {
+        let mut flash = FakeFlash::new(256);
+        flash.reject_writes_from = Some(128);
+        let mut layout = Layout::new();
+        for (name, start, end) in [("first", 0, 15), ("second", 128, 143)] {
+            let mut region = Region::new(name, start, end);
+            region.included = true;
+            layout.add_region(region);
+        }
+        let mut image = flash.bytes.clone();
+        image[..16].fill(0x7f);
+        image[128..144].fill(0x7f);
+        assert!(matches!(
+            block_on(smart_write_by_layout(
+                &mut flash,
+                &layout,
+                &image,
+                &mut NoProgress
+            )),
+            Err(Error::OpcodeNotSupported)
+        ));
+        assert_eq!(flash.mutations, 0);
+    }
+
+    #[test]
+    fn later_content_dependent_eraser_is_checked_before_first_region() {
+        let mut flash = FakeFlash::new(256);
+        flash.blocks.push(EraseBlock::with_count(0xd8, 64, 4));
+        flash.reject_erase_opcode = Some(0x20);
+        let mut layout = Layout::new();
+        for (name, start) in [("first", 0), ("second", 128)] {
+            let mut region = Region::new(name, start, start + 63);
+            region.included = true;
+            layout.add_region(region);
+        }
+        let mut image = flash.bytes.clone();
+        image[..64].fill(0x7f);
+        image[128] = 0x7f;
+        let generic = plan_optimal_erase_region(&flash.blocks, 256, 128, 191).unwrap();
+        assert!(generic.iter().all(|op| op.erase_block.opcode == 0xd8));
+        let actual = plan_optimal_erase(
+            &flash.blocks,
+            256,
+            Some(&flash.bytes[128..192]),
+            Some(&image[128..192]),
+            128,
+            191,
+            WriteGranularity::Byte,
+        )
+        .unwrap();
+        assert!(actual.iter().any(|op| op.erase_block.opcode == 0x20));
+        assert!(matches!(
+            block_on(smart_write_by_layout(
+                &mut flash,
+                &layout,
+                &image,
+                &mut NoProgress
+            )),
+            Err(Error::OpcodeNotSupported)
+        ));
+        assert_eq!(flash.mutations, 0);
     }
 
     #[test]

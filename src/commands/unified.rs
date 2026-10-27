@@ -1266,6 +1266,9 @@ mod tests {
             buf.fill(0xff);
             Ok(())
         }
+        fn validate_write(&self, _: u32, _: usize) -> rflasher_core::Result<()> {
+            Ok(())
+        }
         async fn write(&mut self, _: u32, _: &[u8]) -> rflasher_core::Result<()> {
             self.mutations += 1;
             Ok(())

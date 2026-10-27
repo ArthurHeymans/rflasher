@@ -103,6 +103,7 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         )?;
         for op in plan {
             device.validate_erase_operation(&op)?;
+            validate_neighbors(device, &op, region.start, region.end + 1)?;
             if op.start < region.start || op.start as u64 + op.size as u64 > region.end as u64 + 1 {
                 // An erase/restore still temporarily destroys neighboring
                 // protected data. Its footprint needs the same authorization.
@@ -145,6 +146,22 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         let mut image = vec![0; device.size() as usize];
         device.read(0, &mut image).await?;
         sink.persist(&image)?;
+    }
+    Ok(())
+}
+
+pub(super) fn validate_neighbors<D: FlashDevice + ?Sized>(
+    device: &D,
+    op: &super::operations::OptimalEraseOp,
+    start: u32,
+    end: u32,
+) -> Result<()> {
+    if op.start < start {
+        device.validate_write(op.start, (start - op.start) as usize)?;
+    }
+    let op_end = op.start + op.size;
+    if op_end > end {
+        device.validate_write(end, (op_end - end) as usize)?;
     }
     Ok(())
 }
