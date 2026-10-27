@@ -390,11 +390,15 @@ pub(crate) mod tests {
     /// [`FakeMmio::set_swseq_menu`], so do software sequencing cycles, which
     /// complete at once. SPI100 commands are recorded on trigger and return
     /// the configured response at the FIFO receive offset.
+    /// Decides what a 32-bit write stores, from the offset, old and written
+    /// value; it may change other registers too.
+    type Write32Hook = Arc<dyn Fn(&FakeMmio, usize, u32, u32) -> u32 + Send + Sync>;
+
     #[derive(Default, Clone)]
     pub(crate) struct FakeMmio {
         regs: Arc<Mutex<BTreeMap<usize, u32>>>,
         writes: Arc<Mutex<Vec<(usize, u32, usize)>>>,
-        blocked_write32: RefCell<Option<usize>>,
+        write32_hook: RefCell<Option<Write32Hook>>,
         bytes: RefCell<BTreeMap<usize, u8>>,
         reads: RefCell<Vec<(usize, usize)>>,
         berase: RefCell<[u16; 2]>,
@@ -521,7 +525,19 @@ pub(crate) mod tests {
         }
 
         pub(crate) fn block_write32(&self, offset: usize) {
-            *self.blocked_write32.borrow_mut() = Some(offset);
+            self.on_write32(
+                move |_, written, old, value| {
+                    if written == offset { old } else { value }
+                },
+            );
+        }
+
+        /// Fault injection: `hook` decides what each 32-bit write stores.
+        pub(crate) fn on_write32(
+            &self,
+            hook: impl Fn(&FakeMmio, usize, u32, u32) -> u32 + Send + Sync + 'static,
+        ) {
+            *self.write32_hook.borrow_mut() = Some(Arc::new(hook));
         }
 
         pub(crate) fn set32(&self, offset: usize, value: u32) {
@@ -668,9 +684,8 @@ pub(crate) mod tests {
         fn write32(&self, offset: usize, value: u32) {
             use crate::ich_regs::*;
             self.writes.lock().unwrap().push((offset, value, 4));
-            if *self.blocked_write32.borrow() == Some(offset) {
-                return;
-            }
+            let hook = self.write32_hook.borrow().clone();
+            let value = hook.map_or(value, |hook| hook(self, offset, self.reg(offset), value));
             let menu = *self.swseq_menu.lock().unwrap();
             match menu {
                 // Status bits are write-1-to-clear; SCGO runs the cycle.

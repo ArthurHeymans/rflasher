@@ -518,6 +518,8 @@ pub struct IchSpiController<H: HostAccess> {
     change_count: usize,
     /// Whether software sequencing is locked (DLOCK.SSEQ_LOCKDN on PCH100+)
     swseq_locked: bool,
+    /// DLOCK (PCH100+) at open.
+    dlock: u32,
     /// Flash descriptor valid
     desc_valid: bool,
     /// Requested operating mode (from user)
@@ -652,6 +654,7 @@ impl<H: HostAccess> IchSpiController<H> {
             changes: [None; 12],
             change_count: 0,
             swseq_locked: false,
+            dlock: 0,
             desc_valid: false,
             requested_mode: mode,
             mode: SpiMode::Auto, // Will be determined during init
@@ -719,12 +722,31 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     fn restore_registers(&mut self) {
-        if self.change_count == 0 {
-            return;
+        self.restore_registers_from(0);
+    }
+
+    /// Undo the journaled changes from `start` on at once, saying loudly if
+    /// some cannot be (they stay journaled and are retried on drop).
+    fn roll_back(&mut self, start: usize) {
+        if !self.restore_registers_from(start) {
+            log::error!(
+                "Could not undo the SPI configuration changed for this operation; \
+                 protected ranges may stay cleared until the controller is closed"
+            );
+        }
+    }
+
+    /// Undo the journaled changes from `start` on, newest first. Changes
+    /// that cannot be undone now (busy or locked controller, locked
+    /// register, restore not taken) stay journaled for a later attempt.
+    /// Returns whether none are left.
+    fn restore_registers_from(&mut self, start: usize) -> bool {
+        if self.change_count <= start {
+            return true;
         }
         if self.wait_configuration_idle().is_err() {
             log::warn!("SPI controller busy; cannot restore configuration");
-            return;
+            return false;
         }
         let locked = if self.generation == IchChipset::Ich7 {
             self.spibar.read16(ICH7_REG_SPIS) & (1 << 15) != 0
@@ -733,59 +755,86 @@ impl<H: HostAccess> IchSpiController<H> {
         };
         if locked {
             log::warn!("SPI configuration locked; cannot restore configuration");
-            return;
+            return false;
         }
         let dlock = if self.generation.is_pch100_compatible() {
             self.spibar.read32(PCH100_REG_DLOCK)
         } else {
             0
         };
-        for change in self.changes[..self.change_count].iter().rev().flatten() {
-            let pr_index = change
-                .offset
-                .checked_sub(PCH100_REG_FPR0)
-                .filter(|offset| *offset < 6 * 4 && *offset % 4 == 0)
-                .map(|offset| offset / 4);
-            let pr_locked = self.generation.is_pch100_compatible()
-                && pr_index.is_some_and(|index| dlock & (DLOCK_PR0_LOCKDN << index) != 0);
-            let menu_locked = self.generation.is_pch100_compatible()
-                && change.offset >= self.swseq.preop
-                && change.offset <= self.swseq.opmenu + 4
-                && dlock & DLOCK_SSEQ_LOCKDN != 0;
-            if pr_locked || menu_locked {
-                log::warn!(
-                    "SPI register {:#x} locked; cannot restore it",
-                    change.offset
-                );
-                continue;
-            }
-            let current = if change.width16 {
-                u32::from(self.spibar.read16(change.offset))
-            } else {
-                self.spibar.read32(change.offset)
-            };
-            if current & change.mask != change.after & change.mask {
-                log::warn!(
-                    "SPI register {:#x} changed externally; not restoring it",
-                    change.offset
-                );
-                continue;
-            }
-            let restored = (current & !change.mask) | (change.before & change.mask);
-            if change.width16 {
-                self.spibar.write16(change.offset, restored as u16);
-            } else {
-                self.spibar.write32(change.offset, restored);
-            }
-            let verified = if change.width16 {
-                u32::from(self.spibar.read16(change.offset))
-            } else {
-                self.spibar.read32(change.offset)
-            };
-            if verified & change.mask != restored & change.mask {
-                log::warn!("SPI register {:#x} restore failed", change.offset);
+        let end = self.change_count;
+        for i in (start..end).rev() {
+            if let Some(change) = self.changes[i]
+                && self.restore_change(&change, dlock)
+            {
+                self.changes[i] = None;
             }
         }
+        // Keep what is left, in order.
+        self.change_count = (start..end).fold(start, |kept, i| match self.changes[i].take() {
+            Some(change) => {
+                self.changes[kept] = Some(change);
+                kept + 1
+            }
+            None => kept,
+        });
+        self.change_count == start
+    }
+
+    /// Undo one journaled change; false if it has to stay journaled. Only
+    /// the bits it changed are restored, and only those still reading back
+    /// as it set them: bits the hardware did not take already hold their old
+    /// value. If any other bit of the register changed since, it is someone
+    /// else's now and is left alone.
+    fn restore_change(&self, change: &RegisterChange, dlock: u32) -> bool {
+        let pr_index = change
+            .offset
+            .checked_sub(PCH100_REG_FPR0)
+            .filter(|offset| *offset < 6 * 4 && *offset % 4 == 0)
+            .map(|offset| offset / 4);
+        let pr_locked = self.generation.is_pch100_compatible()
+            && pr_index.is_some_and(|index| dlock & (DLOCK_PR0_LOCKDN << index) != 0);
+        let menu_locked = self.generation.is_pch100_compatible()
+            && change.offset >= self.swseq.preop
+            && change.offset <= self.swseq.opmenu + 4
+            && dlock & DLOCK_SSEQ_LOCKDN != 0;
+        if pr_locked || menu_locked {
+            log::warn!(
+                "SPI register {:#x} locked; cannot restore it",
+                change.offset
+            );
+            return false;
+        }
+        let read = || {
+            if change.width16 {
+                u32::from(self.spibar.read16(change.offset))
+            } else {
+                self.spibar.read32(change.offset)
+            }
+        };
+        let current = read();
+        let changed = (change.before ^ change.after) & change.mask;
+        if (current ^ change.after) & change.mask & !changed != 0 {
+            log::warn!(
+                "SPI register {:#x} changed externally; not restoring it",
+                change.offset
+            );
+            return true;
+        }
+        let restored = (current & !changed) | (change.before & changed);
+        if restored == current {
+            return true;
+        }
+        if change.width16 {
+            self.spibar.write16(change.offset, restored as u16);
+        } else {
+            self.spibar.write32(change.offset, restored);
+        }
+        if (read() ^ restored) & change.mask != 0 {
+            log::error!("SPI register {:#x} restore failed", change.offset);
+            return false;
+        }
+        true
     }
 
     /// Initialize the SPI controller
@@ -835,14 +884,7 @@ impl<H: HostAccess> IchSpiController<H> {
             let pbr = self.spibar.read32(offs);
             log::debug!("{:#04x}: {:#010x} (PBR{})", offs, pbr, i);
         }
-        for r in self.protected_ranges() {
-            log::warn!(
-                "PBR{}: {:#010x}-{:#010x} is write protected",
-                r.index,
-                r.base,
-                r.limit
-            );
-        }
+        self.log_protected_ranges();
 
         // Check for lockdown (bit 15 of SPIS)
         if spis & (1 << 15) != 0 {
@@ -990,6 +1032,7 @@ impl<H: HostAccess> IchSpiController<H> {
         if self.generation.is_pch100_compatible() {
             let dlock = self.spibar.read32(PCH100_REG_DLOCK);
             log::debug!("DLOCK: {:#010x}", dlock);
+            self.dlock = dlock;
             self.print_dlock(dlock);
 
             // Check if software sequencing is locked down
@@ -1004,8 +1047,7 @@ impl<H: HostAccess> IchSpiController<H> {
             self.handle_access_permissions()?;
         }
 
-        // Handle protected ranges
-        self.handle_protected_ranges();
+        self.log_protected_ranges();
 
         // Log SSFS/SSFC
         let ssfsc = self.spibar.read32(self.swseq.ssfsc);
@@ -1165,66 +1207,34 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Handle protected range registers
-    fn handle_protected_ranges(&mut self) {
-        let num_pr = if self.generation.is_pch100_compatible() {
-            6
+    /// Log the protected ranges, and which of them are cleared before the
+    /// first mutation.
+    fn log_protected_ranges(&self) {
+        let name = if self.generation == IchChipset::Ich7 {
+            "PBR"
         } else {
-            5
+            "PR"
         };
-        let reg_pr0 = if self.generation.is_pch100_compatible() {
-            PCH100_REG_FPR0
-        } else {
-            ICH9_REG_PR0
-        };
-
-        for i in 0..num_pr {
-            // Try to clear protection if not locked (as flashprog does). This
-            // changes chipset state even for read-only operations, so say so.
-            let pr_locked = self.generation.is_pch100_compatible()
-                && self.spibar.read32(PCH100_REG_DLOCK) & (DLOCK_PR0_LOCKDN << i) != 0;
-            if !self.locked && !pr_locked {
-                let before = self.spibar.read32(reg_pr0 + i * 4);
-                self.set_pr(reg_pr0, i, false, false);
-                if (before >> PR_RP_OFF) & 1 != 0 || (before >> PR_WP_OFF) & 1 != 0 {
-                    log::info!(
-                        "PR{}: {:#010x}-{:#010x} had {}protection set; cleared it \
-                         (controller is not locked down)",
-                        i,
-                        freg_base(before),
-                        freg_limit(before),
-                        match (
-                            (before >> PR_RP_OFF) & 1 != 0,
-                            (before >> PR_WP_OFF) & 1 != 0
-                        ) {
-                            (true, true) => "read and write ",
-                            (true, false) => "read ",
-                            _ => "write ",
-                        }
-                    );
-                }
-            }
-
-            let pr = self.spibar.read32(reg_pr0 + i * 4);
-            let base = freg_base(pr);
-            let limit = freg_limit(pr);
-
-            let rp = (pr >> PR_RP_OFF) & 1 != 0;
-            let wp = (pr >> PR_WP_OFF) & 1 != 0;
-
-            // PR bits are inverted: 1 = protected
-            if rp || wp {
+        for (r, clearable) in self.protected_ranges() {
+            let what = match (r.read, r.write) {
+                (true, true) => "read/write",
+                (true, false) => "read",
+                _ => "write",
+            };
+            if clearable {
+                log::info!(
+                    "{name}{}: {:#010x}-{:#010x} is {what} protected; it is cleared \
+                     before the first write or erase (not locked down)",
+                    r.index,
+                    r.base,
+                    r.limit
+                );
+            } else {
                 log::warn!(
-                    "PR{}: {:#010x}-{:#010x} is {}",
-                    i,
-                    base,
-                    limit,
-                    match (rp, wp) {
-                        (true, true) => "read/write protected",
-                        (true, false) => "read protected",
-                        (false, true) => "write protected",
-                        _ => "accessible",
-                    }
+                    "{name}{}: {:#010x}-{:#010x} is {what} protected",
+                    r.index,
+                    r.base,
+                    r.limit
                 );
             }
         }
@@ -1269,41 +1279,122 @@ impl<H: HostAccess> IchSpiController<H> {
         })
     }
 
-    /// Protected range registers that currently restrict access: PRx
+    /// First protected range register and how many there are: PRx
     /// (ICH8-ICH10, 5 series and later until PCH100), FPRx and GPR0
-    /// (PCH100+), PBRx (ICH7, write protection only). Their bits enable
-    /// protection. Unlocked ranges were cleared at open (and are restored on
-    /// close), so these are the ones that could not be cleared.
-    fn protected_ranges(&self) -> impl Iterator<Item = Restriction> + '_ {
-        let ich7 = self.generation == IchChipset::Ich7;
-        let (reg0, count) = if ich7 {
+    /// (PCH100+), PBRx (ICH7).
+    fn pr_registers(&self) -> (usize, usize) {
+        if self.generation == IchChipset::Ich7 {
             (ICH7_REG_PBR0, 3)
         } else if self.generation.is_pch100_compatible() {
             (PCH100_REG_FPR0, 6)
         } else {
             (ICH9_REG_PR0, 5)
+        }
+    }
+
+    /// Whether protected range `index` is cleared before the first mutation
+    /// (flashprog clears it at open): at open, the configuration was not
+    /// locked down and, on PCH100+, neither was the range itself
+    /// (DLOCK.PRx_LOCKDN). ICH7 PBRs are never cleared. Decided at open, so
+    /// the access checks and [`Self::clear_protected_ranges`] agree; a lock
+    /// set since makes the latter refuse the mutation.
+    fn pr_clearable(&self, index: usize) -> bool {
+        self.generation != IchChipset::Ich7
+            && !self.locked
+            && self.dlock & (DLOCK_PR0_LOCKDN << index) == 0
+    }
+
+    /// Whether protected range `index` is locked now: HSFS.FLOCKDN or, on
+    /// PCH100+, DLOCK.PRx_LOCKDN.
+    fn pr_locked_now(&self, index: usize) -> bool {
+        self.spibar.read16(ICH9_REG_HSFS) & HSFS_FLOCKDN != 0
+            || (self.generation.is_pch100_compatible()
+                && self.spibar.read32(PCH100_REG_DLOCK) & (DLOCK_PR0_LOCKDN << index) != 0)
+    }
+
+    /// Protected range registers that currently restrict access, and
+    /// whether each is cleared before the first mutation
+    /// ([`Self::pr_clearable`]).
+    fn protected_ranges(&self) -> impl Iterator<Item = (Restriction, bool)> + '_ {
+        (0..self.pr_registers().1).filter_map(|index| self.protected_range(index))
+    }
+
+    /// Protected range `index`, if it restricts access. Its bits enable
+    /// protection; PBRs only write protect.
+    fn protected_range(&self, index: usize) -> Option<(Restriction, bool)> {
+        let pr = self.spibar.read32(self.pr_registers().0 + index * 4);
+        let (base, limit, read) = if self.generation == IchChipset::Ich7 {
+            (
+                (pr & 0xfff) << 12,
+                ((pr >> 12) & 0xfff) << 12 | 0xfff,
+                false,
+            )
+        } else {
+            (freg_base(pr), freg_limit(pr), pr & (1 << PR_RP_OFF) != 0)
         };
-        (0..count).filter_map(move |index| {
-            let pr = self.spibar.read32(reg0 + index * 4);
-            let (base, limit, read) = if ich7 {
-                (
-                    (pr & 0xfff) << 12,
-                    ((pr >> 12) & 0xfff) << 12 | 0xfff,
-                    false,
-                )
-            } else {
-                (freg_base(pr), freg_limit(pr), pr & (1 << PR_RP_OFF) != 0)
+        let write = pr & (1 << PR_WP_OFF) != 0;
+        let restriction = Restriction {
+            source: "protected range",
+            index,
+            base,
+            limit,
+            read,
+            write,
+        };
+        ((read || write) && base <= limit).then(|| (restriction, self.pr_clearable(index)))
+    }
+
+    /// Clear every protected range the access checks assume cleared before a
+    /// mutation ([`Self::pr_clearable`]), whether the mutation overlaps it or
+    /// not, so none of them can refuse a later part of the operation. Each
+    /// change is journaled and restored on drop. All or nothing: if one was
+    /// locked since open or does not read back cleared, those cleared here
+    /// are restored and the mutation is refused, before the flash is changed.
+    fn clear_protected_ranges(&mut self) -> Result<(), InternalError> {
+        let (reg0, count) = self.pr_registers();
+        let clearable = |c: &Self, index| {
+            c.protected_range(index)
+                .and_then(|(r, clearable)| clearable.then_some(r))
+        };
+        if !(0..count).any(|index| clearable(self, index).is_some()) {
+            return Ok(());
+        }
+        // Do not alter controller configuration while a cycle is active.
+        self.wait_configuration_idle()?;
+        let journal = self.change_count;
+        for index in 0..count {
+            let Some(r) = clearable(self, index) else {
+                continue;
             };
-            let write = pr & (1 << PR_WP_OFF) != 0;
-            ((read || write) && base <= limit).then_some(Restriction {
-                source: "protected range",
-                index,
-                base,
-                limit,
-                read,
-                write,
-            })
-        })
+            // Checked per range: a lock may be set while we go.
+            let locked = self.pr_locked_now(index);
+            if !locked {
+                self.set_pr(reg0, index, false, false);
+            }
+            let pr = self.spibar.read32(reg0 + index * 4);
+            if locked || pr & (1 << PR_RP_OFF | 1 << PR_WP_OFF) != 0 {
+                log::error!(
+                    "PR{}: {:#010x}-{:#010x} {} ({pr:#010x}); refusing to modify the flash",
+                    r.index,
+                    r.base,
+                    r.limit,
+                    if locked {
+                        "was locked since open and cannot be cleared"
+                    } else {
+                        "could not be cleared"
+                    }
+                );
+                self.roll_back(journal);
+                return Err(InternalError::AccessDenied { region: r.source });
+            }
+            log::info!(
+                "PR{}: {:#010x}-{:#010x} protection cleared until close",
+                r.index,
+                r.base,
+                r.limit
+            );
+        }
+        Ok(())
     }
 
     /// Every flash range the controller restricts for us now: protected
@@ -1338,7 +1429,13 @@ impl<H: HostAccess> IchSpiController<H> {
                 read: true,
                 write: true,
             });
-        self.protected_ranges().chain(regions).chain(below_bbar)
+        // Write protection of a clearable range is lifted before the first
+        // mutation. Its read protection is not: reads come first.
+        let ranges = self.protected_ranges().map(|(mut r, clearable)| {
+            r.write &= !clearable;
+            r
+        });
+        ranges.chain(regions).chain(below_bbar)
     }
 
     /// Refuse `access` to `len` bytes from `addr` if the controller restricts
@@ -1736,10 +1833,17 @@ impl<H: HostAccess> IchSpiController<H> {
         }
     }
 
-    /// Enable writes lazily, before a flash mutation is issued.
+    /// Clear unlocked protected ranges and enable writes lazily, before a
+    /// flash mutation is issued.
     fn mutation_gate(&mut self) -> Result<(), InternalError> {
-        if !self.bios_writes_enabled {
-            self.enable_bios_write()?;
+        let journal = self.change_count;
+        self.clear_protected_ranges()?;
+        if !self.bios_writes_enabled
+            && let Err(e) = self.enable_bios_write()
+        {
+            // Leave no range cleared for a mutation that cannot happen.
+            self.roll_back(journal);
+            return Err(e);
         }
         Ok(())
     }
@@ -3454,6 +3558,7 @@ mod tests {
             changes: [None; 12],
             change_count: 0,
             swseq_locked: false,
+            dlock: 0,
             desc_valid: false,
             requested_mode: SpiMode::HardwareSequencing,
             mode: SpiMode::HardwareSequencing,
@@ -3510,14 +3615,11 @@ mod tests {
         assert!(c.init().is_err());
         drop(c);
         assert_eq!(mmio.read16(PCH100_REG_PREOP), 0x1234);
-        assert_eq!(mmio.read32(PCH100_REG_FPR0), 0x8000_0001);
         let writes = mmio.writes();
-        let pr = writes.iter().rposition(|w| w.0 == PCH100_REG_FPR0).unwrap();
-        let preop = writes
-            .iter()
-            .rposition(|w| w.0 == PCH100_REG_PREOP)
-            .unwrap();
-        assert!(pr < preop);
+        let last = |offset| writes.iter().rposition(|w| w.0 == offset).unwrap();
+        assert!(last(PCH100_REG_OPMENU + 4) < last(PCH100_REG_PREOP));
+        // Opening never clears protected ranges.
+        assert!(writes.iter().all(|w| w.0 != PCH100_REG_FPR0));
     }
 
     #[test]
@@ -3540,13 +3642,14 @@ mod tests {
     fn individual_locks_only_block_their_own_restoration() {
         let mut c = test_controller();
         let mmio = c.spibar.clone();
-        mmio.set32(PCH100_REG_FPR0, 0x8000_0001);
-        mmio.set32(PCH100_REG_FPR0 + 4, 0x8000_0002);
-        c.handle_protected_ranges();
+        let (pr0, pr1) = (pr(0, 0xfff, false, true), pr(0x1000, 0x1fff, true, true));
+        mmio.set32(PCH100_REG_FPR0, pr0);
+        mmio.set32(PCH100_REG_FPR0 + 4, pr1);
+        c.clear_protected_ranges().unwrap();
         mmio.set32(PCH100_REG_DLOCK, DLOCK_PR0_LOCKDN | DLOCK_SSEQ_LOCKDN);
         drop(c);
-        assert_eq!(mmio.read32(PCH100_REG_FPR0), 1);
-        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 4), 0x8000_0002);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0), pr(0, 0xfff, false, false));
+        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 4), pr1);
     }
 
     #[test]
@@ -4126,6 +4229,8 @@ mod tests {
     #[test]
     fn access_checks_follow_each_restriction_and_its_polarity() {
         let mut c = test_controller();
+        // Locked down, so no protected range is cleared before mutations.
+        c.locked = true;
         let read = |c: &IchSpiController<FakeHost>, addr, len| {
             Controller::check_access(c, FlashAccess::Read, addr, len)
         };
@@ -4181,7 +4286,7 @@ mod tests {
         assert_eq!(modify(&c, 0xf000, 0x1000), Err(CoreError::RegionProtected));
         assert_eq!(modify(&c, 0x10000, 0x1000), Ok(()));
 
-        // ICH7 PBRs: 4 KiB pages, write protection only.
+        // ICH7 PBRs: 4 KiB pages, write protection only, never cleared.
         let mut c = test_controller();
         c.generation = IchChipset::Ich7;
         c.spibar
@@ -4192,25 +4297,217 @@ mod tests {
     }
 
     #[test]
-    fn open_clears_unlocked_ranges_and_honors_locked_ones() {
+    fn unlocked_ranges_are_cleared_at_the_first_mutation_and_restored() {
+        use FlashAccess::{Modify, Read};
         let mut c = test_controller();
+        c.host.enable_write8_readback();
+        c.host
+            .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
         let mmio = c.spibar.clone();
+        mmio.set_flash(vec![0xff; 1 << 20]);
         mmio.set32(ICH9_REG_HSFS, u32::from(HSFS_FDV));
-        mmio.set32(PCH100_REG_FPR0, pr(0x10000, 0x10fff, false, true));
-        mmio.set32(PCH100_REG_FPR0 + 4, pr(0x20000, 0x20fff, false, true));
+        let unlocked = pr(0x10000, 0x10fff, false, true);
+        let locked = pr(0x20000, 0x20fff, false, true);
+        let read_protected = pr(0x30000, 0x30fff, true, false);
+        mmio.set32(PCH100_REG_FPR0, unlocked);
+        mmio.set32(PCH100_REG_FPR0 + 4, locked);
+        mmio.set32(PCH100_REG_FPR0 + 8, read_protected);
         mmio.set32(PCH100_REG_DLOCK, DLOCK_PR0_LOCKDN << 1);
+        let check = |c: &IchSpiController<FakeHost>, access, addr| {
+            Controller::check_access(c, access, addr, 1)
+        };
+        let ranges = PCH100_REG_FPR0..PCH100_REG_FPR0 + 6 * 4;
         c.wait_configuration_idle().unwrap();
         c.init().unwrap();
-        let modify = |c: &IchSpiController<FakeHost>, addr| {
-            Controller::check_access(c, FlashAccess::Modify, addr, 1)
-        };
-        assert_eq!(modify(&c, 0x10000), Ok(()));
-        assert_eq!(modify(&c, 0x20000), Err(CoreError::RegionProtected));
+        // Opening, reading and probing leave the ranges alone...
+        c.hwseq_read(0, &mut [0; 4]).unwrap();
+        assert!(!c.probe_opcode(JEDEC_READ));
+        assert!(mmio.writes().iter().all(|w| !ranges.contains(&w.0)));
+        // ...but the checks know which ones the first mutation clears.
+        // Read protection applies until then: reads come first.
+        assert_eq!(check(&c, Modify, 0x10000), Ok(()));
+        assert_eq!(check(&c, Modify, 0x30000), Ok(()));
+        assert_eq!(check(&c, Read, 0x30000), Err(CoreError::RegionProtected));
+        assert_eq!(check(&c, Modify, 0x20000), Err(CoreError::RegionProtected));
+
+        c.hwseq_write(0x10000, &[0x5a]).unwrap();
+        assert_eq!(mmio.flash()[0x10000], 0x5a);
+        let cleared = |value| value & !(1 << PR_RP_OFF | 1 << PR_WP_OFF);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0), cleared(unlocked));
+        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 4), locked);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 8), cleared(read_protected));
+        assert_eq!(check(&c, Read, 0x30000), Ok(()));
+        assert_eq!(check(&c, Modify, 0x20000), Err(CoreError::RegionProtected));
         drop(c);
-        assert_eq!(
-            mmio.read32(PCH100_REG_FPR0),
-            pr(0x10000, 0x10fff, false, true)
-        );
+        assert_eq!(mmio.read32(PCH100_REG_FPR0), unlocked);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 4), locked);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 8), read_protected);
+    }
+
+    /// A controller over all-zero flash, with BIOS writes enableable and
+    /// FPR0 and FPR1 write protected but clearable.
+    fn clearable_ranges_controller() -> (IchSpiController<FakeHost>, [u32; 2]) {
+        let mut c = test_controller();
+        c.host.enable_write8_readback();
+        c.host
+            .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        c.spibar.set_flash(vec![0; 1 << 20]);
+        let ranges = [
+            pr(0x10000, 0x10fff, true, true),
+            pr(0x20000, 0x20fff, false, true),
+        ];
+        c.spibar.set32(PCH100_REG_FPR0, ranges[0]);
+        c.spibar.set32(PCH100_REG_FPR0 + 4, ranges[1]);
+        (c, ranges)
+    }
+
+    /// `c` refused a write: the flash is unchanged, writes were never
+    /// enabled and both ranges are as they were.
+    fn assert_untouched(c: &IchSpiController<FakeHost>, ranges: [u32; 2]) {
+        assert!(c.spibar.flash().iter().all(|b| *b == 0));
+        assert!(c.host.writes().is_empty());
+        assert_eq!(c.spibar.read32(PCH100_REG_FPR0), ranges[0]);
+        assert_eq!(c.spibar.read32(PCH100_REG_FPR0 + 4), ranges[1]);
+        assert_eq!(c.change_count, 0);
+    }
+
+    #[test]
+    fn ranges_locked_after_open_refuse_the_mutation() {
+        let flockdn = (ICH9_REG_HSFS, u32::from(HSFS_FLOCKDN));
+        let pr1_lockdn = (PCH100_REG_DLOCK, DLOCK_PR0_LOCKDN << 1);
+        // Locked after the access checks assumed them cleared...
+        for (reg, lock) in [flockdn, pr1_lockdn] {
+            let (mut c, ranges) = clearable_ranges_controller();
+            let check = Controller::check_access(&c, FlashAccess::Modify, 0x20000, 1);
+            assert_eq!(check, Ok(()));
+            c.spibar.set32(reg, lock);
+            // ...even when this write does not overlap them.
+            assert!(matches!(
+                c.hwseq_write(0x30000, &[0x5a]),
+                Err(InternalError::AccessDenied { .. })
+            ));
+            assert_untouched(&c, ranges);
+        }
+
+        // Locked while clearing: FPR0 is cleared, then FPR1 is locked.
+        for (reg, lock) in [flockdn, pr1_lockdn] {
+            let (mut c, ranges) = clearable_ranges_controller();
+            c.spibar.on_write32(move |mmio, offset, _, value| {
+                if offset == PCH100_REG_FPR0 {
+                    mmio.set32(reg, mmio.read32(reg) | lock);
+                }
+                value
+            });
+            assert!(matches!(
+                c.hwseq_write(0x30000, &[0x5a]),
+                Err(InternalError::AccessDenied { .. })
+            ));
+            if reg == PCH100_REG_DLOCK {
+                assert_untouched(&c, ranges);
+                continue;
+            }
+            // Locked down, FPR0 cannot be restored: it stays journaled.
+            assert!(c.spibar.flash().iter().all(|b| *b == 0));
+            assert!(c.host.writes().is_empty());
+            assert_eq!(c.spibar.read32(PCH100_REG_FPR0 + 4), ranges[1]);
+            assert_eq!(c.change_count, 1);
+        }
+    }
+
+    #[test]
+    fn partially_taken_clears_are_undone_bit_by_bit() {
+        let rp = 1 << PR_RP_OFF;
+        let wp = 1 << PR_WP_OFF;
+        // FPR0 keeps its read protection; clearing its write protection is
+        // undone.
+        let (mut c, ranges) = clearable_ranges_controller();
+        c.spibar.on_write32(move |_, offset, old, value| {
+            if offset == PCH100_REG_FPR0 {
+                old & rp | value & !rp
+            } else {
+                value
+            }
+        });
+        assert!(c.hwseq_write(0x30000, &[0x5a]).is_err());
+        assert_untouched(&c, ranges);
+
+        // FPR1 cannot be cleared and FPR0's write protection cannot be set
+        // again: that restore is reported and stays journaled.
+        let (mut c, ranges) = clearable_ranges_controller();
+        c.spibar
+            .on_write32(move |_, offset, old, value| match offset {
+                PCH100_REG_FPR0 => value & (old | !wp),
+                o if o == PCH100_REG_FPR0 + 4 => old,
+                _ => value,
+            });
+        assert!(c.hwseq_write(0x30000, &[0x5a]).is_err());
+        assert!(c.spibar.flash().iter().all(|b| *b == 0));
+        assert!(c.host.writes().is_empty());
+        assert_eq!(c.spibar.read32(PCH100_REG_FPR0), ranges[0] & !wp);
+        assert_eq!(c.change_count, 1);
+    }
+
+    #[test]
+    fn failed_write_enable_restores_cleared_ranges_at_once() {
+        let bwe = u32::from(BIOS_CNTL_BWE);
+        for (silvermont, denied) in [(false, false), (false, true), (true, false), (true, true)] {
+            let (mut c, ranges) = clearable_ranges_controller();
+            c.silvermont_bcr = silvermont;
+            if denied {
+                let smm_bwp = u32::from(BIOS_CNTL_SMM_BWP);
+                c.spibar.set32(SILVERMONT_REG_BCR, smm_bwp);
+                c.host
+                    .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, smm_bwp);
+            } else {
+                // BIOS_CNTL.BWE and BCR.WPD do not take.
+                c.host = FakeHost::default();
+                c.host
+                    .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+                c.spibar.block_write32(SILVERMONT_REG_BCR);
+            }
+            assert!(c.hwseq_write(0x30000, &[0x5a]).is_err());
+            // The controller is still open, and nothing is left changed.
+            assert!(c.spibar.flash().iter().all(|b| *b == 0));
+            assert_eq!(c.spibar.read32(PCH100_REG_FPR0), ranges[0]);
+            assert_eq!(c.spibar.read32(PCH100_REG_FPR0 + 4), ranges[1]);
+            assert_eq!(c.change_count, 0);
+            assert!(!c.writes_enabled());
+            let bios_cntl = c.host.read8(c.config_bdf, PCI_REG_BIOS_CNTL as u16);
+            assert_eq!(u32::from(bios_cntl.unwrap()) & bwe, 0);
+            assert_eq!(c.spibar.read32(SILVERMONT_REG_BCR) & bwe, 0);
+        }
+    }
+
+    #[test]
+    fn a_failed_clear_refuses_the_mutation_and_undoes_the_others() {
+        for silvermont in [false, true] {
+            let mut c = test_controller();
+            c.silvermont_bcr = silvermont;
+            c.host.enable_write8_readback();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            let (mmio, host) = (c.spibar.clone(), c.host.clone());
+            mmio.set_flash(vec![0; 1 << 20]);
+            let first = pr(0x10000, 0x10fff, false, true);
+            mmio.set32(PCH100_REG_FPR0, first);
+            mmio.set32(PCH100_REG_FPR0 + 4, pr(0x20000, 0x20fff, false, true));
+            c.spibar.block_write32(PCH100_REG_FPR0 + 4);
+            assert_eq!(
+                Controller::check_access(&c, FlashAccess::Modify, 0x20000, 1),
+                Ok(())
+            );
+            assert!(matches!(
+                c.hwseq_write(0x30000, &[0x5a]),
+                Err(InternalError::AccessDenied { .. })
+            ));
+            // Nothing is left changed: not the flash, not the range cleared
+            // first, and writes were never enabled.
+            assert!(mmio.flash().iter().all(|b| *b == 0));
+            assert_eq!(mmio.read32(PCH100_REG_FPR0), first);
+            assert!(host.writes().is_empty());
+            assert!(mmio.writes().iter().all(|w| w.0 != SILVERMONT_REG_BCR));
+            assert_eq!(c.change_count, 0);
+        }
     }
 
     #[cfg(all(feature = "std", target_os = "linux"))]
@@ -4318,19 +4615,25 @@ mod tests {
             ),
         ] {
             for (erase, refused) in [true, false].into_iter().zip(refused) {
-                let controller = ich9_controller(3, 3, 0);
-                let fake = (controller.spibar.clone(), controller.host.clone());
-                fake.0.set_flash(vec![0; 1 << 20]);
-                fake.0.set32(ICH9_REG_PR0, protection);
-                let mut flash = HwseqFlash::with_size(Box::new(controller), 1 << 20).unwrap();
-                check_mutation(
-                    &mut flash,
-                    (&fake.0, &fake.1),
-                    regions,
-                    changed,
-                    erase,
-                    refused,
-                );
+                // Unless locked down, write protection is cleared first.
+                for locked in [true, false] {
+                    let mut controller = ich9_controller(3, 3, 0);
+                    controller.locked = locked;
+                    let fake = (controller.spibar.clone(), controller.host.clone());
+                    fake.0.set_flash(vec![0; 1 << 20]);
+                    fake.0.set32(ICH9_REG_PR0, protection);
+                    let mut flash = HwseqFlash::with_size(Box::new(controller), 1 << 20).unwrap();
+                    check_mutation(
+                        &mut flash,
+                        (&fake.0, &fake.1),
+                        regions,
+                        changed,
+                        erase,
+                        refused && (locked || protection == read_protected),
+                    );
+                    drop(flash);
+                    assert_eq!(fake.0.read32(ICH9_REG_PR0), protection);
+                }
             }
         }
     }
@@ -4378,11 +4681,15 @@ mod tests {
         // would allow erasing it, since it only checks the erase address.
         let spill = &[(0x10000, 0x1ffff), (0x41000, 0x41fff)][..];
         let unprotected_spill = &[(0x10000, 0x1ffff), (0x51000, 0x51fff)][..];
+        // Only a range locked in DLOCK is not cleared first.
         for (regions, refused) in [(spill, true), (unprotected_spill, false)] {
-            for erase in [true, false] {
-                let c = swseq_controller(vec![0; size]);
+            for (erase, dlock) in [true, false].into_iter().zip([0, DLOCK_PR0_LOCKDN]) {
+                let refused = refused && dlock != 0;
+                let mut c = swseq_controller(vec![0; size]);
                 c.spibar
                     .set32(PCH100_REG_FPR0, pr(0x4f000, 0x4ffff, false, true));
+                c.spibar.set32(PCH100_REG_DLOCK, dlock);
+                c.dlock = dlock;
                 let fake = (c.spibar.clone(), c.host.clone());
                 let mut flash = SpiFlashDevice::new(
                     InternalSpi {
@@ -4406,6 +4713,8 @@ mod tests {
     fn raw_swseq_commands_are_checked_like_the_hardware_checks_cycles() {
         for ich7 in [false, true] {
             let mut c = swseq_controller(vec![0; 1 << 20]);
+            // Locked down, so the protected range stays.
+            c.locked = true;
             if ich7 {
                 c.generation = IchChipset::Ich7;
                 c.spibar
