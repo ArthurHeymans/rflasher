@@ -140,13 +140,24 @@ array verification still detects ignored mutations.
 
 ## Controller restrictions (Intel internal programmer)
 
-At open, unlocked protected ranges are still cleared (journaled and restored on
-close), as flashprog does. What remains restricted for the BIOS master is
-mirrored: locked PRx (ICH8+), FPRx and GPR0 (PCH100+) and PBRx (ICH7, write
-only), whose bits enable protection; descriptor regions without BIOS master
-read or write access, whose FRAP or BIOS_BM_RAP/WAP bits grant access, unless
-the descriptor override strap is set; and, in software sequencing, addresses
-below BBAR. Regions above the permission bits FRAP covers (8) are assumed
+Protected ranges that were not locked at open (configuration not locked down by
+HSFS.FLOCKDN and, on PCH100+, the range not by DLOCK.PRx_LOCKDN) are cleared,
+as flashprog does, but only right before the first mutating command, never by
+opening, reading or probing. All of them are cleared then, not only those the
+command touches, so none can refuse a later part of the operation. Each clear
+is journaled, read back and restored on close. If one was locked since open or
+does not take, or BIOS writes cannot be enabled afterwards, the bits cleared
+for it are restored at once, bit by bit from what reads back, and the mutation
+is refused before the flash is changed; a restore that does not take is
+reported and retried on close. ICH7 PBRs are never cleared.
+
+What restricts the BIOS master is mirrored: PRx (ICH8+), FPRx and GPR0
+(PCH100+) and PBRx (ICH7, write only), whose bits enable protection, except
+the write protection of ranges that will be cleared (their read protection
+applies until then, since reads come first); descriptor regions without BIOS
+master read or write access, whose FRAP or BIOS_BM_RAP/WAP bits grant access,
+unless the descriptor override strap is set; and, in software sequencing,
+addresses below BBAR. Regions above the permission bits FRAP covers (8) are assumed
 accessible, as in flashprog.
 
 Before the first destructive command, mutations ask the device
