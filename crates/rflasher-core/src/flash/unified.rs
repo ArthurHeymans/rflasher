@@ -11,7 +11,10 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::policy::{MutationPolicy, preflight, region_layout, validate_neighbors};
+use super::policy::{
+    MutationPolicy, check_erase_access, check_erase_plan_access, preflight, region_layout,
+    validate_neighbors,
+};
 use crate::chip::WriteGranularity;
 use crate::error::{EraseFailure, Error, Result};
 use crate::flash::device::FlashDevice;
@@ -19,6 +22,7 @@ use crate::flash::operations::{
     coalesce_write_ranges, plan_optimal_erase, plan_optimal_erase_region,
 };
 use crate::layout::{Layout, LayoutError, Region};
+use crate::programmer::FlashAccess;
 
 /// Perform a smart write operation that minimizes flash operations
 ///
@@ -101,6 +105,7 @@ pub async fn erase_by_layout_with_policy<D: FlashDevice + ?Sized>(
     policy: &mut MutationPolicy<'_>,
 ) -> Result<()> {
     preflight(device, layout, policy).await?;
+    check_erase_plan_access(device, layout)?;
     erase_by_layout_prepared(device, layout).await
 }
 
@@ -115,6 +120,7 @@ pub async fn erase_region_with_policy<D: FlashDevice + ?Sized>(
     requested.included = true;
     layout.add_region(requested);
     preflight(device, &layout, policy).await?;
+    check_erase_plan_access(device, &layout)?;
     erase_region_prepared(device, region).await
 }
 
@@ -227,6 +233,8 @@ pub async fn read_with_progress<D: FlashDevice, P: WriteProgress>(
 
 // Validate the content-dependent plan for every region before any mutation.
 // Earlier regions restore their neighbors, so later region contents are unchanged.
+// Only what the plan reads and changes is checked against device access
+// restrictions, so unchanged restricted data in a region does not refuse it.
 async fn validate_smart_plan<D: FlashDevice + ?Sized>(
     device: &mut D,
     addr: u32,
@@ -238,6 +246,8 @@ async fn validate_smart_plan<D: FlashDevice + ?Sized>(
     if !device.is_valid_range(addr, data.len()) {
         return Err(Error::AddressOutOfBounds);
     }
+    // In range, so the length fits.
+    device.check_access(FlashAccess::Read, addr, data.len() as u32)?;
     let mut current = vec![0; data.len()];
     device.read(addr, &mut current).await?;
     let ops = plan_optimal_erase(
@@ -252,6 +262,7 @@ async fn validate_smart_plan<D: FlashDevice + ?Sized>(
     for op in &ops {
         device.validate_erase_operation(op)?;
         validate_neighbors(device, op, addr, addr + data.len() as u32)?;
+        check_erase_access(device, op)?;
         let start = op.start.saturating_sub(addr) as usize;
         let end = ((op.start + op.size).saturating_sub(addr) as usize).min(current.len());
         current[start..end].fill(ERASED_VALUE);
@@ -268,6 +279,7 @@ async fn validate_smart_plan<D: FlashDevice + ?Sized>(
         while offset < end {
             let len = (end - offset).min(WRITE_CHUNK_SIZE);
             device.validate_write(addr + offset as u32, len)?;
+            device.check_access(FlashAccess::Modify, addr + offset as u32, len as u32)?;
             offset += len;
         }
     }
@@ -844,6 +856,8 @@ mod tests {
         timeout_write_at: Option<u32>,
         erase_error: Option<Error>,
         failed: bool,
+        /// Inclusive byte ranges `check_access` refuses for an access.
+        blocked: Vec<(FlashAccess, u32, u32)>,
     }
 
     impl FakeFlash {
@@ -862,6 +876,7 @@ mod tests {
                 timeout_write_at: None,
                 erase_error: None,
                 failed: false,
+                blocked: Vec::new(),
             }
         }
     }
@@ -878,6 +893,17 @@ mod tests {
         }
         fn erase_blocks(&self) -> &[EraseBlock] {
             &self.blocks
+        }
+        fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()> {
+            let last = addr + len - 1;
+            match self
+                .blocked
+                .iter()
+                .any(|&(a, first, end)| a == access && first <= last && addr <= end)
+            {
+                true => Err(Error::RegionProtected),
+                false => Ok(()),
+            }
         }
         async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
             assert!(!self.failed, "IO after device failure");
@@ -1102,6 +1128,69 @@ mod tests {
             Err(Error::OpcodeNotSupported)
         ));
         assert_eq!(flash.mutations, 0);
+    }
+
+    /// Device access restrictions are checked for the actual footprint of
+    /// every selected region (erase blocks and the neighbors they read,
+    /// erase and restore) before the first region is changed.
+    #[test]
+    fn access_restrictions_are_checked_for_every_planned_footprint_first() {
+        use FlashAccess::{Modify, Read};
+        // The second region's 16-byte erase block spills into 136..143.
+        let spilling: &[(u32, u32)] = &[(0, 15), (128, 135)];
+        // The second region's block 144..159 holds unchanged data.
+        let unchanged: &[(u32, u32)] = &[(0, 15), (128, 159)];
+        // (regions, blocked, erase refused, smart write refused)
+        for (regions, blocked, erase_refused, write_refused) in [
+            (spilling, (Modify, 140, 140), true, true),
+            (spilling, (Read, 143, 150), true, true),
+            (spilling, (Modify, 144, 255), false, false),
+            (spilling, (Read, 16, 127), false, false),
+            // A smart write leaves unchanged data alone; an erase does not.
+            (unchanged, (Modify, 150, 150), true, false),
+            // A smart write reads its whole region to compare it.
+            (unchanged, (Read, 150, 150), true, true),
+        ] {
+            let mut layout = Layout::new();
+            for (i, &(start, end)) in regions.iter().enumerate() {
+                let mut region = Region::new(alloc::format!("r{i}"), start, end);
+                region.included = true;
+                layout.add_region(region);
+            }
+            for erase in [false, true] {
+                let mut flash = FakeFlash::new(256);
+                flash.blocked.push(blocked);
+                let mut image = flash.bytes.clone();
+                image[..16].fill(0x7f);
+                image[128..136].fill(0x7f);
+                let result = if erase {
+                    block_on(erase_by_layout(&mut flash, &layout))
+                } else {
+                    block_on(smart_write_by_layout(
+                        &mut flash,
+                        &layout,
+                        &image,
+                        &mut NoProgress,
+                    ))
+                    .map(|_| ())
+                };
+                if if erase { erase_refused } else { write_refused } {
+                    assert_eq!(result, Err(Error::RegionProtected), "{blocked:?}");
+                    assert_eq!(flash.mutations, 0);
+                    continue;
+                }
+                result.unwrap();
+                let want = if erase { 0xff } else { 0x7f };
+                assert!(flash.bytes[..16].iter().all(|b| *b == want));
+                assert!(flash.bytes[128..136].iter().all(|b| *b == want));
+                let rest = regions[1].1 as usize + 1;
+                let unchanged = if erase { 0xff } else { 0 };
+                assert!(flash.bytes[136..rest].iter().all(|b| *b == unchanged));
+                // Restored neighbors and untouched data.
+                assert!(flash.bytes[rest..].iter().all(|b| *b == 0));
+                assert!(flash.bytes[16..128].iter().all(|b| *b == 0));
+            }
+        }
     }
 
     #[test]

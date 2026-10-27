@@ -70,7 +70,7 @@ mod linux {
     use rflasher_core::chip::{EraseBlock, WriteGranularity};
     use rflasher_core::error::{Error as CoreError, Result as CoreResult};
     use rflasher_core::flash::{self, FlashContext, FlashDevice};
-    use rflasher_core::programmer::{SpiFeatures, SpiMaster};
+    use rflasher_core::programmer::{FlashAccess, SpiFeatures, SpiMaster};
     use rflasher_core::spi::{SpiCommand, opcodes};
 
     /// An opened internal programmer, in the access mode its controller allows.
@@ -133,12 +133,17 @@ mod linux {
     ///   are not advertised or executed
     /// - Mutating commands enable BIOS writes first; opcode meanings must
     ///   match the connected flash
+    /// - Programs and erases overlapping protected ranges, write-restricted
+    ///   descriptor regions or flash below BBAR are refused. Addresses are
+    ///   assumed to reach the chip unchanged (3-byte mode, extended address
+    ///   register zero), and erased block sizes come from the chip metadata
+    /// - Chip erase is refused while any flash range is write-restricted
     /// - Maximum 64 bytes per transfer
     /// - Only single I/O mode (no dual/quad)
     /// - No 4-byte addressing support (24-bit address max)
     /// - Dummy cycles are not supported by the Intel controller
     pub struct InternalSpi {
-        pub(super) controller: Box<dyn Controller + Send>,
+        pub(crate) controller: Box<dyn Controller + Send>,
     }
 
     impl SpiMaster for InternalSpi {
@@ -160,6 +165,10 @@ mod linux {
 
         fn probe_opcode(&self, opcode: u8) -> bool {
             self.controller.probe_opcode(opcode)
+        }
+
+        fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> CoreResult<()> {
+            self.controller.check_access(access, addr, len)
         }
 
         async fn delay_us(&mut self, us: u32) {
@@ -273,6 +282,10 @@ mod linux {
 
         fn erase_blocks(&self) -> &[EraseBlock] {
             &self.erase_blocks
+        }
+
+        fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> CoreResult<()> {
+            self.controller.check_access(access, addr, len)
         }
 
         async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {

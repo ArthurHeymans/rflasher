@@ -123,6 +123,22 @@ pub trait FlashDevice {
     /// * `EraseError` - If the erase operation fails
     async fn erase(&mut self, addr: u32, len: u32) -> Result<()>;
 
+    /// Refuse, without side effects, `access` to `len` bytes from `addr` if
+    /// the device restricts any of them (see
+    /// [`SpiMaster::check_access`](crate::programmer::SpiMaster::check_access)).
+    ///
+    /// Unlike the `validate_*` methods, which judge whether an operation can
+    /// be expressed at all, this is only asked about footprints that will
+    /// actually be read or changed.
+    fn check_access(
+        &self,
+        _access: crate::programmer::FlashAccess,
+        _addr: u32,
+        _len: u32,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Validate a planned eraser before the first destructive command.
     fn validate_erase_operation(&self, op: &super::operations::OptimalEraseOp) -> Result<()> {
         if self.erase_blocks().len() != 1

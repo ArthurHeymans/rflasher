@@ -44,6 +44,16 @@ impl Default for SpiFeatures {
     }
 }
 
+/// How an operation uses a flash range, for programmers that restrict
+/// address ranges (e.g. Intel protected ranges and descriptor regions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlashAccess {
+    /// The contents are read.
+    Read,
+    /// The contents are erased or programmed.
+    Modify,
+}
+
 /// SPI Master trait
 ///
 /// This trait represents a programmer that can execute SPI commands.
@@ -139,6 +149,17 @@ pub trait SpiMaster {
 
     /// Delay for the specified number of microseconds
     async fn delay_us(&mut self, us: u32);
+
+    /// Refuse, without side effects, `access` to `len` bytes from `addr` if
+    /// this programmer restricts any of them.
+    ///
+    /// Mutating operations call this for their planned footprint (including
+    /// erase blocks that reach past the request) before the first command.
+    /// Wrappers must forward it, or the restriction is only discovered by a
+    /// failing command part-way through.
+    fn check_access(&self, _access: FlashAccess, _addr: u32, _len: u32) -> Result<()> {
+        Ok(())
+    }
 
     /// Read `buf.len()` bytes of the probed chip starting at `addr`.
     ///

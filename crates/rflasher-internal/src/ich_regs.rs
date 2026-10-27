@@ -28,6 +28,10 @@ pub const ICH7_REG_PREOP: usize = 0x54;
 pub const ICH7_REG_OPTYPE: usize = 0x56;
 /// ICH7 Opcode Menu register (64 bits)
 pub const ICH7_REG_OPMENU: usize = 0x58;
+/// ICH7 Protected BIOS Range 0 (32 bits, three registers): write
+/// protection enable in bit 31, limit and base 4 KiB pages in bits 23:12
+/// and 11:0
+pub const ICH7_REG_PBR0: usize = 0x60;
 
 // ICH7 SPIS bits
 /// SPI Cycle In Progress

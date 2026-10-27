@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use crate::chip::ChipProvider;
 use crate::chip::{EraseBlock, Features, WriteGranularity};
 use crate::error::{EraseFailure, Error, Result};
-use crate::programmer::{SpiFeatures, SpiMaster};
+use crate::programmer::{FlashAccess, SpiFeatures, SpiMaster};
 use crate::protocol::{self, CommandAddressing};
 
 use super::context::{AddressMode, FlashContext};
@@ -1357,6 +1357,8 @@ pub async fn write<M: SpiMaster + ?Sized>(
     if data.is_empty() {
         return Ok(());
     }
+    // In range, so the length fits. Refuse before the first page, not after.
+    master.check_access(FlashAccess::Modify, addr, data.len() as u32)?;
     let saved = super::protection::prepare(master, ctx).await?;
     let result = match master.program_flash(ctx, addr, data).await {
         Ok(()) => super::protection::check_result(master, ctx, addr, false).await,
@@ -1685,6 +1687,8 @@ pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
     op: &OptimalEraseOp,
 ) -> Result<()> {
     validate_spi_erase_operation(master, ctx, op)?;
+    // The chip's geometry (from its metadata) decides what this erases.
+    master.check_access(FlashAccess::Modify, op.start, op.size)?;
     let saved = super::protection::prepare(master, ctx).await?;
     let result = match erase_spi_unprotected(master, ctx, op).await {
         Ok(()) => super::protection::check_result(master, ctx, op.start, true).await,
