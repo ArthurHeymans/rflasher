@@ -570,7 +570,7 @@ pub async fn exit_4byte_mode<M: SpiMaster + ?Sized>(master: &mut M) -> Result<()
 fn extended_address_write_opcode(features: crate::chip::Features) -> Result<u8> {
     use crate::chip::Features;
 
-    if features.contains(Features::EXT_ADDR_REG_C5C8) || features.contains(Features::EXT_ADDR_REG) {
+    if features.contains(Features::EXT_ADDR_REG_C5C8) {
         Ok(opcodes::WREAR)
     } else if features.contains(Features::EXT_ADDR_REG_1716) {
         Ok(opcodes::WREAR_ALT)
@@ -586,6 +586,14 @@ pub async fn set_extended_address<M: SpiMaster + ?Sized>(
     addr_high: u8,
 ) -> Result<()> {
     let opcode = extended_address_write_opcode(features)?;
+    write_extended_address(master, opcode, addr_high).await
+}
+
+async fn write_extended_address<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    opcode: u8,
+    addr_high: u8,
+) -> Result<()> {
     write_enable(master).await?;
     let data = [addr_high];
     let mut cmd = SpiCommand::write_reg(opcode, &data);
@@ -605,7 +613,9 @@ pub async fn enter_4byte_mode_with_features<M: SpiMaster + ?Sized>(
         write_enable(master).await?;
         enter_4byte_mode(master).await
     } else if features.contains(Features::FOUR_BYTE_ENTER_EAR7) {
-        set_extended_address(master, features, 0x80).await
+        // SFDP's EAR7 entry method uses the 0x17 bank register, even when
+        // a separate 0xC5 extended address register is also advertised.
+        write_extended_address(master, opcodes::WREAR_ALT, 0x80).await
     } else {
         Err(Error::ChipNotSupported)
     }
@@ -624,7 +634,7 @@ pub async fn exit_4byte_mode_with_features<M: SpiMaster + ?Sized>(
         write_enable(master).await?;
         exit_4byte_mode(master).await
     } else if features.contains(Features::FOUR_BYTE_ENTER_EAR7) {
-        set_extended_address(master, features, 0x00).await
+        write_extended_address(master, opcodes::WREAR_ALT, 0x00).await
     } else {
         Err(Error::ChipNotSupported)
     }
@@ -1144,3 +1154,75 @@ pub fn select_read_mode(
 
 #[cfg(all(test, feature = "alloc"))]
 mod unique_id_tests;
+
+#[cfg(all(test, feature = "std"))]
+mod extended_address_tests {
+    use super::*;
+    use crate::chip::Features;
+    use alloc::{vec, vec::Vec};
+    use futures_lite::future::block_on;
+
+    #[derive(Default)]
+    struct RecordingMaster(Vec<(u8, Vec<u8>)>);
+
+    impl SpiMaster for RecordingMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+        fn max_read_len(&self) -> usize {
+            256
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+            self.0.push((cmd.opcode, cmd.write_data.to_vec()));
+            Ok(())
+        }
+        async fn delay_us(&mut self, _: u32) {}
+    }
+
+    #[test]
+    fn bank_write_uses_explicit_catalog_opcode() {
+        let db = rflasher_chips::ChipDatabase::new();
+        for (name, opcode) in [
+            ("S25FL256S......0", 0x17),
+            ("N25Q256", 0xc5),
+            ("IS25LP512MG", 0xc5),
+        ] {
+            let chip = db.find_by_name(name)[0];
+            assert!(chip.features.contains(Features::EXT_ADDR_REG));
+            let mut master = RecordingMaster::default();
+            block_on(set_extended_address(&mut master, chip.features, 1)).unwrap();
+            assert_eq!(master.0, [(0x06, vec![]), (opcode, vec![1])]);
+        }
+        for features in [Features::empty(), Features::EXT_ADDR_REG] {
+            let mut master = RecordingMaster::default();
+            assert!(matches!(
+                block_on(set_extended_address(&mut master, features, 1)),
+                Err(Error::ChipNotSupported)
+            ));
+            assert!(master.0.is_empty());
+        }
+    }
+
+    #[test]
+    fn ear7_mode_switch_uses_bank_register_even_with_c5c8() {
+        let db = rflasher_chips::ChipDatabase::new();
+        for name in ["S25FL256S......0", "IS25LP512MG"] {
+            let features = db.find_by_name(name)[0].features;
+            let mut master = RecordingMaster::default();
+            block_on(enter_4byte_mode_with_features(&mut master, features)).unwrap();
+            block_on(exit_4byte_mode_with_features(&mut master, features)).unwrap();
+            assert_eq!(
+                master.0,
+                [
+                    (0x06, vec![]),
+                    (0x17, vec![0x80]),
+                    (0x06, vec![]),
+                    (0x17, vec![0])
+                ]
+            );
+        }
+    }
+}

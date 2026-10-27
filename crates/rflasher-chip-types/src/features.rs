@@ -171,7 +171,7 @@ impl Features {
 
     /// Whether an extended address register can select the high address byte.
     pub fn supports_extended_address_register(self) -> bool {
-        self.intersects(Self::EXT_ADDR_REG | Self::EXT_ADDR_REG_C5C8 | Self::EXT_ADDR_REG_1716)
+        self.intersects(Self::EXT_ADDR_REG_C5C8 | Self::EXT_ADDR_REG_1716)
     }
 
     /// Whether the native 4BA 0x13 read opcode is supported.
