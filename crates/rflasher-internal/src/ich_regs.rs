@@ -28,6 +28,10 @@ pub const ICH7_REG_PREOP: usize = 0x54;
 pub const ICH7_REG_OPTYPE: usize = 0x56;
 /// ICH7 Opcode Menu register (64 bits)
 pub const ICH7_REG_OPMENU: usize = 0x58;
+/// ICH7 Protected BIOS Range 0 (32 bits, three registers): write
+/// protection enable in bit 31, limit and base 4 KiB pages in bits 23:12
+/// and 11:0
+pub const ICH7_REG_PBR0: usize = 0x60;
 
 // ICH7 SPIS bits
 /// SPI Cycle In Progress
@@ -307,13 +311,10 @@ pub const RCBA_SPI_OFFSET_ICH7: u32 = 0x3020;
 /// Offset to SPI registers within RCBA (ICH8+)
 pub const RCBA_SPI_OFFSET_ICH9: u32 = 0x3800;
 
-// For PCH (100 Series and later), SPI is at a fixed MMIO address
-// or accessed via P2SB (Primary to Sideband) bridge
-
-/// SPIBAR register in LPC/eSPI controller config space (PCH100+)
+/// SPIBAR register in SPI controller PCI config space (PCH100+)
 pub const PCI_REG_SPIBAR: u8 = 0x10; // BAR0
 
-// LPC Bridge BIOS_CNTL register
+// BIOS_CNTL in LPC config (legacy) or SPI config (PCH100+)
 /// BIOS Control Register offset
 pub const PCI_REG_BIOS_CNTL: u8 = 0xDC;
 

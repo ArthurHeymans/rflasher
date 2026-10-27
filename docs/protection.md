@@ -41,6 +41,24 @@ power or a disconnected programmer can prevent cleanup. Software protection may
 be temporarily removed outside the selected data region, but data mutation
 policy and verification still apply to the requested region.
 
+## Data sharing an erase block with the requested range
+
+Erase and smart write save data outside the requested range when it shares an
+erase block. After a verified erase, all neighbors are programmed before any
+are verified. If the erase completes but readback finds unerased bytes, the
+original erase mismatch is returned. Recovery reads the neighbors and programs
+saved data only over bytes verified as erased; other changed bytes are left
+alone and reported by verification. The requested range remains as the failed
+erase left it.
+
+If an erase, read, or program call fails, its device state may be unknown: this
+neighbor recovery stops without further device IO and reports unverified data
+at risk. A program failure can therefore leave another neighbor erased. This
+is best effort, not atomic: power loss, cancellation, or a failed restore can
+lose data. Restore affected ranges from an independent backup. These guarantees
+apply to neighbor recovery only; lower-level SPI protection and address-mode
+cleanup retain their existing behavior, including cleanup after an error.
+
 ## Covered procedures
 
 Catalog assignments follow flashprog's exact chip identity (manufacturer ID,
@@ -107,18 +125,98 @@ Unlock masks are not range decoders. `wp` operations require `WP_WINBOND`, an
 explicit assertion of the supported SR1/SR2 map, SPI25 range decoder and combined
 status-write procedure. The bundled W25Q128.V profile carries this assertion,
 but the shared EF:4018 identity does not establish whether SR3 exists, so it
-cannot report or change WP configuration. Other unaudited layouts are refused. A profile explicitly asserting
-`WP_WPS` reads SR3 and refuses individual-lock mode and read failures. A
-floating-low response to an unsupported SR3 command is indistinguishable from
-WPS=0, so this assertion must only be assigned to a positively identified part.
-The RON schema exposes `WP_WINBOND` but not `WP_WPS`, so a custom RON
-profile cannot assert the SR3/WPS layout needed to enable WP configuration for
-the shared EF:4018 identity.
-Array operations on EF:4018 are allowed; individual locks are not removed and
-may prevent a mutation, which array verification detects. CMP/SRL and independent
-protection modes are not automatically cleared.
+cannot report or change WP configuration. If the chip marking is known, select
+`--chip W25Q128BV-WP` for BV or `--chip W25Q128FVJV-WP` for FV/JV. These
+opt-in profiles still require the matching JEDEC ID; the ID itself cannot verify
+the user's variant selection. Choosing the wrong profile is unsafe. The BV
+profile never reads SR3; FV/JV read SR3 and refuse individual-lock mode or read
+failures. A floating-low response to an unsupported SR3 command is
+indistinguishable from WPS=0, so selecting FV/JV requires independent knowledge
+of the part. Other unaudited layouts are refused.
+
+The profiles follow the [BV rev E](https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/1023/W25Q128BV.pdf)
+sections 7.1 and 7.2.9, [FV rev H](https://www.pjrc.com/teensy/W25Q128FV.pdf)
+and [JV rev F](https://cdn.sparkfun.com/assets/9/d/7/a/d/w25q128jv_revf_03272018_plus.pdf)
+sections 7.1 and 8.2.5. Both use a combined two-byte `01h` write preserving
+unmodified SR2 bits; WPS is not changed. SEC=1 with BP=110 is absent from
+these protection tables, so WP reporting and writes to that state are refused.
+
+These profiles only accept `--temporary` WP changes (`50h` + `01h`). All three
+parts support volatile status writes, and the read commands return the current
+values, which may be volatile overrides of the persistent ones. No command reads
+the persistent values. A persistent `06h` + `01h` write built on the current
+values could persist unrelated volatile SR2 bits, including the OTP LB bits. On
+FV/JV, a current WPS=0 may override a persistent WPS=1, so persistent ranges
+would be ignored after the next power-up. Persistent changes are therefore
+refused before any SPI command. A temporary change writes back the current
+values of unrelated bits and is lost at power-off.
+
+Array operations on EF:4018 are allowed. Temporary unprotection of the
+explicit profiles also uses volatile `50h` writes. Before any write enable,
+program or erase, the FV/JV profile reads SR3 and refuses the mutation when
+WPS=1 or SR3 cannot be read: individual locks would silently ignore it, and the
+array verification that would detect this can be skipped with `--no-verify`.
+The BV profile has no WPS and does not read SR3. The generic W25Q128.V profile
+never reads SR3, which BV lacks, so it cannot check WPS, and individual locks
+are not removed. Instead, the device layer reads back every program and erase it
+performs on this profile and reports a mismatch as an error, so neither
+`--no-verify` nor a direct `FlashDevice`/`flash::write` caller sees success for
+an ignored or partial mutation. This costs one extra read of each programmed
+range, and of each range a direct caller erases (the unified operations reuse
+the device's check instead of reading the range again); selecting an explicit
+profile avoids it. The raw
+`spi_program`/`program_flash` primitives are not covered: they also leave
+block protection to the caller. CMP/SRL and independent protection modes are
+not automatically cleared.
 Micron sector locks, Atmel security locks and PMC safeguards remain unresolved;
 array verification still detects ignored mutations.
+
+## Controller restrictions (Intel internal programmer)
+
+Protected ranges that were not locked at open (configuration not locked down by
+HSFS.FLOCKDN and, on PCH100+, the range not by DLOCK.PRx_LOCKDN) are cleared,
+as flashprog does, but only right before the first mutating command, never by
+opening, reading or probing. All of them are cleared then, not only those the
+command touches, so none can refuse a later part of the operation. Each clear
+is journaled, read back and restored on close. If one was locked since open or
+does not take, or BIOS writes cannot be enabled afterwards, the bits cleared
+for it are restored at once, bit by bit from what reads back, and the mutation
+is refused before the flash is changed; a restore that does not take is
+reported and retried on close. ICH7 PBRs are never cleared.
+
+What restricts the BIOS master is mirrored: PRx (ICH8+), FPRx and GPR0
+(PCH100+) and PBRx (ICH7, write only), whose bits enable protection, except
+the write protection of ranges that will be cleared (their read protection
+applies until then, since reads come first); descriptor regions without BIOS
+master read or write access, whose FRAP or BIOS_BM_RAP/WAP bits grant access,
+unless the descriptor override strap is set; and, in software sequencing,
+addresses below BBAR. Regions above the permission bits FRAP covers (8) are assumed
+accessible, as in flashprog.
+
+Before the first destructive command, mutations ask the device
+(`FlashDevice::check_access`, forwarded by `SpiFlashDevice`, the internal
+programmer and the type-erased and web adapters) about what their actual plan
+reads and changes, for every selected region: each erase block, including the
+neighboring data that is saved, erased, restored and verified, and each program
+range. A smart write also reads its whole regions. Unchanged data that a smart
+write neither erases nor programs is not checked, so it may be restricted.
+Direct `FlashDevice` writes and erases, and the controller's own address-based
+writes and erases, check their range before their first command.
+
+This is an early refusal, not an enforcement mechanism. The controller enforces
+restrictions itself, per cycle, against the cycle's address. It cannot know how
+much a raw software-sequencing erase command erases, so neither can the
+controller-level check, which, like the hardware, judges an erase by its
+address. In software sequencing, the erase block sizes used for planned erases
+come from the chip metadata (catalog, SFDP or the caller's chip selection) and
+are trusted; hardware sequencing plans with the controller's own block size.
+Software-sequencing addresses are three bytes and assumed to reach the chip
+unchanged: it is assumed to be in its initial 3-byte address mode with its
+extended address register at zero. Raw chip erase and unclassified commands
+(only reachable through the `unsafe` unchecked paths) are refused while any
+flash range is write-restricted. Status register writes do not touch the
+array. Plain reads are not checked in advance; a restricted read fails with the
+controller's cycle error.
 
 ## References
 

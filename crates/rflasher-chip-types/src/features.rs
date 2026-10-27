@@ -128,6 +128,8 @@ bitflags! {
         const RDID_CONTINUATION       = 1 << 47;
         /// Legacy RES2 identity, not a banked RDID identity.
         const RES2_ID                 = 1 << 48;
+        /// Variant profile requiring an exact, explicit user selection.
+        const EXPLICIT_PROFILE        = 1 << 49;
     }
 }
 
@@ -171,7 +173,7 @@ impl Features {
 
     /// Whether an extended address register can select the high address byte.
     pub fn supports_extended_address_register(self) -> bool {
-        self.intersects(Self::EXT_ADDR_REG | Self::EXT_ADDR_REG_C5C8 | Self::EXT_ADDR_REG_1716)
+        self.intersects(Self::EXT_ADDR_REG_C5C8 | Self::EXT_ADDR_REG_1716)
     }
 
     /// Whether the native 4BA 0x13 read opcode is supported.

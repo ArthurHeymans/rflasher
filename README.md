@@ -90,7 +90,7 @@ When several connected USB programmers match the `-p` specification, rflasher li
 
 Run `rflasher <command> --help` or see the man page for the full option list.
 
-The `internal` programmer uses the chipset's SPI controller on Linux via PCI sysfs and `/dev/mem`, so it usually requires root. Its controller code is `no_std` and can be reused in firmware; see [crates/rflasher-internal](crates/rflasher-internal/README.md).
+The `internal` programmer uses the chipset's SPI controller on Linux via PCI sysfs and `/dev/mem`, so it usually requires root. On Intel PCH100 and newer, the SPI PCI function must be visible and accessible through sysfs, with a validated device ID and platform mapping. If firmware hides it, or kernel permissions deny access, rflasher refuses initialization (including reads); it does not bypass the kernel with direct PCI I/O or write to the LPC bridge instead. Where PCI reads are allowed but write access is denied, read-only operation may still be possible. Its controller code is `no_std` and can be reused in firmware; see [crates/rflasher-internal](crates/rflasher-internal/README.md).
 
 ### Chip database
 

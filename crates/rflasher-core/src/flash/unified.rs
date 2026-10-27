@@ -11,14 +11,18 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::policy::{MutationPolicy, preflight, region_layout};
+use super::policy::{
+    MutationPolicy, check_erase_access, check_erase_plan_access, preflight, region_layout,
+    validate_neighbors,
+};
 use crate::chip::WriteGranularity;
 use crate::error::{EraseFailure, Error, Result};
-use crate::flash::device::FlashDevice;
+use crate::flash::device::{EraseOutcome, FlashDevice};
 use crate::flash::operations::{
     coalesce_write_ranges, plan_optimal_erase, plan_optimal_erase_region,
 };
 use crate::layout::{Layout, LayoutError, Region};
+use crate::programmer::FlashAccess;
 
 /// Perform a smart write operation that minimizes flash operations
 ///
@@ -51,6 +55,7 @@ pub async fn smart_write_with_policy<D: FlashDevice + ?Sized, P: WriteProgress>(
     }
     let layout = region_layout(0, device.size())?;
     preflight(device, &layout, policy).await?;
+    validate_smart_plan(device, 0, data).await?;
     smart_write_region_prepared(device, 0, data, progress).await
 }
 
@@ -65,6 +70,7 @@ pub async fn smart_write_region_with_policy<D: FlashDevice + ?Sized, P: WritePro
     if !data.is_empty() {
         let len = u32::try_from(data.len()).map_err(|_| Error::AddressOutOfBounds)?;
         preflight(device, &region_layout(addr, len)?, policy).await?;
+        validate_smart_plan(device, addr, data).await?;
     }
     smart_write_region_prepared(device, addr, data, progress).await
 }
@@ -81,6 +87,14 @@ pub async fn smart_write_by_layout_with_policy<D: FlashDevice + ?Sized, P: Write
         return Err(Error::BufferTooSmall);
     }
     preflight(device, layout, policy).await?;
+    for region in layout.included_regions() {
+        validate_smart_plan(
+            device,
+            region.start,
+            &image[region.start as usize..=region.end as usize],
+        )
+        .await?;
+    }
     smart_write_by_layout_prepared(device, layout, image, progress).await
 }
 
@@ -91,6 +105,7 @@ pub async fn erase_by_layout_with_policy<D: FlashDevice + ?Sized>(
     policy: &mut MutationPolicy<'_>,
 ) -> Result<()> {
     preflight(device, layout, policy).await?;
+    check_erase_plan_access(device, layout)?;
     erase_by_layout_prepared(device, layout).await
 }
 
@@ -105,6 +120,7 @@ pub async fn erase_region_with_policy<D: FlashDevice + ?Sized>(
     requested.included = true;
     layout.add_region(requested);
     preflight(device, &layout, policy).await?;
+    check_erase_plan_access(device, &layout)?;
     erase_region_prepared(device, region).await
 }
 
@@ -215,6 +231,61 @@ pub async fn read_with_progress<D: FlashDevice, P: WriteProgress>(
     Ok(())
 }
 
+// Validate the content-dependent plan for every region before any mutation.
+// Earlier regions restore their neighbors, so later region contents are unchanged.
+// Only what the plan reads and changes is checked against device access
+// restrictions, so unchanged restricted data in a region does not refuse it.
+async fn validate_smart_plan<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    addr: u32,
+    data: &[u8],
+) -> Result<()> {
+    if data.is_empty() {
+        return Ok(());
+    }
+    if !device.is_valid_range(addr, data.len()) {
+        return Err(Error::AddressOutOfBounds);
+    }
+    // In range, so the length fits.
+    device.check_access(FlashAccess::Read, addr, data.len() as u32)?;
+    let mut current = vec![0; data.len()];
+    device.read(addr, &mut current).await?;
+    let ops = plan_optimal_erase(
+        device.erase_blocks(),
+        device.size(),
+        Some(&current),
+        Some(data),
+        addr,
+        addr + data.len() as u32 - 1,
+        device.write_granularity(),
+    )?;
+    for op in &ops {
+        device.validate_erase_operation(op)?;
+        validate_neighbors(device, op, addr, addr + data.len() as u32)?;
+        check_erase_access(device, op)?;
+        let start = op.start.saturating_sub(addr) as usize;
+        let end = ((op.start + op.size).saturating_sub(addr) as usize).min(current.len());
+        current[start..end].fill(ERASED_VALUE);
+    }
+    let ranges = get_all_write_ranges(&current, data);
+    let ranges = if device.write_granularity() == WriteGranularity::Byte {
+        ranges
+    } else {
+        coalesce_write_ranges(&ranges, device.page_size(), data.len() as u32)
+    };
+    for range in ranges {
+        let mut offset = range.start as usize;
+        let end = offset + range.len as usize;
+        while offset < end {
+            let len = (end - offset).min(WRITE_CHUNK_SIZE);
+            device.validate_write(addr + offset as u32, len)?;
+            device.check_access(FlashAccess::Modify, addr + offset as u32, len as u32)?;
+            offset += len;
+        }
+    }
+    Ok(())
+}
+
 /// Perform a smart write operation for a specific region
 ///
 /// Similar to `smart_write` but only operates on a specific region of flash.
@@ -298,69 +369,7 @@ async fn smart_write_region_prepared<D: FlashDevice + ?Sized, P: WriteProgress>(
         progress.erasing(erase_ops.len(), bytes_to_erase);
 
         for (i, op) in erase_ops.iter().enumerate() {
-            // Handle data outside our region but inside the erase block.
-            // A block may straddle the start, the end, or both boundaries
-            // of our region, so we must check each side independently.
-            let block_end = op.start + op.size;
-            let region_end_addr = addr + data.len() as u32;
-
-            let extends_before = op.start < addr;
-            let extends_after = block_end > region_end_addr;
-
-            // Read data before our region (if block extends before)
-            let pre_data = if extends_before {
-                let preserve_len = (addr - op.start) as usize;
-                let mut buf = vec![0u8; preserve_len];
-                device.read(op.start, &mut buf).await?;
-                Some(buf)
-            } else {
-                None
-            };
-
-            // Read data after our region (if block extends after)
-            let post_data = if extends_after {
-                let preserve_len = (block_end - region_end_addr) as usize;
-                let mut buf = vec![0u8; preserve_len];
-                device.read(region_end_addr, &mut buf).await?;
-                Some(buf)
-            } else {
-                None
-            };
-
-            // Erase the block
-            device.erase_operation(op).await?;
-            verify_erased(device, op.start, op.size).await?;
-
-            // Restore preserved data
-            if let Some(ref buf) = pre_data
-                && let Err(e) = device.write(op.start, buf).await
-            {
-                log::error!(
-                    "Failed to restore {} bytes at 0x{:08X} after erase — data may be lost: {}",
-                    buf.len(),
-                    op.start,
-                    e
-                );
-                return Err(e);
-            }
-            if let Some(ref buf) = post_data
-                && let Err(e) = device.write(region_end_addr, buf).await
-            {
-                log::error!(
-                    "Failed to restore {} bytes at 0x{:08X} after erase — data may be lost: {}",
-                    buf.len(),
-                    region_end_addr,
-                    e
-                );
-                return Err(e);
-            }
-
-            if let Some(ref buf) = pre_data {
-                verify(device, buf, op.start).await?;
-            }
-            if let Some(ref buf) = post_data {
-                verify(device, buf, region_end_addr).await?;
-            }
+            erase_preserving(device, op, addr, addr + data.len() as u32).await?;
 
             // Update our view of current contents
             let rel_start = op.start.saturating_sub(addr) as usize;
@@ -595,86 +604,172 @@ async fn erase_region_prepared<D: FlashDevice + ?Sized>(
     let erase_ops = plan_optimal_erase_region(&erase_blocks, flash_size, region.start, region.end)?;
 
     for op in &erase_ops {
-        let block_end = op.start + op.size - 1;
-        let is_unaligned = op.start < region.start || block_end > region.end;
-
-        if is_unaligned {
-            // Need to preserve data outside the region
-            let mut backup = vec![ERASED_VALUE; op.size as usize];
-
-            // Read data before region (to preserve)
-            if region.start > op.start {
-                let len = (region.start - op.start) as usize;
-                device.read(op.start, &mut backup[..len]).await?;
-            }
-
-            // Read data after region (to preserve)
-            if block_end > region.end {
-                let start = region.end + 1;
-                let rel_start = (start - op.start) as usize;
-                let len = (block_end - region.end) as usize;
-                device
-                    .read(start, &mut backup[rel_start..rel_start + len])
-                    .await?;
-            }
-
-            // Erase the block
-            device.erase_operation(op).await?;
-            verify_erased(device, op.start, op.size).await?;
-
-            // Write back preserved data
-            if region.start > op.start {
-                let len = (region.start - op.start) as usize;
-                device.write(op.start, &backup[..len]).await?;
-            }
-            if block_end > region.end {
-                let start = region.end + 1;
-                let rel_start = (start - op.start) as usize;
-                let len = (block_end - region.end) as usize;
-                device
-                    .write(start, &backup[rel_start..rel_start + len])
-                    .await?;
-            }
-            if region.start > op.start {
-                verify(
-                    device,
-                    &backup[..(region.start - op.start) as usize],
-                    op.start,
-                )
-                .await?;
-            }
-            if block_end > region.end {
-                let start = region.end + 1;
-                let offset = (start - op.start) as usize;
-                verify(device, &backup[offset..], start).await?;
-            }
-        } else {
-            // Block is aligned with region, just erase it
-            device.erase_operation(op).await?;
-            verify_erased(device, op.start, op.size).await?;
-        }
+        erase_preserving(device, op, region.start, region.end + 1).await?;
     }
 
     Ok(())
 }
 
-/// The single post-erase check for every device type; `erase_operation`
-/// implementations do not read the range back themselves.
-async fn verify_erased<D: FlashDevice + ?Sized>(device: &mut D, addr: u32, len: u32) -> Result<()> {
+struct Neighbor {
+    addr: u32,
+    data: Vec<u8>,
+}
+
+// Only a verified mismatch permits recovery. A device error may leave an
+// operation in flight, so issuing any further IO here would be unsafe.
+async fn erase_preserving<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    op: &super::operations::OptimalEraseOp,
+    start: u32,
+    end: u32,
+) -> Result<()> {
+    let block_end = op.start + op.size;
+    let mut neighbors = Vec::new();
+    for (from, to) in [
+        (op.start, start.min(block_end)),
+        (end.max(op.start), block_end),
+    ] {
+        if from < to {
+            let mut data = vec![0; (to - from) as usize];
+            device.read(from, &mut data).await?;
+            neighbors.push(Neighbor { addr: from, data });
+        }
+    }
+
+    let verified = match device.erase_operation(op).await {
+        // Reading the range again would add nothing but a chance for an IO
+        // error that leaves the neighbors unrestored.
+        Ok(EraseOutcome::VerifiedErased) => Ok(()),
+        Ok(EraseOutcome::Unverified) => verify_erased(device, op.start, op.size).await,
+        // A device that reads back its own erase completed those reads, so
+        // its mismatch is as recoverable as one found here.
+        Err(e @ Error::EraseError(EraseFailure::VerifyFailed { .. })) => Err((e, true)),
+        Err(e) => Err((e, false)),
+    };
+    match verified {
+        Ok(()) => {}
+        Err((primary, true)) => {
+            if let Err(e) = restore_neighbors(device, &neighbors, true).await {
+                log::error!("Neighbor recovery after incomplete erase failed: {e}");
+            }
+            return Err(primary);
+        }
+        Err((e, false)) => {
+            report_neighbors(&neighbors, e);
+            return Err(e);
+        }
+    }
+    restore_neighbors(device, &neighbors, false).await
+}
+
+fn report_neighbors(neighbors: &[Neighbor], error: Error) {
+    for neighbor in neighbors {
+        log::error!(
+            "RESTORE FAILED: {} bytes at 0x{:08X} outside the requested range may be lost or unverified ({error}); restore from backup",
+            neighbor.data.len(),
+            neighbor.addr
+        );
+    }
+}
+
+async fn restore_neighbors<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    neighbors: &[Neighbor],
+    reread: bool,
+) -> Result<()> {
+    // Program all neighbors before verifying any. Devices may also verify
+    // inside write(): a completed read with a mismatch is safe to continue
+    // after, unlike a transport failure or timeout.
+    let mut first = None;
+    for neighbor in neighbors {
+        let mut current = vec![ERASED_VALUE; neighbor.data.len()];
+        if reread && let Err(e) = device.read(neighbor.addr, &mut current).await {
+            report_neighbors(neighbors, e);
+            return Err(first.unwrap_or(e));
+        }
+        let mut offset = 0;
+        for run in current.chunk_by(|a, b| (*a == ERASED_VALUE) == (*b == ERASED_VALUE)) {
+            let saved = &neighbor.data[offset..offset + run.len()];
+            if run[0] == ERASED_VALUE
+                && saved.iter().any(|b| *b != ERASED_VALUE)
+                && let Err(e) = device.write(neighbor.addr + offset as u32, saved).await
+            {
+                if matches!(e, Error::VerifyError { .. }) {
+                    first.get_or_insert(e);
+                } else {
+                    report_neighbors(neighbors, e);
+                    return Err(first.unwrap_or(e));
+                }
+            }
+            offset += run.len();
+        }
+    }
+    for (i, neighbor) in neighbors.iter().enumerate() {
+        match verify_neighbor(device, neighbor).await {
+            Ok(()) => {}
+            Err((e, true)) => {
+                report_neighbors(core::slice::from_ref(neighbor), e);
+                first.get_or_insert(e);
+            }
+            Err((e, false)) => {
+                report_neighbors(&neighbors[i..], e);
+                return Err(first.unwrap_or(e));
+            }
+        }
+    }
+    first.map_or(Ok(()), Err)
+}
+
+// The boolean distinguishes a successful read with mismatched data from an
+// IO error; the latter means the device's readiness is unknown.
+async fn verify_neighbor<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    neighbor: &Neighbor,
+) -> core::result::Result<(), (Error, bool)> {
+    let mut buf = vec![0; READ_CHUNK_SIZE.min(neighbor.data.len())];
+    for (i, expected) in neighbor.data.chunks(READ_CHUNK_SIZE).enumerate() {
+        let addr = neighbor.addr + (i * READ_CHUNK_SIZE) as u32;
+        let chunk = &mut buf[..expected.len()];
+        device.read(addr, chunk).await.map_err(|e| (e, false))?;
+        if let Some(pos) = chunk.iter().zip(expected).position(|(a, b)| a != b) {
+            return Err((
+                Error::VerifyError {
+                    addr: addr + pos as u32,
+                },
+                true,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The post-erase check for every device type whose `erase_operation` did
+/// not report the range as verified erased.
+async fn verify_erased<D: FlashDevice + ?Sized>(
+    device: &mut D,
+    addr: u32,
+    len: u32,
+) -> core::result::Result<(), (Error, bool)> {
     let mut buf = vec![0; READ_CHUNK_SIZE.min(len as usize)];
     let mut offset = 0;
     while offset < len {
         let count = (len - offset).min(buf.len() as u32) as usize;
-        device.read(addr + offset, &mut buf[..count]).await?;
+        device
+            .read(addr + offset, &mut buf[..count])
+            .await
+            .map_err(|e| (e, false))?;
         if let Some((index, &found)) = buf[..count]
             .iter()
             .enumerate()
             .find(|&(_, b)| *b != ERASED_VALUE)
         {
-            return Err(Error::EraseError(EraseFailure::VerifyFailed {
-                addr: addr + offset + index as u32,
-                found,
-            }));
+            return Err((
+                Error::EraseError(EraseFailure::VerifyFailed {
+                    addr: addr + offset + index as u32,
+                    found,
+                }),
+                true,
+            ));
         }
         offset += count as u32;
     }
@@ -763,6 +858,20 @@ mod tests {
         blocks: Vec<EraseBlock>,
         mutations: usize,
         require_erased_writes: bool,
+        reject_writes_from: Option<u32>,
+        reject_erase_opcode: Option<u8>,
+        unerased: Vec<(usize, u8)>,
+        miswritten: Vec<(usize, u8)>,
+        fail_read_after_erase: Option<usize>,
+        reads_after_erase: usize,
+        timeout_write_at: Option<u32>,
+        erase_error: Option<Error>,
+        /// `erase_operation` checks its own erase and reports the outcome.
+        verifies_erase: bool,
+        verifies_write: bool,
+        failed: bool,
+        /// Inclusive byte ranges `check_access` refuses for an access.
+        blocked: Vec<(FlashAccess, u32, u32)>,
     }
 
     impl FakeFlash {
@@ -772,6 +881,18 @@ mod tests {
                 blocks: vec![EraseBlock::with_count(0x20, 16, size / 16)],
                 mutations: 0,
                 require_erased_writes: false,
+                reject_writes_from: None,
+                reject_erase_opcode: None,
+                unerased: Vec::new(),
+                miswritten: Vec::new(),
+                fail_read_after_erase: None,
+                reads_after_erase: 0,
+                timeout_write_at: None,
+                erase_error: None,
+                verifies_erase: false,
+                verifies_write: false,
+                failed: false,
+                blocked: Vec::new(),
             }
         }
     }
@@ -789,11 +910,48 @@ mod tests {
         fn erase_blocks(&self) -> &[EraseBlock] {
             &self.blocks
         }
+        fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()> {
+            let last = addr + len - 1;
+            match self
+                .blocked
+                .iter()
+                .any(|&(a, first, end)| a == access && first <= last && addr <= end)
+            {
+                true => Err(Error::RegionProtected),
+                false => Ok(()),
+            }
+        }
         async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
+            assert!(!self.failed, "IO after device failure");
+            if self.mutations > 0 {
+                self.reads_after_erase += 1;
+                if self.fail_read_after_erase == Some(self.reads_after_erase) {
+                    self.failed = true;
+                    return Err(Error::ReadError { addr });
+                }
+            }
             buf.copy_from_slice(&self.bytes[addr as usize..addr as usize + buf.len()]);
             Ok(())
         }
+        fn validate_write(&self, addr: u32, len: usize) -> Result<()> {
+            if self
+                .reject_writes_from
+                .is_some_and(|from| addr as u64 + len as u64 > from as u64)
+            {
+                return Err(Error::OpcodeNotSupported);
+            }
+            if self.is_valid_range(addr, len) {
+                Ok(())
+            } else {
+                Err(Error::AddressOutOfBounds)
+            }
+        }
         async fn write(&mut self, addr: u32, data: &[u8]) -> Result<()> {
+            assert!(!self.failed, "IO after device failure");
+            if self.timeout_write_at == Some(addr) {
+                self.failed = true;
+                return Err(Error::Timeout);
+            }
             if self.require_erased_writes {
                 assert!(
                     self.bytes[addr as usize..addr as usize + data.len()]
@@ -802,14 +960,376 @@ mod tests {
                 );
             }
             self.mutations += 1;
-            self.bytes[addr as usize..addr as usize + data.len()].copy_from_slice(data);
+            let range = addr as usize..addr as usize + data.len();
+            self.bytes[range.clone()].copy_from_slice(data);
+            for &(at, value) in self.miswritten.iter().filter(|(at, _)| range.contains(at)) {
+                self.bytes[at] = value;
+            }
+            if self.verifies_write
+                && let Some(i) = self.bytes[range].iter().zip(data).position(|(a, b)| a != b)
+            {
+                return Err(Error::VerifyError {
+                    addr: addr + i as u32,
+                });
+            }
+            Ok(())
+        }
+        fn validate_erase_operation(
+            &self,
+            op: &crate::flash::operations::OptimalEraseOp,
+        ) -> Result<()> {
+            if self.reject_erase_opcode == Some(op.erase_block.opcode) {
+                return Err(Error::OpcodeNotSupported);
+            }
             Ok(())
         }
         async fn erase(&mut self, addr: u32, len: u32) -> Result<()> {
+            assert!(!self.failed, "IO after device failure");
             self.mutations += 1;
-            self.bytes[addr as usize..(addr + len) as usize].fill(0xff);
+            let range = addr as usize..(addr + len) as usize;
+            self.bytes[range.clone()].fill(0xff);
+            for &(at, value) in self.unerased.iter().filter(|(at, _)| range.contains(at)) {
+                self.bytes[at] = value;
+            }
+            if let Some(e) = self.erase_error {
+                self.failed = true;
+                return Err(e);
+            }
             Ok(())
         }
+        async fn erase_operation(
+            &mut self,
+            op: &crate::flash::operations::OptimalEraseOp,
+        ) -> Result<EraseOutcome> {
+            self.erase(op.start, op.size).await?;
+            if !self.verifies_erase {
+                return Ok(EraseOutcome::Unverified);
+            }
+            // Like a device's internal check, this does not go through `read`.
+            let range = op.start as usize..(op.start + op.size) as usize;
+            match self.bytes[range].iter().position(|b| *b != ERASED_VALUE) {
+                Some(i) => Err(Error::EraseError(EraseFailure::VerifyFailed {
+                    addr: op.start + i as u32,
+                    found: self.bytes[op.start as usize + i],
+                })),
+                None => Ok(EraseOutcome::VerifiedErased),
+            }
+        }
+    }
+
+    fn boundary_mutation(flash: &mut FakeFlash, smart: bool) -> Result<()> {
+        flash.bytes = (0..64).collect();
+        flash.require_erased_writes = true;
+        if smart {
+            block_on(smart_write_region(flash, 4, &[0x80; 8], &mut NoProgress)).map(|_| ())
+        } else {
+            block_on(erase_region(flash, &Region::new("partial", 4, 11)))
+        }
+    }
+
+    #[test]
+    fn boundary_neighbors_restored_and_incomplete_erase_recovers_only_erased_bytes() {
+        for smart in [false, true] {
+            // Recovery is the same when the device reads back its own erase.
+            for (partial, verifies_erase) in [false, true].map(|v| [(false, v), (true, v)]).concat()
+            {
+                let mut flash = FakeFlash::new(64);
+                if partial {
+                    flash.unerased = vec![(6, 0), (13, 0x7f)];
+                }
+                flash.verifies_erase = verifies_erase;
+                let result = boundary_mutation(&mut flash, smart);
+                if partial {
+                    assert_eq!(
+                        result,
+                        Err(Error::EraseError(EraseFailure::VerifyFailed {
+                            addr: 6,
+                            found: 0
+                        }))
+                    );
+                    assert_eq!(&flash.bytes[4..12], &[255, 255, 0, 255, 255, 255, 255, 255]);
+                    assert_eq!(&flash.bytes[12..16], &[12, 0x7f, 14, 15]);
+                } else {
+                    assert_eq!(result, Ok(()));
+                    assert_eq!(&flash.bytes[12..16], &[12, 13, 14, 15]);
+                }
+                assert_eq!(&flash.bytes[..4], &[0, 1, 2, 3]);
+            }
+        }
+    }
+
+    #[test]
+    fn device_verified_erase_is_not_read_back_again() {
+        for smart in [false, true] {
+            // The first read after the device's own successful check is the
+            // neighbor check, after both neighbors are restored, not a second
+            // erase check whose failure would leave them lost.
+            for fail_read in [None, Some(1)] {
+                let mut flash = FakeFlash::new(64);
+                flash.verifies_erase = true;
+                flash.fail_read_after_erase = fail_read;
+                let result = boundary_mutation(&mut flash, smart);
+                assert_eq!(&flash.bytes[..4], &[0, 1, 2, 3]);
+                assert_eq!(&flash.bytes[12..16], &[12, 13, 14, 15]);
+                if fail_read.is_some() {
+                    assert_eq!(result, Err(Error::ReadError { addr: 0 }));
+                    assert_eq!(&flash.bytes[4..12], &[0xff; 8]);
+                    continue;
+                }
+                assert_eq!(result, Ok(()));
+                if !smart {
+                    assert_eq!(&flash.bytes[4..12], &[0xff; 8]);
+                    // One read per neighbor.
+                    assert_eq!(flash.reads_after_erase, 2);
+                }
+            }
+
+            // A device error during its own erase still stops all IO.
+            let mut flash = FakeFlash::new(64);
+            flash.verifies_erase = true;
+            flash.erase_error = Some(Error::Timeout);
+            assert_eq!(boundary_mutation(&mut flash, smart), Err(Error::Timeout));
+            assert_eq!(&flash.bytes[12..16], &[255; 4]);
+        }
+    }
+
+    #[test]
+    fn unknown_device_state_stops_recovery_and_keeps_primary_error() {
+        for smart in [false, true] {
+            for scenario in 0..5 {
+                let mut flash = FakeFlash::new(64);
+                let primary = Error::EraseError(EraseFailure::VerifyFailed { addr: 6, found: 0 });
+                let expected = match scenario {
+                    0 => {
+                        flash.erase_error = Some(Error::Timeout);
+                        Error::Timeout
+                    }
+                    1 => {
+                        flash.fail_read_after_erase = Some(1);
+                        Error::ReadError { addr: 0 }
+                    }
+                    2 => {
+                        flash.timeout_write_at = Some(0);
+                        Error::Timeout
+                    }
+                    3 => {
+                        flash.unerased = vec![(6, 0)];
+                        flash.timeout_write_at = Some(0);
+                        primary
+                    }
+                    _ => {
+                        flash.unerased = vec![(6, 0)];
+                        flash.fail_read_after_erase = Some(2);
+                        primary
+                    }
+                };
+                assert_eq!(boundary_mutation(&mut flash, smart), Err(expected));
+                assert_eq!(&flash.bytes[12..16], &[255; 4]);
+            }
+        }
+    }
+
+    #[test]
+    fn both_neighbors_programmed_before_first_verification() {
+        for smart in [false, true] {
+            let mut flash = FakeFlash::new(64);
+            flash.miswritten = vec![(2, 0)];
+            assert_eq!(
+                boundary_mutation(&mut flash, smart),
+                Err(Error::VerifyError { addr: 2 })
+            );
+            assert_eq!(&flash.bytes[12..16], &[12, 13, 14, 15]);
+
+            let mut flash = FakeFlash::new(64);
+            flash.fail_read_after_erase = Some(2);
+            assert_eq!(
+                boundary_mutation(&mut flash, smart),
+                Err(Error::ReadError { addr: 0 })
+            );
+            assert_eq!(&flash.bytes[12..16], &[12, 13, 14, 15]);
+        }
+    }
+
+    #[test]
+    fn device_program_mismatch_does_not_abandon_other_erase_neighbors() {
+        for smart in [false, true] {
+            for partial in [false, true] {
+                let mut flash = FakeFlash::new(64);
+                flash.verifies_write = true;
+                flash.miswritten = vec![(2, 0)];
+                if partial {
+                    flash.unerased = vec![(6, 0)];
+                }
+                let expected = if partial {
+                    Error::EraseError(EraseFailure::VerifyFailed { addr: 6, found: 0 })
+                } else {
+                    Error::VerifyError { addr: 2 }
+                };
+                assert_eq!(boundary_mutation(&mut flash, smart), Err(expected));
+                assert_eq!(&flash.bytes[12..16], &[12, 13, 14, 15]);
+            }
+        }
+    }
+
+    #[test]
+    fn missing_program_rejects_target_and_erase_neighbors_before_mutation() {
+        for erase_only in [false, true] {
+            let mut flash = FakeFlash::new(256);
+            flash.reject_writes_from = Some(0);
+            let region = Region::new("part", 2, 7);
+            let result = if erase_only {
+                block_on(erase_region(&mut flash, &region))
+            } else {
+                block_on(smart_write_region(
+                    &mut flash,
+                    2,
+                    &[0xff; 6],
+                    &mut NoProgress,
+                ))
+                .map(|_| ())
+            };
+            assert!(matches!(result, Err(Error::OpcodeNotSupported)));
+            assert_eq!(flash.mutations, 0);
+        }
+        let mut flash = FakeFlash::new(256);
+        flash.reject_writes_from = Some(0);
+        assert!(matches!(
+            block_on(smart_write_region(
+                &mut flash,
+                0,
+                &[0x7f; 16],
+                &mut NoProgress
+            )),
+            Err(Error::OpcodeNotSupported)
+        ));
+        assert_eq!(flash.mutations, 0);
+    }
+
+    #[test]
+    fn later_region_program_is_checked_before_first_region_mutates() {
+        let mut flash = FakeFlash::new(256);
+        flash.reject_writes_from = Some(128);
+        let mut layout = Layout::new();
+        for (name, start, end) in [("first", 0, 15), ("second", 128, 143)] {
+            let mut region = Region::new(name, start, end);
+            region.included = true;
+            layout.add_region(region);
+        }
+        let mut image = flash.bytes.clone();
+        image[..16].fill(0x7f);
+        image[128..144].fill(0x7f);
+        assert!(matches!(
+            block_on(smart_write_by_layout(
+                &mut flash,
+                &layout,
+                &image,
+                &mut NoProgress
+            )),
+            Err(Error::OpcodeNotSupported)
+        ));
+        assert_eq!(flash.mutations, 0);
+    }
+
+    /// Device access restrictions are checked for the actual footprint of
+    /// every selected region (erase blocks and the neighbors they read,
+    /// erase and restore) before the first region is changed.
+    #[test]
+    fn access_restrictions_are_checked_for_every_planned_footprint_first() {
+        use FlashAccess::{Modify, Read};
+        // The second region's 16-byte erase block spills into 136..143.
+        let spilling: &[(u32, u32)] = &[(0, 15), (128, 135)];
+        // The second region's block 144..159 holds unchanged data.
+        let unchanged: &[(u32, u32)] = &[(0, 15), (128, 159)];
+        // (regions, blocked, erase refused, smart write refused)
+        for (regions, blocked, erase_refused, write_refused) in [
+            (spilling, (Modify, 140, 140), true, true),
+            (spilling, (Read, 143, 150), true, true),
+            (spilling, (Modify, 144, 255), false, false),
+            (spilling, (Read, 16, 127), false, false),
+            // A smart write leaves unchanged data alone; an erase does not.
+            (unchanged, (Modify, 150, 150), true, false),
+            // A smart write reads its whole region to compare it.
+            (unchanged, (Read, 150, 150), true, true),
+        ] {
+            let mut layout = Layout::new();
+            for (i, &(start, end)) in regions.iter().enumerate() {
+                let mut region = Region::new(alloc::format!("r{i}"), start, end);
+                region.included = true;
+                layout.add_region(region);
+            }
+            for erase in [false, true] {
+                let mut flash = FakeFlash::new(256);
+                flash.blocked.push(blocked);
+                let mut image = flash.bytes.clone();
+                image[..16].fill(0x7f);
+                image[128..136].fill(0x7f);
+                let result = if erase {
+                    block_on(erase_by_layout(&mut flash, &layout))
+                } else {
+                    block_on(smart_write_by_layout(
+                        &mut flash,
+                        &layout,
+                        &image,
+                        &mut NoProgress,
+                    ))
+                    .map(|_| ())
+                };
+                if if erase { erase_refused } else { write_refused } {
+                    assert_eq!(result, Err(Error::RegionProtected), "{blocked:?}");
+                    assert_eq!(flash.mutations, 0);
+                    continue;
+                }
+                result.unwrap();
+                let want = if erase { 0xff } else { 0x7f };
+                assert!(flash.bytes[..16].iter().all(|b| *b == want));
+                assert!(flash.bytes[128..136].iter().all(|b| *b == want));
+                let rest = regions[1].1 as usize + 1;
+                let unchanged = if erase { 0xff } else { 0 };
+                assert!(flash.bytes[136..rest].iter().all(|b| *b == unchanged));
+                // Restored neighbors and untouched data.
+                assert!(flash.bytes[rest..].iter().all(|b| *b == 0));
+                assert!(flash.bytes[16..128].iter().all(|b| *b == 0));
+            }
+        }
+    }
+
+    #[test]
+    fn later_content_dependent_eraser_is_checked_before_first_region() {
+        let mut flash = FakeFlash::new(256);
+        flash.blocks.push(EraseBlock::with_count(0xd8, 64, 4));
+        flash.reject_erase_opcode = Some(0x20);
+        let mut layout = Layout::new();
+        for (name, start) in [("first", 0), ("second", 128)] {
+            let mut region = Region::new(name, start, start + 63);
+            region.included = true;
+            layout.add_region(region);
+        }
+        let mut image = flash.bytes.clone();
+        image[..64].fill(0x7f);
+        image[128] = 0x7f;
+        let generic = plan_optimal_erase_region(&flash.blocks, 256, 128, 191).unwrap();
+        assert!(generic.iter().all(|op| op.erase_block.opcode == 0xd8));
+        let actual = plan_optimal_erase(
+            &flash.blocks,
+            256,
+            Some(&flash.bytes[128..192]),
+            Some(&image[128..192]),
+            128,
+            191,
+            WriteGranularity::Byte,
+        )
+        .unwrap();
+        assert!(actual.iter().any(|op| op.erase_block.opcode == 0x20));
+        assert!(matches!(
+            block_on(smart_write_by_layout(
+                &mut flash,
+                &layout,
+                &image,
+                &mut NoProgress
+            )),
+            Err(Error::OpcodeNotSupported)
+        ));
+        assert_eq!(flash.mutations, 0);
     }
 
     #[test]

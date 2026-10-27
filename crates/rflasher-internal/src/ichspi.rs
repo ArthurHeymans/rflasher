@@ -98,7 +98,7 @@ impl Deadline {
         expired
     }
 }
-use rflasher_core::programmer::SpiFeatures;
+use rflasher_core::programmer::{FlashAccess, SpiFeatures};
 use rflasher_core::spi::SpiCommand;
 
 /// Maximum SPI data transfer size for hardware sequencing
@@ -147,11 +147,77 @@ impl core::fmt::Display for SpiMode {
     }
 }
 
+const SILVERMONT_REG_BCR: usize = 0xfc;
+
+fn uses_silvermont_sbase(chipset: &DetectedChipset) -> bool {
+    chipset.chipset_type() == IchChipset::BayTrail
+        && matches!(chipset.enable.device_id, 0x0f1c..=0x0f1f | 0x1f38..=0x1f3b | 0x229c)
+}
+
+pub(crate) fn is_visible_spi_id(id: u16) -> bool {
+    matches!(
+        id,
+        0x9d24
+            | 0xa2a4
+            | 0xa1a4
+            | 0x9da4
+            | 0xa324
+            | 0x02a4
+            | 0x06a4
+            | 0x34a4
+            | 0x4da4
+            | 0xa3a4
+            | 0xa0a4
+            | 0x43a4
+            | 0x51a4
+            | 0x54a4
+            | 0x7a24
+            | 0x7aa4
+            | 0x4b24
+            | 0x5a96
+            | 0x3196
+            | 0x7e23
+            | 0xa823
+            | 0xae23
+    )
+}
+
+/// PCI location of the BIOS control register and, on PCH100+, SPI BAR.
+/// IDs and bridge mappings follow flashprog's chipset_enable.c. Do not infer
+/// a location for other generations or IDs: an unrelated function may exist.
+pub(crate) fn intel_config_bdf(chipset: &DetectedChipset) -> Result<PciAddress, InternalError> {
+    let actual = PciAddress::new(
+        chipset.domain,
+        chipset.bus,
+        chipset.device,
+        chipset.function,
+    );
+    let id = chipset.enable.device_id;
+    if is_visible_spi_id(id) && chipset.chipset_type().is_pch100_compatible() {
+        return Ok(actual);
+    }
+    let location = match (chipset.chipset_type(), id) {
+        (IchChipset::Series100SunrisePoint, _)
+        | (IchChipset::C620Lewisburg, 0xa1c0..=0xa1c7)
+        | (IchChipset::Series300CannonPoint, 0xa3c8 | 0xa3da) => (0x1f, 5),
+        (IchChipset::ApolloLake, 0x5ae8) | (IchChipset::GeminiLake, 0x31e8 | 0x3197) => (0x0d, 2),
+        (generation, _) if !generation.is_pch100_compatible() => return Ok(actual),
+        _ => {
+            return Err(InternalError::NotSupported(
+                "No validated SPI PCI device mapping for this chipset",
+            ));
+        }
+    };
+    Ok(PciAddress::new(
+        chipset.domain,
+        chipset.bus,
+        location.0,
+        location.1,
+    ))
+}
+
 /// Gets the SPI BAR physical address using host-provided PCI config access.
-///
-/// This helper is independent from Linux sysfs and can be exercised by
-/// embedded firmware or fake hosts. It covers both PCH100+ hidden SPI function
-/// BAR discovery and legacy RCBA-relative SPI BAR discovery.
+/// Linux uses sysfs only; inaccessible or hidden SPI devices are refused.
 pub fn get_spibar_address_with_host<H: PciConfigAccess<Error = InternalError>>(
     host: &H,
     chipset: &DetectedChipset,
@@ -159,9 +225,40 @@ pub fn get_spibar_address_with_host<H: PciConfigAccess<Error = InternalError>>(
     let generation = chipset.chipset_type();
 
     if generation.is_pch100_compatible() {
-        const SPI_FUNCTION: u8 = 5;
-        let spi_bdf = PciAddress::new(chipset.domain, chipset.bus, chipset.device, SPI_FUNCTION);
-        let spibar_raw = host.read32(spi_bdf, PCI_REG_SPIBAR as u16)?;
+        let spi_bdf = intel_config_bdf(chipset)?;
+        let read_config = |offset| {
+            host.read32(spi_bdf, offset).map_err(|e| {
+            log::warn!("Cannot read SPI PCI configuration at {spi_bdf:?}: {e}");
+            InternalError::ChipsetEnable("SPI PCI config unavailable or access denied; hidden SPI devices cannot be accessed safely via sysfs")
+        })
+        };
+        let identity = read_config(0)?;
+        let device = (identity >> 16) as u16;
+        let valid = if is_visible_spi_id(chipset.enable.device_id) {
+            device == chipset.enable.device_id
+        } else {
+            match generation {
+                IchChipset::Series100SunrisePoint => matches!(device, 0x9d24 | 0xa2a4),
+                IchChipset::C620Lewisburg => matches!(device, 0xa1a4 | 0xa224),
+                IchChipset::Series300CannonPoint => device == 0xa3a4,
+                IchChipset::ApolloLake => device == 0x5a96,
+                IchChipset::GeminiLake => device == 0x3196,
+                _ => false,
+            }
+        };
+        if identity as u16 != 0x8086 || !valid {
+            return Err(InternalError::ChipsetEnable(
+                "PCI function is not a validated Intel SPI controller",
+            ));
+        }
+        let spibar_raw = read_config(PCI_REG_SPIBAR as u16)?;
+        // SPI BAR is a 32-bit memory BAR; never treat I/O or other BAR
+        // encodings as a physical MMIO address.
+        if spibar_raw & 0x7 != 0 {
+            return Err(InternalError::ChipsetEnable(
+                "SPI BAR is not a 32-bit memory BAR",
+            ));
+        }
         let addr = spibar_raw & 0xffff_f000;
 
         if addr == 0 || addr == 0xffff_f000 {
@@ -171,6 +268,18 @@ pub fn get_spibar_address_with_host<H: PciConfigAccess<Error = InternalError>>(
         }
 
         Ok(addr as u64)
+    } else if uses_silvermont_sbase(chipset) {
+        let lpc_bdf = PciAddress::new(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        let sbase = host.read32(lpc_bdf, 0x54)? & 0xffff_fe00;
+        if sbase == 0 || sbase == 0xffff_fe00 {
+            return Err(InternalError::ChipsetEnable("SBASE is invalid"));
+        }
+        Ok(u64::from(sbase))
     } else if generation.is_ich9_compatible() || generation == IchChipset::Ich7 {
         let lpc_bdf = PciAddress::new(
             chipset.domain,
@@ -333,6 +442,58 @@ impl Default for Opcodes {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MutationIntent {
+    ReadOnly,
+    Mutating,
+}
+
+/// Flash array bytes a software-sequencing command may change, as far as
+/// the controller can tell without knowing the chip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Footprint {
+    /// None (reads, status register writes).
+    Nothing,
+    /// `len` bytes from `addr`. For block erases this is just the address,
+    /// which is all the hardware checks too: the erased block size is chip
+    /// metadata, checked by the caller's preflight.
+    Range { addr: u32, len: u32 },
+    /// Possibly any of it (chip erase, unclassified commands).
+    Everything,
+}
+
+/// A flash range the controller restricts for the BIOS master.
+#[derive(Clone, Copy, Debug)]
+struct Restriction {
+    /// What restricts it, for diagnostics and [`InternalError::AccessDenied`].
+    source: &'static str,
+    /// Register or region index, for diagnostics.
+    index: usize,
+    base: u32,
+    /// Inclusive.
+    limit: u32,
+    read: bool,
+    write: bool,
+}
+
+impl Restriction {
+    fn blocks(&self, access: FlashAccess) -> bool {
+        match access {
+            FlashAccess::Read => self.read,
+            FlashAccess::Modify => self.write,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RegisterChange {
+    offset: usize,
+    width16: bool,
+    before: u32,
+    after: u32,
+    mask: u32,
+}
+
 /// Intel ICH/PCH SPI Controller
 #[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
 pub struct IchSpiController<H: HostAccess> {
@@ -342,17 +503,23 @@ pub struct IchSpiController<H: HostAccess> {
     spibar: H::MmioRegion,
     /// Chipset generation
     generation: IchChipset,
-    /// PCI location of LPC/eSPI bridge
-    lpc_segment: u16,
-    lpc_bus: u8,
-    lpc_device: u8,
-    lpc_function: u8,
+    /// PCI location of BIOS_CNTL (SPI function on PCH100+).
+    config_bdf: PciAddress,
     /// Whether configuration is locked (HSFS.FLOCKDN)
     locked: bool,
     /// BIOS_CNTL.BWE was observed or successfully verified during enable.
     bios_writes_enabled: bool,
+    /// Bay Trail / Avoton / Braswell BCR is in the SBASE MMIO window.
+    silvermont_bcr: bool,
+    /// Restore Silvermont BCR.WPD if this controller enabled it.
+    restore_bcr_wpd: bool,
+    restore_pci_bwe: bool,
+    changes: [Option<RegisterChange>; 12],
+    change_count: usize,
     /// Whether software sequencing is locked (DLOCK.SSEQ_LOCKDN on PCH100+)
     swseq_locked: bool,
+    /// DLOCK (PCH100+) at open.
+    dlock: u32,
     /// Flash descriptor valid
     desc_valid: bool,
     /// Requested operating mode (from user)
@@ -374,6 +541,32 @@ pub struct IchSpiController<H: HostAccess> {
     bbar: u32,
 }
 
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+impl<H: HostAccess> Drop for IchSpiController<H> {
+    fn drop(&mut self) {
+        if self.restore_pci_bwe {
+            let bdf = self.config_bdf;
+            match self.host.read8(bdf, PCI_REG_BIOS_CNTL as u16) {
+                Ok(value) => {
+                    if let Err(e) =
+                        self.host
+                            .write8(bdf, PCI_REG_BIOS_CNTL as u16, value & !BIOS_CNTL_BWE)
+                    {
+                        log::warn!("Failed to restore BIOS_CNTL.BWE: {}", e);
+                    }
+                }
+                Err(e) => log::warn!("Failed to read BIOS_CNTL for restore: {}", e),
+            }
+        }
+        if self.restore_bcr_wpd {
+            let bcr = self.spibar.read32(SILVERMONT_REG_BCR);
+            self.spibar
+                .write32(SILVERMONT_REG_BCR, bcr & !u32::from(BIOS_CNTL_BWE));
+        }
+        self.restore_registers();
+    }
+}
+
 #[cfg(all(feature = "std", target_os = "linux"))]
 impl IchSpiController<LinuxHost> {
     /// Initialize a new SPI controller for the detected chipset using Linux host access.
@@ -393,6 +586,7 @@ impl<H: HostAccess> IchSpiController<H> {
         let generation = chipset.chipset_type();
 
         // Get SPI BAR address
+        let config_bdf = intel_config_bdf(chipset)?;
         let spibar_addr = get_spibar_address_with_host(&host, chipset)?;
         log::debug!("SPI BAR at physical address: {:#x}", spibar_addr);
 
@@ -451,13 +645,16 @@ impl<H: HostAccess> IchSpiController<H> {
             host,
             spibar,
             generation,
-            lpc_segment: chipset.domain,
-            lpc_bus: chipset.bus,
-            lpc_device: chipset.device,
-            lpc_function: chipset.function,
+            config_bdf,
             locked: false,
             bios_writes_enabled: false,
+            silvermont_bcr: uses_silvermont_sbase(chipset),
+            restore_bcr_wpd: false,
+            restore_pci_bwe: false,
+            changes: [None; 12],
+            change_count: 0,
             swseq_locked: false,
+            dlock: 0,
             desc_valid: false,
             requested_mode: mode,
             mode: SpiMode::Auto, // Will be determined during init
@@ -469,10 +666,175 @@ impl<H: HostAccess> IchSpiController<H> {
             bbar: 0,
         };
 
-        // Initialize the controller
+        // Do not alter controller configuration while a cycle is active.
+        controller.wait_configuration_idle()?;
+        // Initialize the controller. Drop also unwinds a partially failed init.
         controller.init()?;
 
         Ok(controller)
+    }
+
+    fn wait_configuration_idle(&self) -> Result<(), InternalError> {
+        if self.generation == IchChipset::Ich7 {
+            self.ich7_swseq_wait_idle(60_000)
+        } else {
+            self.swseq_wait_idle(60_000)?;
+            let mut deadline = Deadline::new(60_000);
+            loop {
+                if self.spibar.read16(ICH9_REG_HSFS) & HSFS_SCIP == 0 {
+                    return Ok(());
+                }
+                if deadline.expired() {
+                    return Err(InternalError::Io("hardware sequencing busy"));
+                }
+                spin_loop();
+            }
+        }
+    }
+
+    fn change_register(&mut self, offset: usize, width16: bool, value: u32, mask: u32) {
+        let before = if width16 {
+            u32::from(self.spibar.read16(offset))
+        } else {
+            self.spibar.read32(offset)
+        };
+        let after = (before & !mask) | (value & mask);
+        if before == after {
+            return;
+        }
+        if self.change_count == self.changes.len() {
+            log::warn!("SPI configuration journal full; not changing register {offset:#x}");
+            return;
+        }
+        self.changes[self.change_count] = Some(RegisterChange {
+            offset,
+            width16,
+            before,
+            after,
+            mask,
+        });
+        self.change_count += 1;
+        if width16 {
+            self.spibar.write16(offset, after as u16);
+        } else {
+            self.spibar.write32(offset, after);
+        }
+    }
+
+    fn restore_registers(&mut self) {
+        self.restore_registers_from(0);
+    }
+
+    /// Undo the journaled changes from `start` on at once, saying loudly if
+    /// some cannot be (they stay journaled and are retried on drop).
+    fn roll_back(&mut self, start: usize) {
+        if !self.restore_registers_from(start) {
+            log::error!(
+                "Could not undo the SPI configuration changed for this operation; \
+                 protected ranges may stay cleared until the controller is closed"
+            );
+        }
+    }
+
+    /// Undo the journaled changes from `start` on, newest first. Changes
+    /// that cannot be undone now (busy or locked controller, locked
+    /// register, restore not taken) stay journaled for a later attempt.
+    /// Returns whether none are left.
+    fn restore_registers_from(&mut self, start: usize) -> bool {
+        if self.change_count <= start {
+            return true;
+        }
+        if self.wait_configuration_idle().is_err() {
+            log::warn!("SPI controller busy; cannot restore configuration");
+            return false;
+        }
+        let locked = if self.generation == IchChipset::Ich7 {
+            self.spibar.read16(ICH7_REG_SPIS) & (1 << 15) != 0
+        } else {
+            self.spibar.read16(ICH9_REG_HSFS) & HSFS_FLOCKDN != 0
+        };
+        if locked {
+            log::warn!("SPI configuration locked; cannot restore configuration");
+            return false;
+        }
+        let dlock = if self.generation.is_pch100_compatible() {
+            self.spibar.read32(PCH100_REG_DLOCK)
+        } else {
+            0
+        };
+        let end = self.change_count;
+        for i in (start..end).rev() {
+            if let Some(change) = self.changes[i]
+                && self.restore_change(&change, dlock)
+            {
+                self.changes[i] = None;
+            }
+        }
+        // Keep what is left, in order.
+        self.change_count = (start..end).fold(start, |kept, i| match self.changes[i].take() {
+            Some(change) => {
+                self.changes[kept] = Some(change);
+                kept + 1
+            }
+            None => kept,
+        });
+        self.change_count == start
+    }
+
+    /// Undo one journaled change; false if it has to stay journaled. Only
+    /// the bits it changed are restored, and only those still reading back
+    /// as it set them: bits the hardware did not take already hold their old
+    /// value. If any other bit of the register changed since, it is someone
+    /// else's now and is left alone.
+    fn restore_change(&self, change: &RegisterChange, dlock: u32) -> bool {
+        let pr_index = change
+            .offset
+            .checked_sub(PCH100_REG_FPR0)
+            .filter(|offset| *offset < 6 * 4 && *offset % 4 == 0)
+            .map(|offset| offset / 4);
+        let pr_locked = self.generation.is_pch100_compatible()
+            && pr_index.is_some_and(|index| dlock & (DLOCK_PR0_LOCKDN << index) != 0);
+        let menu_locked = self.generation.is_pch100_compatible()
+            && change.offset >= self.swseq.preop
+            && change.offset <= self.swseq.opmenu + 4
+            && dlock & DLOCK_SSEQ_LOCKDN != 0;
+        if pr_locked || menu_locked {
+            log::warn!(
+                "SPI register {:#x} locked; cannot restore it",
+                change.offset
+            );
+            return false;
+        }
+        let read = || {
+            if change.width16 {
+                u32::from(self.spibar.read16(change.offset))
+            } else {
+                self.spibar.read32(change.offset)
+            }
+        };
+        let current = read();
+        let changed = (change.before ^ change.after) & change.mask;
+        if (current ^ change.after) & change.mask & !changed != 0 {
+            log::warn!(
+                "SPI register {:#x} changed externally; not restoring it",
+                change.offset
+            );
+            return true;
+        }
+        let restored = (current & !changed) | (change.before & changed);
+        if restored == current {
+            return true;
+        }
+        if change.width16 {
+            self.spibar.write16(change.offset, restored as u16);
+        } else {
+            self.spibar.write32(change.offset, restored);
+        }
+        if (read() ^ restored) & change.mask != 0 {
+            log::error!("SPI register {:#x} restore failed", change.offset);
+            return false;
+        }
+        true
     }
 
     /// Initialize the SPI controller
@@ -518,10 +880,11 @@ impl<H: HostAccess> IchSpiController<H> {
 
         // Log PBR registers (Protected BIOS Range)
         for i in 0..3 {
-            let offs = 0x60 + (i * 4);
+            let offs = ICH7_REG_PBR0 + (i * 4);
             let pbr = self.spibar.read32(offs);
             log::debug!("{:#04x}: {:#010x} (PBR{})", offs, pbr, i);
         }
+        self.log_protected_ranges();
 
         // Check for lockdown (bit 15 of SPIS)
         if spis & (1 << 15) != 0 {
@@ -599,7 +962,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Program opcodes to ICH7 hardware registers
-    fn program_ich7_opcodes(&self, opcodes: &Opcodes) -> Result<(), InternalError> {
+    fn program_ich7_opcodes(&mut self, opcodes: &Opcodes) -> Result<(), InternalError> {
         let preop = (opcodes.preop[0] as u16) | ((opcodes.preop[1] as u16) << 8);
 
         let mut optype: u16 = 0;
@@ -617,10 +980,10 @@ impl<H: HostAccess> IchSpiController<H> {
             opmenu_hi |= (opcodes.opcode[i].opcode as u32) << ((i - 4) * 8);
         }
 
-        self.spibar.write16(self.ich7_swseq.preop, preop);
-        self.spibar.write16(self.ich7_swseq.optype, optype);
-        self.spibar.write32(self.ich7_swseq.opmenu, opmenu_lo);
-        self.spibar.write32(self.ich7_swseq.opmenu + 4, opmenu_hi);
+        self.change_register(self.ich7_swseq.preop, true, preop.into(), 0xffff);
+        self.change_register(self.ich7_swseq.optype, true, optype.into(), 0xffff);
+        self.change_register(self.ich7_swseq.opmenu, false, opmenu_lo, u32::MAX);
+        self.change_register(self.ich7_swseq.opmenu + 4, false, opmenu_hi, u32::MAX);
 
         Ok(())
     }
@@ -652,6 +1015,10 @@ impl<H: HostAccess> IchSpiController<H> {
             );
         }
 
+        // Read software-sequencing lock before touching its opcode menu.
+        if self.generation.is_pch100_compatible() {
+            self.swseq_locked = self.spibar.read32(PCH100_REG_DLOCK) & DLOCK_SSEQ_LOCKDN != 0;
+        }
         // Initialize opcodes
         self.init_opcodes()?;
 
@@ -665,6 +1032,7 @@ impl<H: HostAccess> IchSpiController<H> {
         if self.generation.is_pch100_compatible() {
             let dlock = self.spibar.read32(PCH100_REG_DLOCK);
             log::debug!("DLOCK: {:#010x}", dlock);
+            self.dlock = dlock;
             self.print_dlock(dlock);
 
             // Check if software sequencing is locked down
@@ -679,8 +1047,7 @@ impl<H: HostAccess> IchSpiController<H> {
             self.handle_access_permissions()?;
         }
 
-        // Handle protected ranges
-        self.handle_protected_ranges();
+        self.log_protected_ranges();
 
         // Log SSFS/SSFC
         let ssfsc = self.spibar.read32(self.swseq.ssfsc);
@@ -714,7 +1081,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
     /// Initialize opcodes for software sequencing
     fn init_opcodes(&mut self) -> Result<(), InternalError> {
-        if self.locked {
+        if self.locked || self.swseq_locked {
             // Read existing opcodes from hardware
             log::debug!("Reading OPCODES from locked controller...");
             self.opcodes = Some(self.generate_opcodes());
@@ -767,7 +1134,7 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Program opcodes to hardware registers
-    fn program_opcodes(&self, opcodes: &Opcodes) -> Result<(), InternalError> {
+    fn program_opcodes(&mut self, opcodes: &Opcodes) -> Result<(), InternalError> {
         let preop = (opcodes.preop[0] as u16) | ((opcodes.preop[1] as u16) << 8);
 
         let mut optype: u16 = 0;
@@ -785,71 +1152,30 @@ impl<H: HostAccess> IchSpiController<H> {
             opmenu_hi |= (opcodes.opcode[i].opcode as u32) << ((i - 4) * 8);
         }
 
-        self.spibar.write16(self.swseq.preop, preop);
-        self.spibar.write16(self.swseq.optype, optype);
-        self.spibar.write32(self.swseq.opmenu, opmenu_lo);
-        self.spibar.write32(self.swseq.opmenu + 4, opmenu_hi);
+        self.change_register(self.swseq.preop, true, preop.into(), 0xffff);
+        self.change_register(self.swseq.optype, true, optype.into(), 0xffff);
+        self.change_register(self.swseq.opmenu, false, opmenu_lo, u32::MAX);
+        self.change_register(self.swseq.opmenu + 4, false, opmenu_hi, u32::MAX);
 
         Ok(())
     }
 
-    /// Handle access permissions from FRAP/FREG
+    /// Log access permissions from FRAP/FREG
     fn handle_access_permissions(&mut self) -> Result<(), InternalError> {
         let frap = self.spibar.read32(ICH9_REG_FRAP);
         log::debug!("FRAP: {:#010x}", frap);
+        log::debug!(
+            "BRWA: {:#04x}, BRRA: {:#04x}",
+            (frap >> 8) & 0xff,
+            frap & 0xff
+        );
+        if self.generation.has_new_access_perm() {
+            log::debug!("BIOS_BM_WAP: {:#010x}", self.spibar.read32(BIOS_BM_WAP));
+            log::debug!("BIOS_BM_RAP: {:#010x}", self.spibar.read32(BIOS_BM_RAP));
+        }
 
-        let brwa = ((frap >> 8) & 0xFF) as u8;
-        let brra = (frap & 0xFF) as u8;
-        log::debug!("BRWA: {:#04x}, BRRA: {:#04x}", brwa, brra);
-
-        // For PCH100+ with new access permissions
-        let (bm_wap, bm_rap, max_regions) = if self.generation.has_new_access_perm() {
-            let wap = self.spibar.read32(BIOS_BM_WAP);
-            let rap = self.spibar.read32(BIOS_BM_RAP);
-            log::debug!("BIOS_BM_WAP: {:#010x}", wap);
-            log::debug!("BIOS_BM_RAP: {:#010x}", rap);
-            (wap, rap, 32)
-        } else {
-            (brwa as u32, brra as u32, 8)
-        };
-
-        // Determine number of regions based on chipset
-        let num_freg = match self.generation {
-            IchChipset::Series100SunrisePoint => 10,
-            IchChipset::C620Lewisburg => 12,
-            _ if self.generation.is_pch100_compatible() => 16,
-            _ => 5,
-        };
-
-        // Check each region's access permissions
         let mut restricted = false;
-        for i in 0..num_freg {
-            let offset = if i < 12 {
-                ICH9_REG_FREG0 + i * 4
-            } else {
-                APL_REG_FREG12 + (i - 12) * 4
-            };
-
-            let freg = self.spibar.read32(offset);
-            let base = freg_base(freg);
-            let limit = freg_limit(freg);
-
-            // Skip disabled regions
-            if base > limit || (freg == 0 && i > 0) {
-                continue;
-            }
-
-            // Check permissions
-            let can_read = if i < max_regions {
-                (bm_rap >> i) & 1 != 0
-            } else {
-                true
-            };
-            let can_write = if i < max_regions {
-                (bm_wap >> i) & 1 != 0
-            } else {
-                true
-            };
+        for (i, base, limit, can_read, can_write) in self.region_permissions() {
             let prot = AccessProtection::from_permissions(can_read, can_write);
 
             if prot != AccessProtection::None {
@@ -881,71 +1207,295 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Handle protected range registers
-    fn handle_protected_ranges(&mut self) {
-        let num_pr = if self.generation.is_pch100_compatible() {
-            6
+    /// Log the protected ranges, and which of them are cleared before the
+    /// first mutation.
+    fn log_protected_ranges(&self) {
+        let name = if self.generation == IchChipset::Ich7 {
+            "PBR"
         } else {
-            5
+            "PR"
         };
-        let reg_pr0 = if self.generation.is_pch100_compatible() {
-            PCH100_REG_FPR0
-        } else {
-            ICH9_REG_PR0
-        };
-
-        for i in 0..num_pr {
-            // Try to clear protection if not locked (as flashprog does). This
-            // changes chipset state even for read-only operations, so say so.
-            if !self.locked {
-                let before = self.spibar.read32(reg_pr0 + i * 4);
-                self.set_pr(reg_pr0, i, false, false);
-                if (before >> PR_RP_OFF) & 1 != 0 || (before >> PR_WP_OFF) & 1 != 0 {
-                    log::info!(
-                        "PR{}: {:#010x}-{:#010x} had {}protection set; cleared it \
-                         (controller is not locked down)",
-                        i,
-                        freg_base(before),
-                        freg_limit(before),
-                        match (
-                            (before >> PR_RP_OFF) & 1 != 0,
-                            (before >> PR_WP_OFF) & 1 != 0
-                        ) {
-                            (true, true) => "read and write ",
-                            (true, false) => "read ",
-                            _ => "write ",
-                        }
-                    );
-                }
-            }
-
-            let pr = self.spibar.read32(reg_pr0 + i * 4);
-            let base = freg_base(pr);
-            let limit = freg_limit(pr);
-
-            let rp = (pr >> PR_RP_OFF) & 1 != 0;
-            let wp = (pr >> PR_WP_OFF) & 1 != 0;
-
-            // PR bits are inverted: 1 = protected
-            if rp || wp {
+        for (r, clearable) in self.protected_ranges() {
+            let what = match (r.read, r.write) {
+                (true, true) => "read/write",
+                (true, false) => "read",
+                _ => "write",
+            };
+            if clearable {
+                log::info!(
+                    "{name}{}: {:#010x}-{:#010x} is {what} protected; it is cleared \
+                     before the first write or erase (not locked down)",
+                    r.index,
+                    r.base,
+                    r.limit
+                );
+            } else {
                 log::warn!(
-                    "PR{}: {:#010x}-{:#010x} is {}",
-                    i,
-                    base,
-                    limit,
-                    match (rp, wp) {
-                        (true, true) => "read/write protected",
-                        (true, false) => "read protected",
-                        (false, true) => "write protected",
-                        _ => "accessible",
-                    }
+                    "{name}{}: {:#010x}-{:#010x} is {what} protected",
+                    r.index,
+                    r.base,
+                    r.limit
                 );
             }
         }
     }
 
+    /// Enabled descriptor regions as `(index, base, limit, can_read,
+    /// can_write)` for the BIOS master, from FREG and FRAP (BIOS_BM_RAP/WAP
+    /// where present). These bits grant access. Regions without permission
+    /// bits (FRAP covers regions 0-7) are reported accessible, as flashprog
+    /// does; the controller still enforces whatever applies to them.
+    fn region_permissions(&self) -> impl Iterator<Item = (usize, u32, u32, bool, bool)> + '_ {
+        let (wap, rap, max_regions) = if self.generation.has_new_access_perm() {
+            (
+                self.spibar.read32(BIOS_BM_WAP),
+                self.spibar.read32(BIOS_BM_RAP),
+                32,
+            )
+        } else {
+            let frap = self.spibar.read32(ICH9_REG_FRAP);
+            ((frap >> 8) & 0xff, frap & 0xff, 8)
+        };
+        let num_freg = match self.generation {
+            IchChipset::Series100SunrisePoint => 10,
+            IchChipset::C620Lewisburg => 12,
+            _ if self.generation.is_pch100_compatible() => 16,
+            _ => 5,
+        };
+        (0..num_freg).filter_map(move |i| {
+            let offset = if i < 12 {
+                ICH9_REG_FREG0 + i * 4
+            } else {
+                APL_REG_FREG12 + (i - 12) * 4
+            };
+            let freg = self.spibar.read32(offset);
+            let (base, limit) = (freg_base(freg), freg_limit(freg));
+            // Skip disabled regions
+            if base > limit || (freg == 0 && i > 0) {
+                return None;
+            }
+            let granted = |bits: u32| i >= max_regions || (bits >> i) & 1 != 0;
+            Some((i, base, limit, granted(rap), granted(wap)))
+        })
+    }
+
+    /// First protected range register and how many there are: PRx
+    /// (ICH8-ICH10, 5 series and later until PCH100), FPRx and GPR0
+    /// (PCH100+), PBRx (ICH7).
+    fn pr_registers(&self) -> (usize, usize) {
+        if self.generation == IchChipset::Ich7 {
+            (ICH7_REG_PBR0, 3)
+        } else if self.generation.is_pch100_compatible() {
+            (PCH100_REG_FPR0, 6)
+        } else {
+            (ICH9_REG_PR0, 5)
+        }
+    }
+
+    /// Whether protected range `index` is cleared before the first mutation
+    /// (flashprog clears it at open): at open, the configuration was not
+    /// locked down and, on PCH100+, neither was the range itself
+    /// (DLOCK.PRx_LOCKDN). ICH7 PBRs are never cleared. Decided at open, so
+    /// the access checks and [`Self::clear_protected_ranges`] agree; a lock
+    /// set since makes the latter refuse the mutation.
+    fn pr_clearable(&self, index: usize) -> bool {
+        self.generation != IchChipset::Ich7
+            && !self.locked
+            && self.dlock & (DLOCK_PR0_LOCKDN << index) == 0
+    }
+
+    /// Whether protected range `index` is locked now: HSFS.FLOCKDN or, on
+    /// PCH100+, DLOCK.PRx_LOCKDN.
+    fn pr_locked_now(&self, index: usize) -> bool {
+        self.spibar.read16(ICH9_REG_HSFS) & HSFS_FLOCKDN != 0
+            || (self.generation.is_pch100_compatible()
+                && self.spibar.read32(PCH100_REG_DLOCK) & (DLOCK_PR0_LOCKDN << index) != 0)
+    }
+
+    /// Protected range registers that currently restrict access, and
+    /// whether each is cleared before the first mutation
+    /// ([`Self::pr_clearable`]).
+    fn protected_ranges(&self) -> impl Iterator<Item = (Restriction, bool)> + '_ {
+        (0..self.pr_registers().1).filter_map(|index| self.protected_range(index))
+    }
+
+    /// Protected range `index`, if it restricts access. Its bits enable
+    /// protection; PBRs only write protect.
+    fn protected_range(&self, index: usize) -> Option<(Restriction, bool)> {
+        let pr = self.spibar.read32(self.pr_registers().0 + index * 4);
+        let (base, limit, read) = if self.generation == IchChipset::Ich7 {
+            (
+                (pr & 0xfff) << 12,
+                ((pr >> 12) & 0xfff) << 12 | 0xfff,
+                false,
+            )
+        } else {
+            (freg_base(pr), freg_limit(pr), pr & (1 << PR_RP_OFF) != 0)
+        };
+        let write = pr & (1 << PR_WP_OFF) != 0;
+        let restriction = Restriction {
+            source: "protected range",
+            index,
+            base,
+            limit,
+            read,
+            write,
+        };
+        ((read || write) && base <= limit).then(|| (restriction, self.pr_clearable(index)))
+    }
+
+    /// Clear every protected range the access checks assume cleared before a
+    /// mutation ([`Self::pr_clearable`]), whether the mutation overlaps it or
+    /// not, so none of them can refuse a later part of the operation. Each
+    /// change is journaled and restored on drop. All or nothing: if one was
+    /// locked since open or does not read back cleared, those cleared here
+    /// are restored and the mutation is refused, before the flash is changed.
+    fn clear_protected_ranges(&mut self) -> Result<(), InternalError> {
+        let (reg0, count) = self.pr_registers();
+        let clearable = |c: &Self, index| {
+            c.protected_range(index)
+                .and_then(|(r, clearable)| clearable.then_some(r))
+        };
+        if !(0..count).any(|index| clearable(self, index).is_some()) {
+            return Ok(());
+        }
+        // Do not alter controller configuration while a cycle is active.
+        self.wait_configuration_idle()?;
+        let journal = self.change_count;
+        for index in 0..count {
+            let Some(r) = clearable(self, index) else {
+                continue;
+            };
+            // Checked per range: a lock may be set while we go.
+            let locked = self.pr_locked_now(index);
+            if !locked {
+                self.set_pr(reg0, index, false, false);
+            }
+            let pr = self.spibar.read32(reg0 + index * 4);
+            if locked || pr & (1 << PR_RP_OFF | 1 << PR_WP_OFF) != 0 {
+                log::error!(
+                    "PR{}: {:#010x}-{:#010x} {} ({pr:#010x}); refusing to modify the flash",
+                    r.index,
+                    r.base,
+                    r.limit,
+                    if locked {
+                        "was locked since open and cannot be cleared"
+                    } else {
+                        "could not be cleared"
+                    }
+                );
+                self.roll_back(journal);
+                return Err(InternalError::AccessDenied { region: r.source });
+            }
+            log::info!(
+                "PR{}: {:#010x}-{:#010x} protection cleared until close",
+                r.index,
+                r.base,
+                r.limit
+            );
+        }
+        Ok(())
+    }
+
+    /// Every flash range the controller restricts for us now: protected
+    /// ranges, descriptor regions without BIOS master access (unless the
+    /// descriptor override strap is set) and, in software sequencing,
+    /// addresses below BBAR.
+    fn restrictions(&self) -> impl Iterator<Item = Restriction> + '_ {
+        // FDOPSS reads 0 while the override strap is set.
+        let regions_enforced = self.generation != IchChipset::Ich7
+            && self.desc_valid
+            && self.spibar.read16(ICH9_REG_HSFS) & HSFS_FDOPSS != 0;
+        let regions = regions_enforced
+            .then(|| self.region_permissions())
+            .into_iter()
+            .flatten()
+            .filter(|&(_, _, _, read, write)| !read || !write)
+            .map(|(index, base, limit, read, write)| Restriction {
+                source: "descriptor region",
+                index,
+                base,
+                limit,
+                read: !read,
+                write: !write,
+            });
+        let bbar = self.bbar & BBAR_MASK;
+        let below_bbar =
+            (self.mode != SpiMode::HardwareSequencing && bbar != 0).then(|| Restriction {
+                source: "below BBAR",
+                index: 0,
+                base: 0,
+                limit: bbar - 1,
+                read: true,
+                write: true,
+            });
+        // Write protection of a clearable range is lifted before the first
+        // mutation. Its read protection is not: reads come first.
+        let ranges = self.protected_ranges().map(|(mut r, clearable)| {
+            r.write &= !clearable;
+            r
+        });
+        ranges.chain(regions).chain(below_bbar)
+    }
+
+    /// Refuse `access` to `len` bytes from `addr` if the controller restricts
+    /// any of them. This mirrors the controller's own per-cycle checks so a
+    /// refusal can come before the first command of an operation.
+    fn check_range(&self, access: FlashAccess, addr: u32, len: u64) -> Result<(), InternalError> {
+        if len == 0 {
+            return Ok(());
+        }
+        let last = u64::from(addr) + len - 1;
+        let Some(r) = self.restrictions().find(|r| {
+            r.blocks(access) && u64::from(r.base) <= last && u64::from(addr) <= u64::from(r.limit)
+        }) else {
+            return Ok(());
+        };
+        log::error!(
+            "Refusing to {} flash {:#x}-{:#x}: it overlaps {} {} at {:#010x}-{:#010x}; \
+             select only accessible regions (e.g. a layout with just the BIOS region)",
+            match access {
+                FlashAccess::Read => "read",
+                FlashAccess::Modify => "modify",
+            },
+            addr,
+            last,
+            r.source,
+            r.index,
+            r.base,
+            r.limit
+        );
+        Err(InternalError::AccessDenied { region: r.source })
+    }
+
+    fn check_footprint(&self, footprint: Footprint) -> Result<(), InternalError> {
+        match footprint {
+            Footprint::Nothing => Ok(()),
+            Footprint::Range { addr, len } => {
+                self.check_range(FlashAccess::Modify, addr, len.into())
+            }
+            // The chip size is unknown here; any write restriction may be hit.
+            Footprint::Everything => self.check_range(FlashAccess::Modify, 0, 1 << 32),
+        }
+    }
+
+    /// What a software-sequencing command may change in the array.
+    fn command_footprint(opcode: u8, addr: u32, data_len: usize) -> Footprint {
+        match (opcode, Self::opcode_intent(opcode)) {
+            (_, Some(MutationIntent::ReadOnly)) => Footprint::Nothing,
+            (JEDEC_WRSR | 0x31 | 0x11, _) => Footprint::Nothing,
+            (JEDEC_BYTE_PROGRAM, _) => Footprint::Range {
+                addr,
+                len: data_len.max(1) as u32,
+            },
+            (JEDEC_SE | JEDEC_BE_52 | JEDEC_BE_D8, _) => Footprint::Range { addr, len: 1 },
+            // Chip erase and unclassified commands.
+            _ => Footprint::Everything,
+        }
+    }
+
     /// Set protection range register
-    fn set_pr(&self, reg_pr0: usize, index: usize, read_prot: bool, write_prot: bool) {
+    fn set_pr(&mut self, reg_pr0: usize, index: usize, read_prot: bool, write_prot: bool) {
         let addr = reg_pr0 + index * 4;
         let mut pr = self.spibar.read32(addr);
 
@@ -957,7 +1507,9 @@ impl<H: HostAccess> IchSpiController<H> {
             pr |= 1 << PR_WP_OFF;
         }
 
-        self.spibar.write32(addr, pr);
+        // Treat the range and enable bits as one unit: a changed range must
+        // never receive protection bits belonging to the old range.
+        self.change_register(addr, false, pr, u32::MAX);
     }
 
     /// Set BBAR (BIOS Base Address Register)
@@ -970,7 +1522,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
         let mut bbar = self.spibar.read32(bbar_off) & !BBAR_MASK;
         bbar |= min_addr & BBAR_MASK;
-        self.spibar.write32(bbar_off, bbar);
+        self.change_register(bbar_off, false, bbar, BBAR_MASK);
 
         self.bbar = self.spibar.read32(bbar_off) & BBAR_MASK;
         if self.bbar != (min_addr & BBAR_MASK) {
@@ -1098,13 +1650,6 @@ impl<H: HostAccess> IchSpiController<H> {
             .position(|op| op.opcode == opcode)
     }
 
-    /// Check if an opcode is available in the OPMENU table
-    ///
-    /// This is used internally for the Controller trait's `probe_opcode` method.
-    fn has_opcode(&self, opcode: u8) -> bool {
-        self.find_opcode_index(opcode).is_some()
-    }
-
     /// Get the opcode type for an opcode in the table
     ///
     /// Returns the SPI opcode type (read/write, with/without address) if found.
@@ -1112,6 +1657,53 @@ impl<H: HostAccess> IchSpiController<H> {
     fn get_opcode_type(&self, opcode: u8) -> Option<u8> {
         let idx = self.find_opcode_index(opcode)?;
         self.opcodes.as_ref().map(|ops| ops.opcode[idx].spi_type)
+    }
+
+    // Software sequencing emits only three address bytes. Validate the whole
+    // transfer before issuing any cycle, including when callers chunk it.
+    fn check_swseq_range(addr: u32, len: usize) -> Result<(), InternalError> {
+        const LIMIT: usize = 1 << 24;
+        let start = addr as usize;
+        if start >= LIMIT || len > LIMIT - start {
+            return Err(InternalError::NotSupported(
+                "Address exceeds 3-byte swseq range",
+            ));
+        }
+        Ok(())
+    }
+
+    fn framing_fits(opcode: u8, spi_type: u8) -> bool {
+        match opcode {
+            JEDEC_READ | JEDEC_FAST_READ | JEDEC_REMS | JEDEC_RES => {
+                spi_type == SPI_OPCODE_TYPE_READ_WITH_ADDRESS
+            }
+            JEDEC_RDSR | 0x15 | JEDEC_RDID => spi_type == SPI_OPCODE_TYPE_READ_NO_ADDRESS,
+            0x4b => matches!(
+                spi_type,
+                SPI_OPCODE_TYPE_READ_NO_ADDRESS | SPI_OPCODE_TYPE_READ_WITH_ADDRESS
+            ),
+            JEDEC_BYTE_PROGRAM | JEDEC_SE | JEDEC_BE_52 | JEDEC_BE_D8 => {
+                spi_type == SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS
+            }
+            JEDEC_CE_C7 | JEDEC_CE_60 | JEDEC_WRSR | 0x31 | 0x11 => {
+                spi_type == SPI_OPCODE_TYPE_WRITE_NO_ADDRESS
+            }
+            _ => true,
+        }
+    }
+
+    fn menu_type(&self, opcode: u8) -> Result<u8, InternalError> {
+        let spi_type = self
+            .get_opcode_type(opcode)
+            .ok_or(InternalError::NotSupported(
+                "Opcode not available in OPMENU",
+            ))?;
+        if !Self::framing_fits(opcode, spi_type) {
+            return Err(InternalError::NotSupported(
+                "OPMENU frames the opcode wrongly",
+            ));
+        }
+        Ok(spi_type)
     }
 
     /// Find if an opcode is in the preop table
@@ -1136,10 +1728,10 @@ impl<H: HostAccess> IchSpiController<H> {
     /// - 0 = no preop needed
     /// - 1 = use preop[0] (typically WREN)
     /// - 2 = use preop[1] (typically EWSR)
-    fn get_atomic_for_opcode(&self, opcode: u8) -> u8 {
+    fn get_atomic_for_opcode(&self, opcode: u8) -> Result<u8, InternalError> {
         let opcodes = match &self.opcodes {
             Some(ops) => ops,
-            None => return 0,
+            None => return Err(InternalError::NotSupported("No PREOP table")),
         };
 
         // List of opcodes that require WREN (preop[0])
@@ -1152,36 +1744,47 @@ impl<H: HostAccess> IchSpiController<H> {
             | JEDEC_BE_D8       // 0xD8 - Block Erase 64KB
             | JEDEC_CE_C7       // 0xC7 - Chip Erase
             | JEDEC_CE_60       // 0x60 - Chip Erase (alternative)
-            | JEDEC_WRSR // 0x01 - Write Status Register
+            | JEDEC_WRSR | 0x31 | 0x11 // Write status registers
         );
 
         if needs_wren {
             // Check if WREN is in preop[0] position
             if opcodes.preop[0] == JEDEC_WREN {
-                return 1; // Use preop[0]
+                return Ok(1); // Use preop[0]
             }
             // Check if WREN is in preop[1] position
             if opcodes.preop[1] == JEDEC_WREN {
-                return 2; // Use preop[1]
+                return Ok(2); // Use preop[1]
             }
-            // WREN not in preop table - this is a problem but log and continue
-            log::warn!(
-                "WREN (0x06) not in preop table, atomic mode not available for opcode {:#04x}",
-                opcode
-            );
+            return Err(InternalError::NotSupported("WREN not in the PREOP table"));
         }
 
-        0 // No preop needed
+        Ok(0) // No preop needed
     }
 
     /// Atomic mode for a write `opcode`. A preop the caller sent first
     /// (`SpiMaster::execute`) selects its PREOP slot, so chips whose WRSR
     /// needs EWSR (older SST25) get it; otherwise WREN as needed.
     fn select_atomic(&self, opcode: u8, preop: Option<u8>) -> Result<u8, InternalError> {
+        if preop == Some(JEDEC_EWSR)
+            && matches!(
+                opcode,
+                JEDEC_BYTE_PROGRAM
+                    | JEDEC_SE
+                    | JEDEC_BE_52
+                    | JEDEC_BE_D8
+                    | JEDEC_CE_C7
+                    | JEDEC_CE_60
+            )
+        {
+            return Err(InternalError::NotSupported(
+                "Program and erase require WREN",
+            ));
+        }
         match preop.map(|preop| (preop, self.find_preop(preop))) {
             Some((_, Some(index))) => Ok(index as u8 + 1),
-            Some((JEDEC_EWSR, None)) => Err(InternalError::Io("EWSR not in the PREOP table")),
-            _ => Ok(self.get_atomic_for_opcode(opcode)),
+            Some((_, None)) => Err(InternalError::NotSupported("Preop not in the PREOP table")),
+            None => self.get_atomic_for_opcode(opcode),
         }
     }
 
@@ -1230,15 +1833,84 @@ impl<H: HostAccess> IchSpiController<H> {
         }
     }
 
+    /// Clear unlocked protected ranges and enable writes lazily, before a
+    /// flash mutation is issued.
+    fn mutation_gate(&mut self) -> Result<(), InternalError> {
+        let journal = self.change_count;
+        self.clear_protected_ranges()?;
+        if !self.bios_writes_enabled
+            && let Err(e) = self.enable_bios_write()
+        {
+            // Leave no range cleared for a mutation that cannot happen.
+            self.roll_back(journal);
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Classify supported commands by their effect, not their transfer framing.
+    fn opcode_intent(opcode: u8) -> Option<MutationIntent> {
+        match opcode {
+            // RES can also release the device from deep power-down; it does not
+            // modify flash contents or protection. 0x4b reads a unique ID.
+            JEDEC_READ | JEDEC_FAST_READ | JEDEC_RDSR | 0x15 | JEDEC_REMS | JEDEC_RDID
+            | JEDEC_RES | 0x4b => Some(MutationIntent::ReadOnly),
+            // 0x35 is RDSR2 on some parts but enters QPI on Macronix parts.
+            // OPMENU transfer type does not identify the flash's interpretation.
+            JEDEC_BYTE_PROGRAM | JEDEC_SE | JEDEC_BE_52 | JEDEC_BE_D8 | JEDEC_CE_C7
+            | JEDEC_CE_60 | JEDEC_WRSR | 0x31 | 0x11 => Some(MutationIntent::Mutating),
+            _ => None,
+        }
+    }
+
+    /// Refuse a command that may change restricted flash, then enable
+    /// writes for it.
+    fn gate_opcode(
+        &mut self,
+        opcode: u8,
+        allow_unknown: bool,
+        footprint: Footprint,
+    ) -> Result<(), InternalError> {
+        match Self::opcode_intent(opcode) {
+            Some(MutationIntent::ReadOnly) => Ok(()),
+            None if !allow_unknown => Err(InternalError::NotSupported("Unclassified SPI opcode")),
+            _ => {
+                self.check_footprint(footprint)?;
+                self.mutation_gate()
+            }
+        }
+    }
+
     /// Enable BIOS write access via BIOS_CNTL register
     pub fn enable_bios_write(&mut self) -> Result<(), InternalError> {
         self.bios_writes_enabled = false;
-        let lpc_bdf = PciAddress::new(
-            self.lpc_segment,
-            self.lpc_bus,
-            self.lpc_device,
-            self.lpc_function,
-        );
+        if self.silvermont_bcr {
+            let bcr = self.spibar.read32(SILVERMONT_REG_BCR);
+            if bcr & u32::from(BIOS_CNTL_BLE) != 0 {
+                log::warn!("BIOS Lock Enable is set - writes may trigger SMI");
+            }
+            // Match the PCI path: try to clear SMM_BWP and verify only BWE.
+            let wanted = (bcr | u32::from(BIOS_CNTL_BWE)) & !u32::from(BIOS_CNTL_SMM_BWP);
+            let current = if wanted != bcr {
+                if bcr & u32::from(BIOS_CNTL_BWE) == 0 {
+                    // Failed verification must also clean up an attempted enable.
+                    self.restore_bcr_wpd = true;
+                }
+                self.spibar.write32(SILVERMONT_REG_BCR, wanted);
+                self.spibar.read32(SILVERMONT_REG_BCR)
+            } else {
+                bcr
+            };
+            if current & u32::from(BIOS_CNTL_SMM_BWP) != 0 {
+                log::warn!("SMM BIOS Write Protect is set - BIOS region writes may be rejected");
+            }
+            if current & u32::from(BIOS_CNTL_BWE) == 0 {
+                return Err(InternalError::ChipsetEnable("Cannot enable BIOS writes"));
+            }
+            self.bios_writes_enabled = true;
+            return Ok(());
+        }
+        let lpc_bdf = self.config_bdf;
         let bios_cntl = self.host.read8(lpc_bdf, PCI_REG_BIOS_CNTL as u16)?;
 
         log::debug!("BIOS_CNTL: {:#04x}", bios_cntl);
@@ -1253,6 +1925,9 @@ impl<H: HostAccess> IchSpiController<H> {
         // writable, and if it stays set the controller rejects the cycles.
         let wanted = (bios_cntl | BIOS_CNTL_BWE) & !BIOS_CNTL_SMM_BWP;
         let current = if wanted != bios_cntl {
+            if bios_cntl & BIOS_CNTL_BWE == 0 {
+                self.restore_pci_bwe = true;
+            }
             self.host
                 .write8(lpc_bdf, PCI_REG_BIOS_CNTL as u16, wanted)?;
             self.host.read8(lpc_bdf, PCI_REG_BIOS_CNTL as u16)?
@@ -1318,6 +1993,77 @@ impl<H: HostAccess> IchSpiController<H> {
     // ========================================================================
     // Hardware Sequencing Operations
     // ========================================================================
+
+    /// Read the descriptor through the controller's observability registers.
+    /// Only generations whose FLCOMP encoding is documented by flashprog are
+    /// handled; later engines retain the region-based fallback.
+    fn descriptor_flash_size(&self) -> Result<Option<u32>, InternalError> {
+        if !self.desc_valid {
+            return Err(InternalError::InvalidDescriptor);
+        }
+        let new_density = match self.generation {
+            IchChipset::Ich9
+            | IchChipset::Ich10
+            | IchChipset::Series5IbexPeak
+            | IchChipset::Series6CougarPoint
+            | IchChipset::Series7PantherPoint
+            | IchChipset::BayTrail => false,
+            IchChipset::Series8LynxPoint
+            | IchChipset::Series8LynxPointLp
+            | IchChipset::Series8Wellsburg
+            | IchChipset::Series9WildcatPoint
+            | IchChipset::Series9WildcatPointLp
+            | IchChipset::Series100SunrisePoint => true,
+            _ => return Ok(None),
+        };
+        let (fdoc, fdod) = if self.generation.is_pch100_compatible() {
+            (0xb4, 0xb8)
+        } else {
+            (0xb0, 0xb4)
+        };
+        let read = |selector| {
+            self.spibar.write32(fdoc, selector);
+            self.spibar.read32(fdod)
+        };
+        let saved_selector = self.spibar.read32(fdoc);
+        let signature = read(0);
+        let map = read(4);
+        let comp = read(1 << 12);
+        self.spibar.write32(fdoc, saved_selector);
+        if signature != 0x0ff0_a55a {
+            return Err(InternalError::InvalidDescriptor);
+        }
+        let count = (map >> 8) & 3;
+        if count > 1 {
+            return Err(InternalError::InvalidDescriptor);
+        }
+        let width = if new_density { 4 } else { 3 };
+        let mask = (1 << width) - 1;
+        let max = if new_density { 7 } else { 5 };
+        let density = |index: u32| -> Option<u32> {
+            let code = (comp >> (index * width)) & mask;
+            if code > max {
+                None
+            } else {
+                Some(1u32 << (19 + code))
+            }
+        };
+        let first = density(0).ok_or(InternalError::InvalidDescriptor)?;
+        let second = if count == 1 {
+            density(1).ok_or(InternalError::InvalidDescriptor)?
+        } else {
+            0
+        };
+        let size = first
+            .checked_add(second)
+            .ok_or(InternalError::InvalidDescriptor)?;
+        if u64::from(size) > u64::from(self.hwseq.addr_mask) + 1 {
+            return Err(InternalError::NotSupported(
+                "Flash exceeds hardware sequencing address range",
+            ));
+        }
+        Ok(Some(size))
+    }
 
     /// Reject ranges that FADDR would truncate before touching controller registers.
     fn hwseq_check_range(&self, addr: u32, len: usize) -> Result<(), InternalError> {
@@ -1425,13 +2171,16 @@ impl<H: HostAccess> IchSpiController<H> {
     /// Write data using hardware sequencing
     ///
     /// This is the main write path - optimized for throughput.
-    pub fn hwseq_write(&self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+    pub fn hwseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
         let len = data.len();
         self.hwseq_check_range(addr, len)?;
         if len == 0 {
             return Ok(());
         }
 
+        // Refuse before the first chunk, not part-way through.
+        self.check_range(FlashAccess::Modify, addr, len as u64)?;
+        self.mutation_gate()?;
         let mut offset = 0;
         let mut current_addr = addr as u64;
 
@@ -1511,7 +2260,7 @@ impl<H: HostAccess> IchSpiController<H> {
     ///
     /// `addr` and `len` must consist of whole hardware erase blocks. This is
     /// verified for the entire range before the first cycle is started.
-    pub fn hwseq_erase(&self, addr: u32, len: u32) -> Result<(), InternalError> {
+    pub fn hwseq_erase(&mut self, addr: u32, len: u32) -> Result<(), InternalError> {
         self.hwseq_check_range(addr, len as usize)?;
 
         let end_addr = addr as u64 + len as u64;
@@ -1529,6 +2278,12 @@ impl<H: HostAccess> IchSpiController<H> {
             current_addr += erase_size;
         }
 
+        if len == 0 {
+            return Ok(());
+        }
+        // Whole hardware blocks (checked above), so this is what is erased.
+        self.check_range(FlashAccess::Modify, addr, len.into())?;
+        self.mutation_gate()?;
         // Clear FDONE, FCERR, AEL by writing 1s to them (do once at start)
         self.spibar
             .write16(ICH9_REG_HSFS, self.spibar.read16(ICH9_REG_HSFS));
@@ -2039,21 +2794,42 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Send a raw SPI command using ICH7 software sequencing
+    /// Send a raw SPI command using ICH7 software sequencing.
+    ///
+    /// Only classified opcodes in OPMENU are accepted. Mutating commands
+    /// enable BIOS writes first; unknown commands (including ambiguous 0x35)
+    /// are rejected. Opcode meanings must match the connected flash.
     pub fn ich7_swseq_send_command(
-        &self,
+        &mut self,
         writearr: &[u8],
         readarr: &mut [u8],
     ) -> Result<(), InternalError> {
-        self.ich7_swseq_send_command_after(writearr, readarr, None)
+        self.ich7_swseq_send_command_after(writearr, readarr, None, false)
+    }
+
+    /// Send a raw command, allowing unknown opcodes through the mutation gate.
+    ///
+    /// Known opcodes retain their normal classification; OPMENU and framing
+    /// checks still apply. This does not bypass BIOS write protection.
+    ///
+    /// # Safety
+    /// The caller must verify the command's meaning and effects on the connected
+    /// flash and platform, including for opcodes classified as read-only.
+    pub unsafe fn ich7_swseq_send_command_unchecked(
+        &mut self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+    ) -> Result<(), InternalError> {
+        self.ich7_swseq_send_command_after(writearr, readarr, None, true)
     }
 
     /// [`Self::ich7_swseq_send_command`] after an explicit `preop`.
     fn ich7_swseq_send_command_after(
-        &self,
+        &mut self,
         writearr: &[u8],
         readarr: &mut [u8],
         preop: Option<u8>,
+        allow_unknown: bool,
     ) -> Result<(), InternalError> {
         if writearr.is_empty() {
             return Err(InternalError::Io("Empty write array"));
@@ -2063,6 +2839,7 @@ impl<H: HostAccess> IchSpiController<H> {
         let writecnt = writearr.len();
         let readcnt = readarr.len();
 
+        self.menu_type(opcode)?;
         // Find opcode in table
         let opcode_index = self.find_opcode_index(opcode).ok_or_else(|| {
             log::debug!("ICH7: Opcode {:#04x} not found in opcode table", opcode);
@@ -2131,6 +2908,16 @@ impl<H: HostAccess> IchSpiController<H> {
             _ => (0, &[], false),
         };
 
+        if data_slice.len() > Self::SWSEQ_MAX_DATA || readcnt > Self::SWSEQ_MAX_DATA {
+            return Err(InternalError::Io("Data length exceeds swseq maximum"));
+        }
+        if matches!(
+            spi_type,
+            SPI_OPCODE_TYPE_READ_WITH_ADDRESS | SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS
+        ) {
+            Self::check_swseq_range(addr, if is_write { data_slice.len() } else { readcnt })?;
+        }
+
         // Determine if we need atomic mode (preop + main op)
         let atomic = if is_write {
             self.select_atomic(opcode, preop)?
@@ -2140,6 +2927,8 @@ impl<H: HostAccess> IchSpiController<H> {
 
         // For read operations, we need to use the readarr
         // For write operations, we use the data from writearr
+        let footprint = Self::command_footprint(opcode, addr, data_slice.len());
+        self.gate_opcode(opcode, allow_unknown, footprint)?;
         if is_write {
             let mut data_buf: [u8; 64] = [0; 64];
             let len = data_slice.len().min(64);
@@ -2152,7 +2941,8 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Read data using ICH7 software sequencing
-    pub fn ich7_swseq_read(&self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+    pub fn ich7_swseq_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+        Self::check_swseq_range(addr, buf.len())?;
         // Check we have a read opcode available
         let read_opcode = if self.find_opcode_index(JEDEC_READ).is_some() {
             JEDEC_READ
@@ -2193,13 +2983,16 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Write data using ICH7 software sequencing
-    pub fn ich7_swseq_write(&self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+    pub fn ich7_swseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+        Self::check_swseq_range(addr, data.len())?;
         // Check we have a program opcode available
         if self.find_opcode_index(JEDEC_BYTE_PROGRAM).is_none() {
             return Err(InternalError::NotSupported("No program opcode available"));
         }
 
         let len = data.len();
+        // Refuse before the first page, not part-way through.
+        self.check_range(FlashAccess::Modify, addr, len as u64)?;
         let mut offset = 0;
         let mut current_addr = addr;
 
@@ -2230,48 +3023,15 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Erase a block using ICH7 software sequencing
-    pub fn ich7_swseq_erase(&self, addr: u32, len: u32) -> Result<(), InternalError> {
-        // Find an erase opcode - prefer 4KB sector erase for granularity
-        let (erase_opcode, erase_size) = if self.find_opcode_index(JEDEC_SE).is_some() {
-            (JEDEC_SE, 4096u32)
-        } else if self.find_opcode_index(JEDEC_BE_52).is_some() {
-            (JEDEC_BE_52, 32768u32)
-        } else if self.find_opcode_index(JEDEC_BE_D8).is_some() {
-            (JEDEC_BE_D8, 65536u32)
-        } else {
-            return Err(InternalError::NotSupported("No erase opcode available"));
-        };
-
-        // Verify alignment
-        if addr & (erase_size - 1) != 0 || len & (erase_size - 1) != 0 {
-            return Err(InternalError::Io("Erase address/length not aligned"));
-        }
-
-        let mut current_addr = addr;
-        let end_addr = addr + len;
-
-        while current_addr < end_addr {
-            // Build erase command: opcode + 3-byte address
-            let erase_arr = [
-                erase_opcode,
-                ((current_addr >> 16) & 0xff) as u8,
-                ((current_addr >> 8) & 0xff) as u8,
-                (current_addr & 0xff) as u8,
-            ];
-            self.ich7_swseq_send_command(&erase_arr, &mut [])?;
-
-            // Wait for erase to complete
-            self.ich7_swseq_wait_wip()?;
-
-            current_addr += erase_size;
-        }
-
-        Ok(())
+    /// Raw controller erase is unavailable without chip-specific geometry.
+    pub fn ich7_swseq_erase(&mut self, _addr: u32, _len: u32) -> Result<(), InternalError> {
+        Err(InternalError::NotSupported(
+            "Software erase requires chip-specific geometry",
+        ))
     }
 
     /// Wait for Write-In-Progress (WIP) bit to clear using ICH7 swseq
-    fn ich7_swseq_wait_wip(&self) -> Result<(), InternalError> {
+    fn ich7_swseq_wait_wip(&mut self) -> Result<(), InternalError> {
         // Check we have RDSR opcode
         if self.find_opcode_index(JEDEC_RDSR).is_none() {
             // No RDSR available, just wait a fixed time
@@ -2309,20 +3069,40 @@ impl<H: HostAccess> IchSpiController<H> {
     ///
     /// The first byte of writearr is the opcode. For address-type commands,
     /// bytes 1-3 are the 24-bit address. Any remaining bytes are data to write.
+    /// Only classified opcodes in OPMENU are accepted. Mutating commands enable
+    /// BIOS writes first; unknown commands (including ambiguous 0x35) are
+    /// rejected. Opcode meanings must match the connected flash.
     pub fn swseq_send_command(
-        &self,
+        &mut self,
         writearr: &[u8],
         readarr: &mut [u8],
     ) -> Result<(), InternalError> {
-        self.swseq_send_command_after(writearr, readarr, None)
+        self.swseq_send_command_after(writearr, readarr, None, false)
+    }
+
+    /// Send a raw command, allowing unknown opcodes through the mutation gate.
+    ///
+    /// Known opcodes retain their normal classification; OPMENU and framing
+    /// checks still apply. This does not bypass BIOS write protection.
+    ///
+    /// # Safety
+    /// The caller must verify the command's meaning and effects on the connected
+    /// flash and platform, including for opcodes classified as read-only.
+    pub unsafe fn swseq_send_command_unchecked(
+        &mut self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+    ) -> Result<(), InternalError> {
+        self.swseq_send_command_after(writearr, readarr, None, true)
     }
 
     /// [`Self::swseq_send_command`] after an explicit `preop`.
     fn swseq_send_command_after(
-        &self,
+        &mut self,
         writearr: &[u8],
         readarr: &mut [u8],
         preop: Option<u8>,
+        allow_unknown: bool,
     ) -> Result<(), InternalError> {
         if writearr.is_empty() {
             return Err(InternalError::Io("Empty write array"));
@@ -2332,6 +3112,7 @@ impl<H: HostAccess> IchSpiController<H> {
         let writecnt = writearr.len();
         let readcnt = readarr.len();
 
+        self.menu_type(opcode)?;
         // Find opcode in table
         let opcode_index = self.find_opcode_index(opcode).ok_or_else(|| {
             log::debug!("Opcode {:#04x} not found in opcode table", opcode);
@@ -2400,6 +3181,16 @@ impl<H: HostAccess> IchSpiController<H> {
             _ => (0, &[], false),
         };
 
+        if data_slice.len() > Self::SWSEQ_MAX_DATA || readcnt > Self::SWSEQ_MAX_DATA {
+            return Err(InternalError::Io("Data length exceeds swseq maximum"));
+        }
+        if matches!(
+            spi_type,
+            SPI_OPCODE_TYPE_READ_WITH_ADDRESS | SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS
+        ) {
+            Self::check_swseq_range(addr, if is_write { data_slice.len() } else { readcnt })?;
+        }
+
         // Determine if we need atomic mode (preop + main op)
         // Write operations typically need WREN first
         let atomic = if is_write {
@@ -2407,6 +3198,9 @@ impl<H: HostAccess> IchSpiController<H> {
         } else {
             0
         };
+
+        let footprint = Self::command_footprint(opcode, addr, data_slice.len());
+        self.gate_opcode(opcode, allow_unknown, footprint)?;
 
         // For read operations, we need to use the readarr
         // For write operations, we use the data from writearr
@@ -2424,7 +3218,8 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Read data using software sequencing
-    pub fn swseq_read(&self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+    pub fn swseq_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+        Self::check_swseq_range(addr, buf.len())?;
         // Check we have a read opcode available
         let read_opcode = if self.find_opcode_index(JEDEC_READ).is_some() {
             JEDEC_READ
@@ -2465,13 +3260,16 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Write data using software sequencing
-    pub fn swseq_write(&self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+    pub fn swseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+        Self::check_swseq_range(addr, data.len())?;
         // Check we have a program opcode available
         if self.find_opcode_index(JEDEC_BYTE_PROGRAM).is_none() {
             return Err(InternalError::NotSupported("No program opcode available"));
         }
 
         let len = data.len();
+        // Refuse before the first page, not part-way through.
+        self.check_range(FlashAccess::Modify, addr, len as u64)?;
         let mut offset = 0;
         let mut current_addr = addr;
 
@@ -2502,49 +3300,15 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Erase a block using software sequencing
-    pub fn swseq_erase(&self, addr: u32, len: u32) -> Result<(), InternalError> {
-        // Find an erase opcode - prefer 4KB sector erase for granularity
-        let (erase_opcode, erase_size) = if self.find_opcode_index(JEDEC_SE).is_some() {
-            (JEDEC_SE, 4096u32)
-        } else if self.find_opcode_index(JEDEC_BE_52).is_some() {
-            (JEDEC_BE_52, 32768u32)
-        } else if self.find_opcode_index(JEDEC_BE_D8).is_some() {
-            (JEDEC_BE_D8, 65536u32)
-        } else {
-            return Err(InternalError::NotSupported("No erase opcode available"));
-        };
-
-        // Verify alignment
-        if addr & (erase_size - 1) != 0 || len & (erase_size - 1) != 0 {
-            return Err(InternalError::Io("Erase address/length not aligned"));
-        }
-
-        let mut current_addr = addr;
-        let end_addr = addr + len;
-
-        while current_addr < end_addr {
-            // Build erase command: opcode + 3-byte address
-            // WREN is handled automatically via atomic mode in swseq_send_command
-            let erase_arr = [
-                erase_opcode,
-                ((current_addr >> 16) & 0xff) as u8,
-                ((current_addr >> 8) & 0xff) as u8,
-                (current_addr & 0xff) as u8,
-            ];
-            self.swseq_send_command(&erase_arr, &mut [])?;
-
-            // Wait for erase to complete
-            self.swseq_wait_wip()?;
-
-            current_addr += erase_size;
-        }
-
-        Ok(())
+    /// Raw controller erase is unavailable without chip-specific geometry.
+    pub fn swseq_erase(&mut self, _addr: u32, _len: u32) -> Result<(), InternalError> {
+        Err(InternalError::NotSupported(
+            "Software erase requires chip-specific geometry",
+        ))
     }
 
     /// Wait for Write-In-Progress (WIP) bit to clear
-    fn swseq_wait_wip(&self) -> Result<(), InternalError> {
+    fn swseq_wait_wip(&mut self) -> Result<(), InternalError> {
         // Check we have RDSR opcode
         if self.find_opcode_index(JEDEC_RDSR).is_none() {
             // No RDSR available, just wait a fixed time
@@ -2623,6 +3387,14 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         "Intel ICH/PCH"
     }
 
+    fn physical_flash_size(&self) -> Result<Option<u32>, InternalError> {
+        if self.mode == SpiMode::HardwareSequencing {
+            self.descriptor_flash_size()
+        } else {
+            Ok(None)
+        }
+    }
+
     fn erase_block_size(&self, flash_size: u32) -> Result<Option<u32>, InternalError> {
         if self.mode == SpiMode::HardwareSequencing {
             self.hwseq_erase_geometry(flash_size).map(Some)
@@ -2664,6 +3436,10 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         // The higher-level protocol sends them separately; remember which one
         // and send it atomically with the next command.
         if cmd.opcode == JEDEC_WREN || cmd.opcode == JEDEC_EWSR {
+            self.pending_preop = None;
+            if self.find_preop(cmd.opcode).is_none() {
+                return Err(CoreError::OpcodeNotSupported);
+            }
             log::trace!("Deferring preop {:#04x} to the next command", cmd.opcode);
             self.pending_preop = Some(cmd.opcode);
             return Ok(());
@@ -2698,6 +3474,8 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         if let Some(addr) = cmd.address {
             match cmd.address_width {
                 AddressWidth::ThreeByte => {
+                    Self::check_swseq_range(addr, cmd.write_data.len().max(cmd.read_buf.len()))
+                        .map_err(InternalError::to_core_error)?;
                     writearr[1] = ((addr >> 16) & 0xff) as u8;
                     writearr[2] = ((addr >> 8) & 0xff) as u8;
                     writearr[3] = (addr & 0xff) as u8;
@@ -2727,11 +3505,16 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
 
         // Execute the command - route to appropriate swseq implementation
         let result = if self.generation == IchChipset::Ich7 {
-            self.ich7_swseq_send_command_after(&writearr[..write_len], cmd.read_buf, preop)
+            self.ich7_swseq_send_command_after(&writearr[..write_len], cmd.read_buf, preop, false)
         } else {
-            self.swseq_send_command_after(&writearr[..write_len], cmd.read_buf, preop)
+            self.swseq_send_command_after(&writearr[..write_len], cmd.read_buf, preop, false)
         };
         result.map_err(InternalError::to_core_error)
+    }
+
+    fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> CoreResult<()> {
+        self.check_range(access, addr, len.into())
+            .map_err(InternalError::to_core_error)
     }
 
     fn probe_opcode(&self, opcode: u8) -> bool {
@@ -2741,7 +3524,8 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         }
 
         // OPMENU opcodes, or WREN/EWSR sent atomically from the PREOP table.
-        self.has_opcode(opcode) || self.find_preop(opcode).is_some()
+        (Self::opcode_intent(opcode).is_some() && self.menu_type(opcode).is_ok())
+            || ((opcode == JEDEC_WREN || opcode == JEDEC_EWSR) && self.find_preop(opcode).is_some())
     }
 }
 
@@ -2764,19 +3548,23 @@ impl IchSpiController {
 mod tests {
     use super::*;
     use crate::host::tests::{FakeHost, FakeMmio};
+    use alloc::vec;
 
     fn test_controller() -> IchSpiController<FakeHost> {
         IchSpiController {
             host: FakeHost::default(),
             spibar: FakeMmio::default(),
             generation: IchChipset::Series100SunrisePoint,
-            lpc_segment: 0,
-            lpc_bus: 0,
-            lpc_device: 0x1f,
-            lpc_function: 0,
+            config_bdf: PciAddress::new(0, 0, 0x1f, 0),
             locked: false,
             bios_writes_enabled: false,
+            silvermont_bcr: false,
+            restore_bcr_wpd: false,
+            restore_pci_bwe: false,
+            changes: [None; 12],
+            change_count: 0,
             swseq_locked: false,
+            dlock: 0,
             desc_valid: false,
             requested_mode: SpiMode::HardwareSequencing,
             mode: SpiMode::HardwareSequencing,
@@ -2806,6 +3594,518 @@ mod tests {
             pending_preop: None,
             bbar: 0,
         }
+    }
+
+    #[test]
+    fn init_read_and_drop_restores_menu_and_protection() {
+        let mut c = test_controller();
+        let mmio = c.spibar.clone();
+        mmio.set32(ICH9_REG_HSFS, u32::from(HSFS_FDV));
+        mmio.set32(PCH100_REG_PREOP, 0x1234);
+        mmio.set32(PCH100_REG_FPR0, 0x8000_0001);
+        c.wait_configuration_idle().unwrap();
+        c.init().unwrap();
+        c.hwseq_read(0, &mut [0; 4]).unwrap();
+        drop(c);
+        assert_eq!(mmio.read16(PCH100_REG_PREOP), 0x1234);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0), 0x8000_0001);
+    }
+
+    #[test]
+    fn init_failure_restores_configuration_in_reverse() {
+        let mut c = test_controller();
+        c.requested_mode = SpiMode::HardwareSequencing; // descriptor invalid
+        let mmio = c.spibar.clone();
+        mmio.set32(PCH100_REG_PREOP, 0x1234);
+        mmio.set32(PCH100_REG_FPR0, 0x8000_0001);
+        assert!(c.init().is_err());
+        drop(c);
+        assert_eq!(mmio.read16(PCH100_REG_PREOP), 0x1234);
+        let writes = mmio.writes();
+        let last = |offset| writes.iter().rposition(|w| w.0 == offset).unwrap();
+        assert!(last(PCH100_REG_OPMENU + 4) < last(PCH100_REG_PREOP));
+        // Opening never clears protected ranges.
+        assert!(writes.iter().all(|w| w.0 != PCH100_REG_FPR0));
+    }
+
+    #[test]
+    fn restore_preserves_external_changes_and_bbar_unrelated_bits() {
+        let mut c = test_controller();
+        c.generation = IchChipset::Ich9;
+        let mmio = c.spibar.clone();
+        mmio.set32(ICH9_REG_BBAR, 0x123400 | 1);
+        c.set_bbar(0);
+        mmio.set32(ICH9_REG_BBAR, 2);
+        mmio.set32(ICH9_REG_PR0, 0x8000_0001);
+        c.set_pr(ICH9_REG_PR0, 0, false, false);
+        mmio.set32(ICH9_REG_PR0, 0x0000_0002);
+        drop(c);
+        assert_eq!(mmio.read32(ICH9_REG_BBAR), 0x123402);
+        assert_eq!(mmio.read32(ICH9_REG_PR0), 2);
+    }
+
+    #[test]
+    fn individual_locks_only_block_their_own_restoration() {
+        let mut c = test_controller();
+        let mmio = c.spibar.clone();
+        let (pr0, pr1) = (pr(0, 0xfff, false, true), pr(0x1000, 0x1fff, true, true));
+        mmio.set32(PCH100_REG_FPR0, pr0);
+        mmio.set32(PCH100_REG_FPR0 + 4, pr1);
+        c.clear_protected_ranges().unwrap();
+        mmio.set32(PCH100_REG_DLOCK, DLOCK_PR0_LOCKDN | DLOCK_SSEQ_LOCKDN);
+        drop(c);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0), pr(0, 0xfff, false, false));
+        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 4), pr1);
+    }
+
+    #[test]
+    fn restore_skips_locked_or_busy_controller() {
+        for busy in [false, true] {
+            let mut c = test_controller();
+            let mmio = c.spibar.clone();
+            mmio.set32(PCH100_REG_PREOP, 0x1234);
+            c.change_register(PCH100_REG_PREOP, true, 0x5678, 0xffff);
+            if busy {
+                mmio.set32(PCH100_REG_SSFSC, SSFS_SCIP);
+            } else {
+                mmio.set32(ICH9_REG_HSFS, u32::from(HSFS_FLOCKDN));
+            }
+            drop(c);
+            assert_eq!(mmio.read16(PCH100_REG_PREOP), 0x5678);
+        }
+    }
+
+    #[test]
+    fn drop_clears_owned_write_enable_even_when_busy() {
+        for silvermont in [false, true] {
+            for busy in [0, 1, 2] {
+                let mut c = test_controller();
+                c.silvermont_bcr = silvermont;
+                c.host.enable_write8_readback();
+                let host = c.host.clone();
+                let mmio = c.spibar.clone();
+                let bdf = PciAddress::new(0, 0, 0x1f, 0);
+                host.set_config32(bdf, PCI_REG_BIOS_CNTL as u16 & !3, 0);
+                mmio.set32(SILVERMONT_REG_BCR, 0);
+                mmio.set32(PCH100_REG_PREOP, 0x1234);
+                c.change_register(PCH100_REG_PREOP, true, 0x5678, 0xffff);
+                c.enable_bios_write().unwrap();
+                if busy == 1 {
+                    mmio.set32(PCH100_REG_SSFSC, SSFS_SCIP | SSFS_FDONE | SSFS_FCERR);
+                } else if busy == 2 {
+                    mmio.set32(
+                        ICH9_REG_HSFS,
+                        u32::from(HSFS_SCIP | HSFS_FDONE | HSFS_FCERR),
+                    );
+                }
+                let writes_before = mmio.writes().len();
+                drop(c);
+                assert_eq!(
+                    mmio.read16(PCH100_REG_PREOP),
+                    if busy == 0 { 0x1234 } else { 0x5678 }
+                );
+                if silvermont {
+                    assert_eq!(
+                        mmio.read32(SILVERMONT_REG_BCR) & u32::from(BIOS_CNTL_BWE),
+                        0
+                    );
+                } else {
+                    assert_eq!(
+                        host.read8(bdf, PCI_REG_BIOS_CNTL as u16).unwrap() & BIOS_CNTL_BWE,
+                        0
+                    );
+                    assert_eq!(
+                        host.writes().last().unwrap().2 & u32::from(BIOS_CNTL_BWE),
+                        0
+                    );
+                }
+                assert!(
+                    mmio.writes()[writes_before..]
+                        .iter()
+                        .all(
+                            |&(offset, _, _)| offset != ICH9_REG_HSFS && offset != PCH100_REG_SSFSC
+                        )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn swseq_address_limits_and_erase_geometry() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.mode = SpiMode::SoftwareSequencing;
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            c.opcodes = Some(Opcodes::default());
+            let host = c.host.clone();
+            let mmio = c.spibar.clone();
+            let limit = 1 << 24;
+
+            // A later chunk would wrap to zero; reject the entire operation.
+            assert!(c.controller_read(limit - 64, &mut [0; 65], 0).is_err());
+            assert!(c.controller_write(limit - 64, &[0; 65]).is_err());
+            assert!(c.controller_read(limit, &mut [0; 1], 0).is_err());
+            assert!(c.controller_write(u32::MAX, &[0; 1]).is_err());
+            assert!(c.controller_erase(0, 4096).is_err());
+            assert!(c.controller_erase(limit - 4096, 8192).is_err());
+
+            let mut cmd = SpiCommand::write_3b(JEDEC_BYTE_PROGRAM, limit, &[1]);
+            assert!(c.execute(&mut cmd).is_err());
+            let mut cmd = SpiCommand::erase_3b(JEDEC_SE, limit);
+            assert!(c.execute(&mut cmd).is_err());
+            let mut buf = [0; 2];
+            let mut cmd = SpiCommand::read_3b(JEDEC_READ, limit - 1, &mut buf);
+            assert!(c.execute(&mut cmd).is_err());
+
+            let crossing = [JEDEC_BYTE_PROGRAM, 0xff, 0xff, 0xff, 1, 2];
+            let mut too_long = [0; 69];
+            too_long[0] = JEDEC_BYTE_PROGRAM;
+            for unchecked in [false, true] {
+                for bytes in [&crossing[..], &too_long[..]] {
+                    // SAFETY: the fake controller is not connected to flash.
+                    let result = unsafe {
+                        match (ich7, unchecked) {
+                            (true, true) => c.ich7_swseq_send_command_unchecked(bytes, &mut []),
+                            (false, true) => c.swseq_send_command_unchecked(bytes, &mut []),
+                            (true, false) => c.ich7_swseq_send_command(bytes, &mut []),
+                            (false, false) => c.swseq_send_command(bytes, &mut []),
+                        }
+                    };
+                    assert!(result.is_err());
+                }
+            }
+            assert!(host.writes().is_empty());
+            assert!(mmio.writes().is_empty());
+            assert!(IchSpiController::<FakeHost>::check_swseq_range(limit - 64, 64).is_ok());
+        }
+    }
+
+    #[test]
+    fn chip_specific_erase_still_uses_raw_command() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.mode = SpiMode::SoftwareSequencing;
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            c.opcodes = Some(Opcodes::default());
+            c.host.enable_write8_readback();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            let host = c.host.clone();
+            let mmio = c.spibar.clone();
+            c.execute(&mut SpiCommand::simple(JEDEC_WREN)).unwrap();
+            let _ = c.execute(&mut SpiCommand::erase_3b(JEDEC_SE, 0xfff000));
+            // The fake may report a cycle error, but the command was issued.
+            assert!(!host.writes().is_empty());
+            assert!(!mmio.writes().is_empty());
+        }
+    }
+
+    #[test]
+    fn direct_paths_gate_mutations_and_restore() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.host.enable_write8_readback();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            c.opcodes = Some(Opcodes::default());
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            let host = c.host.clone();
+            // A refused command never enables writes, regardless of framing.
+            c.opcodes.as_mut().unwrap().opcode[0].opcode = 0xaa;
+            let send = |c: &mut IchSpiController<FakeHost>, cmd: &[u8], out: &mut [u8]| {
+                if ich7 {
+                    c.ich7_swseq_send_command(cmd, out)
+                } else {
+                    c.swseq_send_command(cmd, out)
+                }
+            };
+            assert!(send(&mut c, &[0xaa, 0, 0, 0], &mut []).is_err());
+            assert!(host.writes().is_empty());
+            let _ = send(&mut c, &[JEDEC_RDSR], &mut [0]);
+            assert!(host.writes().is_empty());
+            // A wrongly framed mutation is rejected before enabling writes.
+            c.opcodes.as_mut().unwrap().opcode[0] = Opcode {
+                opcode: JEDEC_CE_C7,
+                spi_type: SPI_OPCODE_TYPE_READ_NO_ADDRESS,
+                atomic: 0,
+            };
+            host.set_config32(
+                c.config_bdf,
+                PCI_REG_BIOS_CNTL as u16,
+                u32::from(BIOS_CNTL_SMM_BWP),
+            );
+            assert!(matches!(
+                send(&mut c, &[JEDEC_CE_C7], &mut [0]),
+                Err(InternalError::NotSupported(_))
+            ));
+            assert!(host.writes().is_empty());
+            host.set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            c.opcodes.as_mut().unwrap().opcode[0].spi_type = SPI_OPCODE_TYPE_WRITE_NO_ADDRESS;
+            // Cycle may fail in the fake, but enable must precede it and be restored.
+            let _ = send(&mut c, &[JEDEC_CE_C7], &mut []);
+            assert_eq!(host.writes().len(), 1);
+            drop(c);
+            assert_eq!(host.writes().len(), 2);
+            assert_eq!(host.writes()[1].2 & 1, 0);
+        }
+    }
+
+    #[test]
+    fn locked_menu_refuses_missing_preop_and_bad_framing() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.locked = true;
+            c.mode = SpiMode::SoftwareSequencing;
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            c.opcodes = Some(Opcodes::default());
+            c.opcodes.as_mut().unwrap().preop = [0, 0];
+            c.opcodes.as_mut().unwrap().opcode[0] = Opcode {
+                opcode: JEDEC_BYTE_PROGRAM,
+                spi_type: SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS,
+                atomic: 0,
+            };
+            let host = c.host.clone();
+            let mmio = c.spibar.clone();
+            for opcode in [JEDEC_WREN, JEDEC_EWSR] {
+                let mut preop = SpiCommand::simple(opcode);
+                assert!(c.execute(&mut preop).is_err());
+                assert!(c.pending_preop.is_none());
+            }
+            let send = |c: &mut IchSpiController<FakeHost>| {
+                if ich7 {
+                    c.ich7_swseq_send_command(&[JEDEC_BYTE_PROGRAM, 0, 0, 0, 0xaa], &mut [])
+                } else {
+                    c.swseq_send_command(&[JEDEC_BYTE_PROGRAM, 0, 0, 0, 0xaa], &mut [])
+                }
+            };
+            assert!(send(&mut c).is_err());
+            c.opcodes.as_mut().unwrap().preop = [JEDEC_WREN, 0];
+            c.opcodes.as_mut().unwrap().opcode[0].spi_type = SPI_OPCODE_TYPE_WRITE_NO_ADDRESS;
+            assert!(!c.probe_opcode(JEDEC_BYTE_PROGRAM));
+            assert!(send(&mut c).is_err());
+            assert!(host.writes().is_empty());
+            assert!(mmio.writes().is_empty());
+        }
+    }
+
+    #[test]
+    fn locked_menu_identification_reads_and_ambiguous_opcode() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.locked = true;
+            c.mode = SpiMode::SoftwareSequencing;
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            c.opcodes = Some(Opcodes::default());
+            let host = c.host.clone();
+            let send = |c: &mut IchSpiController<FakeHost>, cmd: &[u8], out: &mut [u8]| {
+                if ich7 {
+                    c.ich7_swseq_send_command(cmd, out)
+                } else {
+                    c.swseq_send_command(cmd, out)
+                }
+            };
+            for opcode in [JEDEC_RES, 0x4b] {
+                c.opcodes.as_mut().unwrap().opcode[0] = Opcode {
+                    opcode,
+                    spi_type: SPI_OPCODE_TYPE_READ_WITH_ADDRESS,
+                    atomic: 0,
+                };
+                c.spibar.set32(ICH7_REG_OPMENU, u32::from(opcode));
+                assert!(c.probe_opcode(opcode));
+                let writes_before = c.spibar.writes().len();
+                // The fake may report a cycle error; verify the cycle was issued.
+                let _ = send(&mut c, &[opcode, 0, 0, 0], &mut [0; 2]);
+                let control = if ich7 {
+                    ICH7_REG_SPIC
+                } else {
+                    PCH100_REG_SSFSC
+                };
+                assert!(
+                    c.spibar.writes()[writes_before..]
+                        .iter()
+                        .any(|w| w.0 == control)
+                );
+                assert!(host.writes().is_empty());
+            }
+            c.opcodes.as_mut().unwrap().opcode[0].opcode = 0x35;
+            assert!(!c.probe_opcode(0x35));
+            assert!(matches!(
+                send(&mut c, &[0x35, 0, 0, 0], &mut [0]),
+                Err(InternalError::NotSupported("Unclassified SPI opcode"))
+            ));
+            assert!(host.writes().is_empty());
+        }
+    }
+
+    #[test]
+    fn unsafe_unknown_command_is_always_treated_as_mutating() {
+        let mut c = test_controller();
+        c.host.enable_write8_readback();
+        c.host
+            .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        c.opcodes = Some(Opcodes::default());
+        c.opcodes.as_mut().unwrap().opcode[0] = Opcode {
+            opcode: 0xaa,
+            spi_type: SPI_OPCODE_TYPE_READ_NO_ADDRESS,
+            atomic: 0,
+        };
+        let host = c.host.clone();
+        assert!(!c.probe_opcode(0xaa));
+        // SAFETY: the fake controller has no physical flash.
+        let _ = unsafe { c.swseq_send_command_unchecked(&[0xaa], &mut [0]) };
+        assert_eq!(host.writes().len(), 1);
+        drop(c);
+        assert_eq!(host.writes().len(), 2);
+    }
+
+    #[test]
+    fn ambiguous_opcode_unchecked_still_obeys_write_protection() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.opcodes = Some(Opcodes::default());
+            c.opcodes.as_mut().unwrap().opcode[0] = Opcode {
+                opcode: 0x35,
+                spi_type: SPI_OPCODE_TYPE_READ_NO_ADDRESS,
+                atomic: 0,
+            };
+            c.host.set_config32(
+                c.config_bdf,
+                PCI_REG_BIOS_CNTL as u16,
+                u32::from(BIOS_CNTL_SMM_BWP),
+            );
+            // SAFETY: the fake controller has no physical flash.
+            let result = unsafe {
+                if ich7 {
+                    c.ich7_swseq_send_command_unchecked(&[0x35], &mut [0])
+                } else {
+                    c.swseq_send_command_unchecked(&[0x35], &mut [0])
+                }
+            };
+            assert!(matches!(result, Err(InternalError::ChipsetEnable(_))));
+            assert_eq!(
+                c.host.writes(),
+                vec![(
+                    c.config_bdf,
+                    PCI_REG_BIOS_CNTL as u16,
+                    u32::from(BIOS_CNTL_BWE),
+                    1
+                )]
+            );
+            assert!(c.spibar.writes().is_empty());
+        }
+    }
+
+    #[test]
+    fn failed_lazy_enable_is_restored_and_status_write_is_gated() {
+        let mut c = test_controller();
+        c.opcodes = Some(Opcodes::default());
+        c.host
+            .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        let host = c.host.clone();
+        assert!(c.swseq_send_command(&[JEDEC_WRSR, 0], &mut []).is_err());
+        assert!(!c.writes_enabled());
+        assert_eq!(host.writes().len(), 1);
+        drop(c);
+        assert_eq!(host.writes().len(), 2);
+        assert_eq!(host.writes()[1].2 & 1, 0);
+    }
+
+    #[test]
+    fn read_probe_and_hwseq_mutations_are_lazy() {
+        let mut c = test_controller();
+        c.host.enable_write8_readback();
+        c.host
+            .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        let host = c.host.clone();
+        let shared: &IchSpiController<FakeHost> = &c;
+        shared.hwseq_read(0, &mut [0; 1]).unwrap();
+        assert!(!c.probe_opcode(JEDEC_READ));
+        assert!(host.writes().is_empty());
+        c.hwseq_write(0, &[0]).unwrap();
+        c.hwseq_erase(0, 4096).unwrap();
+        assert_eq!(host.writes().len(), 1);
+        drop(c);
+        assert_eq!(host.writes().len(), 2);
+    }
+
+    #[test]
+    fn configuration_wait_polls_hardware_sequencer_without_status_writes() {
+        let c = test_controller();
+        c.spibar.set_hsfs_busy_reads(3);
+        c.wait_configuration_idle().unwrap();
+        assert!(c.spibar.writes().is_empty());
+    }
+
+    #[test]
+    fn full_journal_never_makes_untracked_changes() {
+        let mut c = test_controller();
+        let mmio = c.spibar.clone();
+        for i in 0..c.changes.len() {
+            c.change_register(0x200 + i * 4, false, 1, u32::MAX);
+        }
+        c.change_register(0x300, false, 1, u32::MAX);
+        assert_eq!(mmio.read32(0x300), 0);
+        drop(c);
+        for i in 0..12 {
+            assert_eq!(mmio.read32(0x200 + i * 4), 0);
+        }
+    }
+
+    #[test]
+    fn descriptor_densities_and_controller_limits() {
+        let mut c = test_controller();
+        c.desc_valid = true;
+        c.spibar.set32(0xb4, 0x20);
+        // 8 MiB component, ignoring the unused second density field.
+        c.spibar.set_descriptor(0xb4, 0x0ff0_a55a, 0, 0xf4);
+        assert_eq!(c.descriptor_flash_size().unwrap(), Some(8 << 20));
+        assert_eq!(c.spibar.read32(0xb4), 0x20);
+        // 8 + 16 MiB, even if descriptor regions leave a trailing gap.
+        c.spibar.set_descriptor(0xb4, 0x0ff0_a55a, 1 << 8, 0x54);
+        assert_eq!(c.descriptor_flash_size().unwrap(), Some(24 << 20));
+        c.spibar.set_descriptor(0xb4, 0x0ff0_a55a, 2 << 8, 0x54);
+        assert!(c.descriptor_flash_size().is_err());
+        c.spibar.set_descriptor(0xb4, 0x0ff0_a55a, 1 << 8, 0x84);
+        assert!(c.descriptor_flash_size().is_err());
+        c.spibar.set_descriptor(0xb4, 0, 0, 4);
+        assert!(c.descriptor_flash_size().is_err());
+        c.desc_valid = false;
+        assert!(c.descriptor_flash_size().is_err());
+        c.desc_valid = true;
+        c.spibar.set_descriptor(0xb4, 0x0ff0_a55a, 1 << 8, 0x77);
+        assert_eq!(c.descriptor_flash_size().unwrap(), Some(128 << 20));
+        c.hwseq.addr_mask = ICH9_FADDR_FLA;
+        assert!(c.descriptor_flash_size().is_err()); // 128 MiB > SPI limit
+
+        c.generation = IchChipset::BayTrail;
+        c.hwseq.addr_mask = ICH9_FADDR_FLA;
+        c.spibar
+            .set_descriptor(0xb0, 0x0ff0_a55a, 1 << 8, 4 | (5 << 3));
+        assert_eq!(c.descriptor_flash_size().unwrap(), Some(24 << 20));
+        c.spibar.set_descriptor(0xb0, 0x0ff0_a55a, 0, 6);
+        assert!(c.descriptor_flash_size().is_err());
+        c.generation = IchChipset::ApolloLake;
+        assert_eq!(c.descriptor_flash_size().unwrap(), None);
     }
 
     #[test]
@@ -2888,6 +4188,10 @@ mod tests {
     /// sequencer whose partitions report `low`/`high` BERASE encodings.
     fn ich9_controller(low: u16, high: u16, fpb: u32) -> IchSpiController<FakeHost> {
         let mut controller = test_controller();
+        controller.host.enable_write8_readback();
+        controller
+            .host
+            .set_config32(controller.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
         controller.generation = IchChipset::Ich9;
         controller.hwseq = HwseqData {
             addr_mask: ICH9_FADDR_FLA,
@@ -2908,24 +4212,569 @@ mod tests {
         use futures_lite::future::block_on;
         use rflasher_core::flash::FlashDevice;
 
-        let mut flash = HwseqFlash::with_size(Box::new(ich9_controller(3, 3, 0)), 1 << 20).unwrap();
+        let controller = ich9_controller(3, 3, 0);
+        controller.host.set_config32(
+            controller.config_bdf,
+            PCI_REG_BIOS_CNTL as u16,
+            u32::from(BIOS_CNTL_SMM_BWP),
+        );
+        let mut flash = HwseqFlash::with_size(Box::new(controller), 1 << 20).unwrap();
         assert_eq!(flash.erase_granularity(), 64 * 1024);
         assert_eq!(flash.erase_blocks()[0].total_size(), 1 << 20);
-        // BIOS writes are not enabled on the fake chipset.
-        assert_eq!(
-            block_on(flash.erase(0, 64 * 1024)),
-            Err(CoreError::WriteProtected)
-        );
+        // Writable SMM_BWP must not prevent the lazy enable.
+        block_on(flash.erase(0, 64 * 1024)).unwrap();
         assert_eq!(
             block_on(flash.read(1 << 20, &mut [0])),
             Err(CoreError::AddressOutOfBounds)
         );
     }
 
+    /// A PRx/FPRx value restricting `base..=limit`; its bits enable protection.
+    fn pr(base: u32, limit: u32, read: bool, write: bool) -> u32 {
+        (base >> 12)
+            | (limit >> 12) << 16
+            | u32::from(read) << PR_RP_OFF
+            | u32::from(write) << PR_WP_OFF
+    }
+
+    #[test]
+    fn access_checks_follow_each_restriction_and_its_polarity() {
+        let mut c = test_controller();
+        // Locked down, so no protected range is cleared before mutations.
+        c.locked = true;
+        let read = |c: &IchSpiController<FakeHost>, addr, len| {
+            Controller::check_access(c, FlashAccess::Read, addr, len)
+        };
+        let modify = |c: &IchSpiController<FakeHost>, addr, len| {
+            Controller::check_access(c, FlashAccess::Modify, addr, len)
+        };
+        // Protected range bits enable protection: read protection only
+        // blocks reads.
+        c.spibar
+            .set32(PCH100_REG_GPR0, pr(0x8000, 0x8fff, true, false));
+        assert_eq!(read(&c, 0x8fff, 1), Err(CoreError::RegionProtected));
+        assert_eq!(read(&c, 0x7000, 0x1000), Ok(()));
+        assert_eq!(modify(&c, 0x8000, 0x1000), Ok(()));
+        c.spibar
+            .set32(PCH100_REG_GPR0, pr(0x8000, 0x8fff, false, true));
+        assert_eq!(modify(&c, 0x7fff, 2), Err(CoreError::RegionProtected));
+        assert_eq!(read(&c, 0x8000, 0x1000), Ok(()));
+        // A range whose limit is below its base protects nothing.
+        c.spibar
+            .set32(PCH100_REG_GPR0, pr(0x9000, 0x8000, true, true));
+        assert_eq!(modify(&c, 0, 0x10000), Ok(()));
+
+        // Descriptor permission bits grant access: region 1 (0x1000) may be
+        // read but not written, region 2 (from 0x20000) written but not read.
+        // They apply unless the override strap is set (FDOPSS reads 0).
+        c.desc_valid = true;
+        c.spibar.set32(ICH9_REG_FREG0 + 4, 0x0001_0001);
+        c.spibar.set32(ICH9_REG_FREG0 + 8, 0x002f_0020);
+        let (wap, rap) = (0b101, 0b011);
+        c.spibar.set32(ICH9_REG_FRAP, wap << 8 | rap);
+        c.spibar.set32(ICH9_REG_HSFS, u32::from(HSFS_FDOPSS));
+        assert_eq!(modify(&c, 0x1000, 0x1000), Err(CoreError::RegionProtected));
+        assert_eq!(read(&c, 0x1000, 0x1000), Ok(()));
+        assert_eq!(read(&c, 0x20000, 1), Err(CoreError::RegionProtected));
+        assert_eq!(modify(&c, 0x20000, 0x1000), Ok(()));
+        assert_eq!(modify(&c, 0, 0x1000), Ok(()));
+        // Newer chipsets grant access through BIOS_BM_RAP/WAP instead.
+        c.generation = IchChipset::C740Emmitsburg;
+        c.spibar.set32(BIOS_BM_WAP, wap);
+        c.spibar.set32(BIOS_BM_RAP, rap);
+        c.spibar.set32(ICH9_REG_FRAP, 0xffff);
+        assert_eq!(modify(&c, 0x1000, 0x1000), Err(CoreError::RegionProtected));
+        assert_eq!(read(&c, 0x20000, 1), Err(CoreError::RegionProtected));
+        c.spibar.set32(ICH9_REG_HSFS, 0);
+        assert_eq!(modify(&c, 0x1000, 0x1000), Ok(()));
+        assert_eq!(read(&c, 0x20000, 1), Ok(()));
+
+        // Software sequencing cannot reach below BBAR.
+        c.bbar = 0x10000;
+        assert_eq!(read(&c, 0xffff, 1), Ok(())); // hardware sequencing
+        c.mode = SpiMode::SoftwareSequencing;
+        assert_eq!(read(&c, 0xffff, 1), Err(CoreError::RegionProtected));
+        assert_eq!(modify(&c, 0xf000, 0x1000), Err(CoreError::RegionProtected));
+        assert_eq!(modify(&c, 0x10000, 0x1000), Ok(()));
+
+        // ICH7 PBRs: 4 KiB pages, write protection only, never cleared.
+        let mut c = test_controller();
+        c.generation = IchChipset::Ich7;
+        c.spibar
+            .set32(ICH7_REG_PBR0 + 4, 0x21 | 0x22 << 12 | 1 << PR_WP_OFF);
+        assert_eq!(modify(&c, 0x20fff, 1), Ok(()));
+        assert_eq!(modify(&c, 0x22fff, 1), Err(CoreError::RegionProtected));
+        assert_eq!(read(&c, 0x21000, 0x2000), Ok(()));
+    }
+
+    #[test]
+    fn unlocked_ranges_are_cleared_at_the_first_mutation_and_restored() {
+        use FlashAccess::{Modify, Read};
+        let mut c = test_controller();
+        c.host.enable_write8_readback();
+        c.host
+            .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        let mmio = c.spibar.clone();
+        mmio.set_flash(vec![0xff; 1 << 20]);
+        mmio.set32(ICH9_REG_HSFS, u32::from(HSFS_FDV));
+        let unlocked = pr(0x10000, 0x10fff, false, true);
+        let locked = pr(0x20000, 0x20fff, false, true);
+        let read_protected = pr(0x30000, 0x30fff, true, false);
+        mmio.set32(PCH100_REG_FPR0, unlocked);
+        mmio.set32(PCH100_REG_FPR0 + 4, locked);
+        mmio.set32(PCH100_REG_FPR0 + 8, read_protected);
+        mmio.set32(PCH100_REG_DLOCK, DLOCK_PR0_LOCKDN << 1);
+        let check = |c: &IchSpiController<FakeHost>, access, addr| {
+            Controller::check_access(c, access, addr, 1)
+        };
+        let ranges = PCH100_REG_FPR0..PCH100_REG_FPR0 + 6 * 4;
+        c.wait_configuration_idle().unwrap();
+        c.init().unwrap();
+        // Opening, reading and probing leave the ranges alone...
+        c.hwseq_read(0, &mut [0; 4]).unwrap();
+        assert!(!c.probe_opcode(JEDEC_READ));
+        assert!(mmio.writes().iter().all(|w| !ranges.contains(&w.0)));
+        // ...but the checks know which ones the first mutation clears.
+        // Read protection applies until then: reads come first.
+        assert_eq!(check(&c, Modify, 0x10000), Ok(()));
+        assert_eq!(check(&c, Modify, 0x30000), Ok(()));
+        assert_eq!(check(&c, Read, 0x30000), Err(CoreError::RegionProtected));
+        assert_eq!(check(&c, Modify, 0x20000), Err(CoreError::RegionProtected));
+
+        c.hwseq_write(0x10000, &[0x5a]).unwrap();
+        assert_eq!(mmio.flash()[0x10000], 0x5a);
+        let cleared = |value| value & !(1 << PR_RP_OFF | 1 << PR_WP_OFF);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0), cleared(unlocked));
+        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 4), locked);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 8), cleared(read_protected));
+        assert_eq!(check(&c, Read, 0x30000), Ok(()));
+        assert_eq!(check(&c, Modify, 0x20000), Err(CoreError::RegionProtected));
+        drop(c);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0), unlocked);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 4), locked);
+        assert_eq!(mmio.read32(PCH100_REG_FPR0 + 8), read_protected);
+    }
+
+    /// A controller over all-zero flash, with BIOS writes enableable and
+    /// FPR0 and FPR1 write protected but clearable.
+    fn clearable_ranges_controller() -> (IchSpiController<FakeHost>, [u32; 2]) {
+        let mut c = test_controller();
+        c.host.enable_write8_readback();
+        c.host
+            .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        c.spibar.set_flash(vec![0; 1 << 20]);
+        let ranges = [
+            pr(0x10000, 0x10fff, true, true),
+            pr(0x20000, 0x20fff, false, true),
+        ];
+        c.spibar.set32(PCH100_REG_FPR0, ranges[0]);
+        c.spibar.set32(PCH100_REG_FPR0 + 4, ranges[1]);
+        (c, ranges)
+    }
+
+    /// `c` refused a write: the flash is unchanged, writes were never
+    /// enabled and both ranges are as they were.
+    fn assert_untouched(c: &IchSpiController<FakeHost>, ranges: [u32; 2]) {
+        assert!(c.spibar.flash().iter().all(|b| *b == 0));
+        assert!(c.host.writes().is_empty());
+        assert_eq!(c.spibar.read32(PCH100_REG_FPR0), ranges[0]);
+        assert_eq!(c.spibar.read32(PCH100_REG_FPR0 + 4), ranges[1]);
+        assert_eq!(c.change_count, 0);
+    }
+
+    #[test]
+    fn ranges_locked_after_open_refuse_the_mutation() {
+        let flockdn = (ICH9_REG_HSFS, u32::from(HSFS_FLOCKDN));
+        let pr1_lockdn = (PCH100_REG_DLOCK, DLOCK_PR0_LOCKDN << 1);
+        // Locked after the access checks assumed them cleared...
+        for (reg, lock) in [flockdn, pr1_lockdn] {
+            let (mut c, ranges) = clearable_ranges_controller();
+            let check = Controller::check_access(&c, FlashAccess::Modify, 0x20000, 1);
+            assert_eq!(check, Ok(()));
+            c.spibar.set32(reg, lock);
+            // ...even when this write does not overlap them.
+            assert!(matches!(
+                c.hwseq_write(0x30000, &[0x5a]),
+                Err(InternalError::AccessDenied { .. })
+            ));
+            assert_untouched(&c, ranges);
+        }
+
+        // Locked while clearing: FPR0 is cleared, then FPR1 is locked.
+        for (reg, lock) in [flockdn, pr1_lockdn] {
+            let (mut c, ranges) = clearable_ranges_controller();
+            c.spibar.on_write32(move |mmio, offset, _, value| {
+                if offset == PCH100_REG_FPR0 {
+                    mmio.set32(reg, mmio.read32(reg) | lock);
+                }
+                value
+            });
+            assert!(matches!(
+                c.hwseq_write(0x30000, &[0x5a]),
+                Err(InternalError::AccessDenied { .. })
+            ));
+            if reg == PCH100_REG_DLOCK {
+                assert_untouched(&c, ranges);
+                continue;
+            }
+            // Locked down, FPR0 cannot be restored: it stays journaled.
+            assert!(c.spibar.flash().iter().all(|b| *b == 0));
+            assert!(c.host.writes().is_empty());
+            assert_eq!(c.spibar.read32(PCH100_REG_FPR0 + 4), ranges[1]);
+            assert_eq!(c.change_count, 1);
+        }
+    }
+
+    #[test]
+    fn partially_taken_clears_are_undone_bit_by_bit() {
+        let rp = 1 << PR_RP_OFF;
+        let wp = 1 << PR_WP_OFF;
+        // FPR0 keeps its read protection; clearing its write protection is
+        // undone.
+        let (mut c, ranges) = clearable_ranges_controller();
+        c.spibar.on_write32(move |_, offset, old, value| {
+            if offset == PCH100_REG_FPR0 {
+                old & rp | value & !rp
+            } else {
+                value
+            }
+        });
+        assert!(c.hwseq_write(0x30000, &[0x5a]).is_err());
+        assert_untouched(&c, ranges);
+
+        // FPR1 cannot be cleared and FPR0's write protection cannot be set
+        // again: that restore is reported and stays journaled.
+        let (mut c, ranges) = clearable_ranges_controller();
+        c.spibar
+            .on_write32(move |_, offset, old, value| match offset {
+                PCH100_REG_FPR0 => value & (old | !wp),
+                o if o == PCH100_REG_FPR0 + 4 => old,
+                _ => value,
+            });
+        assert!(c.hwseq_write(0x30000, &[0x5a]).is_err());
+        assert!(c.spibar.flash().iter().all(|b| *b == 0));
+        assert!(c.host.writes().is_empty());
+        assert_eq!(c.spibar.read32(PCH100_REG_FPR0), ranges[0] & !wp);
+        assert_eq!(c.change_count, 1);
+    }
+
+    #[test]
+    fn failed_write_enable_restores_cleared_ranges_at_once() {
+        let bwe = u32::from(BIOS_CNTL_BWE);
+        for (silvermont, protected) in [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let (mut c, ranges) = clearable_ranges_controller();
+            c.silvermont_bcr = silvermont;
+            let initial = if protected {
+                u32::from(BIOS_CNTL_SMM_BWP)
+            } else {
+                0
+            };
+            // Neither BIOS_CNTL.BWE nor BCR.WPD takes, with or without SMM_BWP.
+            c.host = FakeHost::default();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, initial);
+            c.spibar.set32(SILVERMONT_REG_BCR, initial);
+            c.spibar.block_write32(SILVERMONT_REG_BCR);
+            assert!(c.hwseq_write(0x30000, &[0x5a]).is_err());
+            // The controller is still open, and nothing is left changed.
+            assert!(c.spibar.flash().iter().all(|b| *b == 0));
+            assert_eq!(c.spibar.read32(PCH100_REG_FPR0), ranges[0]);
+            assert_eq!(c.spibar.read32(PCH100_REG_FPR0 + 4), ranges[1]);
+            assert_eq!(c.change_count, 0);
+            assert!(!c.writes_enabled());
+            let bios_cntl = c.host.read8(c.config_bdf, PCI_REG_BIOS_CNTL as u16);
+            assert_eq!(u32::from(bios_cntl.unwrap()) & bwe, 0);
+            assert_eq!(c.spibar.read32(SILVERMONT_REG_BCR) & bwe, 0);
+        }
+    }
+
+    #[test]
+    fn a_failed_clear_refuses_the_mutation_and_undoes_the_others() {
+        for silvermont in [false, true] {
+            let mut c = test_controller();
+            c.silvermont_bcr = silvermont;
+            c.host.enable_write8_readback();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            let (mmio, host) = (c.spibar.clone(), c.host.clone());
+            mmio.set_flash(vec![0; 1 << 20]);
+            let first = pr(0x10000, 0x10fff, false, true);
+            mmio.set32(PCH100_REG_FPR0, first);
+            mmio.set32(PCH100_REG_FPR0 + 4, pr(0x20000, 0x20fff, false, true));
+            c.spibar.block_write32(PCH100_REG_FPR0 + 4);
+            assert_eq!(
+                Controller::check_access(&c, FlashAccess::Modify, 0x20000, 1),
+                Ok(())
+            );
+            assert!(matches!(
+                c.hwseq_write(0x30000, &[0x5a]),
+                Err(InternalError::AccessDenied { .. })
+            ));
+            // Nothing is left changed: not the flash, not the range cleared
+            // first, and writes were never enabled.
+            assert!(mmio.flash().iter().all(|b| *b == 0));
+            assert_eq!(mmio.read32(PCH100_REG_FPR0), first);
+            assert!(host.writes().is_empty());
+            assert!(mmio.writes().iter().all(|w| w.0 != SILVERMONT_REG_BCR));
+            assert_eq!(c.change_count, 0);
+        }
+    }
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    fn layout(regions: &[(u32, u32)]) -> rflasher_core::layout::Layout {
+        use rflasher_core::layout::{Layout, Region};
+        let mut layout = Layout::new();
+        for (i, &(start, end)) in regions.iter().enumerate() {
+            let mut region = Region::new(format!("r{i}"), start, end);
+            region.included = true;
+            layout.add_region(region);
+        }
+        layout
+    }
+
+    /// Erase `regions` of `flash`, or smart write them from `image`.
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    fn mutate<D: rflasher_core::flash::FlashDevice>(
+        flash: &mut D,
+        regions: &[(u32, u32)],
+        image: Option<&[u8]>,
+    ) -> CoreResult<()> {
+        use futures_lite::future::block_on;
+        use rflasher_core::flash::{MutationPolicy, unified};
+        let mut policy = MutationPolicy::default();
+        match image {
+            None => block_on(unified::erase_by_layout_with_policy(
+                flash,
+                &layout(regions),
+                &mut policy,
+            )),
+            Some(image) => block_on(unified::smart_write_by_layout_with_policy(
+                flash,
+                &layout(regions),
+                image,
+                &mut unified::NoProgress,
+                &mut policy,
+            ))
+            .map(|_| ()),
+        }
+    }
+
+    /// Erase or smart write `regions` of all-zero flash (changing `changed`
+    /// to 0x5a) and check the result: refused before anything changed, or
+    /// done with every neighbor restored.
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    fn check_mutation<D: rflasher_core::flash::FlashDevice>(
+        flash: &mut D,
+        (mmio, host): (&FakeMmio, &FakeHost),
+        regions: &[(u32, u32)],
+        changed: &[(u32, u32)],
+        erase: bool,
+        refused: bool,
+    ) {
+        let mut image = vec![0; flash.size() as usize];
+        for &(start, end) in changed {
+            image[start as usize..=end as usize].fill(0x5a);
+        }
+        let result = mutate(flash, regions, (!erase).then_some(&image[..]));
+        let contents = mmio.flash();
+        if refused {
+            assert_eq!(result, Err(CoreError::RegionProtected), "{regions:x?}");
+            assert!(contents.iter().all(|b| *b == 0));
+            // BIOS writes were never even enabled.
+            assert!(host.writes().is_empty());
+            return;
+        }
+        result.unwrap();
+        if erase {
+            image.fill(0);
+            for &(start, end) in regions {
+                image[start as usize..=end as usize].fill(0xff);
+            }
+        }
+        assert!(contents == image, "{regions:x?}");
+    }
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
+    fn hwseq_mutations_check_planned_footprints_before_the_first_change() {
+        use crate::programmer::HwseqFlash;
+
+        // 64 KiB hardware erase blocks; 0x2f000-0x2ffff is protected.
+        let write_protected = pr(0x2f000, 0x2ffff, false, true);
+        let read_protected = pr(0x2f000, 0x2ffff, true, false);
+        let spill = &[(0, 0xffff), (0x21000, 0x21fff)][..];
+        let unprotected_spill = &[(0, 0xffff), (0x31000, 0x31fff)][..];
+        // (regions, changed by the write, protection, erase/write refused)
+        for (regions, changed, protection, refused) in [
+            // A later region's block reaches the protected range.
+            (spill, spill, write_protected, [true, true]),
+            // Its neighbors are read to save and verify them.
+            (spill, spill, read_protected, [true, true]),
+            (
+                unprotected_spill,
+                unprotected_spill,
+                write_protected,
+                [false, false],
+            ),
+            // Unchanged protected data in a region is only erased by an erase.
+            (
+                &[(0x20000, 0x3ffff)][..],
+                &[(0x30000, 0x3ffff)][..],
+                write_protected,
+                [true, false],
+            ),
+        ] {
+            for (erase, refused) in [true, false].into_iter().zip(refused) {
+                // Unless locked down, write protection is cleared first.
+                for locked in [true, false] {
+                    let mut controller = ich9_controller(3, 3, 0);
+                    controller.locked = locked;
+                    let fake = (controller.spibar.clone(), controller.host.clone());
+                    fake.0.set_flash(vec![0; 1 << 20]);
+                    fake.0.set32(ICH9_REG_PR0, protection);
+                    let mut flash = HwseqFlash::with_size(Box::new(controller), 1 << 20).unwrap();
+                    check_mutation(
+                        &mut flash,
+                        (&fake.0, &fake.1),
+                        regions,
+                        changed,
+                        erase,
+                        refused && (locked || protection == read_protected),
+                    );
+                    drop(flash);
+                    assert_eq!(fake.0.read32(ICH9_REG_PR0), protection);
+                }
+            }
+        }
+    }
+
+    /// Opcode menu of the software-sequencing tests: the defaults, with a
+    /// 64 KiB block erase.
+    fn swseq_menu() -> Opcodes {
+        let mut opcodes = Opcodes::default();
+        opcodes.opcode[2].opcode = JEDEC_BE_D8;
+        opcodes
+    }
+
+    /// A PCH100 controller in software sequencing over `flash`, with BIOS
+    /// writes enableable.
+    fn swseq_controller(flash: Vec<u8>) -> IchSpiController<FakeHost> {
+        let mut c = test_controller();
+        c.mode = SpiMode::SoftwareSequencing;
+        c.host.enable_write8_readback();
+        c.host
+            .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+        let opcodes = swseq_menu();
+        c.spibar.set_flash(flash);
+        c.spibar.set_swseq_menu(
+            PCH100_REG_SSFSC,
+            core::array::from_fn(|i| opcodes.opcode[i].opcode),
+        );
+        c.opcodes = Some(opcodes);
+        c
+    }
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
+    fn swseq_mutations_check_planned_footprints_before_the_first_change() {
+        use crate::programmer::InternalSpi;
+        use rflasher_core::flash::{FlashContext, SpiFlashDevice};
+
+        let db = rflasher_chips::ChipDatabase::new();
+        let mut chip = db.find_by_name("W25Q128.V")[0].clone();
+        // 64 KiB blocks only, the erase in the menu.
+        chip.erase_blocks.retain(|b| b.opcode == JEDEC_BE_D8);
+        // Its status unlock needs RDSR2 (0x35), which swseq refuses.
+        chip.unlock = rflasher_core::chip::Unlock::None;
+        let size = chip.total_size as usize;
+        // The end of the 64 KiB block at 0x40000 is protected: the hardware
+        // would allow erasing it, since it only checks the erase address.
+        let spill = &[(0x10000, 0x1ffff), (0x41000, 0x41fff)][..];
+        let unprotected_spill = &[(0x10000, 0x1ffff), (0x51000, 0x51fff)][..];
+        // Only a range locked in DLOCK is not cleared first.
+        for (regions, refused) in [(spill, true), (unprotected_spill, false)] {
+            for (erase, dlock) in [true, false].into_iter().zip([0, DLOCK_PR0_LOCKDN]) {
+                let refused = refused && dlock != 0;
+                let mut c = swseq_controller(vec![0; size]);
+                c.spibar
+                    .set32(PCH100_REG_FPR0, pr(0x4f000, 0x4ffff, false, true));
+                c.spibar.set32(PCH100_REG_DLOCK, dlock);
+                c.dlock = dlock;
+                let fake = (c.spibar.clone(), c.host.clone());
+                let mut flash = SpiFlashDevice::new(
+                    InternalSpi {
+                        controller: Box::new(c),
+                    },
+                    FlashContext::new(chip.clone()),
+                );
+                check_mutation(
+                    &mut flash,
+                    (&fake.0, &fake.1),
+                    regions,
+                    regions,
+                    erase,
+                    refused,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn raw_swseq_commands_are_checked_like_the_hardware_checks_cycles() {
+        for ich7 in [false, true] {
+            let mut c = swseq_controller(vec![0; 1 << 20]);
+            // Locked down, so the protected range stays.
+            c.locked = true;
+            if ich7 {
+                c.generation = IchChipset::Ich7;
+                c.spibar
+                    .set32(ICH7_REG_PBR0, 0x20 | 0x20 << 12 | 1 << PR_WP_OFF);
+            } else {
+                c.spibar
+                    .set32(PCH100_REG_FPR0, pr(0x20000, 0x20fff, false, true));
+            }
+            c.opcodes.as_mut().unwrap().opcode[4] = Opcode {
+                opcode: 0xaa,
+                spi_type: SPI_OPCODE_TYPE_READ_NO_ADDRESS,
+                atomic: 0,
+            };
+            let host = c.host.clone();
+            for mut cmd in [
+                SpiCommand::write_3b(JEDEC_BYTE_PROGRAM, 0x1fff0, &[0; 0x20]),
+                SpiCommand::erase_3b(JEDEC_BE_D8, 0x20000),
+                // Could erase anything; the chip size is unknown here.
+                SpiCommand::simple(JEDEC_CE_C7),
+            ] {
+                assert_eq!(c.execute(&mut cmd), Err(CoreError::RegionProtected));
+            }
+            // SAFETY: the fake controller has no physical flash.
+            let unknown = unsafe {
+                if ich7 {
+                    c.ich7_swseq_send_command_unchecked(&[0xaa], &mut [0])
+                } else {
+                    c.swseq_send_command_unchecked(&[0xaa], &mut [0])
+                }
+            };
+            assert!(matches!(unknown, Err(InternalError::AccessDenied { .. })));
+            assert!(host.writes().is_empty());
+            // Status register writes do not touch the array, and an erase is
+            // judged by its address, as by the hardware. The chip geometry
+            // is checked before planned erases instead.
+            for mut cmd in [
+                SpiCommand::write_reg(JEDEC_WRSR, &[0]),
+                SpiCommand::erase_3b(JEDEC_BE_D8, 0x10000),
+            ] {
+                assert_ne!(c.execute(&mut cmd), Err(CoreError::RegionProtected));
+            }
+            assert_eq!(host.writes().len(), 1);
+        }
+    }
+
     #[test]
     fn ich9_erase_follows_berase_instead_of_assuming_4k() {
         // BERASE = 3: every cycle erases 64 KiB.
-        let controller = ich9_controller(3, 3, 0);
+        let mut controller = ich9_controller(3, 3, 0);
         assert_eq!(
             controller.hwseq_erase_geometry(16 << 20).unwrap(),
             64 * 1024
@@ -2953,7 +4802,7 @@ mod tests {
 
     #[test]
     fn ich9_4k_erase_walks_every_block() {
-        let controller = ich9_controller(1, 1, 0);
+        let mut controller = ich9_controller(1, 1, 0);
         assert_eq!(controller.hwseq_erase_geometry(8 << 20).unwrap(), 4096);
         controller.hwseq_erase(0x2000, 0x3000).unwrap();
         assert_eq!(
@@ -2965,7 +4814,7 @@ mod tests {
     #[test]
     fn ich9_partitions_with_different_erase_sizes() {
         // FPB = 0x100 puts the boundary at 1 MiB: 4 KiB blocks below, 64 KiB above.
-        let controller = ich9_controller(1, 3, 0x100);
+        let mut controller = ich9_controller(1, 3, 0x100);
         assert_eq!(controller.hwseq_erase_geometry(8 << 20).unwrap(), 64 * 1024);
 
         // Each partition erases in its own block size ...
@@ -2989,7 +4838,7 @@ mod tests {
 
     #[test]
     fn hwseq_erase_rejects_partial_blocks_before_any_cycle() {
-        let controller = test_controller();
+        let mut controller = test_controller();
         // PCH100+: 4 KiB blocks. None of these is a sequence of whole blocks.
         for (addr, len) in [(1, 4096), (0, 4095), (4096, 100), (2048, 4096)] {
             assert!(
@@ -3033,7 +4882,7 @@ mod tests {
         assert!(!controller.writes_enabled());
         let wanted = (BIOS_CNTL_BLE | BIOS_CNTL_BWE) as u32;
         assert_eq!(
-            controller.host.config_writes().last(),
+            controller.host.writes().last(),
             Some(&(bdf, PCI_REG_BIOS_CNTL as u16, wanted, 1))
         );
 
@@ -3044,7 +4893,7 @@ mod tests {
         );
         controller.enable_bios_write().unwrap();
         assert!(controller.writes_enabled());
-        let writes = controller.host.config_writes();
+        let writes = controller.host.writes();
         assert_eq!(writes.len(), 3);
         assert_eq!(writes[2], (bdf, PCI_REG_BIOS_CNTL as u16, wanted, 1));
     }
@@ -3053,7 +4902,7 @@ mod tests {
     fn detected_with_generation(generation: IchChipset) -> DetectedChipset {
         let enable = INTEL_CHIPSETS
             .iter()
-            .find(|chipset| chipset.chipset == generation)
+            .find(|chipset| chipset.chipset == generation && !is_visible_spi_id(chipset.device_id))
             .expect("Intel chipset table entry for generation");
 
         DetectedChipset {
@@ -3064,6 +4913,117 @@ mod tests {
             function: 0,
             revision_id: 0,
         }
+    }
+
+    fn detected_id(id: u16) -> DetectedChipset {
+        let enable = INTEL_CHIPSETS.iter().find(|e| e.device_id == id).unwrap();
+        DetectedChipset {
+            enable,
+            domain: 3,
+            bus: 7,
+            device: 0x1f,
+            function: 0,
+            revision_id: 0,
+        }
+    }
+
+    #[test]
+    fn pch_spi_mapping_and_identity() {
+        for (id, target, spi_id) in [
+            (0x9d48, (0x1f, 5), 0x9d24),
+            (0xa1c0, (0x1f, 5), 0xa1a4),
+            (0xa3c8, (0x1f, 5), 0xa3a4),
+            (0x5ae8, (0x0d, 2), 0x5a96),
+            (0x31e8, (0x0d, 2), 0x3196),
+        ] {
+            let chipset = detected_id(id);
+            let bdf = PciAddress::new(3, 7, target.0, target.1);
+            let host = FakeHost::default();
+            host.set_config32(bdf, 0, (spi_id << 16) | 0x8086);
+            host.set_config32(bdf, 0x10, 0xfed1_c000);
+            assert_eq!(intel_config_bdf(&chipset).unwrap(), bdf);
+            assert_eq!(
+                get_spibar_address_with_host(&host, &chipset).unwrap(),
+                0xfed1_c000
+            );
+            host.set_config32(bdf, 0, 0x4b23_8086);
+            assert!(get_spibar_address_with_host(&host, &chipset).is_err());
+            assert!(host.writes().is_empty());
+        }
+        for id in [
+            0xa1a4, 0xa324, 0x43a4, 0x4b24, 0x5a96, 0x3196, 0x7e23, 0xa823, 0xae23,
+        ] {
+            let mut chipset = detected_id(id);
+            chipset.device = 12;
+            chipset.function = 3;
+            let bdf = PciAddress::new(3, 7, 12, 3);
+            let host = FakeHost::default();
+            host.set_config32(bdf, 0, (u32::from(id) << 16) | 0x8086);
+            host.set_config32(bdf, 0x10, 0xfed1_c000);
+            assert_eq!(intel_config_bdf(&chipset).unwrap(), bdf);
+            assert_eq!(
+                get_spibar_address_with_host(&host, &chipset).unwrap(),
+                0xfed1_c000
+            );
+        }
+        assert!(crate::intel_pci::find_chipset(0x8086, 0x4b23, None).is_none());
+        for id in [0xa303, 0x4380] {
+            assert!(intel_config_bdf(&detected_id(id)).is_err());
+        }
+    }
+
+    #[test]
+    fn missing_spi_refuses_before_writes() {
+        let host = FakeHost::default();
+        let chipset = detected_id(0x5ae8);
+        assert!(matches!(
+            get_spibar_address_with_host(&host, &chipset),
+            Err(InternalError::ChipsetEnable(_))
+        ));
+        assert!(host.writes().is_empty());
+        let mut denied = host.clone();
+        denied.deny_reads();
+        assert!(matches!(
+            get_spibar_address_with_host(&denied, &chipset),
+            Err(InternalError::ChipsetEnable(_))
+        ));
+        assert!(denied.writes().is_empty());
+    }
+
+    #[test]
+    fn pch_bios_control_uses_and_restores_spi_bdf() {
+        let mut host = FakeHost::default();
+        host.enable_write8_readback();
+        let chipset = detected_id(0x5ae8);
+        let spi = PciAddress::new(3, 7, 0x0d, 2);
+        host.set_config32(spi, 0, 0x5a96_8086);
+        host.set_config32(spi, 0x10, 0xfed1_c000);
+        host.set_config32(spi, 0xdc, 0);
+        assert_eq!(
+            get_spibar_address_with_host(&host, &chipset).unwrap(),
+            0xfed1_c000
+        );
+        let mut controller = test_controller();
+        controller.host = host.clone();
+        controller.config_bdf = intel_config_bdf(&chipset).unwrap();
+        controller.enable_bios_write().unwrap();
+        drop(controller);
+        let writes = host.writes();
+        assert_eq!(writes.len(), 2);
+        assert!(writes.iter().all(|w| w.0 == spi && w.1 == 0xdc));
+        assert_eq!(writes[0].2 & 1, 1);
+        assert_eq!(writes[1].2 & 1, 0);
+
+        host.set_config32(spi, 0xdc, 0);
+        let mut denied = host.clone();
+        denied.deny_writes();
+        let mut controller = test_controller();
+        controller.host = denied;
+        controller.config_bdf = spi;
+        assert!(controller.enable_bios_write().is_err());
+        assert!(!controller.writes_enabled());
+        drop(controller);
+        assert_eq!(host.writes().len(), 2);
     }
 
     #[test]
@@ -3082,7 +5042,8 @@ mod tests {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Series100SunrisePoint);
         let spi_bdf = PciAddress::new(chipset.domain, chipset.bus, chipset.device, 5);
-        host.set_config32(spi_bdf, PCI_REG_SPIBAR as u16, 0xfed1_c001);
+        host.set_config32(spi_bdf, 0, 0x9d24_8086);
+        host.set_config32(spi_bdf, PCI_REG_SPIBAR as u16, 0xfed1_c000);
 
         let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
 
@@ -3094,11 +5055,163 @@ mod tests {
         let host = FakeHost::default();
         let chipset = detected_with_generation(IchChipset::Series100SunrisePoint);
         let spi_bdf = PciAddress::new(chipset.domain, chipset.bus, chipset.device, 5);
+        host.set_config32(spi_bdf, 0, 0x9d24_8086);
         host.set_config32(spi_bdf, PCI_REG_SPIBAR as u16, u32::MAX);
 
         let err = get_spibar_address_with_host(&host, &chipset).unwrap_err();
 
         assert!(matches!(err, InternalError::ChipsetEnable(_)));
+    }
+
+    #[test]
+    fn pch_spi_bar_rejects_io_reserved_and_unassigned() {
+        let host = FakeHost::default();
+        let chipset = detected_id(0xa324);
+        let bdf = PciAddress::new(3, 7, 0x1f, 0);
+        host.set_config32(bdf, 0, 0xa324_8086);
+        for bar in [
+            0xfed1_c001,
+            0xfed1_c002,
+            0xfed1_c004,
+            0,
+            0xffff_f000,
+            u32::MAX,
+        ] {
+            host.set_config32(bdf, 0x10, bar);
+            assert!(
+                get_spibar_address_with_host(&host, &chipset).is_err(),
+                "BAR {bar:#x}"
+            );
+        }
+        assert!(host.writes().is_empty());
+        assert!(crate::intel_pci::find_chipset(0x8086, 0xa124, None).is_none());
+    }
+
+    #[test]
+    fn silvermont_sbase_discovery_and_errors() {
+        let host = FakeHost::default();
+        let chipset = detected_with_generation(IchChipset::BayTrail);
+        let bdf = PciAddress::new(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        );
+        assert!(matches!(
+            get_spibar_address_with_host(&host, &chipset),
+            Err(InternalError::PciAccess(_))
+        ));
+        for value in [0, u32::MAX] {
+            host.set_config32(bdf, 0x54, value);
+            assert!(matches!(
+                get_spibar_address_with_host(&host, &chipset),
+                Err(InternalError::ChipsetEnable(_))
+            ));
+        }
+        host.set_config32(bdf, 0x54, 0xfed0_13ff);
+        assert_eq!(
+            get_spibar_address_with_host(&host, &chipset).unwrap(),
+            0xfed0_1200
+        );
+    }
+
+    #[test]
+    fn silvermont_device_scope_includes_braswell() {
+        for id in [0x0f1c, 0x1f38, 0x229c] {
+            let enable = INTEL_CHIPSETS
+                .iter()
+                .find(|entry| entry.device_id == id)
+                .unwrap();
+            let chipset = DetectedChipset {
+                enable,
+                ..detected_with_generation(IchChipset::BayTrail)
+            };
+            assert!(uses_silvermont_sbase(&chipset));
+            let host = FakeHost::default();
+            let bdf = PciAddress::new(
+                chipset.domain,
+                chipset.bus,
+                chipset.device,
+                chipset.function,
+            );
+            host.set_config32(bdf, 0x54, 0xfed0_1002);
+            assert_eq!(
+                get_spibar_address_with_host(&host, &chipset).unwrap(),
+                0xfed0_1000
+            );
+        }
+    }
+
+    #[test]
+    fn silvermont_bcr_enable_and_restore() {
+        let mut controller = test_controller();
+        controller.silvermont_bcr = true;
+        let mmio = controller.spibar.clone();
+        mmio.set32(0xfc, 0x1234_5604);
+        controller.enable_bios_write().unwrap();
+        controller.enable_bios_write().unwrap();
+        assert_eq!(mmio.read32(0xfc), 0x1234_5605);
+        // Other bits can change during the controller lifetime.
+        mmio.set32(0xfc, 0x1234_5645);
+        drop(controller);
+        assert_eq!(mmio.read32(0xfc), 0x1234_5644);
+        assert_eq!(
+            mmio.writes(),
+            vec![(0xfc, 0x1234_5605, 4), (0xfc, 0x1234_5644, 4)]
+        );
+    }
+
+    #[test]
+    fn silvermont_bcr_existing_enable_and_access_failures() {
+        let mut controller = test_controller();
+        controller.silvermont_bcr = true;
+        let mmio = controller.spibar.clone();
+        mmio.set32(0xfc, 1);
+        controller.enable_bios_write().unwrap();
+        drop(controller);
+        assert!(mmio.writes().is_empty());
+
+        for sticky in [false, true] {
+            for already_enabled in [false, true] {
+                let mut controller = test_controller();
+                controller.silvermont_bcr = true;
+                let mmio = controller.spibar.clone();
+                let smm_bwp = u32::from(BIOS_CNTL_SMM_BWP);
+                let bwe = u32::from(BIOS_CNTL_BWE);
+                let unrelated = 0x1234_5602;
+                mmio.set32(0xfc, unrelated | smm_bwp | u32::from(already_enabled));
+                if sticky {
+                    controller.spibar.on_write32(move |_, offset, _, value| {
+                        if offset == 0xfc {
+                            value | smm_bwp
+                        } else {
+                            value
+                        }
+                    });
+                }
+                controller.enable_bios_write().unwrap();
+                assert!(controller.writes_enabled());
+                let protection = if sticky { smm_bwp } else { 0 };
+                assert_eq!(mmio.read32(0xfc), unrelated | protection | bwe);
+                assert_eq!(mmio.writes(), vec![(0xfc, unrelated | bwe, 4)]);
+                drop(controller);
+                assert_eq!(
+                    mmio.read32(0xfc),
+                    unrelated | protection | u32::from(already_enabled)
+                );
+            }
+        }
+
+        let mut controller = test_controller();
+        controller.silvermont_bcr = true;
+        controller.spibar.block_write32(0xfc);
+        let mmio = controller.spibar.clone();
+        assert!(matches!(
+            controller.enable_bios_write(),
+            Err(InternalError::ChipsetEnable(_))
+        ));
+        drop(controller);
+        assert_eq!(mmio.writes(), vec![(0xfc, 1, 4), (0xfc, 0, 4)]);
     }
 
     #[test]

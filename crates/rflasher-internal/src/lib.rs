@@ -41,6 +41,8 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
+#[cfg(all(test, not(feature = "std")))]
+extern crate std;
 
 pub mod amd_enable;
 pub mod amd_pci;

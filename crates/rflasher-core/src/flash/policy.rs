@@ -1,7 +1,11 @@
 //! Shared preflight for CLI, web and library mutations.
 
-use super::{FlashDevice, operations::plan_optimal_erase_region};
+use super::{
+    FlashDevice,
+    operations::{OptimalEraseOp, plan_optimal_erase_region},
+};
 use crate::layout::{Layout, Region};
+use crate::programmer::FlashAccess;
 use crate::{Error, Refusal, Result};
 use alloc::vec;
 
@@ -103,6 +107,7 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         )?;
         for op in plan {
             device.validate_erase_operation(&op)?;
+            validate_neighbors(device, &op, region.start, region.end + 1)?;
             if op.start < region.start || op.start as u64 + op.size as u64 > region.end as u64 + 1 {
                 // An erase/restore still temporarily destroys neighboring
                 // protected data. Its footprint needs the same authorization.
@@ -145,6 +150,50 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         let mut image = vec![0; device.size() as usize];
         device.read(0, &mut image).await?;
         sink.persist(&image)?;
+    }
+    Ok(())
+}
+
+/// Refuse an erase whose block the device restricts. The whole block is
+/// read (neighbors are saved before the erase, which is verified after it),
+/// erased, and partly reprogrammed (the restored neighbors).
+pub(super) fn check_erase_access<D: FlashDevice + ?Sized>(
+    device: &D,
+    op: &OptimalEraseOp,
+) -> Result<()> {
+    device.check_access(FlashAccess::Read, op.start, op.size)?;
+    device.check_access(FlashAccess::Modify, op.start, op.size)
+}
+
+/// Check the erase plan of every included region before the first erase.
+pub(super) fn check_erase_plan_access<D: FlashDevice + ?Sized>(
+    device: &D,
+    layout: &Layout,
+) -> Result<()> {
+    layout.included_regions().try_for_each(|region| {
+        plan_optimal_erase_region(
+            device.erase_blocks(),
+            device.size(),
+            region.start,
+            region.end,
+        )?
+        .iter()
+        .try_for_each(|op| check_erase_access(device, op))
+    })
+}
+
+pub(super) fn validate_neighbors<D: FlashDevice + ?Sized>(
+    device: &D,
+    op: &OptimalEraseOp,
+    start: u32,
+    end: u32,
+) -> Result<()> {
+    if op.start < start {
+        device.validate_write(op.start, (start - op.start) as usize)?;
+    }
+    let op_end = op.start + op.size;
+    if op_end > end {
+        device.validate_write(end, (op_end - end) as usize)?;
     }
     Ok(())
 }

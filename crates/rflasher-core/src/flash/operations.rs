@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use crate::chip::ChipProvider;
 use crate::chip::{EraseBlock, Features, WriteGranularity};
 use crate::error::{EraseFailure, Error, Result};
-use crate::programmer::{SpiFeatures, SpiMaster};
+use crate::programmer::{FlashAccess, SpiFeatures, SpiMaster};
 use crate::protocol::{self, CommandAddressing};
 
 use super::context::{AddressMode, FlashContext};
@@ -804,7 +804,9 @@ fn select_candidates(
             .iter()
             .copied()
             .filter(|c| {
-                c.name().eq_ignore_ascii_case(wanted) || crate::chip::name_matches(c.name(), wanted)
+                c.name().eq_ignore_ascii_case(wanted)
+                    || (!c.features.contains(Features::EXPLICIT_PROFILE)
+                        && crate::chip::name_matches(c.name(), wanted))
             })
             .collect();
         if matching.is_empty() {
@@ -838,6 +840,7 @@ fn select_candidates(
             .ok_or(Error::ChipAmbiguous);
     }
 
+    candidates.retain(|c| !c.features.contains(Features::EXPLICIT_PROFILE));
     let Some(&first) = candidates.first() else {
         return Ok(None);
     };
@@ -1338,19 +1341,93 @@ pub async fn spi_read<M: SpiMaster + ?Sized>(
 ///
 /// Validates that the generic SPI protocol could program the range, then
 /// temporarily lifts chip protection around [`SpiMaster::program_flash`].
-/// The target region must be erased first.
+/// The target region must be erased first. On the generic W25Q128.V profile,
+/// whose possible WPS individual locks ignore programs without an error, the
+/// range is read back and a mismatch is reported as [`Error::VerifyError`].
 pub async fn write<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
     addr: u32,
     data: &[u8],
 ) -> Result<()> {
-    if !ctx.is_valid_range(addr, data.len()) {
-        return Err(Error::AddressOutOfBounds);
-    }
+    validate_spi_program(master, ctx, addr, data.len())?;
     if data.is_empty() {
         return Ok(());
     }
+    // In range, so the length fits. Refuse before the first page, not after.
+    master.check_access(FlashAccess::Modify, addr, data.len() as u32)?;
+    let read_back = super::protection::wps_unknown(ctx);
+    if read_back {
+        master.check_access(FlashAccess::Read, addr, data.len() as u32)?;
+    }
+    let saved = super::protection::prepare(master, ctx).await?;
+    let result = match master.program_flash(ctx, addr, data).await {
+        Ok(()) => super::protection::check_result(master, ctx, addr, false).await,
+        Err(error) => Err(error),
+    };
+    super::protection::finish(
+        master,
+        ctx,
+        saved,
+        result,
+        (protocol::WRSR_POLL_US, protocol::WRSR_TIMEOUT_US),
+    )
+    .await?;
+    if read_back {
+        check_programmed_range(master, ctx, addr, data).await?;
+    }
+    Ok(())
+}
+
+/// Read `data`'s range back and report the first byte that differs.
+async fn check_programmed_range<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    ctx: &FlashContext,
+    addr: u32,
+    data: &[u8],
+) -> Result<()> {
+    const CHUNK_SIZE: usize = 4096;
+    let mut buf = [0u8; CHUNK_SIZE];
+    for (i, expected) in data.chunks(CHUNK_SIZE).enumerate() {
+        let chunk_addr = addr + (i * CHUNK_SIZE) as u32;
+        let actual = &mut buf[..expected.len()];
+        read(master, ctx, chunk_addr, actual).await?;
+        if let Some(pos) = actual.iter().zip(expected).position(|(a, b)| a != b) {
+            let addr = chunk_addr + pos as u32;
+            log::error!(
+                "Program at 0x{addr:08X} was ignored or incomplete; WPS individual \
+                 locks may protect it. Select W25Q128BV-WP or W25Q128FVJV-WP if the marking is known"
+            );
+            return Err(Error::VerifyError { addr });
+        }
+    }
+    Ok(())
+}
+
+fn check_mutation_opcodes<M: SpiMaster + ?Sized>(master: &M) -> Result<()> {
+    if [crate::spi::opcodes::WREN, crate::spi::opcodes::RDSR]
+        .into_iter()
+        .all(|opcode| master.probe_opcode(opcode))
+    {
+        Ok(())
+    } else {
+        Err(Error::OpcodeNotSupported)
+    }
+}
+
+pub(crate) fn validate_spi_program<M: SpiMaster + ?Sized>(
+    master: &M,
+    ctx: &FlashContext,
+    addr: u32,
+    len: usize,
+) -> Result<()> {
+    if !ctx.is_valid_range(addr, len) {
+        return Err(Error::AddressOutOfBounds);
+    }
+    if len == 0 {
+        return Ok(());
+    }
+    check_mutation_opcodes(master)?;
     if master.max_write_len() == 0 {
         return Err(Error::ProgrammerError);
     }
@@ -1361,10 +1438,10 @@ pub async fn write<M: SpiMaster + ?Sized>(
     if ctx.address_mode == AddressMode::FourByte {
         addressing_for_4byte_operation(native, ctx.chip.features, master.features())?;
     }
-    let aai = ctx.chip.features.contains(Features::AAI_WORD) && master.max_write_len() >= 2;
+    let aai = use_aai(master, ctx);
     if aai {
         let leading_byte = usize::from(!addr.is_multiple_of(2));
-        let remaining = data.len() - leading_byte;
+        let remaining = len - leading_byte;
         let has_words = remaining >= 2;
         let has_bytes = leading_byte != 0 || !remaining.is_multiple_of(2);
         if (has_words
@@ -1381,19 +1458,14 @@ pub async fn write<M: SpiMaster + ?Sized>(
     }) {
         return Err(Error::OpcodeNotSupported);
     }
-    let saved = super::protection::prepare(master, ctx).await?;
-    let result = match master.program_flash(ctx, addr, data).await {
-        Ok(()) => super::protection::check_result(master, ctx, addr, false).await,
-        Err(error) => Err(error),
-    };
-    super::protection::finish(
-        master,
-        ctx,
-        saved,
-        result,
-        (protocol::WRSR_POLL_US, protocol::WRSR_TIMEOUT_US),
-    )
-    .await
+    Ok(())
+}
+
+fn use_aai<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashContext) -> bool {
+    ctx.chip.features.contains(Features::AAI_WORD)
+        && master.max_write_len() >= 2
+        && master.probe_opcode(crate::spi::opcodes::AAI_WP)
+        && master.probe_opcode(crate::spi::opcodes::WRDI)
 }
 
 /// Program already-erased flash with generic SPI page-program commands.
@@ -1409,8 +1481,9 @@ pub async fn spi_program<M: SpiMaster + ?Sized>(
     addr: u32,
     data: &[u8],
 ) -> Result<()> {
-    if !ctx.is_valid_range(addr, data.len()) {
-        return Err(Error::AddressOutOfBounds);
+    validate_spi_program(master, ctx, addr, data.len())?;
+    if data.is_empty() {
+        return Ok(());
     }
     let features = ctx.chip.features;
     let write_granularity = ctx.chip.write_granularity;
@@ -1421,9 +1494,9 @@ pub async fn spi_program<M: SpiMaster + ?Sized>(
     // AAI uses 3-byte addressing only — 4-byte mode is irrelevant for SST25 chips.
     // Note: SFDP-probed chips may report WriteGranularity::Byte (BFPT DWORD1 bit[2]=0)
     // without AAI_WORD being set; those fall through to single-byte page program below.
-    // Masters that cannot transfer two data bytes in one command skip AAI and use
-    // single-byte page program, which SST25 chips also support.
-    if features.contains(crate::chip::Features::AAI_WORD) && master.max_write_len() >= 2 {
+    // Fall back to single-byte page program when the master cannot transfer
+    // two bytes or its opcode menu cannot execute and terminate AAI.
+    if use_aai(master, ctx) {
         return protocol::aai_word_program(master, addr, data).await;
     }
 
@@ -1462,10 +1535,12 @@ pub async fn spi_program<M: SpiMaster + ?Sized>(
     while offset < data.len() {
         let remaining = data.len() - offset;
 
-        let chunk_size = if write_granularity == WriteGranularity::Byte {
+        let chunk_size = if write_granularity == WriteGranularity::Byte
+            || features.contains(Features::AAI_WORD)
+        {
             // Single-byte page program: one byte per WREN+PP+WIP cycle.
-            // Used for SFDP-detected chips reporting byte granularity (BFPT DWORD1
-            // bit[2]=0) that don't have AAI_WORD — matches flashprog spi_chip_write_1.
+            // Also used for SST chips when AAI is unavailable, matching
+            // flashprog spi_chip_write_1.
             1
         } else {
             // Page-granularity program: up to a full page per command, respecting
@@ -1582,6 +1657,7 @@ pub(crate) fn validate_spi_erase_operation<M: SpiMaster + ?Sized>(
     {
         return Err(Error::InvalidAlignment);
     }
+    check_mutation_opcodes(master)?;
     let block = &op.erase_block;
     if block.is_chip_erase() {
         if op.start != 0 || op.size != ctx.chip.total_size || block.total_size() != op.size {
@@ -1641,6 +1717,8 @@ pub(crate) async fn erase_spi_operation<M: SpiMaster + ?Sized>(
     op: &OptimalEraseOp,
 ) -> Result<()> {
     validate_spi_erase_operation(master, ctx, op)?;
+    // The chip's geometry (from its metadata) decides what this erases.
+    master.check_access(FlashAccess::Modify, op.start, op.size)?;
     let saved = super::protection::prepare(master, ctx).await?;
     let result = match erase_spi_unprotected(master, ctx, op).await {
         Ok(()) => super::protection::check_result(master, ctx, op.start, true).await,
@@ -2139,6 +2217,7 @@ mod tests {
         fail_read: bool,
         fail_exit: bool,
         reject_native: bool,
+        reject_opcode: Option<u8>,
     }
 
     impl SpiMaster for ReadMaster {
@@ -2153,6 +2232,7 @@ mod tests {
         }
         fn probe_opcode(&self, opcode: u8) -> bool {
             !(self.reject_native && opcode == opcodes::READ_4B)
+                && self.reject_opcode != Some(opcode)
         }
         async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
             self.commands
@@ -2167,6 +2247,70 @@ mod tests {
             Ok(())
         }
         async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    #[test]
+    fn program_preflight_checks_every_needed_opcode_before_commands() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.chip.features |= Features::AAI_WORD;
+        for opcode in [opcodes::WREN, opcodes::RDSR, opcodes::PP] {
+            let mut master = ReadMaster {
+                reject_opcode: Some(opcode),
+                ..Default::default()
+            };
+            assert!(matches!(
+                block_on(spi_program(&mut master, &ctx, 0, &[1, 2, 3])),
+                Err(Error::OpcodeNotSupported)
+            ));
+            assert!(master.commands.is_empty());
+        }
+    }
+
+    #[test]
+    fn aai_falls_back_to_byte_program_when_menu_lacks_aai_or_wrdi() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.chip.features |= Features::AAI_WORD;
+        ctx.chip.write_granularity = WriteGranularity::Page;
+        for opcode in [opcodes::AAI_WP, opcodes::WRDI] {
+            let mut master = ReadMaster {
+                reject_opcode: Some(opcode),
+                ..Default::default()
+            };
+            block_on(spi_program(&mut master, &ctx, 0, &[1, 2, 3])).unwrap();
+            assert_eq!(
+                master
+                    .commands
+                    .iter()
+                    .filter(|c| c.0 == opcodes::PP)
+                    .count(),
+                3
+            );
+            assert!(!master.commands.iter().any(|c| c.0 == opcodes::AAI_WP));
+        }
+    }
+
+    #[test]
+    fn erase_preflight_checks_prerequisites_before_commands() {
+        use futures_lite::future::block_on;
+        let ctx = nonuniform_context();
+        let op = OptimalEraseOp {
+            start: 0,
+            size: 8,
+            erase_block: ctx.chip.erase_blocks[0].clone(),
+        };
+        for opcode in [opcodes::WREN, opcodes::RDSR, 0x20] {
+            let mut master = ReadMaster {
+                reject_opcode: Some(opcode),
+                ..Default::default()
+            };
+            assert!(matches!(
+                block_on(erase_spi_operation(&mut master, &ctx, &op)),
+                Err(Error::OpcodeNotSupported)
+            ));
+            assert!(master.commands.is_empty());
+        }
     }
 
     #[test]
@@ -2333,7 +2477,10 @@ mod tests {
             fail_erase: false,
         };
         let mut device = SpiFlashDevice::new(master, ctx);
-        block_on(device.erase_operation(&op)).unwrap();
+        assert_eq!(
+            block_on(device.erase_operation(&op)),
+            Ok(crate::flash::EraseOutcome::Unverified)
+        );
         let commands = device.into_parts().0.commands;
         assert_eq!(commands.iter().filter(|(code, _)| *code == 0x20).count(), 3);
         assert!(!commands.iter().any(|(code, _)| *code == 0xc7));

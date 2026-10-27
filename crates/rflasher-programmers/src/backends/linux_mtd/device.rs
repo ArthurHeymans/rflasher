@@ -314,6 +314,16 @@ impl FlashDevice for LinuxMtd {
         Ok(())
     }
 
+    fn validate_write(&self, addr: u32, len: usize) -> CoreResult<()> {
+        if !self.is_valid_range(addr, len) {
+            return Err(CoreError::AddressOutOfBounds);
+        }
+        if !self.info.is_writable {
+            return Err(CoreError::WriteProtected);
+        }
+        Ok(())
+    }
+
     async fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
         if !self.is_valid_range(addr, data.len()) {
             return Err(CoreError::AddressOutOfBounds);

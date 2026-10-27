@@ -84,8 +84,8 @@ pub trait HostAccess: PciConfigAccess<Error = InternalError> {
 
 /// Default PCI configuration-space backend for the current target.
 ///
-/// On Linux userspace this uses sysfs config access and falls back to direct
-/// x86 PCI config I/O for hidden devices. On unsupported targets it returns
+/// On Linux userspace this uses only kernel-mediated sysfs config access.
+/// On unsupported targets it returns
 /// [`InternalError::NotSupported`] via the PCI stubs; embedded callers should
 /// provide their own [`PciConfigAccess`] implementation.
 #[derive(Debug, Default, Clone, Copy)]
@@ -128,13 +128,6 @@ impl PciConfigAccess for DefaultPciAccess {
         {
             rflasher_pci::SysfsPci::system()
                 .read32(address, offset)
-                .or_else(|error| {
-                    if address.segment() == 0 {
-                        rflasher_pci::read32_direct(address, offset)
-                    } else {
-                        Err(error)
-                    }
-                })
                 .map_err(Into::into)
         }
         #[cfg(not(all(feature = "std", target_os = "linux")))]
@@ -257,29 +250,45 @@ impl HostAccess for LinuxHost {
 pub(crate) mod tests {
     use super::*;
     use crate::error::PciAccessError;
-    use std::cell::RefCell;
+    use alloc::{vec, vec::Vec};
+    use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    type PciWrites = Arc<Mutex<Vec<(PciAddress, u16, u32, u8)>>>;
 
     /// Fake no-heap-shape host used by controller construction tests.
-    #[derive(Default)]
+    #[derive(Default, Clone)]
     pub(crate) struct FakeHost {
-        config: RefCell<BTreeMap<(PciAddress, u16), u32>>,
-        writes: RefCell<Vec<(PciAddress, u16, u32, u8)>>,
-        delays: RefCell<Vec<u32>>,
+        config: Arc<Mutex<BTreeMap<(PciAddress, u16), u32>>>,
+        writes: PciWrites,
+        delays: Arc<Mutex<Vec<u32>>>,
+        update_write8: bool,
+        deny_reads: bool,
+        deny_writes: bool,
     }
 
     impl FakeHost {
+        pub(crate) fn deny_reads(&mut self) {
+            self.deny_reads = true;
+        }
+        pub(crate) fn deny_writes(&mut self) {
+            self.deny_writes = true;
+        }
+        pub(crate) fn enable_write8_readback(&mut self) {
+            self.update_write8 = true;
+        }
+
         pub(crate) fn set_config32(&self, bdf: PciAddress, offset: u16, value: u32) {
-            self.config.borrow_mut().insert((bdf, offset), value);
+            self.config.lock().unwrap().insert((bdf, offset), value);
+        }
+
+        pub(crate) fn writes(&self) -> Vec<(PciAddress, u16, u32, u8)> {
+            self.writes.lock().unwrap().clone()
         }
 
         pub(crate) fn delay_log(&self) -> Vec<u32> {
-            self.delays.borrow().clone()
-        }
-
-        /// Config writes as `(bdf, offset, value, width)`.
-        pub(crate) fn config_writes(&self) -> Vec<(PciAddress, u16, u32, u8)> {
-            self.writes.borrow().clone()
+            self.delays.lock().unwrap().clone()
         }
     }
 
@@ -299,33 +308,60 @@ pub(crate) mod tests {
         }
 
         fn read32(&self, bdf: PciAddress, offset: u16) -> Result<u32> {
-            self.config.borrow().get(&(bdf, offset)).copied().ok_or({
-                InternalError::PciAccess(PciAccessError::ConfigRead {
-                    bus: bdf.bus(),
-                    device: bdf.device(),
-                    function: bdf.function(),
-                    register: offset,
+            if self.deny_reads {
+                return Err(InternalError::AccessDenied {
+                    region: "PCI config",
+                });
+            }
+            self.config
+                .lock()
+                .unwrap()
+                .get(&(bdf, offset))
+                .copied()
+                .ok_or({
+                    InternalError::PciAccess(PciAccessError::ConfigRead {
+                        bus: bdf.bus(),
+                        device: bdf.device(),
+                        function: bdf.function(),
+                        register: offset,
+                    })
                 })
-            })
         }
 
         fn write8(&self, bdf: PciAddress, offset: u16, value: u8) -> Result<()> {
+            if self.deny_writes {
+                return Err(InternalError::AccessDenied {
+                    region: "PCI config",
+                });
+            }
             self.writes
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .push((bdf, offset, value as u32, 1));
+            if self.update_write8 {
+                let aligned = offset & !3;
+                let shift = u32::from((offset & 3) * 8);
+                let mut config = self.config.lock().unwrap();
+                let current = config.get(&(bdf, aligned)).copied().unwrap_or(0);
+                config.insert(
+                    (bdf, aligned),
+                    (current & !(0xff << shift)) | (u32::from(value) << shift),
+                );
+            }
             Ok(())
         }
 
         fn write16(&self, bdf: PciAddress, offset: u16, value: u16) -> Result<()> {
             self.writes
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .push((bdf, offset, value as u32, 2));
             Ok(())
         }
 
         fn write32(&self, bdf: PciAddress, offset: u16, value: u32) -> Result<()> {
-            self.writes.borrow_mut().push((bdf, offset, value, 4));
-            self.config.borrow_mut().insert((bdf, offset), value);
+            self.writes.lock().unwrap().push((bdf, offset, value, 4));
+            self.config.lock().unwrap().insert((bdf, offset), value);
             Ok(())
         }
     }
@@ -337,6 +373,9 @@ pub(crate) mod tests {
         pub read_len: usize,
     }
 
+    /// SSFS/SSFC offset and OPMENU of a modelled software sequencer.
+    type SwseqMenu = Option<(usize, [u8; 8])>;
+
     /// Register-backed fake controller window.
     ///
     /// Plain registers read back what was written (32-bit accesses share
@@ -345,27 +384,164 @@ pub(crate) mod tests {
     /// enough to observe erases: an erase cycle started through HSFC is
     /// recorded with the current FADDR and completes at once, and HSFS.BERASE
     /// reads back a per-partition value chosen through [`FakeMmio::set_berase`]
-    /// (partitions split at the FPB boundary). SPI100 commands are recorded
-    /// on trigger and return the configured response at the FIFO receive offset.
-    #[derive(Default)]
+    /// (partitions split at the FPB boundary). With [`FakeMmio::set_flash`],
+    /// hardware sequencing cycles also read, program (AND) and erase
+    /// (BERASE-sized blocks of) that flash image, and, after
+    /// [`FakeMmio::set_swseq_menu`], so do software sequencing cycles, which
+    /// complete at once. SPI100 commands are recorded on trigger and return
+    /// the configured response at the FIFO receive offset.
+    /// Decides what a 32-bit write stores, from the offset, old and written
+    /// value; it may change other registers too.
+    type Write32Hook = Arc<dyn Fn(&FakeMmio, usize, u32, u32) -> u32 + Send + Sync>;
+
+    #[derive(Default, Clone)]
     pub(crate) struct FakeMmio {
-        regs: RefCell<BTreeMap<usize, u32>>,
+        regs: Arc<Mutex<BTreeMap<usize, u32>>>,
+        writes: Arc<Mutex<Vec<(usize, u32, usize)>>>,
+        write32_hook: RefCell<Option<Write32Hook>>,
         bytes: RefCell<BTreeMap<usize, u8>>,
         reads: RefCell<Vec<(usize, usize)>>,
         berase: RefCell<[u16; 2]>,
         erase_cycles: RefCell<Vec<u32>>,
         spi_commands: RefCell<Vec<FakeSpiCommand>>,
         spi_response: RefCell<Vec<u8>>,
+        descriptor: RefCell<Option<(usize, BTreeMap<u32, u32>)>>,
+        hsfs_busy_reads: Cell<usize>,
+        flash: Arc<Mutex<Vec<u8>>>,
+        swseq_menu: Arc<Mutex<SwseqMenu>>,
     }
 
     impl FakeMmio {
+        pub(crate) fn set_hsfs_busy_reads(&self, count: usize) {
+            self.hsfs_busy_reads.set(count);
+        }
+
+        pub(crate) fn set_descriptor(&self, fdoc: usize, signature: u32, map: u32, comp: u32) {
+            *self.descriptor.borrow_mut() =
+                Some((fdoc, [(0, signature), (4, map), (0x1000, comp)].into()));
+        }
+
         /// Set the BERASE encodings reported below and from the FPB boundary
         pub(crate) fn set_berase(&self, low: u16, high: u16) {
             *self.berase.borrow_mut() = [low, high];
         }
 
+        /// Contents behind sequencing cycles
+        pub(crate) fn set_flash(&self, data: Vec<u8>) {
+            *self.flash.lock().unwrap() = data;
+        }
+
+        pub(crate) fn flash(&self) -> Vec<u8> {
+            self.flash.lock().unwrap().clone()
+        }
+
+        /// Run software sequencing cycles started through `ssfsc` with the
+        /// opcodes of `menu` on the flash image.
+        pub(crate) fn set_swseq_menu(&self, ssfsc: usize, menu: [u8; 8]) {
+            *self.swseq_menu.lock().unwrap() = Some((ssfsc, menu));
+        }
+
+        /// Run a hardware sequencing cycle on the flash image, if one is set.
+        fn hwseq_cycle(&self, fcycle: u16, hsfc: u16) {
+            use crate::ich_regs::*;
+            let mut flash = self.flash.lock().unwrap();
+            if flash.is_empty() {
+                return;
+            }
+            let addr = (self.reg(ICH9_REG_FADDR) & ICH9_FADDR_FLA) as usize;
+            let len = usize::from((hsfc & HSFC_FDBC) >> HSFC_FDBC_OFF) + 1;
+            match fcycle {
+                0 => self.set_fdata(&flash[addr..addr + len]),
+                2 => {
+                    let data = self.fdata(len);
+                    flash[addr..addr + len]
+                        .iter_mut()
+                        .zip(data)
+                        .for_each(|(byte, new)| *byte &= new);
+                }
+                3 => {
+                    let size = [256, 4096, 8192, 65536][usize::from(
+                        (self.read16(ICH9_REG_HSFS) & HSFS_BERASE) >> HSFS_BERASE_OFF,
+                    )];
+                    let start = addr & !(size - 1);
+                    flash[start..start + size].fill(0xff);
+                }
+                _ => {}
+            }
+        }
+
+        /// Run a software sequencing cycle started with `ssfc`: a page
+        /// program, 4/32/64 KiB or chip erase with an atomic WREN, a read or
+        /// a status read (never busy).
+        fn swseq_cycle(&self, menu: &[u8; 8], ssfc: u32) {
+            use crate::ich_regs::*;
+            let mut flash = self.flash.lock().unwrap();
+            let opcode = menu[((ssfc & SSFC_COP) >> SSFC_COP_OFF) as usize];
+            let len = if ssfc & SSFC_DS != 0 {
+                ((ssfc & SSFC_DBC) >> SSFC_DBC_OFF) as usize + 1
+            } else {
+                0
+            };
+            let addr = (self.reg(ICH9_REG_FADDR) & 0x00ff_ffff) as usize;
+            let wren = ssfc & SSFC_ACS != 0;
+            match opcode {
+                JEDEC_READ => self.set_fdata(&flash[addr..addr + len]),
+                JEDEC_RDSR => self.set_fdata(&[0]),
+                JEDEC_BYTE_PROGRAM if wren => {
+                    let data = self.fdata(len);
+                    flash[addr..addr + len]
+                        .iter_mut()
+                        .zip(data)
+                        .for_each(|(byte, new)| *byte &= new);
+                }
+                JEDEC_SE | JEDEC_BE_52 | JEDEC_BE_D8 if wren => {
+                    let size = match opcode {
+                        JEDEC_SE => 0x1000,
+                        JEDEC_BE_52 => 0x8000,
+                        _ => 0x10000,
+                    };
+                    let start = addr & !(size - 1);
+                    flash[start..start + size].fill(0xff);
+                }
+                JEDEC_CE_C7 | JEDEC_CE_60 if wren => flash.fill(0xff),
+                _ => {}
+            }
+        }
+
+        fn fdata(&self, len: usize) -> Vec<u8> {
+            use crate::ich_regs::ICH9_REG_FDATA0;
+            (0..len)
+                .map(|i| (self.reg(ICH9_REG_FDATA0 + (i & !3)) >> (8 * (i % 4))) as u8)
+                .collect()
+        }
+
+        fn set_fdata(&self, data: &[u8]) {
+            use crate::ich_regs::ICH9_REG_FDATA0;
+            for (word, bytes) in data.chunks(4).enumerate() {
+                let mut value = [0; 4];
+                value[..bytes.len()].copy_from_slice(bytes);
+                self.set32(ICH9_REG_FDATA0 + word * 4, u32::from_le_bytes(value));
+            }
+        }
+
+        pub(crate) fn block_write32(&self, offset: usize) {
+            self.on_write32(
+                move |_, written, old, value| {
+                    if written == offset { old } else { value }
+                },
+            );
+        }
+
+        /// Fault injection: `hook` decides what each 32-bit write stores.
+        pub(crate) fn on_write32(
+            &self,
+            hook: impl Fn(&FakeMmio, usize, u32, u32) -> u32 + Send + Sync + 'static,
+        ) {
+            *self.write32_hook.borrow_mut() = Some(Arc::new(hook));
+        }
+
         pub(crate) fn set32(&self, offset: usize, value: u32) {
-            self.regs.borrow_mut().insert(offset, value);
+            self.regs.lock().unwrap().insert(offset, value);
         }
 
         /// FADDR of every erase cycle started so far
@@ -387,6 +563,10 @@ pub(crate) mod tests {
                 .extend(data.iter().enumerate().map(|(i, &b)| (offset + i, b)));
         }
 
+        pub(crate) fn writes(&self) -> Vec<(usize, u32, usize)> {
+            self.writes.lock().unwrap().clone()
+        }
+
         pub(crate) fn reads(&self) -> Vec<(usize, usize)> {
             self.reads.borrow().clone()
         }
@@ -400,7 +580,7 @@ pub(crate) mod tests {
         }
 
         fn reg(&self, offset: usize) -> u32 {
-            self.regs.borrow().get(&offset).copied().unwrap_or(0)
+            self.regs.lock().unwrap().get(&offset).copied().unwrap_or(0)
         }
     }
 
@@ -410,9 +590,13 @@ pub(crate) mod tests {
             self.byte(offset)
         }
         fn read16(&self, offset: usize) -> u16 {
-            let value = self.reg(offset) as u16;
+            let mut value = self.reg(offset) as u16;
             if offset != crate::ich_regs::ICH9_REG_HSFS {
                 return value;
+            }
+            if self.hsfs_busy_reads.get() > 0 {
+                self.hsfs_busy_reads.set(self.hsfs_busy_reads.get() - 1);
+                value |= crate::ich_regs::HSFS_SCIP;
             }
             let boundary =
                 (self.reg(crate::ich_regs::ICH9_REG_FPB) & crate::ich_regs::FPB_FPBA) << 12;
@@ -423,6 +607,11 @@ pub(crate) mod tests {
         }
         fn read32(&self, offset: usize) -> u32 {
             self.reads.borrow_mut().push((offset, 4));
+            if let Some((fdoc, values)) = &*self.descriptor.borrow()
+                && offset == fdoc + 4
+            {
+                return values.get(&self.reg(*fdoc)).copied().unwrap_or(0);
+            }
             if self.bytes.borrow().contains_key(&offset) {
                 u32::from_le_bytes(core::array::from_fn(|i| self.byte(offset + i)))
             } else {
@@ -434,6 +623,10 @@ pub(crate) mod tests {
             u64::from_le_bytes(core::array::from_fn(|i| self.byte(offset + i)))
         }
         fn write8(&self, offset: usize, value: u8) {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((offset, u32::from(value), 1));
             if offset >= 0x80 {
                 self.bytes.borrow_mut().insert(offset, value);
             } else {
@@ -458,6 +651,10 @@ pub(crate) mod tests {
             }
         }
         fn write16(&self, offset: usize, value: u16) {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((offset, u32::from(value), 2));
             use crate::ich_regs::*;
             match offset {
                 // Status bits are write-1-to-clear.
@@ -474,6 +671,7 @@ pub(crate) mod tests {
                                 .borrow_mut()
                                 .push(self.reg(ICH9_REG_FADDR) & ICH9_FADDR_FLA);
                         }
+                        self.hwseq_cycle(fcycle, value);
                         self.set32(
                             ICH9_REG_HSFS,
                             self.reg(ICH9_REG_HSFS) | u32::from(HSFS_FDONE),
@@ -484,7 +682,26 @@ pub(crate) mod tests {
             }
         }
         fn write32(&self, offset: usize, value: u32) {
-            self.set32(offset, value);
+            use crate::ich_regs::*;
+            self.writes.lock().unwrap().push((offset, value, 4));
+            let hook = self.write32_hook.borrow().clone();
+            let value = hook.map_or(value, |hook| hook(self, offset, self.reg(offset), value));
+            let menu = *self.swseq_menu.lock().unwrap();
+            match menu {
+                // Status bits are write-1-to-clear; SCGO runs the cycle.
+                Some((ssfsc, menu)) if offset == ssfsc => {
+                    let status = SSFS_FDONE | SSFS_FCERR;
+                    let kept = self.reg(offset) & status & !value;
+                    let done = if value & SSFC_SCGO != 0 {
+                        self.swseq_cycle(&menu, value);
+                        SSFS_FDONE
+                    } else {
+                        0
+                    };
+                    self.set32(offset, (value & !(status | SSFC_SCGO)) | kept | done);
+                }
+                _ => self.set32(offset, value),
+            }
         }
     }
 
@@ -496,7 +713,7 @@ pub(crate) mod tests {
         }
 
         fn delay_us(&self, us: u32) {
-            self.delays.borrow_mut().push(us);
+            self.delays.lock().unwrap().push(us);
         }
     }
 

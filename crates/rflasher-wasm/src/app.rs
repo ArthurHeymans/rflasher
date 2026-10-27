@@ -13,7 +13,7 @@ use rflasher_core::flash::unified::{
     WriteProgress, WriteStats, erase_region_with_policy, smart_write_with_policy,
 };
 use rflasher_core::flash::{FlashContext, FlashDevice, ProbeResult, SpiFlashDevice};
-use rflasher_core::programmer::{SpiFeatures, SpiMaster};
+use rflasher_core::programmer::{FlashAccess, SpiFeatures, SpiMaster};
 use rflasher_core::spi::SpiCommand;
 use rflasher_programmers::catalog::{OptionKind, ProgrammerInfo, Transport, available_programmers};
 use rflasher_programmers::ch341a::Ch341a;
@@ -104,6 +104,10 @@ impl SpiMaster for Programmer {
 
     async fn delay_us(&mut self, us: u32) {
         dispatch!(self, m => SpiMaster::delay_us(m, us).await)
+    }
+
+    fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> CoreResult<()> {
+        dispatch!(self, m => SpiMaster::check_access(m, access, addr, len))
     }
 
     async fn read_flash(
