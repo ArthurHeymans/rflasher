@@ -1383,7 +1383,7 @@ fn check_mutation_opcodes<M: SpiMaster + ?Sized>(master: &M) -> Result<()> {
     }
 }
 
-fn validate_spi_program<M: SpiMaster + ?Sized>(
+pub(crate) fn validate_spi_program<M: SpiMaster + ?Sized>(
     master: &M,
     ctx: &FlashContext,
     addr: u32,
@@ -1406,7 +1406,7 @@ fn validate_spi_program<M: SpiMaster + ?Sized>(
     if ctx.address_mode == AddressMode::FourByte {
         addressing_for_4byte_operation(native, ctx.chip.features, master.features())?;
     }
-    let aai = ctx.chip.features.contains(Features::AAI_WORD) && master.max_write_len() >= 2;
+    let aai = use_aai(master, ctx);
     if aai {
         let leading_byte = usize::from(!addr.is_multiple_of(2));
         let remaining = len - leading_byte;
@@ -1427,6 +1427,13 @@ fn validate_spi_program<M: SpiMaster + ?Sized>(
         return Err(Error::OpcodeNotSupported);
     }
     Ok(())
+}
+
+fn use_aai<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashContext) -> bool {
+    ctx.chip.features.contains(Features::AAI_WORD)
+        && master.max_write_len() >= 2
+        && master.probe_opcode(crate::spi::opcodes::AAI_WP)
+        && master.probe_opcode(crate::spi::opcodes::WRDI)
 }
 
 /// Program already-erased flash with generic SPI page-program commands.
@@ -1455,9 +1462,9 @@ pub async fn spi_program<M: SpiMaster + ?Sized>(
     // AAI uses 3-byte addressing only — 4-byte mode is irrelevant for SST25 chips.
     // Note: SFDP-probed chips may report WriteGranularity::Byte (BFPT DWORD1 bit[2]=0)
     // without AAI_WORD being set; those fall through to single-byte page program below.
-    // Masters that cannot transfer two data bytes in one command skip AAI and use
-    // single-byte page program, which SST25 chips also support.
-    if features.contains(crate::chip::Features::AAI_WORD) && master.max_write_len() >= 2 {
+    // Fall back to single-byte page program when the master cannot transfer
+    // two bytes or its opcode menu cannot execute and terminate AAI.
+    if use_aai(master, ctx) {
         return protocol::aai_word_program(master, addr, data).await;
     }
 
@@ -1496,10 +1503,12 @@ pub async fn spi_program<M: SpiMaster + ?Sized>(
     while offset < data.len() {
         let remaining = data.len() - offset;
 
-        let chunk_size = if write_granularity == WriteGranularity::Byte {
+        let chunk_size = if write_granularity == WriteGranularity::Byte
+            || features.contains(Features::AAI_WORD)
+        {
             // Single-byte page program: one byte per WREN+PP+WIP cycle.
-            // Used for SFDP-detected chips reporting byte granularity (BFPT DWORD1
-            // bit[2]=0) that don't have AAI_WORD — matches flashprog spi_chip_write_1.
+            // Also used for SST chips when AAI is unavailable, matching
+            // flashprog spi_chip_write_1.
             1
         } else {
             // Page-granularity program: up to a full page per command, respecting
@@ -2199,13 +2208,7 @@ mod tests {
         use futures_lite::future::block_on;
         let mut ctx = nonuniform_context();
         ctx.chip.features |= Features::AAI_WORD;
-        for opcode in [
-            opcodes::WREN,
-            opcodes::RDSR,
-            opcodes::AAI_WP,
-            opcodes::WRDI,
-            opcodes::PP,
-        ] {
+        for opcode in [opcodes::WREN, opcodes::RDSR, opcodes::PP] {
             let mut master = ReadMaster {
                 reject_opcode: Some(opcode),
                 ..Default::default()
@@ -2215,6 +2218,30 @@ mod tests {
                 Err(Error::OpcodeNotSupported)
             ));
             assert!(master.commands.is_empty());
+        }
+    }
+
+    #[test]
+    fn aai_falls_back_to_byte_program_when_menu_lacks_aai_or_wrdi() {
+        use futures_lite::future::block_on;
+        let mut ctx = nonuniform_context();
+        ctx.chip.features |= Features::AAI_WORD;
+        ctx.chip.write_granularity = WriteGranularity::Page;
+        for opcode in [opcodes::AAI_WP, opcodes::WRDI] {
+            let mut master = ReadMaster {
+                reject_opcode: Some(opcode),
+                ..Default::default()
+            };
+            block_on(spi_program(&mut master, &ctx, 0, &[1, 2, 3])).unwrap();
+            assert_eq!(
+                master
+                    .commands
+                    .iter()
+                    .filter(|c| c.0 == opcodes::PP)
+                    .count(),
+                3
+            );
+            assert!(!master.commands.iter().any(|c| c.0 == opcodes::AAI_WP));
         }
     }
 

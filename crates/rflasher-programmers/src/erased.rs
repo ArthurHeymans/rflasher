@@ -35,6 +35,7 @@ trait DynFlashDevice {
     fn erase_blocks(&self) -> &[EraseBlock];
     fn page_size(&self) -> u32;
     fn is_valid_range(&self, addr: u32, len: usize) -> bool;
+    fn validate_write(&self, addr: u32, len: usize) -> Result<()>;
     fn read<'a>(&'a mut self, addr: u32, buf: &'a mut [u8]) -> BoxFuture<'a, Result<()>>;
     fn write<'a>(&'a mut self, addr: u32, data: &'a [u8]) -> BoxFuture<'a, Result<()>>;
     fn erase(&mut self, addr: u32, len: u32) -> BoxFuture<'_, Result<()>>;
@@ -76,6 +77,9 @@ impl<D: FlashDevice> DynFlashDevice for D {
     }
     fn is_valid_range(&self, addr: u32, len: usize) -> bool {
         FlashDevice::is_valid_range(self, addr, len)
+    }
+    fn validate_write(&self, addr: u32, len: usize) -> Result<()> {
+        FlashDevice::validate_write(self, addr, len)
     }
     fn read<'a>(&'a mut self, addr: u32, buf: &'a mut [u8]) -> BoxFuture<'a, Result<()>> {
         Box::pin(FlashDevice::read(self, addr, buf))
@@ -162,6 +166,9 @@ impl FlashDevice for ErasedFlashDevice {
     }
     fn is_valid_range(&self, addr: u32, len: usize) -> bool {
         self.inner.is_valid_range(addr, len)
+    }
+    fn validate_write(&self, addr: u32, len: usize) -> Result<()> {
+        self.inner.validate_write(addr, len)
     }
     async fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<()> {
         self.inner.read(addr, buf).await
