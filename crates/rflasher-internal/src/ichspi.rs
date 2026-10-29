@@ -182,20 +182,36 @@ pub(crate) fn is_visible_spi_id(id: u16) -> bool {
     )
 }
 
+/// PCI function holding the BIOS control register and, on PCH100+, SPI BAR.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct IntelConfigFunction {
+    pub(crate) address: PciAddress,
+    /// Firmware hides this function's vendor/device IDs, so the OS does not
+    /// enumerate it and its config space needs a raw access mechanism.
+    pub(crate) hidden: bool,
+}
+
 /// PCI location of the BIOS control register and, on PCH100+, SPI BAR.
 /// IDs and bridge mappings follow flashprog's chipset_enable.c. Do not infer
 /// a location for other generations or IDs: an unrelated function may exist.
-pub(crate) fn intel_config_bdf(chipset: &DetectedChipset) -> Result<PciAddress, InternalError> {
-    let actual = PciAddress::new(
-        chipset.domain,
-        chipset.bus,
-        chipset.device,
-        chipset.function,
-    );
+pub(crate) fn intel_config_function(
+    chipset: &DetectedChipset,
+) -> Result<IntelConfigFunction, InternalError> {
+    let actual = IntelConfigFunction {
+        address: PciAddress::new(
+            chipset.domain,
+            chipset.bus,
+            chipset.device,
+            chipset.function,
+        ),
+        hidden: false,
+    };
     let id = chipset.enable.device_id;
     if is_visible_spi_id(id) && chipset.chipset_type().is_pch100_compatible() {
         return Ok(actual);
     }
+    // These are the mappings flashprog accesses via PCI_ACCESS_I386_TYPE1
+    // (enable_flash_pch100_or_c620) because the SPI function may be hidden.
     let location = match (chipset.chipset_type(), id) {
         (IchChipset::Series100SunrisePoint, _)
         | (IchChipset::C620Lewisburg, 0xa1c0..=0xa1c7)
@@ -208,16 +224,20 @@ pub(crate) fn intel_config_bdf(chipset: &DetectedChipset) -> Result<PciAddress, 
             ));
         }
     };
-    Ok(PciAddress::new(
-        chipset.domain,
-        chipset.bus,
-        location.0,
-        location.1,
-    ))
+    Ok(IntelConfigFunction {
+        address: PciAddress::new(chipset.domain, chipset.bus, location.0, location.1),
+        hidden: true,
+    })
+}
+
+/// PCI address of [`intel_config_function`].
+pub(crate) fn intel_config_bdf(chipset: &DetectedChipset) -> Result<PciAddress, InternalError> {
+    intel_config_function(chipset).map(|function| function.address)
 }
 
 /// Gets the SPI BAR physical address using host-provided PCI config access.
-/// Linux uses sysfs only; inaccessible or hidden SPI devices are refused.
+/// Hidden SPI functions must be reachable through `host`; on Linux,
+/// [`IchSpiController::new`] routes them to raw x86 config access.
 pub fn get_spibar_address_with_host<H: PciConfigAccess<Error = InternalError>>(
     host: &H,
     chipset: &DetectedChipset,
@@ -225,16 +245,25 @@ pub fn get_spibar_address_with_host<H: PciConfigAccess<Error = InternalError>>(
     let generation = chipset.chipset_type();
 
     if generation.is_pch100_compatible() {
-        let spi_bdf = intel_config_bdf(chipset)?;
+        let IntelConfigFunction {
+            address: spi_bdf,
+            hidden,
+        } = intel_config_function(chipset)?;
         let read_config = |offset| {
             host.read32(spi_bdf, offset).map_err(|e| {
-            log::warn!("Cannot read SPI PCI configuration at {spi_bdf:?}: {e}");
-            InternalError::ChipsetEnable("SPI PCI config unavailable or access denied; hidden SPI devices cannot be accessed safely via sysfs")
-        })
+                log::warn!("Cannot read SPI PCI configuration at {spi_bdf}: {e}");
+                InternalError::ChipsetEnable("SPI PCI config unavailable or access denied")
+            })
         };
         let identity = read_config(0)?;
         let device = (identity >> 16) as u16;
-        let valid = if is_visible_spi_id(chipset.enable.device_id) {
+        let ids_hidden = hidden && identity == u32::MAX;
+        let valid = if ids_hidden {
+            // Firmware hides the IDs of this function; like flashprog, rely
+            // on the LPC/eSPI device mapping and the SPI BAR checks below.
+            log::debug!("SPI PCI function {spi_bdf} has hidden IDs");
+            true
+        } else if is_visible_spi_id(chipset.enable.device_id) {
             device == chipset.enable.device_id
         } else {
             match generation {
@@ -246,7 +275,7 @@ pub fn get_spibar_address_with_host<H: PciConfigAccess<Error = InternalError>>(
                 _ => false,
             }
         };
-        if identity as u16 != 0x8086 || !valid {
+        if !valid || (!ids_hidden && identity as u16 != 0x8086) {
             return Err(InternalError::ChipsetEnable(
                 "PCI function is not a validated Intel SPI controller",
             ));
@@ -571,7 +600,23 @@ impl<H: HostAccess> Drop for IchSpiController<H> {
 impl IchSpiController<LinuxHost> {
     /// Initialize a new SPI controller for the detected chipset using Linux host access.
     pub fn new(chipset: &DetectedChipset, mode: SpiMode) -> Result<Self, InternalError> {
-        Self::new_with_host(LinuxHost::new(), chipset, mode)
+        let config = intel_config_function(chipset)?;
+        let host = if config.hidden {
+            LinuxHost::new()
+                .with_hidden_function(config.address)
+                .map_err(|e| {
+                    log::warn!(
+                        "SPI PCI function {} is not enumerated by the OS: {e}",
+                        config.address
+                    );
+                    InternalError::ChipsetEnable(
+                        "hidden SPI PCI function needs raw x86 PCI config access (run as root)",
+                    )
+                })?
+        } else {
+            LinuxHost::new()
+        };
+        Self::new_with_host(host, chipset, mode)
     }
 }
 
@@ -5048,6 +5093,42 @@ mod tests {
         let spibar = get_spibar_address_with_host(&host, &chipset).unwrap();
 
         assert_eq!(spibar, 0xfed1_c000);
+    }
+
+    #[test]
+    fn hidden_spi_function_accepts_masked_ids_only_for_hidden_mappings() {
+        for (id, target) in [
+            (0x9d4e, (0x1f, 5)),
+            (0xa1c0, (0x1f, 5)),
+            (0xa3c8, (0x1f, 5)),
+            (0x5ae8, (0x0d, 2)),
+            (0x31e8, (0x0d, 2)),
+        ] {
+            let chipset = detected_id(id);
+            let function = intel_config_function(&chipset).unwrap();
+            assert!(function.hidden);
+            assert_eq!(function.address, PciAddress::new(3, 7, target.0, target.1));
+            let host = FakeHost::default();
+            host.set_config32(function.address, 0, u32::MAX);
+            host.set_config32(function.address, PCI_REG_SPIBAR as u16, 0xfed1_c000);
+            assert_eq!(
+                get_spibar_address_with_host(&host, &chipset).unwrap(),
+                0xfed1_c000
+            );
+            // An absent function reads all-ones everywhere and is rejected.
+            host.set_config32(function.address, PCI_REG_SPIBAR as u16, u32::MAX);
+            assert!(get_spibar_address_with_host(&host, &chipset).is_err());
+        }
+
+        let mut chipset = detected_id(0xa324);
+        chipset.device = 0x1f;
+        chipset.function = 5;
+        let function = intel_config_function(&chipset).unwrap();
+        assert!(!function.hidden);
+        let host = FakeHost::default();
+        host.set_config32(function.address, 0, u32::MAX);
+        host.set_config32(function.address, PCI_REG_SPIBAR as u16, 0xfed1_c000);
+        assert!(get_spibar_address_with_host(&host, &chipset).is_err());
     }
 
     #[test]
