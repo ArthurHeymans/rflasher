@@ -303,6 +303,11 @@ mod linux {
             ))
         }
 
+        /// Returns whether the OS enumerated `address`.
+        pub fn is_present(&self, address: PciAddress) -> bool {
+            self.device_path(address).exists()
+        }
+
         fn config_path(&self, address: PciAddress) -> PathBuf {
             self.device_path(address).join("config")
         }
@@ -456,8 +461,8 @@ mod linux {
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     fn ensure_io_privilege(acquire: impl FnOnce() -> bool) -> bool {
-        // Linux grants I/O privilege to the calling thread, not the process.
-        // Cache successes only, so a later privilege grant can retry a failure.
+        // Linux grants I/O port permissions to the calling thread, not the
+        // process. Cache successes only, so a later grant can retry a failure.
         std::thread_local! {
             static IO_PRIVILEGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         }
@@ -485,48 +490,248 @@ mod linux {
         }
     }
 
-    /// Reads a legacy PCI configuration dword through x86 configuration ports.
+    /// Legacy x86 PCI configuration mechanism #1 (`0xcf8`/`0xcfc` port I/O).
     ///
-    /// This supports only segment zero and offsets below 256. It requires
-    /// `CAP_SYS_RAWIO` (normally root) and serializes the global CF8/CFC pair.
+    /// Unlike [`SysfsPci`], this reaches functions the OS never enumerated,
+    /// such as PCH functions whose vendor/device IDs are hidden by firmware.
+    /// Use it only for such explicitly selected functions:
+    ///
+    /// - Only segment 0 and the first 256 bytes of config space are reachable.
+    /// - It requires `CAP_SYS_RAWIO` (normally root) and no kernel lockdown.
+    /// - Accesses are serialized within this process, but the kernel also uses
+    ///   the same index/data port pair under a lock userspace cannot take, so
+    ///   concurrent kernel accesses can race. flashprog/libpci share this risk.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Type1Pci {
+        _private: (),
+    }
+
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    pub fn read32_direct(address: PciAddress, offset: u16) -> Result<u32, PciError> {
-        use std::sync::Mutex;
-        static LOCK: Mutex<()> = Mutex::new(());
-        if address.segment() != 0 || offset > u8::MAX as u16 {
-            return Err(PciError::NotSupported(
-                "legacy PCI config access requires segment 0 and an offset below 256",
-            ));
+    mod port {
+        pub(super) const CONFIG_ADDRESS: u16 = 0xcf8;
+        pub(super) const CONFIG_DATA: u16 = 0xcfc;
+
+        /// Grants the calling thread access to `0xcf8..=0xcff`.
+        pub(super) fn acquire() -> bool {
+            super::ensure_io_privilege(|| {
+                // SAFETY: ioperm takes no pointers; failure is reported.
+                unsafe { libc::ioperm(CONFIG_ADDRESS.into(), 8, 1) == 0 }
+            })
         }
-        let _guard = LOCK.lock().expect("PCI configuration lock poisoned");
-        // SAFETY: iopl takes no pointers; failure (missing CAP_SYS_RAWIO) is
-        // reported as an error below.
-        if !ensure_io_privilege(|| unsafe { libc::iopl(3) } == 0) {
-            return Err(PciError::ConfigRead { address, offset });
+
+        // SAFETY (all helpers): callers must hold I/O permission for `port`.
+        pub(super) unsafe fn inb(port: u16) -> u8 {
+            let value: u8;
+            unsafe {
+                core::arch::asm!("in al, dx", in("dx") port, out("al") value, options(nomem, nostack, preserves_flags));
+            }
+            value
         }
-        let config_address = 0x8000_0000
-            | ((address.bus() as u32) << 16)
-            | ((address.device() as u32) << 11)
-            | ((address.function() as u32) << 8)
-            | ((offset as u32) & 0xfc);
-        let value: u32;
-        unsafe {
-            core::arch::asm!("out dx, eax", in("dx") 0xcf8_u16, in("eax") config_address, options(nomem, nostack, preserves_flags));
-            core::arch::asm!("in eax, dx", in("dx") 0xcfc_u16, out("eax") value, options(nomem, nostack, preserves_flags));
+        pub(super) unsafe fn inw(port: u16) -> u16 {
+            let value: u16;
+            unsafe {
+                core::arch::asm!("in ax, dx", in("dx") port, out("ax") value, options(nomem, nostack, preserves_flags));
+            }
+            value
         }
-        Ok(value)
+        pub(super) unsafe fn inl(port: u16) -> u32 {
+            let value: u32;
+            unsafe {
+                core::arch::asm!("in eax, dx", in("dx") port, out("eax") value, options(nomem, nostack, preserves_flags));
+            }
+            value
+        }
+        pub(super) unsafe fn outb(port: u16, value: u8) {
+            unsafe {
+                core::arch::asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags));
+            }
+        }
+        pub(super) unsafe fn outw(port: u16, value: u16) {
+            unsafe {
+                core::arch::asm!("out dx, ax", in("dx") port, in("ax") value, options(nomem, nostack, preserves_flags));
+            }
+        }
+        pub(super) unsafe fn outl(port: u16, value: u32) {
+            unsafe {
+                core::arch::asm!("out dx, eax", in("dx") port, in("eax") value, options(nomem, nostack, preserves_flags));
+            }
+        }
+    }
+
+    /// Value for the `0xcf8` configuration address register.
+    pub(crate) fn type1_config_address(
+        address: PciAddress,
+        offset: u16,
+        width: u16,
+    ) -> Result<u32, PciError> {
+        if address.segment() != 0
+            || u32::from(offset) + u32::from(width) > 256
+            || !offset.is_multiple_of(width)
+            || address.device() > 31
+            || address.function() > 7
+        {
+            return Err(PciError::InvalidAccess { address, offset });
+        }
+        Ok(0x8000_0000
+            | (u32::from(address.bus()) << 16)
+            | (u32::from(address.device()) << 11)
+            | (u32::from(address.function()) << 8)
+            | u32::from(offset & 0xfc))
+    }
+
+    impl Type1Pci {
+        /// Acquires I/O permission for the configuration ports.
+        pub fn open() -> Result<Self, PciError> {
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            {
+                if port::acquire() {
+                    Ok(Self { _private: () })
+                } else {
+                    Err(PciError::NotSupported(
+                        "raw PCI port I/O denied (needs CAP_SYS_RAWIO and no kernel lockdown)",
+                    ))
+                }
+            }
+            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+            Err(PciError::NotSupported(
+                "legacy PCI config access is only available on x86",
+            ))
+        }
+
+        /// Runs one index/data access with the configuration ports locked.
+        #[cfg_attr(
+            not(any(target_arch = "x86", target_arch = "x86_64")),
+            allow(unused_variables)
+        )]
+        fn access<T>(
+            &self,
+            address: PciAddress,
+            offset: u16,
+            width: u16,
+            write: bool,
+            data: impl FnOnce(u16) -> T,
+        ) -> Result<T, PciError> {
+            let config_address = type1_config_address(address, offset, width)?;
+            let failed = || {
+                if write {
+                    PciError::ConfigWrite { address, offset }
+                } else {
+                    PciError::ConfigRead { address, offset }
+                }
+            };
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            {
+                use std::sync::Mutex;
+                static LOCK: Mutex<()> = Mutex::new(());
+                let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                // I/O permission is per thread; this may run on another thread
+                // than the one that called `open`.
+                if !port::acquire() {
+                    return Err(failed());
+                }
+                // SAFETY: permission for 0xcf8..=0xcff was acquired above.
+                unsafe { port::outl(port::CONFIG_ADDRESS, config_address) };
+                Ok(data(port::CONFIG_DATA + (offset & 3)))
+            }
+            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+            Err(failed())
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    impl PciConfigAccess for Type1Pci {
+        type Error = PciError;
+
+        // SAFETY (all methods): `access` only runs the closure after acquiring
+        // permission for the data ports 0xcfc..=0xcff.
+        fn read8(&self, address: PciAddress, offset: u16) -> Result<u8, Self::Error> {
+            self.access(address, offset, 1, false, |p| unsafe { port::inb(p) })
+        }
+        fn read16(&self, address: PciAddress, offset: u16) -> Result<u16, Self::Error> {
+            self.access(address, offset, 2, false, |p| unsafe { port::inw(p) })
+        }
+        fn read32(&self, address: PciAddress, offset: u16) -> Result<u32, Self::Error> {
+            self.access(address, offset, 4, false, |p| unsafe { port::inl(p) })
+        }
+        fn write8(&self, address: PciAddress, offset: u16, value: u8) -> Result<(), Self::Error> {
+            self.access(address, offset, 1, true, |p| unsafe {
+                port::outb(p, value)
+            })
+        }
+        fn write16(&self, address: PciAddress, offset: u16, value: u16) -> Result<(), Self::Error> {
+            self.access(address, offset, 2, true, |p| unsafe {
+                port::outw(p, value)
+            })
+        }
+        fn write32(&self, address: PciAddress, offset: u16, value: u32) -> Result<(), Self::Error> {
+            self.access(address, offset, 4, true, |p| unsafe {
+                port::outl(p, value)
+            })
+        }
     }
 
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    pub fn read32_direct(_address: PciAddress, _offset: u16) -> Result<u32, PciError> {
-        Err(PciError::NotSupported(
-            "legacy PCI config access is only available on x86 Linux",
-        ))
+    impl PciConfigAccess for Type1Pci {
+        type Error = PciError;
+
+        fn read8(&self, address: PciAddress, offset: u16) -> Result<u8, Self::Error> {
+            self.access(address, offset, 1, false, |_| 0)
+        }
+        fn read16(&self, address: PciAddress, offset: u16) -> Result<u16, Self::Error> {
+            self.access(address, offset, 2, false, |_| 0)
+        }
+        fn read32(&self, address: PciAddress, offset: u16) -> Result<u32, Self::Error> {
+            self.access(address, offset, 4, false, |_| 0)
+        }
+        fn write8(&self, address: PciAddress, offset: u16, _value: u8) -> Result<(), Self::Error> {
+            self.access(address, offset, 1, true, |_| ())
+        }
+        fn write16(
+            &self,
+            address: PciAddress,
+            offset: u16,
+            _value: u16,
+        ) -> Result<(), Self::Error> {
+            self.access(address, offset, 2, true, |_| ())
+        }
+        fn write32(
+            &self,
+            address: PciAddress,
+            offset: u16,
+            _value: u32,
+        ) -> Result<(), Self::Error> {
+            self.access(address, offset, 4, true, |_| ())
+        }
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn type1_config_address_encoding_and_limits() {
+        let spi = PciAddress::new(0, 0, 0x1f, 5);
+        assert_eq!(type1_config_address(spi, 0xdc, 1).unwrap(), 0x8000_fddc);
+        assert_eq!(type1_config_address(spi, 0xdd, 1).unwrap(), 0x8000_fddc);
+        assert_eq!(
+            type1_config_address(PciAddress::new(0, 0x12, 3, 2), 0x10, 4).unwrap(),
+            0x8012_1a10
+        );
+        for (address, offset, width) in [
+            (PciAddress::new(1, 0, 0x1f, 5), 0, 4),
+            (spi, 0x100, 1),
+            (spi, 0xfffc, 4),
+            (spi, 0xfe, 4),
+            (spi, 0x11, 2),
+            (spi, 0x12, 4),
+        ] {
+            assert!(matches!(
+                type1_config_address(address, offset, width),
+                Err(PciError::InvalidAccess { .. })
+            ));
+        }
     }
 }
 
 #[cfg(all(feature = "std", target_os = "linux"))]
-pub use linux::{MappedBar, SysfsPci, read32_direct};
+pub use linux::{MappedBar, SysfsPci, Type1Pci};
 
 #[cfg(test)]
 mod tests {

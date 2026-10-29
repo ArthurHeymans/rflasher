@@ -84,7 +84,8 @@ pub trait HostAccess: PciConfigAccess<Error = InternalError> {
 
 /// Default PCI configuration-space backend for the current target.
 ///
-/// On Linux userspace this uses only kernel-mediated sysfs config access.
+/// On Linux userspace this uses only kernel-mediated sysfs config access;
+/// see [`LinuxHost::with_hidden_function`] for functions the OS hides.
 /// On unsupported targets it returns
 /// [`InternalError::NotSupported`] via the PCI stubs; embedded callers should
 /// provide their own [`PciConfigAccess`] implementation.
@@ -174,15 +175,42 @@ impl PciConfigAccess for DefaultPciAccess {
 }
 
 /// Linux userspace host backend.
+///
+/// PCI configuration accesses go through sysfs. A single function that the
+/// OS does not enumerate (hidden by firmware) can be routed to raw x86
+/// configuration mechanism #1 with [`LinuxHost::with_hidden_function`];
+/// there is never a fallback from sysfs to raw access.
 #[cfg(all(feature = "std", target_os = "linux"))]
 #[derive(Debug, Default, Clone, Copy)]
-pub struct LinuxHost;
+pub struct LinuxHost {
+    hidden: Option<(PciAddress, rflasher_pci::Type1Pci)>,
+}
 
 #[cfg(all(feature = "std", target_os = "linux"))]
 impl LinuxHost {
     /// Creates a Linux host backend.
     pub const fn new() -> Self {
-        Self
+        Self { hidden: None }
+    }
+
+    /// Routes config accesses for `address` to raw x86 port I/O when the OS
+    /// has not enumerated it. Enumerated functions keep using sysfs.
+    pub fn with_hidden_function(mut self, address: PciAddress) -> Result<Self> {
+        if rflasher_pci::SysfsPci::system().is_present(address) {
+            log::debug!("PCI function {address} is enumerated; using sysfs");
+            self.hidden = None;
+        } else {
+            log::info!("PCI function {address} is hidden; using raw PCI config access");
+            self.hidden = Some((address, rflasher_pci::Type1Pci::open()?));
+        }
+        Ok(self)
+    }
+
+    fn raw_for(&self, address: PciAddress) -> Option<&rflasher_pci::Type1Pci> {
+        self.hidden
+            .as_ref()
+            .filter(|(hidden, _)| *hidden == address)
+            .map(|(_, raw)| raw)
     }
 
     /// Scans Linux sysfs for PCI devices.
@@ -197,27 +225,45 @@ impl PciConfigAccess for LinuxHost {
     type Error = InternalError;
 
     fn read8(&self, bdf: PciAddress, offset: u16) -> Result<u8> {
-        DefaultPciAccess.read8(bdf, offset)
+        match self.raw_for(bdf) {
+            Some(raw) => Ok(raw.read8(bdf, offset)?),
+            None => DefaultPciAccess.read8(bdf, offset),
+        }
     }
 
     fn read16(&self, bdf: PciAddress, offset: u16) -> Result<u16> {
-        DefaultPciAccess.read16(bdf, offset)
+        match self.raw_for(bdf) {
+            Some(raw) => Ok(raw.read16(bdf, offset)?),
+            None => DefaultPciAccess.read16(bdf, offset),
+        }
     }
 
     fn read32(&self, bdf: PciAddress, offset: u16) -> Result<u32> {
-        DefaultPciAccess.read32(bdf, offset)
+        match self.raw_for(bdf) {
+            Some(raw) => Ok(raw.read32(bdf, offset)?),
+            None => DefaultPciAccess.read32(bdf, offset),
+        }
     }
 
     fn write8(&self, bdf: PciAddress, offset: u16, value: u8) -> Result<()> {
-        DefaultPciAccess.write8(bdf, offset, value)
+        match self.raw_for(bdf) {
+            Some(raw) => Ok(raw.write8(bdf, offset, value)?),
+            None => DefaultPciAccess.write8(bdf, offset, value),
+        }
     }
 
     fn write16(&self, bdf: PciAddress, offset: u16, value: u16) -> Result<()> {
-        DefaultPciAccess.write16(bdf, offset, value)
+        match self.raw_for(bdf) {
+            Some(raw) => Ok(raw.write16(bdf, offset, value)?),
+            None => DefaultPciAccess.write16(bdf, offset, value),
+        }
     }
 
     fn write32(&self, bdf: PciAddress, offset: u16, value: u32) -> Result<()> {
-        DefaultPciAccess.write32(bdf, offset, value)
+        match self.raw_for(bdf) {
+            Some(raw) => Ok(raw.write32(bdf, offset, value)?),
+            None => DefaultPciAccess.write32(bdf, offset, value),
+        }
     }
 }
 
