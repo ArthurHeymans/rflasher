@@ -1,0 +1,11 @@
+[package]
+name = "rflasher-no-alloc-link"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Keep std-using dev-dependencies out of this firmware link.
+[workspace]
+
+[dependencies]
+rflasher-internal = { path = "../..", default-features = false }

@@ -3593,7 +3593,7 @@ impl IchSpiController {
 mod tests {
     use super::*;
     use crate::host::tests::{FakeHost, FakeMmio};
-    use alloc::vec;
+    use alloc::{vec, vec::Vec};
 
     fn test_controller() -> IchSpiController<FakeHost> {
         IchSpiController {
