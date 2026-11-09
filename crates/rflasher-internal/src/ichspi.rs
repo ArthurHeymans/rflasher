@@ -3068,7 +3068,8 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Raw controller erase is unavailable without chip-specific geometry.
+    /// Raw controller erase is unavailable without chip-specific geometry;
+    /// see [`Self::swseq_erase_blocks`].
     pub fn ich7_swseq_erase(&mut self, _addr: u32, _len: u32) -> Result<(), InternalError> {
         Err(InternalError::NotSupported(
             "Software erase requires chip-specific geometry",
@@ -3345,11 +3346,56 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Raw controller erase is unavailable without chip-specific geometry.
+    /// Raw controller erase is unavailable without chip-specific geometry;
+    /// see [`Self::swseq_erase_blocks`].
     pub fn swseq_erase(&mut self, _addr: u32, _len: u32) -> Result<(), InternalError> {
         Err(InternalError::NotSupported(
             "Software erase requires chip-specific geometry",
         ))
+    }
+
+    /// Erase `len` bytes at `addr` in `block_size` blocks with `opcode`, then
+    /// wait for each to finish, using ICH7 or ICH9+ software sequencing.
+    ///
+    /// The caller supplies the geometry it verified for the connected chip:
+    /// `opcode` must erase exactly `block_size` bytes there. This is the raw
+    /// command path chip-aware callers already use, without a heap or the
+    /// chip database.
+    pub fn swseq_erase_blocks(
+        &mut self,
+        opcode: u8,
+        block_size: u32,
+        addr: u32,
+        len: u32,
+    ) -> Result<(), InternalError> {
+        if self.mode == SpiMode::HardwareSequencing {
+            return Err(InternalError::NotSupported(
+                "Hardware sequencing erases by address",
+            ));
+        }
+        if !matches!(opcode, JEDEC_SE | JEDEC_BE_52 | JEDEC_BE_D8) {
+            return Err(InternalError::NotSupported("Not a block erase opcode"));
+        }
+        if !block_size.is_power_of_two()
+            || !addr.is_multiple_of(block_size)
+            || !len.is_multiple_of(block_size)
+        {
+            return Err(InternalError::Io("Erase address/length not aligned"));
+        }
+        // Reject the whole range before erasing any of it.
+        Self::check_swseq_range(addr, len as usize)?;
+        for block in (addr..addr + len).step_by(block_size as usize) {
+            let [_, high, middle, low] = block.to_be_bytes();
+            let command = [opcode, high, middle, low];
+            if self.generation == IchChipset::Ich7 {
+                self.ich7_swseq_send_command(&command, &mut [])?;
+                self.ich7_swseq_wait_wip()?;
+            } else {
+                self.swseq_send_command(&command, &mut [])?;
+                self.swseq_wait_wip()?;
+            }
+        }
+        Ok(())
     }
 
     /// Wait for Write-In-Progress (WIP) bit to clear
@@ -3850,6 +3896,48 @@ mod tests {
             // The fake may report a cycle error, but the command was issued.
             assert!(!host.writes().is_empty());
             assert!(!mmio.writes().is_empty());
+        }
+    }
+
+    #[test]
+    fn erase_blocks_use_the_callers_geometry() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.mode = SpiMode::SoftwareSequencing;
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            c.opcodes = Some(Opcodes::default());
+            c.host.enable_write8_readback();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            let host = c.host.clone();
+            let mmio = c.spibar.clone();
+
+            // Rejected before any cycle: not an erase, misaligned, past 16 MiB.
+            for (opcode, size, addr, len) in [
+                (JEDEC_BYTE_PROGRAM, 4096, 0, 4096),
+                (JEDEC_CE_C7, 4096, 0, 4096),
+                (JEDEC_SE, 0, 0, 4096),
+                (JEDEC_SE, 3000, 0, 6000),
+                (JEDEC_SE, 4096, 2048, 4096),
+                (JEDEC_SE, 4096, 0, 2048),
+                (JEDEC_BE_D8, 65536, (1 << 24) - 65536, 2 * 65536),
+            ] {
+                assert!(c.swseq_erase_blocks(opcode, size, addr, len).is_err());
+            }
+            assert!(host.writes().is_empty());
+            assert!(mmio.writes().is_empty());
+
+            // The fake may report a cycle error, but the command was issued.
+            let _ = c.swseq_erase_blocks(JEDEC_SE, 4096, 0xff0000, 0x10000);
+            assert!(!host.writes().is_empty());
+            assert!(!mmio.writes().is_empty());
+
+            c.mode = SpiMode::HardwareSequencing;
+            assert!(c.swseq_erase_blocks(JEDEC_SE, 4096, 0, 4096).is_err());
         }
     }
 
