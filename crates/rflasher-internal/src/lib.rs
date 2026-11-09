@@ -40,6 +40,7 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(any(feature = "alloc", test))]
 extern crate alloc;
 
 pub mod amd_enable;
@@ -69,8 +70,10 @@ pub use intel_pci::{INTEL_CHIPSETS, INTEL_VID, find_chipset};
 pub use pci::{
     DetectedAmdChipset, PciDevice, find_amd_chipset, find_amd_chipset_in_devices,
     find_amd_chipset_in_iter, find_intel_chipset, find_intel_chipset_in_devices,
-    find_intel_chipset_in_iter, scan_for_amd_chipsets, scan_for_intel_chipsets, scan_pci_bus,
+    find_intel_chipset_in_iter,
 };
+#[cfg(feature = "alloc")]
+pub use pci::{scan_for_amd_chipsets, scan_for_intel_chipsets, scan_pci_bus};
 pub use physmap::PhysMap;
 pub use programmer::{InternalOptions, InternalProgrammer, programmer_info};
 

@@ -125,7 +125,7 @@ pub fn scan_pci_bus() -> Result<alloc::vec::Vec<PciDevice>, InternalError> {
         .map_err(InternalError::from)
 }
 
-#[cfg(not(all(feature = "std", target_os = "linux")))]
+#[cfg(all(feature = "alloc", not(all(feature = "std", target_os = "linux"))))]
 pub fn scan_pci_bus() -> Result<alloc::vec::Vec<PciDevice>, InternalError> {
     Err(InternalError::NotSupported(
         "PCI scanning only supported on Linux",
@@ -142,7 +142,7 @@ pub fn scan_for_intel_chipsets() -> Result<alloc::vec::Vec<DetectedChipset>, Int
         .collect())
 }
 
-#[cfg(not(all(feature = "std", target_os = "linux")))]
+#[cfg(all(feature = "alloc", not(all(feature = "std", target_os = "linux"))))]
 pub fn scan_for_intel_chipsets() -> Result<alloc::vec::Vec<DetectedChipset>, InternalError> {
     Err(InternalError::NotSupported(
         "PCI scanning only supported on Linux",
@@ -234,7 +234,7 @@ pub fn scan_for_amd_chipsets() -> Result<alloc::vec::Vec<DetectedAmdChipset>, In
         .collect())
 }
 
-#[cfg(not(all(feature = "std", target_os = "linux")))]
+#[cfg(all(feature = "alloc", not(all(feature = "std", target_os = "linux"))))]
 pub fn scan_for_amd_chipsets() -> Result<alloc::vec::Vec<DetectedAmdChipset>, InternalError> {
     Err(InternalError::NotSupported(
         "PCI scanning only supported on Linux",

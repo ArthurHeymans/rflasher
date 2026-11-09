@@ -7,6 +7,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(feature = "alloc")]
+#[cfg(test)]
 extern crate alloc;
 
 pub use pci_types;
