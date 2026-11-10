@@ -110,6 +110,9 @@ js-sys = { version = "0.3", optional = true }
 gloo-timers = { version = "0.3", features = ["futures"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Every native USB backend awaits nusb blocking syscalls. Do not rely on FTDI
+# feature unification to supply the runtime; keep WebUSB builds runtime-free.
+nusb = { workspace = true, optional = true, features = ["smol"] }
 futures-timer = { version = "3", optional = true }
 
 [package.metadata.docs.rs]

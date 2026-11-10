@@ -146,6 +146,15 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "usb", not(target_arch = "wasm32")))]
+    #[test]
+    fn native_usb_await_has_a_runtime() {
+        // Enumeration opens no programmer and needs no attached hardware.
+        // Permission/OS errors are acceptable; awaiting must not panic when
+        // FTDI is absent from the feature graph.
+        let _ = futures_lite::future::block_on(async { nusb::list_devices().await });
+    }
+
     #[test]
     fn choose_is_only_asked_between_several_devices() {
         let refuse: ChooseUsbDevice = &|_| panic!("asked to choose");
