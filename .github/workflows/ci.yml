@@ -57,6 +57,11 @@ jobs:
           sudo apt-get install -y libudev-dev
       - name: Run tests
         run: cargo test --workspace --exclude rflasher-wasm --features rflasher/linux-gpio
+      - name: Check standalone USB runtime without FTDI
+        run: >-
+          cargo test -p rflasher-programmers
+          --no-default-features --features usb
+          usb::tests::native_usb_await_has_a_runtime
 
   build:
     name: Build
