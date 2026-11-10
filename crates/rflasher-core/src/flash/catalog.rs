@@ -25,11 +25,9 @@ pub async fn probe_catalog<M: SpiMaster + ?Sized>(
         catalog.resolve(manufacturer, device)
     } else {
         let banked = protocol::read_banked_jedec_id(master, device).await?;
-        catalog.resolve_identity(ChipIdentity::BankedJedec {
-            bank: 1,
-            manufacturer: banked.manufacturer,
-            device: banked.device_bytes(),
-        })
+        let identity = ChipIdentity::banked_rdid(1, banked.manufacturer, banked.device_bytes())
+            .ok_or(Error::ChipNotFound)?;
+        catalog.resolve_identity(identity)
     }
     .map_err(|e| match e {
         ResolveError::Unknown => Error::ChipNotFound,

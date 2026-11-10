@@ -43,7 +43,7 @@ mod integration;
 mod tests {
     use super::{catalog::*, empty};
     use rflasher_core::chip::{
-        ChipCatalog, ChipIdentity, ChipName, EraseBlock, EraseRegion, Features, ResolveError,
+        ChipCatalog, ChipIdentity, ChipName, ChipSlice, EraseBlock, EraseRegion, Features, ResolveError,
         Unlock,
     };
 
@@ -97,11 +97,7 @@ mod tests {
             ResolveError::Unknown
         );
         let banked = CATALOG
-            .resolve_identity(ChipIdentity::BankedJedec {
-                bank: 1,
-                manufacturer: 0x37,
-                device: &[0x20, 0x21],
-            })
+            .resolve_identity(ChipIdentity::Rdid { id: 0x7f372021 })
             .unwrap();
         assert_eq!(banked.name(), "A25L10PT");
         assert!(empty::CHIPS.is_empty());
@@ -131,7 +127,7 @@ mod tests {
     #[test]
     fn legacy_identity_is_not_interchangeable_with_rdid() {
         let mut chip = CHIPS[3].clone();
-        chip.features = Features::RES2_ID;
+        chip.ids = ChipSlice::borrowed(&[ChipIdentity::Res2 { id: 0xbf41 }]);
         chip.jedec_device = 0x41;
         let chips = [chip];
         let catalog = ChipCatalog::new(&chips);
@@ -141,10 +137,7 @@ mod tests {
         );
         assert!(
             catalog
-                .resolve_identity(ChipIdentity::Res2 {
-                    manufacturer: 0xbf,
-                    device: 0x41
-                })
+                .resolve_identity(ChipIdentity::Res2 { id: 0xbf41 })
                 .is_ok()
         );
     }

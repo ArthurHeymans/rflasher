@@ -8,7 +8,7 @@
         // IS25 series - Standard SPI flash
         (
             name: "IS25LP016D",
-            device_id: 0x6015,
+            ids: [Rdid(id: 0x9D6015)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -21,7 +21,7 @@
         ),
         (
             name: "IS25LP032",
-            device_id: 0x6016,
+            ids: [Rdid(id: 0x9D6016)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -35,7 +35,7 @@
         (
             name: "IS25LP064",
             unlock: Some(Status),
-            device_id: 0x6017,
+            ids: [Rdid(id: 0x9D6017)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -51,7 +51,7 @@
         (
             name: "IS25LP128",
             unlock: Some(Status),
-            device_id: 0x6018,
+            ids: [Rdid(id: 0x9D6018)],
             total_size: MiB(16),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -67,7 +67,7 @@
         (
             name: "IS25LP256",
             unlock: Some(Status),
-            device_id: 0x6019,
+            ids: [Rdid(id: 0x9D6019)],
             total_size: MiB(32),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, ext_addr_reg_c5c8: true, four_byte_enter_ear7: true, ext_addr_reg_1716: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2300, max: 3600),
@@ -83,7 +83,7 @@
         // IS25WP series - Wide voltage range
         (
             name: "IS25WP016D",
-            device_id: 0x7015,
+            ids: [Rdid(id: 0x9D7015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 1650, max: 1950),
@@ -97,7 +97,7 @@
         (
             name: "IS25WP032",
             unlock: Some(Status),
-            device_id: 0x7016,
+            ids: [Rdid(id: 0x9D7016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 1650, max: 1950),
@@ -113,7 +113,7 @@
         (
             name: "IS25WP064",
             unlock: Some(Status),
-            device_id: 0x7017,
+            ids: [Rdid(id: 0x9D7017)],
             total_size: MiB(8),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 1650, max: 1950),
@@ -129,7 +129,7 @@
         (
             name: "IS25WP128",
             unlock: Some(Status),
-            device_id: 0x7018,
+            ids: [Rdid(id: 0x9D7018)],
             total_size: MiB(16),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 1650, max: 1950),
@@ -145,7 +145,7 @@
         (
             name: "IS25WP256",
             unlock: Some(Status),
-            device_id: 0x7019,
+            ids: [Rdid(id: 0x9D7019)],
             total_size: MiB(32),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, ext_addr_reg_c5c8: true, four_byte_enter_ear7: true, ext_addr_reg_1716: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1650, max: 1950),
@@ -161,7 +161,7 @@
 
         (
             name: "IS25WQ040",
-            device_id: 0x1253,
+            ids: [Rdid(id: 0x9D1253)],
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -176,7 +176,7 @@
         ),
         (
             name: "IS25LQ016",
-            device_id: 0x1445,
+            ids: [Rdid(id: 0x9D1445)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2300, max: 3600),
@@ -190,7 +190,7 @@
         ),
         (
             name: "IS25LQ032",
-            device_id: 0x4016,
+            ids: [Rdid(id: 0x9D4016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2300, max: 3600),
@@ -205,7 +205,7 @@
         ),
         (
             name: "IS25LP512MG",
-            device_id: 0x6020,
+            ids: [Rdid(id: 0x9D6020)],
             total_size: MiB(64),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter_ear7: true, ext_addr_reg_c5c8: true, ext_addr_reg_1716: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -219,7 +219,7 @@
         ),
         (
             name: "IS25LP01GJ",
-            device_id: 0x6021,
+            ids: [Rdid(id: 0x9D6021)],
             total_size: MiB(128),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter_ear7: true, ext_addr_reg_c5c8: true, ext_addr_reg_1716: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -233,7 +233,7 @@
         ),
         (
             name: "IS25WP020",
-            device_id: 0x7012,
+            ids: [Rdid(id: 0x9D7012)],
             total_size: KiB(256),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -248,7 +248,7 @@
         ),
         (
             name: "IS25WP040",
-            device_id: 0x7013,
+            ids: [Rdid(id: 0x9D7013)],
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -263,7 +263,7 @@
         ),
         (
             name: "IS25WP080",
-            device_id: 0x7014,
+            ids: [Rdid(id: 0x9D7014)],
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -278,7 +278,7 @@
         ),
         (
             name: "IS25WP512MG",
-            device_id: 0x7020,
+            ids: [Rdid(id: 0x9D7020)],
             total_size: MiB(64),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter_ear7: true, ext_addr_reg_c5c8: true, ext_addr_reg_1716: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -292,7 +292,7 @@
         ),
         (
             name: "IS25WP01GJ",
-            device_id: 0x7021,
+            ids: [Rdid(id: 0x9D7021)],
             total_size: MiB(128),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter_ear7: true, ext_addr_reg_c5c8: true, ext_addr_reg_1716: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -306,7 +306,7 @@
         ),
         (
             name: "IS25LP010E",
-            device_id: 0x4011,
+            ids: [Rdid(id: 0x9D4011)],
             total_size: KiB(128),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -319,7 +319,7 @@
         ),
         (
             name: "IS25LP020E",
-            device_id: 0x4012,
+            ids: [Rdid(id: 0x9D4012)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -332,7 +332,7 @@
         ),
         (
             name: "IS25LP040E/IS25LQ040B",
-            device_id: 0x4013,
+            ids: [Rdid(id: 0x9D4013)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -345,7 +345,7 @@
         ),
         (
             name: "IS25LP080D",
-            device_id: 0x6014,
+            ids: [Rdid(id: 0x9D6014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -358,7 +358,7 @@
         ),
         (
             name: "IS25WJ128F",
-            device_id: 0x7118,
+            ids: [Rdid(id: 0x9D7118)],
             total_size: MiB(16),
             features: (wrsr_wren: true),
             voltage: (min: 1650, max: 1950),

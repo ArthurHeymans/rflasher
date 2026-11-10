@@ -84,15 +84,6 @@ fn features_to_tokens(def: FeaturesDef) -> TokenStream {
     if def.explicit_profile {
         flags.push(quote!(Features::EXPLICIT_PROFILE));
     }
-    if def.at25f_id {
-        flags.push(quote!(Features::AT25F_ID));
-    }
-    if def.res2_id {
-        flags.push(quote!(Features::RES2_ID));
-    }
-    if def.rdid_continuation {
-        flags.push(quote!(Features::RDID_CONTINUATION));
-    }
     if def.wrsr_persistent_ewsr {
         flags.push(quote!(Features::WRSR_PERSISTENT_EWSR));
     }
@@ -281,8 +272,24 @@ fn chip_to_tokens(vendor: &VendorDef, chip: &ChipDef) -> TokenStream {
         static ERASE_BLOCKS: [EraseBlock; #count] = [#(#erase_blocks),*];
         ChipSlice::borrowed(&ERASE_BLOCKS)
     });
-    let mfr_id = Literal::u8_unsuffixed(vendor.manufacturer_id);
-    let dev_id = Literal::u16_unsuffixed(chip.device_id);
+    let (manufacturer, device) = chip
+        .canonical_id()
+        .expect("validated chip has at least one identity");
+    let mfr_id = Literal::u8_unsuffixed(manufacturer);
+    let dev_id = Literal::u16_unsuffixed(device);
+    let ids = chip.ids.iter().map(|identity| {
+        use rflasher_chip_types::ChipIdentity::*;
+        let (variant, id) = match *identity {
+            Rdid { id } => ("Rdid", Literal::u32_unsuffixed(id)),
+            Rems { id } => ("Rems", Literal::u16_unsuffixed(id)),
+            Res1 { id } => ("Res1", Literal::u8_unsuffixed(id)),
+            Res2 { id } => ("Res2", Literal::u16_unsuffixed(id)),
+            Res3 { id } => ("Res3", Literal::u32_unsuffixed(id)),
+            At25f { id } => ("At25f", Literal::u16_unsuffixed(id)),
+        };
+        let variant = quote::format_ident!("{variant}");
+        quote!(ChipIdentity::#variant { id: #id })
+    });
     let total_size = Literal::u32_unsuffixed(chip.total_size.to_bytes());
     let page_size = Literal::u16_unsuffixed(chip.page_size);
     let features = features_to_tokens(chip.features);
@@ -297,6 +304,7 @@ fn chip_to_tokens(vendor: &VendorDef, chip: &ChipDef) -> TokenStream {
             name: ChipName::borrowed(#chip_name),
             jedec_manufacturer: #mfr_id,
             jedec_device: #dev_id,
+            ids: ChipSlice::borrowed(&[#(#ids),*]),
             total_size: #total_size,
             page_size: #page_size,
             features: #features,
@@ -410,7 +418,7 @@ mod tests {
             chips: [
                 (
                     name: "W25Q128FV",
-                    device_id: 0x4018,
+                    ids: [Rdid(id: 0xEF4018)],
                     total_size: MiB(16),
                     page_size: 256,
                     features: (
@@ -439,7 +447,10 @@ mod tests {
 
         let chip = &vendor.chips[0];
         assert_eq!(chip.name, "W25Q128FV");
-        assert_eq!(chip.device_id, 0x4018);
+        assert_eq!(
+            chip.ids,
+            [rflasher_chip_types::ChipIdentity::Rdid { id: 0xEF4018 }]
+        );
         assert_eq!(chip.total_size.to_bytes(), 16 * 1024 * 1024);
         assert!(chip.features.wrsr_wren);
         assert!(chip.features.fast_read);
@@ -450,7 +461,7 @@ mod tests {
         let invalid = r#"(
             vendor: "Test", manufacturer_id: 1,
             chips: [(
-                name: "Broken", device_id: 1, total_size: KiB(8),
+                name: "Broken", ids: [Rdid(id: 0x010001)], total_size: KiB(8),
                 erase_blocks: [(opcode: 0x20, regions: [(size: KiB(4), count: 1)])],
             )],
         )"#;
@@ -473,7 +484,7 @@ mod tests {
             chips: [
                 (
                     name: "A25L10PT",
-                    device_id: 0x2021,
+                    ids: [Rdid(id: 0x372021)],
                     total_size: KiB(128),
                     features: (wrsr_wren: true),
                     voltage: (min: 2700, max: 3600),

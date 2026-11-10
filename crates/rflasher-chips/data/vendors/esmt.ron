@@ -8,7 +8,7 @@
         // F25 series - Standard 3.3V SPI flash
         (
             name: "F25L004A",
-            device_id: 0x2013,
+            ids: [Rdid(id: 0x8C2013)],
             total_size: KiB(512),
             // Byte program (0x02) or AAI word program (0xAD), no page program;
             // WRSR accepts EWSR or WREN.
@@ -25,7 +25,7 @@
         (
             name: "F25L008A",
             unlock: Some(Status),
-            device_id: 0x2014,
+            ids: [Rdid(id: 0x8C2014)],
             total_size: MiB(1),
             write_granularity: Byte,
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true),
@@ -39,7 +39,7 @@
         ),
         (
             name: "F25L016A",
-            device_id: 0x2015,
+            ids: [Rdid(id: 0x8C2015)],
             total_size: MiB(2),
             // Byte program (0x02) or AAI word program (0xAD), no page program;
             // WRSR accepts EWSR or WREN.
@@ -56,7 +56,7 @@
         (
             name: "F25L032A",
             unlock: Some(Status),
-            device_id: 0x2016,
+            ids: [Rdid(id: 0x8C2016)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -70,7 +70,7 @@
         // F25D series
         (
             name: "F25D08QA",
-            device_id: 0x2534,
+            ids: [Rdid(id: 0x8C2534)],
             total_size: MiB(1),
             features: (wrsr_wren: true, dual_io: true),
             voltage: (min: 2700, max: 3600),
@@ -86,7 +86,7 @@
             unlock: Some(Status),
             // F25L032A uses the same RDID. Keep both names because their
             // status-register/OTP capabilities differ and probing is ambiguous.
-            device_id: 0x2016,
+            ids: [Rdid(id: 0x8C2016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -100,7 +100,7 @@
 
         (
             name: "F25L32QA-2S",
-            device_id: 0x4116,
+            ids: [Rdid(id: 0x8C4116)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -113,7 +113,7 @@
         ),
         (
             name: "F25L64QA",
-            device_id: 0x4117,
+            ids: [Rdid(id: 0x8C4117)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),

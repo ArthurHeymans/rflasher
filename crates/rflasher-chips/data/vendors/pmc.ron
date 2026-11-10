@@ -9,9 +9,9 @@
             name: "Pm25LD010(C)",
             unlock: Some(Status),
             // RDID is 7F 9D 21, not 9D 00 21; it can repeat.
-            device_id: 0x0021,
+            ids: [Rdid(id: 0x7F9D21)],
             total_size: KiB(128),
-            features: (wrsr_wren: true, rdid_continuation: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 32)]),
@@ -25,9 +25,9 @@
         (
             name: "Pm25LD020(C)",
             unlock: Some(Status),
-            device_id: 0x0022,
+            ids: [Rdid(id: 0x7F9D22)],
             total_size: KiB(256),
-            features: (wrsr_wren: true, rdid_continuation: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -41,9 +41,9 @@
         (
             name: "Pm25LD040(C)",
             unlock: Some(Status),
-            device_id: 0x007E,
+            ids: [Rdid(id: 0x7F9D7E)],
             total_size: KiB(512),
-            features: (wrsr_wren: true, rdid_continuation: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -57,9 +57,9 @@
         (
             name: "Pm25LD256C",
             unlock: Some(Status),
-            device_id: 0x002F,
+            ids: [Rdid(id: 0x7F9D2F)],
             total_size: KiB(32),
-            features: (wrsr_wren: true, rdid_continuation: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 8)]),
@@ -72,9 +72,9 @@
         (
             name: "Pm25LD512(C)",
             unlock: Some(Status),
-            device_id: 0x0020,
+            ids: [Rdid(id: 0x7F9D20)],
             total_size: KiB(64),
-            features: (wrsr_wren: true, rdid_continuation: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 16)]),
@@ -88,9 +88,9 @@
         (
             name: "Pm25LQ016",
             unlock: Some(Bp3Srwd),
-            device_id: 0x0045,
+            ids: [Rdid(id: 0x7F9D45)],
             total_size: MiB(2),
-            features: (wrsr_wren: true, otp: true, rdid_continuation: true),
+            features: (wrsr_wren: true, otp: true, ),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 512)]),
@@ -103,9 +103,9 @@
         (
             name: "Pm25LQ020",
             unlock: Some(Bp3Srwd),
-            device_id: 0x0042,
+            ids: [Rdid(id: 0x7F9D42)],
             total_size: KiB(256),
-            features: (wrsr_wren: true, otp: true, rdid_continuation: true),
+            features: (wrsr_wren: true, otp: true, ),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 64)]),
@@ -118,9 +118,9 @@
         (
             name: "Pm25LQ032C",
             unlock: Some(Bp3Srwd),
-            device_id: 0x0046,
+            ids: [Rdid(id: 0x7F9D46)],
             total_size: MiB(4),
-            features: (wrsr_wren: true, otp: true, rdid_continuation: true),
+            features: (wrsr_wren: true, otp: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 1024)]),
@@ -134,9 +134,9 @@
         (
             name: "Pm25LQ040",
             unlock: Some(Bp3Srwd),
-            device_id: 0x0043,
+            ids: [Rdid(id: 0x7F9D43)],
             total_size: KiB(512),
-            features: (wrsr_wren: true, otp: true, rdid_continuation: true),
+            features: (wrsr_wren: true, otp: true, ),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -149,9 +149,9 @@
         (
             name: "Pm25LQ080",
             unlock: Some(Bp3Srwd),
-            device_id: 0x0044,
+            ids: [Rdid(id: 0x7F9D44)],
             total_size: MiB(1),
-            features: (wrsr_wren: true, otp: true, rdid_continuation: true),
+            features: (wrsr_wren: true, otp: true, ),
             voltage: (min: 2300, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 256)]),
@@ -165,9 +165,9 @@
             name: "Pm25LV010",
             unlock: Some(Status),
             // RES2, not RDID.
-            device_id: 0x007C,
+            ids: [Res2(id: 0x9D7C)],
             total_size: KiB(128),
-            features: (wrsr_wren: true, rdid_continuation: true, res2_id: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 32)]),
@@ -179,9 +179,9 @@
         (
             name: "Pm25LV010A",
             unlock: Some(Status),
-            device_id: 0x007C,
+            ids: [Rdid(id: 0x7F9D7C)],
             total_size: KiB(128),
-            features: (wrsr_wren: true, rdid_continuation: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 32)]),
@@ -193,9 +193,9 @@
         (
             name: "Pm25LV016B",
             unlock: Some(Status),
-            device_id: 0x0014,
+            ids: [Rdid(id: 0x7F9D14)],
             total_size: MiB(2),
-            features: (wrsr_wren: true, rdid_continuation: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 512)]),
@@ -208,9 +208,9 @@
         (
             name: "Pm25LV020",
             unlock: Some(Status),
-            device_id: 0x007D,
+            ids: [Rdid(id: 0x7F9D7D)],
             total_size: KiB(256),
-            features: (wrsr_wren: true, rdid_continuation: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 64)]),
@@ -221,9 +221,9 @@
         (
             name: "Pm25LV040",
             unlock: Some(Status),
-            device_id: 0x007E,
+            ids: [Rdid(id: 0x7F9D7E)],
             total_size: KiB(512),
-            features: (wrsr_wren: true, rdid_continuation: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 128)]),
@@ -235,9 +235,9 @@
         (
             name: "Pm25LV080B",
             unlock: Some(Status),
-            device_id: 0x0013,
+            ids: [Rdid(id: 0x7F9D13)],
             total_size: MiB(1),
-            features: (wrsr_wren: true, rdid_continuation: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 256)]),
@@ -251,9 +251,9 @@
             name: "Pm25LV512(A)",
             unlock: Some(Status),
             // RES2, not RDID.
-            device_id: 0x007B,
+            ids: [Res2(id: 0x9D7B)],
             total_size: KiB(64),
-            features: (wrsr_wren: true, rdid_continuation: true, res2_id: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xD7, regions: [(size: KiB(4), count: 16)]),
