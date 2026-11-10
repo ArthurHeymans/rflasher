@@ -1,0 +1,12 @@
+[package]
+name = "em100-smoke-helper"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Hardware-only tool; the rem100 sibling checkout supplies its USB library.
+[workspace]
+
+[dependencies]
+rem100 = { path = "../../../rem100", default-features = false }
+futures-lite = "2"

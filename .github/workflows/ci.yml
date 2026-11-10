@@ -57,6 +57,10 @@ jobs:
           sudo apt-get install -y libudev-dev
       - name: Run tests
         run: cargo test --workspace --exclude rflasher-wasm --features rflasher/linux-gpio
+      - name: Check EM100 harness without hardware
+        run: >-
+          python3 -m unittest discover -s scripts
+          -p test_em100_smoke.py -v
       - name: Check standalone USB runtime without FTDI
         run: >-
           cargo test -p rflasher-programmers

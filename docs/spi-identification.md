@@ -99,6 +99,11 @@ single I/O**. No Pico/EM100 firmware or original-sweep binaries were changed.
   25VF020 and 25LF020A. MX25L51245G and W25Q256FV passed too.
 - Final multi-ID iteration (`fix-validation-v3`) passed full reads and bounded
   erase/program for 25VF512, 25LF040A, 25VF040B and MX25L51245G.
+- After rebasing onto current master and fixing the USB runtime feature,
+  `fix-validation-v4` repeated those four profiles with a Dediprog-only build
+  (`--no-default-features --features dediprog`). All full reads and bounded
+  erase/program comparisons passed. This run used the hardened harness and
+  freshly verified cleanup, with matching run IDs in status/restoration records.
 - MX25L51245G's complete 64 MiB read passed. Mutation windows at 64 KiB and
   16 MiB passed; complete independent EM100 uploads after erase and program
   matched, including every byte outside the windows. Final full-chip rflasher
@@ -111,11 +116,11 @@ single I/O**. No Pico/EM100 firmware or original-sweep binaries were changed.
   pass on this emulator profile.
 
 Evidence is retained in the original workspace under
-`.local/em100-smoke-20261110/fix-validation-v2/`, `fix-validation-v3/` and
-`fix-id-diagnostics/`. The first run (`fix-validation-v1`) was invalid: a minimal
+`.local/em100-smoke-20261110/fix-validation-v2/`, `fix-validation-v3/`,
+`fix-validation-v4/` and `fix-id-diagnostics/`. The first run (`fix-validation-v1`) was invalid: a minimal
 Dediprog-only build exposed a pre-existing missing nusb async-runtime feature
-and panicked before SPI access. The qualifying runs used the normal default
-CLI build; failed-attempt logs were preserved.
+and panicked before SPI access. V2/V3 used the normal default CLI build; V4
+qualifies the corrected standalone backend. Failed-attempt logs were preserved.
 
 A subsequent raw-SPI investigation bypassed rflasher entirely. Linux USB control
 transfers directly requested `DC 00 01 00 00` and `DC 01 00 00 00` at 24 MHz.
