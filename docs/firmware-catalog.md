@@ -142,6 +142,12 @@ owned and static APIs. `ChipName::borrowed` and `ChipSlice::borrowed` are const
 constructors in every feature configuration. Generated maps are complete,
 compact static slices—not capacity-eight inline vectors.
 
+An eraser's single region of equal blocks is held inline. `EraseBlock::new`
+and `with_count` are therefore const and need neither a heap nor a static
+table, so geometry found at run time (a controller's block size, for one)
+can be described without `alloc`. Only maps of several regions borrow a
+table or own their storage.
+
 With `alloc`, storage uses standard `Cow`: runtime strings/vectors convert via
 `.into()` or `.collect()`, and `to_mut()` copies borrowed maps before modifying
 them. Cloning a generated descriptor or performing SPI operations with it does

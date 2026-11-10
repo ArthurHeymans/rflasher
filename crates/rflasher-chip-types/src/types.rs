@@ -1,9 +1,10 @@
 //! Flash chip type definitions
 
-use super::{ChipName, ChipSlice, features::Features};
+use super::{ChipName, ChipSlice, EraseRegions, features::Features};
 
-/// Erase regions, borrowed from a catalog or owned by runtime discovery.
-pub type RegionVec = ChipSlice<EraseRegion>;
+/// Erase regions: one inline, or a map borrowed from a catalog or owned by
+/// runtime discovery.
+pub type RegionVec = EraseRegions;
 
 /// Region definition: size and count pair
 ///
@@ -52,6 +53,7 @@ pub struct EraseBlock {
     /// Native 4-byte-address SPI opcode for this erase operation, if supported
     pub opcode_4b: Option<u8>,
     /// Complete regions for this operation, without a fixed-capacity limit.
+    /// A single region is held inline.
     pub regions: RegionVec,
 }
 
@@ -61,18 +63,31 @@ impl EraseBlock {
     /// Note: This creates a block with count=1, suitable for chip erase operations.
     /// For sector/block erase operations, use `with_count()` instead to specify
     /// the number of blocks on the chip.
-    #[cfg(feature = "alloc")]
-    pub fn new(opcode: u8, size: u32) -> Self {
+    pub const fn new(opcode: u8, size: u32) -> Self {
         Self::with_count(opcode, size, 1)
     }
 
     /// Create a new erase block with a single uniform region and specified count
     ///
     /// This is the correct way to create sector/block erase definitions where
-    /// multiple blocks of the same size exist on the chip.
-    #[cfg(feature = "alloc")]
-    pub fn with_count(opcode: u8, size: u32, count: u32) -> Self {
-        Self::with_regions(opcode, &[EraseRegion::new(size, count)])
+    /// multiple blocks of the same size exist on the chip. It needs neither a
+    /// heap nor a static table, so the geometry may be found at run time.
+    pub const fn with_count(opcode: u8, size: u32, count: u32) -> Self {
+        Self::with_count_and_4b(opcode, None, size, count)
+    }
+
+    /// [`Self::with_count`] with an optional native 4BA opcode.
+    pub const fn with_count_and_4b(
+        opcode: u8,
+        opcode_4b: Option<u8>,
+        size: u32,
+        count: u32,
+    ) -> Self {
+        Self {
+            opcode,
+            opcode_4b,
+            regions: RegionVec::uniform(size, count),
+        }
     }
 
     /// Create an erase block from multiple regions

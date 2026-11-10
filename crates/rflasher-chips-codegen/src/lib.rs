@@ -253,12 +253,25 @@ fn chip_to_tokens(vendor: &VendorDef, chip: &ChipDef) -> TokenStream {
                     quote!(Some(#op))
                 },
             );
-            let regions = eb.regions.iter().map(|r| {
-                let size = Literal::u32_unsuffixed(r.size.to_bytes());
-                let count = Literal::u32_unsuffixed(r.count);
-                quote!(EraseRegion::new(#size, #count))
-            });
-            quote!(EraseBlock::from_static_regions(#opcode, #opcode_4b, &[#(#regions),*]))
+            let regions: Vec<_> = eb
+                .regions
+                .iter()
+                .map(|r| {
+                    (
+                        Literal::u32_unsuffixed(r.size.to_bytes()),
+                        Literal::u32_unsuffixed(r.count),
+                    )
+                })
+                .collect();
+            // One region is held inline; only real maps need a table.
+            if let [(size, count)] = &regions[..] {
+                quote!(EraseBlock::with_count_and_4b(#opcode, #opcode_4b, #size, #count))
+            } else {
+                let regions = regions
+                    .iter()
+                    .map(|(size, count)| quote!(EraseRegion::new(#size, #count)));
+                quote!(EraseBlock::from_static_regions(#opcode, #opcode_4b, &[#(#regions),*]))
+            }
         })
         .collect();
     let vendor_name = &vendor.vendor;

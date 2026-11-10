@@ -163,4 +163,16 @@ mod tests {
         assert_eq!(BLOCK.total_size(), 9 * 4096);
         assert!(core::mem::size_of::<EraseBlock>() <= 40);
     }
+
+    #[test]
+    fn uniform_geometry_found_at_run_time_needs_no_heap_or_table() {
+        // Such as the block size a controller reports for its flash.
+        let (block, flash) = (core::hint::black_box(4096), 16 << 20);
+        let eraser = EraseBlock::with_count(0x20, block, flash / block);
+        assert!(eraser.is_uniform());
+        assert_eq!(eraser.total_size(), flash);
+        assert_eq!(eraser.block_size_at_boundary(8192), Some(4096));
+        // The same eraser from the generated catalog, whatever stores it.
+        assert_eq!(eraser, CHIPS[2].erase_blocks()[0]);
+    }
 }
