@@ -39,6 +39,8 @@ jobs:
         run: |
           cargo clippy --workspace --exclude rflasher-wasm --all-targets --features rflasher/linux-gpio -- -D warnings
           cargo clippy -p rflasher --no-default-features --features portable-programmers --all-targets -- -D warnings
+          # Firmware builds these without alloc, where some types differ.
+          cargo clippy -p rflasher-chip-types -p rflasher-core -p rflasher-internal --no-default-features -- -D warnings
 
   test:
     name: Tests

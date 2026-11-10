@@ -40,7 +40,11 @@ impl ChipName {
 impl Deref for ChipName {
     type Target = str;
     fn deref(&self) -> &str {
-        &self.inner
+        // The borrow is only needed to reach through the owning storage.
+        #[cfg(feature = "alloc")]
+        return &self.inner;
+        #[cfg(not(feature = "alloc"))]
+        self.inner
     }
 }
 
@@ -122,7 +126,11 @@ impl<T: Clone + 'static> ChipSlice<T> {
 impl<T: Clone + 'static> Deref for ChipSlice<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
-        &self.inner
+        // The borrow is only needed to reach through the owning storage.
+        #[cfg(feature = "alloc")]
+        return &self.inner;
+        #[cfg(not(feature = "alloc"))]
+        self.inner
     }
 }
 
