@@ -269,6 +269,9 @@ pub struct FlashChip {
     pub jedec_manufacturer: u8,
     /// JEDEC device ID (second and third bytes of RDID response)
     pub jedec_device: u16,
+    /// Exact alternative identities; empty adapts the legacy catalog fields.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub ids: ChipSlice<crate::ChipIdentity>,
     /// Total flash size in bytes
     pub total_size: u32,
     /// Page size in bytes (for programming)
@@ -312,17 +315,39 @@ impl FlashChip {
         ((self.jedec_manufacturer as u32) << 16) | (self.jedec_device as u32)
     }
 
+    /// Iterate command-specific identities, adapting legacy fields only when
+    /// the descriptor does not explicitly list its identities.
+    pub fn identities(&self) -> impl Iterator<Item = crate::ChipIdentity> + '_ {
+        let legacy = self
+            .ids
+            .is_empty()
+            .then(|| {
+                crate::ChipIdentity::from_legacy(
+                    self.jedec_manufacturer,
+                    self.jedec_device,
+                    self.features.contains(Features::AT25F_ID),
+                    self.features.contains(Features::RES2_ID),
+                    self.features.contains(Features::RDID_CONTINUATION),
+                )
+            })
+            .flatten();
+        self.ids.iter().copied().chain(legacy)
+    }
+
+    /// Match a response without crossing identification command namespaces.
+    pub fn matches_identity(&self, identity: &crate::ChipIdentity) -> bool {
+        identity.is_valid() && self.identities().any(|candidate| candidate == *identity)
+    }
+
     /// Check if this chip matches the given RDID manufacturer and device IDs.
     /// Legacy Atmel opcode-0x15, RES2, and continuation-prefixed identities
     /// cannot be represented by this lookup and must not enter its candidates.
     #[must_use]
     pub fn matches_jedec_id(&self, manufacturer: u8, device: u16) -> bool {
         manufacturer != 0x7f
-            && !self
-                .features
-                .intersects(Features::AT25F_ID | Features::RDID_CONTINUATION | Features::RES2_ID)
-            && self.jedec_manufacturer == manufacturer
-            && self.jedec_device == device
+            && self.matches_identity(&crate::ChipIdentity::Rdid {
+                id: (u32::from(manufacturer) << 16) | u32::from(device),
+            })
     }
 
     /// Check whether two definitions modify flash in the same way.
@@ -467,6 +492,7 @@ mod tests {
             name: "W25Q128FV".into(),
             jedec_manufacturer: 0xEF,
             jedec_device: 0x4018,
+            ids: Default::default(),
             total_size: 16 * 1024 * 1024,
             page_size: 256,
             features: Features::WRSR_WREN | Features::FAST_READ,

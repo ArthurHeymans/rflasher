@@ -165,6 +165,14 @@ pub struct ChipDatabase {
 }
 
 impl ChipProvider for ChipDatabase {
+    fn supports_probe_method(&self, method: ProbeMethod) -> bool {
+        self.chips.as_slice().supports_probe_method(method)
+    }
+
+    fn find_nth_by_identity(&self, identity: &ChipIdentity, index: usize) -> Option<&FlashChip> {
+        self.chips.as_slice().find_nth_by_identity(identity, index)
+    }
+
     fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
         ChipDatabase::find_by_jedec_id(self, manufacturer, device)
     }
@@ -252,11 +260,13 @@ impl ChipDatabase {
         let count = vendor_def.chips.len();
 
         for chip_def in vendor_def.chips {
+            let (manufacturer, device) = chip_def.canonical_id(vendor_def.manufacturer_id);
             let chip = FlashChip {
                 vendor: vendor_def.vendor.clone().into(),
                 name: chip_def.name.into(),
-                jedec_manufacturer: vendor_def.manufacturer_id,
-                jedec_device: chip_def.device_id,
+                jedec_manufacturer: manufacturer,
+                jedec_device: device,
+                ids: chip_def.ids.into(),
                 total_size: chip_def.total_size.to_bytes(),
                 page_size: chip_def.page_size,
                 features: features_from(chip_def.features),
@@ -345,6 +355,9 @@ impl ChipDatabase {
         self.chips.iter()
     }
 }
+
+#[cfg(test)]
+mod identity_tests;
 
 #[cfg(test)]
 mod tests {

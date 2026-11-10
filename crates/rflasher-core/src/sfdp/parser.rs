@@ -609,6 +609,7 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         name: String::from("Unknown").into(),
         jedec_manufacturer,
         jedec_device,
+        ids: Default::default(),
         total_size: params.density_bytes as u32,
         page_size: params.page_size as u16,
         features,

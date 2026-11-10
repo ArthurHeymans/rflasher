@@ -281,8 +281,22 @@ fn chip_to_tokens(vendor: &VendorDef, chip: &ChipDef) -> TokenStream {
         static ERASE_BLOCKS: [EraseBlock; #count] = [#(#erase_blocks),*];
         ChipSlice::borrowed(&ERASE_BLOCKS)
     });
-    let mfr_id = Literal::u8_unsuffixed(vendor.manufacturer_id);
-    let dev_id = Literal::u16_unsuffixed(chip.device_id);
+    let (manufacturer, device) = chip.canonical_id(vendor.manufacturer_id);
+    let mfr_id = Literal::u8_unsuffixed(manufacturer);
+    let dev_id = Literal::u16_unsuffixed(device);
+    let ids = chip.ids.iter().map(|identity| {
+        use rflasher_chip_types::ChipIdentity::*;
+        let (variant, id) = match *identity {
+            Rdid { id } => ("Rdid", Literal::u32_unsuffixed(id)),
+            Rems { id } => ("Rems", Literal::u16_unsuffixed(id)),
+            Res1 { id } => ("Res1", Literal::u8_unsuffixed(id)),
+            Res2 { id } => ("Res2", Literal::u16_unsuffixed(id)),
+            Res3 { id } => ("Res3", Literal::u32_unsuffixed(id)),
+            At25f { id } => ("At25f", Literal::u16_unsuffixed(id)),
+        };
+        let variant = quote::format_ident!("{variant}");
+        quote!(ChipIdentity::#variant { id: #id })
+    });
     let total_size = Literal::u32_unsuffixed(chip.total_size.to_bytes());
     let page_size = Literal::u16_unsuffixed(chip.page_size);
     let features = features_to_tokens(chip.features);
@@ -297,6 +311,7 @@ fn chip_to_tokens(vendor: &VendorDef, chip: &ChipDef) -> TokenStream {
             name: ChipName::borrowed(#chip_name),
             jedec_manufacturer: #mfr_id,
             jedec_device: #dev_id,
+            ids: ChipSlice::borrowed(&[#(#ids),*]),
             total_size: #total_size,
             page_size: #page_size,
             features: #features,

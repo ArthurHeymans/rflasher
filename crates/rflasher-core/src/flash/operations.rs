@@ -16,6 +16,10 @@ use crate::protocol::{self, CommandAddressing};
 
 use super::context::{AddressMode, FlashContext};
 
+#[cfg(all(test, feature = "std"))]
+#[path = "erase_addressing_tests.rs"]
+mod erase_addressing_tests;
+
 pub(crate) fn compatible_4byte_addressing(
     chip_features: Features,
     master_features: SpiFeatures,
@@ -709,6 +713,9 @@ pub struct ProbeResult {
     pub jedec_manufacturer: u8,
     /// Second and third raw RDID bytes, in big-endian order.
     pub jedec_device: u16,
+    /// Actual method/value that matched (or the RDID used for SFDP synthesis).
+    /// None means continuation framing could not be established.
+    pub identity: Option<crate::chip::ChipIdentity>,
     /// The chip to use for operations
     pub chip: crate::chip::FlashChip,
     /// Whether the chip was found in the database
@@ -777,8 +784,11 @@ fn select_database_chip<P>(
 where
     P: ChipProvider + ?Sized,
 {
+    let identity = crate::chip::ChipIdentity::Rdid {
+        id: (u32::from(manufacturer) << 16) | u32::from(device),
+    };
     let candidates = (0..)
-        .map_while(|i| provider.find_nth_by_jedec_id(manufacturer, device, i))
+        .map_while(|i| provider.find_nth_by_identity(&identity, i))
         .collect();
     select_candidates(candidates, manufacturer, device, sfdp, wanted)
 }
@@ -810,8 +820,8 @@ fn select_candidates(
             })
             .collect();
         if matching.is_empty() {
-            log::error!(
-                "No chip definition named \"{}\" matches JEDEC ID {:02X}:{:04X}{}",
+            log::debug!(
+                "No chip definition named \"{}\" matches this identity {:02X}:{:04X}{}",
                 wanted,
                 manufacturer,
                 device,
@@ -1029,31 +1039,34 @@ pub(crate) async fn select_probed_chip<M: SpiMaster + ?Sized, P: ChipProvider + 
     sfdp: Option<&crate::sfdp::SfdpInfo>,
     wanted: Option<&str>,
 ) -> Result<Option<crate::chip::FlashChip>> {
-    if manufacturer != 0x7f {
-        return select_database_chip(provider, manufacturer, device, sfdp, wanted);
+    let identity = super::identification::rdid_identity(master, manufacturer, device).await?;
+    select_identity(provider, identity, sfdp, wanted)
+}
+
+#[cfg(feature = "std")]
+fn select_identity<P: ChipProvider + ?Sized>(
+    provider: &P,
+    identity: Option<crate::chip::ChipIdentity>,
+    sfdp: Option<&crate::sfdp::SfdpInfo>,
+    wanted: Option<&str>,
+) -> Result<Option<crate::chip::FlashChip>> {
+    match identity {
+        Some(crate::chip::ChipIdentity::Rdid { id }) if id <= 0xff_ffff && id >> 16 != 0x7f => {
+            return select_database_chip(provider, (id >> 16) as u8, id as u16, sfdp, wanted);
+        }
+        _ => {}
     }
-    let banked = protocol::read_banked_jedec_id(master, device).await?;
-    let candidates = if banked.device_bytes().is_empty() {
-        Vec::new()
-    } else {
-        (0..)
-            .map_while(|i| {
-                provider.find_nth_by_banked_jedec_id(
-                    1,
-                    banked.manufacturer,
-                    banked.device_bytes(),
-                    i,
-                )
-            })
-            .collect()
-    };
-    select_candidates(
-        candidates,
-        banked.manufacturer,
-        banked.device_id(),
-        sfdp,
-        wanted,
-    )
+    let candidates = identity
+        .map(|id| {
+            (0..)
+                .map_while(|n| provider.find_nth_by_identity(&id, n))
+                .collect()
+        })
+        .unwrap_or_default();
+    let (manufacturer, device) = identity
+        .map(|id| id.manufacturer_device())
+        .unwrap_or_default();
+    select_candidates(candidates, manufacturer, device, sfdp, wanted)
 }
 
 /// Probe for a flash chip with detailed results
@@ -1120,35 +1133,21 @@ where
         }
     };
 
-    let selection = select_probed_chip(
-        master,
-        provider,
-        jedec_manufacturer,
-        jedec_device,
-        sfdp.as_ref(),
-        options.chip,
-    )
-    .await;
+    let rdid =
+        super::identification::rdid_identity(master, jedec_manufacturer, jedec_device).await?;
+    let selection = select_identity(provider, rdid, sfdp.as_ref(), options.chip);
     let mut db_chip = match selection {
         Err(Error::ChipNotFound) if options.chip.is_some() && sfdp.is_none() && sfdp_absent => {
             // A requested name may refer to a legacy identity, but never let
             // it override an identifiable RDID chip.
-            match select_probed_chip(
-                master,
-                provider,
-                jedec_manufacturer,
-                jedec_device,
-                None,
-                None,
-            )
-            .await
-            {
+            match select_identity(provider, rdid, None, None) {
                 Ok(None) => None,
                 _ => return Err(Error::ChipNotFound),
             }
         }
         other => other?,
     };
+    let mut matched_identity = db_chip.as_ref().and(rdid);
     // A controller limited to three-byte reads cannot resolve AMIC's four-byte
     // continuation ID. Do not turn that uncertainty into a legacy match.
     if db_chip.is_none()
@@ -1156,23 +1155,17 @@ where
         && sfdp_absent
         && !(jedec_manufacturer == 0x7f && jedec_device >> 8 == 0x37)
     {
-        // RES2 is 0xAB followed by three zero bytes and two response bytes.
-        // Never interpret a failed transfer as an identity.
-        let mut id = [0; 2];
-        let mut cmd = crate::spi::SpiCommand::read_3b(crate::spi::opcodes::RES, 0, &mut id);
-        match master.execute(&mut cmd).await {
-            Ok(()) if id != [0, 0] && id != [0xff, 0xff] => {
-                let candidates: Vec<_> = (0..)
-                    .map_while(|i| provider.find_nth_by_res2_id(id[0], id[1], i))
-                    .collect();
-                if candidates.len() > 1 && options.chip.is_none() {
-                    return Err(Error::ChipAmbiguous);
-                }
-                db_chip =
-                    select_candidates(candidates, id[0], u16::from(id[1]), None, options.chip)?;
-            }
-            Ok(()) | Err(Error::OpcodeNotSupported) => {}
-            Err(e) => return Err(e),
+        let rdid_absent = matches!((jedec_manufacturer, jedec_device), (0, 0) | (0xff, 0xffff));
+        let matches =
+            super::identification::legacy_candidates(master, provider, rdid_absent).await?;
+        let (candidates, identity) =
+            super::identification::intersect_matches(&matches, options.chip)?;
+        if let Some(identity) = identity {
+            let (manufacturer, device) = identity.manufacturer_device();
+            db_chip = select_candidates(candidates, manufacturer, device, None, options.chip)?;
+            matched_identity = Some(identity);
+        } else if options.chip.is_some() {
+            return Err(Error::ChipNotFound);
         }
     }
     if db_chip.is_some() {
@@ -1202,6 +1195,7 @@ where
     let mut result = ProbeResult {
         jedec_manufacturer,
         jedec_device,
+        identity: matched_identity.or(rdid),
         chip,
         from_database,
         sfdp,
@@ -1724,27 +1718,85 @@ pub(crate) fn spi_eraser_usable<M: SpiMaster + ?Sized>(
 /// Check that `master` can issue `block`.
 ///
 /// Some programmers only send an allowed set of opcodes (e.g. Intel software
-/// sequencing with a locked opcode menu). With 4-byte addressing a native
-/// opcode is preferred when the programmer can send it; otherwise the
-/// three-byte opcode needs a usable 4-byte addressing procedure.
+/// sequencing with a locked opcode menu). Prefer a documented mode-entered
+/// legacy erase when possible, as flashprog's equal-geometry alternatives do.
+/// Native opcodes remain available for masters/chips that cannot switch modes.
+/// Selection is made before any mutation; verification failure is not retried.
 fn check_spi_eraser<M: SpiMaster + ?Sized>(
     master: &M,
     chip_features: Features,
     four_byte: bool,
     block: &EraseBlock,
 ) -> Result<()> {
-    let four_byte = four_byte && !block.is_chip_erase();
+    select_erase_addressing(
+        master,
+        chip_features,
+        four_byte && !block.is_chip_erase(),
+        block,
+    )
+    .map(|_| ())
+}
+
+fn erase_mode_switch_supported<M: SpiMaster + ?Sized>(master: &M, features: Features) -> bool {
+    use crate::spi::opcodes;
+    if features.intersects(Features::FOUR_BYTE_ENTER | Features::FOUR_BYTE_ENTER_WREN) {
+        master.probe_opcode(opcodes::EN4B)
+            && master.probe_opcode(opcodes::EX4B)
+            && (!features.contains(Features::FOUR_BYTE_ENTER_WREN)
+                || master.probe_opcode(opcodes::WREN))
+    } else if features.contains(Features::FOUR_BYTE_ENTER_EAR7) {
+        master.probe_opcode(opcodes::WREAR_ALT) && master.probe_opcode(opcodes::WREN)
+    } else {
+        false
+    }
+}
+
+fn select_erase_addressing<M: SpiMaster + ?Sized>(
+    master: &M,
+    features: Features,
+    four_byte: bool,
+    block: &EraseBlock,
+) -> Result<(u8, CommandAddressing, bool)> {
+    let capabilities = master.features();
+    if four_byte
+        && features.supports_4ba_mode_switch()
+        && capabilities.contains(SpiFeatures::FOUR_BYTE_ADDR)
+        && !capabilities.contains(SpiFeatures::NO_4BA_MODES)
+        && master.probe_opcode(block.opcode)
+    {
+        let (addressing, enter) = compatible_4byte_addressing(features, capabilities)?;
+        // Check mode-entry prerequisites during preflight too.
+        if !erase_mode_switch_supported(master, features) {
+            return select_native_or_compatible_erase(master, features, four_byte, block);
+        }
+        return Ok((block.opcode, addressing, enter));
+    }
+    select_native_or_compatible_erase(master, features, four_byte, block)
+}
+
+fn select_native_or_compatible_erase<M: SpiMaster + ?Sized>(
+    master: &M,
+    features: Features,
+    four_byte: bool,
+    block: &EraseBlock,
+) -> Result<(u8, CommandAddressing, bool)> {
     let native = four_byte
         && block.opcode_4b.is_some_and(|opcode| {
             master.features().contains(SpiFeatures::FOUR_BYTE_ADDR) && master.probe_opcode(opcode)
         });
-    if !master.probe_opcode(block.opcode_for_address_width(native)) {
+    let opcode = block.opcode_for_address_width(native);
+    if !master.probe_opcode(opcode) {
         return Err(Error::OpcodeNotSupported);
     }
-    if four_byte {
-        addressing_for_4byte_operation(native, chip_features, master.features())?;
+    let (addressing, enter) = if four_byte {
+        addressing_for_4byte_operation(native, features, master.features())?
+    } else {
+        (CommandAddressing::ThreeByte, false)
+    };
+    if enter && !erase_mode_switch_supported(master, features) {
+        return Err(Error::OpcodeNotSupported);
     }
-    Ok(())
+    Ok((opcode, addressing, enter))
 }
 
 /// Execute exactly the validated eraser selected by the planner.
@@ -1802,20 +1854,8 @@ async fn erase_spi_unprotected<M: SpiMaster + ?Sized>(
     }
     let features = ctx.chip.features;
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
-    let master_features = master.features();
-    let use_native = use_4byte
-        && block.opcode_4b.is_some_and(|opcode| {
-            master_features.contains(SpiFeatures::FOUR_BYTE_ADDR) && master.probe_opcode(opcode)
-        });
-    let opcode = block.opcode_for_address_width(use_native);
-    if !master.probe_opcode(opcode) {
-        return Err(Error::OpcodeNotSupported);
-    }
-    let (addressing, enter_exit_4byte) = if use_4byte {
-        addressing_for_4byte_operation(use_native, features, master_features)?
-    } else {
-        (CommandAddressing::ThreeByte, false)
-    };
+    let (opcode, addressing, enter_exit_4byte) =
+        select_erase_addressing(master, features, use_4byte, block)?;
     // Validate the complete walk before issuing any erase command.
     let mut current = addr;
     let end = addr.checked_add(len).ok_or(Error::AddressOutOfBounds)?;
@@ -2123,7 +2163,10 @@ mod tests {
                 cmd.read_buf
                     .copy_from_slice(&response[..cmd.read_buf.len()]);
             } else {
-                assert!(matches!(cmd.opcode, opcodes::RDSFDP | opcodes::RES));
+                assert!(matches!(
+                    cmd.opcode,
+                    opcodes::RDSFDP | opcodes::RES | 0x90 | 0x15
+                ));
                 cmd.read_buf.fill(0xff);
             }
             Ok(())
@@ -2466,6 +2509,7 @@ mod tests {
             name: "test".into(),
             jedec_manufacturer: 0,
             jedec_device: 0,
+            ids: Default::default(),
             total_size: 48,
             page_size: 16,
             features: Features::empty(),

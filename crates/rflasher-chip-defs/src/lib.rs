@@ -1,6 +1,6 @@
 //! Shared RON schema and validation for runtime and compiled chip databases.
 
-pub use rflasher_chip_types::Unlock;
+pub use rflasher_chip_types::{ChipIdentity, Unlock};
 use serde::Deserialize;
 use std::collections::HashSet;
 
@@ -229,7 +229,12 @@ pub struct ChipDef {
     pub name: String,
     /// JEDEC device ID (2 bytes, e.g., 0x4018), or the legacy 0x15 ID
     /// when `features.at25f_id` is set.
+    #[serde(default)]
     pub device_id: u16,
+    /// Alternative method-specific identities, including their complete values.
+    /// When present, these replace legacy identity fields for probing.
+    #[serde(default)]
+    pub ids: Vec<ChipIdentity>,
     /// Total flash size
     pub total_size: Size,
     /// Page size in bytes (for programming)
@@ -252,6 +257,37 @@ pub struct ChipDef {
     /// Test status
     #[serde(default)]
     pub tested: TestStatusDef,
+}
+
+impl ChipDef {
+    /// Exact identities, adapting legacy metadata only when no IDs are listed.
+    pub fn identities(&self, manufacturer: u8) -> impl Iterator<Item = ChipIdentity> + '_ {
+        let legacy = self
+            .ids
+            .is_empty()
+            .then(|| {
+                ChipIdentity::from_legacy(
+                    manufacturer,
+                    self.device_id,
+                    self.features.at25f_id,
+                    self.features.res2_id,
+                    self.features.rdid_continuation,
+                )
+            })
+            .flatten();
+        self.ids.iter().copied().chain(legacy)
+    }
+
+    /// Canonical manufacturer/device metadata for existing operational APIs.
+    /// Prefer RDID when available, but never use these fields to reinterpret IDs.
+    pub fn canonical_id(&self, vendor_manufacturer: u8) -> (u8, u16) {
+        self.ids
+            .iter()
+            .find(|id| matches!(id, ChipIdentity::Rdid { .. }))
+            .or_else(|| self.ids.first())
+            .map(|id| id.manufacturer_device())
+            .unwrap_or((vendor_manufacturer, self.device_id))
+    }
 }
 
 fn default_page_size() -> u16 {
@@ -280,6 +316,22 @@ impl VendorDef {
                     "Vendor {} defines chip name {} more than once",
                     self.vendor, chip.name
                 ));
+            }
+
+            let legacy_flags = u8::from(chip.features.at25f_id) + u8::from(chip.features.res2_id);
+            if legacy_flags > 1 || (!chip.ids.is_empty() && legacy_flags != 0) {
+                return Err(format!(
+                    "Chip {} mixes explicit and legacy probe metadata",
+                    chip.name
+                ));
+            }
+            for (index, id) in chip.ids.iter().enumerate() {
+                if !id.is_valid() || chip.ids[..index].contains(id) {
+                    return Err(format!(
+                        "Chip {} has an invalid or duplicate identity",
+                        chip.name
+                    ));
+                }
             }
 
             // Validate erase blocks
@@ -325,6 +377,46 @@ impl VendorDef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_values_validate_framing_duplicates_and_legacy_conflicts() {
+        let mut vendor: VendorDef = ron::from_str(
+            r#"(
+            vendor: "Test", manufacturer_id: 1, chips: [(
+                name: "Chip", ids: [Rems(id: 0xBF48), Res2(id: 0xBF48)], total_size: KiB(64),
+                erase_blocks: [(opcode: 0xc7, regions: [(size: KiB(64), count: 1)])],
+            )],
+        )"#,
+        )
+        .unwrap();
+        assert!(vendor.validate().is_ok());
+        assert_eq!(vendor.chips[0].canonical_id(1), (0xbf, 0x48));
+        vendor.chips[0]
+            .ids
+            .push(ChipIdentity::Rdid { id: 0x12345678 });
+        assert!(
+            vendor
+                .validate()
+                .unwrap_err()
+                .contains("invalid or duplicate")
+        );
+        vendor.chips[0].ids.pop();
+        vendor.chips[0].ids.push(ChipIdentity::Rems { id: 0xbf48 });
+        assert!(
+            vendor
+                .validate()
+                .unwrap_err()
+                .contains("invalid or duplicate")
+        );
+        vendor.chips[0].ids.pop();
+        vendor.chips[0].features.res2_id = true;
+        assert!(
+            vendor
+                .validate()
+                .unwrap_err()
+                .contains("mixes explicit and legacy")
+        );
+    }
 
     #[test]
     fn vendor_validation_covers_duplicates_and_erase_geometry() {

@@ -56,6 +56,7 @@ fn chip(size: u32, features: Features, four_byte_erase: bool) -> FlashChip {
         name: "EMU".into(),
         jedec_manufacturer: 0xEF,
         jedec_device: 0x4018,
+        ids: Default::default(),
         total_size: size,
         page_size: 256,
         features: Features::WRSR_WREN | features,

@@ -2,10 +2,10 @@
 // Ported from flashprog/flashchips.c
 //
 // SST25 series write behaviour (from flashprog):
-//   - Chips with device_id >= 0x25xx ("B" suffix, RDID-probed):
+//   - Chips with RDID BF:25xx ("B" suffix):
 //       use AAI word program (0xAD) → features: (aai_word: true)
 //       WRSR requires EWSR (0x50) prefix for most; SST25VF016B accepts either.
-//   - Chips with device_id 0x00xx (REMS-probed, older/non-B variants):
+//   - Chips with legacy REMS/RES identities (older/non-B variants):
 //       use single-byte page program (0x02) — no AAI, no aai_word flag.
 //       WRSR requires EWSR (0x50).
 //   - SST25VF064C and all SST25WFxxxA/B variants: standard 256-byte page program.
@@ -25,15 +25,15 @@
     chips: [
 
         // ====================================================================
-        // SST25VF series — RDID-probed (device_id 0x25xx)
+        // SST25VF series — explicit legacy identities and RDID "B" variants
         // "B" suffix chips: AAI word program (0xAD), WRSR needs EWSR
-        // Non-"B" chips below this group: single-byte PP, WRSR needs EWSR
+        // Older variants: single-byte PP, WRSR needs EWSR
         // ====================================================================
 
         (
             name: "SST25VF512",
             unlock: Some(Status),
-            device_id: 0x2548,
+            ids: [Rems(id: 0xBF48)],
             total_size: KiB(64),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
             // Byte program (0x02), no page program — matches flashprog spi_chip_write_1
@@ -49,7 +49,7 @@
         (
             name: "SST25VF512A",
             unlock: Some(Status),
-            device_id: 0x4800,
+            ids: [Rems(id: 0xBF48)],
             total_size: KiB(64),
             // Byte program (0x02); D8/C7 + fast read supported by A only (flashprog)
             // WRSR needs EWSR, like the combined SST25VF512(A) entry
@@ -67,7 +67,7 @@
         (
             name: "SST25VF010",
             unlock: Some(Status),
-            device_id: 0x2549,
+            ids: [Rems(id: 0xBF49)],
             total_size: KiB(128),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
             // Byte program (0x02), no page program — matches flashprog spi_chip_write_1
@@ -83,7 +83,7 @@
         (
             name: "SST25VF010A",
             unlock: Some(Status),
-            device_id: 0x4900,
+            ids: [Rems(id: 0xBF49)],
             total_size: KiB(128),
             // Byte program (0x02); D8/C7 + fast read supported by A only (flashprog)
             // WRSR needs EWSR, like the combined SST25VF010(A) entry
@@ -101,7 +101,7 @@
         (
             name: "SST25VF020",
             unlock: Some(Status),
-            device_id: 0x2543,
+            ids: [Rems(id: 0xBF43)],
             total_size: KiB(256),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
             // Byte program (0x02), no page program — matches flashprog spi_chip_write_1
@@ -134,7 +134,7 @@
         (
             name: "SST25VF040",
             unlock: Some(Status),
-            device_id: 0x258D,
+            ids: [Rems(id: 0xBF44)],
             total_size: KiB(512),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
             // Byte program (0x02), no page program — matches flashprog spi_chip_write_1
@@ -152,12 +152,10 @@
         (
             name: "SST25VF040B",
             unlock: Some(Status),
-            device_id: 0x258D,
+            ids: [Rdid(id: 0xBF258D), Rems(id: 0xBF8D)],
             total_size: KiB(512),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
-            // Note: same RDID device_id as SST25VF040; differentiated by REMS probe
-            // in flashprog. rflasher uses RDID only, so incompatible procedures
-            // require explicit --chip selection.
+            // RDID identity; the non-B SST25VF040 instead uses REMS BF:44.
             features: (wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
             voltage: (min: 2700, max: 3600),
@@ -238,14 +236,14 @@
         ),
 
         // ====================================================================
-        // SST25VF / SST25LF / SST25WF — REMS-probed (device_id 0x00xx)
+        // SST25VF / SST25LF / SST25WF — legacy REMS/RES identities
         // Single-byte page program; WRSR needs EWSR
         // ====================================================================
 
         (
             name: "SST25LF020A",
             unlock: Some(Status),
-            device_id: 0x0043,
+            ids: [Rems(id: 0xBF43)],
             total_size: KiB(256),
             // EWSR required; AAI uses 0xAF (not standard 0xAD), fall back to byte PP
             write_granularity: Byte,
@@ -261,7 +259,7 @@
         (
             name: "SST25LF040A",
             unlock: Some(Status),
-            device_id: 0x0044,
+            ids: [Res2(id: 0xBF44), Rems(id: 0xBF44)],
             total_size: KiB(512),
             write_granularity: Byte,
             features: (wrsr_persistent_ewsr: true),
@@ -276,7 +274,7 @@
         (
             name: "SST25LF080(A)",
             unlock: Some(Status),
-            device_id: 0x0080,
+            ids: [Res2(id: 0xBF80), Rems(id: 0xBF80)],
             total_size: MiB(1),
             // Accepts both EWSR and WREN (flashprog: FEATURE_WRSR_EITHER)
             write_granularity: Byte,
@@ -291,7 +289,7 @@
         (
             name: "SST25VF010(A)",
             unlock: Some(Status),
-            device_id: 0x0049,
+            ids: [Rems(id: 0xBF49)],
             total_size: KiB(128),
             write_granularity: Byte,
             features: (wrsr_persistent_ewsr: true),
@@ -306,11 +304,11 @@
             tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
         ),
         (
-            // REMS-probed SST25VF040B variant — same chip as 0x258D but
-            // identified via REMS (0x90) command returning 0x008D
+            // Legacy name alias. SST25VF040B above already accepts both
+            // RDID BF258D and REMS BF8D on a single operational definition.
             name: "SST25VF040B.REMS",
             unlock: Some(Status),
-            device_id: 0x008D,
+            ids: [Rems(id: 0xBF8D)],
             total_size: KiB(512),
             features: (wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
@@ -327,7 +325,7 @@
         (
             name: "SST25VF512(A)",
             unlock: Some(Status),
-            device_id: 0x0048,
+            ids: [Rems(id: 0xBF48)],
             total_size: KiB(64),
             write_granularity: Byte,
             features: (wrsr_persistent_ewsr: true),

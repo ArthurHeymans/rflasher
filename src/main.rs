@@ -365,8 +365,11 @@ async fn print_chip_info(handle: &mut FlashHandle) {
 
         println!("Vendor:          {}", info.vendor);
         println!("Name:            {}", info.name);
+        if let Some(identity) = info.identity {
+            println!("Matched ID:      {identity:X?}");
+        }
         println!(
-            "JEDEC ID:        {:02X} {:04X}",
+            "RDID response:   {:02X} {:04X}",
             info.jedec_manufacturer, info.jedec_device
         );
         println!("Unique ID:       {unique_id}");
