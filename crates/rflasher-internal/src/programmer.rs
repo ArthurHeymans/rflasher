@@ -3,8 +3,8 @@
 //! [`InternalProgrammer::open`] detects the chipset and returns either raw
 //! SPI access ([`InternalSpi`], Intel software sequencing and AMD SPI100) or
 //! address-based access ([`HwseqFlash`], Intel hardware sequencing).
-//! Embedded users can drive the controllers directly instead; see the
-//! crate README.
+//! Embedded users wrap a controller themselves instead: in `SpiFlashDevice`
+//! for raw SPI or in [`HwseqFlash`]; see the crate README.
 
 use crate::error::InternalError;
 use crate::ichspi::SpiMode;
@@ -54,31 +54,33 @@ impl InternalOptions {
     }
 }
 
+pub use crate::hwseq::HwseqFlash;
 #[cfg(all(feature = "std", target_os = "linux"))]
-pub use linux::{HwseqFlash, InternalProgrammer, InternalSpi};
+pub use linux::{InternalProgrammer, InternalSpi};
 
 #[cfg(all(feature = "std", target_os = "linux"))]
 mod linux {
-    use super::InternalOptions;
+    use super::{HwseqFlash, InternalOptions};
     use crate::amd_enable::enable_amd_spi100_with_host;
     use crate::controller::Controller;
     use crate::error::InternalError;
-    use crate::host::{DefaultPciAccess, PciAddress};
+    use crate::host::{DefaultPciAccess, LinuxHost, PciAddress};
     use crate::ichspi::{IchSpiController, SpiMode};
     use crate::{AnyDetectedChipset, DetectedAmdChipset, DetectedChipset};
 
-    use rflasher_core::chip::{EraseBlock, WriteGranularity};
-    use rflasher_core::error::{Error as CoreError, Result as CoreResult};
-    use rflasher_core::flash::{self, FlashContext, FlashDevice};
+    use rflasher_core::error::Result as CoreResult;
+    use rflasher_core::flash::{self, FlashContext};
     use rflasher_core::programmer::{FlashAccess, SpiFeatures, SpiMaster};
-    use rflasher_core::spi::{SpiCommand, opcodes};
+    use rflasher_core::spi::SpiCommand;
 
     /// An opened internal programmer, in the access mode its controller allows.
+    // There is one per process; boxing the controller would buy nothing.
+    #[allow(clippy::large_enum_variant)]
     pub enum InternalProgrammer {
         /// Raw SPI commands: Intel software sequencing or AMD SPI100.
         Spi(InternalSpi),
         /// Intel hardware sequencing: the controller runs the flash protocol.
-        HardwareSequencing(HwseqFlash),
+        HardwareSequencing(HwseqFlash<IchSpiController<LinuxHost>>),
     }
 
     impl InternalProgrammer {
@@ -97,7 +99,7 @@ mod linux {
         ) -> Result<Self, InternalError> {
             let controller = IchSpiController::new(chipset, options.mode)?;
             if controller.spi_mode() == SpiMode::HardwareSequencing {
-                HwseqFlash::new(Box::new(controller)).map(Self::HardwareSequencing)
+                HwseqFlash::new(controller).map(Self::HardwareSequencing)
             } else {
                 Ok(Self::Spi(InternalSpi {
                     controller: Box::new(controller),
@@ -190,129 +192,6 @@ mod linux {
                 Some(result) => result,
                 None => flash::spi_read(self, ctx, addr, buf).await,
             }
-        }
-    }
-
-    /// Flash behind Intel hardware sequencing.
-    ///
-    /// The size comes from the flash descriptor and the erase block size from
-    /// the controller, which always erases whole hardware blocks.
-    pub struct HwseqFlash {
-        controller: Box<dyn Controller + Send>,
-        size: u32,
-        erase_blocks: [EraseBlock; 1],
-    }
-
-    fn descriptor_size(header: &[u8], physical_size: Option<u32>) -> Result<u32, InternalError> {
-        let region_end = rflasher_core::layout::parse_ifd(header)
-            .ok()
-            .and_then(|layout| layout.regions.iter().map(|r| r.end).max())
-            .and_then(|end| end.checked_add(1))
-            .filter(|&size| size > 0)
-            .ok_or(InternalError::InvalidDescriptor)?;
-        match physical_size {
-            Some(size) if size >= region_end => Ok(size),
-            Some(_) => Err(InternalError::InvalidDescriptor),
-            None => {
-                log::warn!(
-                    "Physical flash density is unknown; using the last descriptor region endpoint"
-                );
-                Ok(region_end)
-            }
-        }
-    }
-
-    impl HwseqFlash {
-        fn new(mut controller: Box<dyn Controller + Send>) -> Result<Self, InternalError> {
-            let mut header = [0; 4096];
-            controller
-                .controller_read(0, &mut header, 0)
-                .map_err(|_| InternalError::Io("Cannot read the flash descriptor"))?;
-            let size = descriptor_size(&header, controller.physical_flash_size()?)?;
-            log::info!("Flash size: {} bytes", size);
-            Self::with_size(controller, size)
-        }
-
-        pub(crate) fn with_size(
-            controller: Box<dyn Controller + Send>,
-            size: u32,
-        ) -> Result<Self, InternalError> {
-            let block = controller.erase_block_size(size)?.unwrap_or(4096);
-            log::info!("Hardware sequencing erase block size: {} bytes", block);
-            Ok(Self {
-                controller,
-                size,
-                // The opcode is never sent; the controller picks its own.
-                erase_blocks: [EraseBlock::with_count(opcodes::SE_20, block, size / block)],
-            })
-        }
-
-        fn check_writable(&self, addr: u32, len: usize) -> CoreResult<()> {
-            if !self.is_valid_range(addr, len) {
-                Err(CoreError::AddressOutOfBounds)
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    #[cfg(test)]
-    #[test]
-    fn descriptor_size_preserves_unallocated_tail() {
-        let mut header = [0u8; 4096];
-        header[0..4].copy_from_slice(&0x0ff0_a55au32.to_le_bytes());
-        header[4..8].copy_from_slice(&((2u32 << 24) | (4 << 16)).to_le_bytes());
-        header[0x40..0x44].copy_from_slice(&0u32.to_le_bytes());
-        header[0x44..0x48].copy_from_slice(&((0x7ffu32 << 16) | 1).to_le_bytes());
-        header[0x48..0x4c].copy_from_slice(&0x7fffu32.to_le_bytes());
-        assert_eq!(descriptor_size(&header, Some(16 << 20)).unwrap(), 16 << 20);
-        assert_eq!(descriptor_size(&header, None).unwrap(), 8 << 20);
-        assert!(descriptor_size(&header, Some(4 << 20)).is_err());
-        header[0] = 0;
-        assert!(descriptor_size(&header, Some(16 << 20)).is_err());
-    }
-
-    impl FlashDevice for HwseqFlash {
-        fn size(&self) -> u32 {
-            self.size
-        }
-
-        fn erase_granularity(&self) -> u32 {
-            self.erase_blocks[0].min_block_size()
-        }
-
-        fn write_granularity(&self) -> WriteGranularity {
-            WriteGranularity::Bit
-        }
-
-        fn erase_blocks(&self) -> &[EraseBlock] {
-            &self.erase_blocks
-        }
-
-        fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> CoreResult<()> {
-            self.controller.check_access(access, addr, len)
-        }
-
-        async fn read(&mut self, addr: u32, buf: &mut [u8]) -> CoreResult<()> {
-            if !self.is_valid_range(addr, buf.len()) {
-                return Err(CoreError::AddressOutOfBounds);
-            }
-            self.controller
-                .controller_read(addr, buf, self.size as usize)
-        }
-
-        fn validate_write(&self, addr: u32, len: usize) -> CoreResult<()> {
-            self.check_writable(addr, len)
-        }
-
-        async fn write(&mut self, addr: u32, data: &[u8]) -> CoreResult<()> {
-            self.check_writable(addr, data.len())?;
-            self.controller.controller_write(addr, data)
-        }
-
-        async fn erase(&mut self, addr: u32, len: u32) -> CoreResult<()> {
-            self.check_writable(addr, len as usize)?;
-            self.controller.controller_erase(addr, len)
         }
     }
 }

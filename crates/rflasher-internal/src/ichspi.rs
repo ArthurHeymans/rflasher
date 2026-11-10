@@ -4543,6 +4543,24 @@ mod tests {
 
     #[cfg(all(feature = "std", target_os = "linux"))]
     #[test]
+    fn hwseq_flash_needs_address_erase_and_whole_blocks() {
+        use crate::programmer::HwseqFlash;
+
+        // 64 KiB hardware blocks.
+        for size in [0, 4096, (1 << 20) + 4096] {
+            let refused = HwseqFlash::with_size(ich9_controller(3, 3, 0), size);
+            assert!(
+                matches!(refused, Err(InternalError::NotSupported(_))),
+                "{size}"
+            );
+        }
+        // Software sequencing sends raw commands: the chip decides geometry.
+        let refused = HwseqFlash::with_size(swseq_controller(vec![0; 1 << 20]), 1 << 20);
+        assert!(matches!(refused, Err(InternalError::NotSupported(_))));
+    }
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
     fn hwseq_flash_plans_with_the_controller_block_size() {
         use crate::programmer::HwseqFlash;
         use futures_lite::future::block_on;
@@ -4554,7 +4572,7 @@ mod tests {
             PCI_REG_BIOS_CNTL as u16,
             u32::from(BIOS_CNTL_SMM_BWP),
         );
-        let mut flash = HwseqFlash::with_size(Box::new(controller), 1 << 20).unwrap();
+        let mut flash = HwseqFlash::with_size(controller, 1 << 20).unwrap();
         assert_eq!(flash.erase_granularity(), 64 * 1024);
         assert_eq!(flash.erase_blocks()[0].total_size(), 1 << 20);
         // Writable SMM_BWP must not prevent the lazy enable.
@@ -4969,7 +4987,7 @@ mod tests {
                     let fake = (controller.spibar.clone(), controller.host.clone());
                     fake.0.set_flash(vec![0; 1 << 20]);
                     fake.0.set32(ICH9_REG_PR0, protection);
-                    let mut flash = HwseqFlash::with_size(Box::new(controller), 1 << 20).unwrap();
+                    let mut flash = HwseqFlash::with_size(controller, 1 << 20).unwrap();
                     check_mutation(
                         &mut flash,
                         (&fake.0, &fake.1),

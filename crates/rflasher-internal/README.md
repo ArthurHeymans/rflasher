@@ -40,6 +40,11 @@ Both concrete generic controllers implement `SpiMaster`, without `Box` or
 in `SpiFlashDevice`. Core then owns chip geometry, protection and polling;
 firmware should not reissue raw erase/status/unlock sequences itself.
 
+An Intel controller in hardware sequencing sends no raw SPI commands, so it
+needs no chip at all: wrap it in `HwseqFlash::with_size(controller, size)`,
+which is the same `FlashDevice` with the controller's erase block size. That
+is the path for flash beyond the 16 MiB software sequencing can address.
+
 For native probing, the same adapter uses the richer SFDP-aware context.
 AMD SPI100 reads use the checked memory window where the chip's size and addressing allow it, and native SPI commands otherwise;
 writes, erases and status access use the chip-aware SPI path.

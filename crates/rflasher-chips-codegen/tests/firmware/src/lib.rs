@@ -22,6 +22,18 @@ pub async fn open<H: rflasher_internal::HostAccess>(
     ))
 }
 
+/// Hardware sequencing needs no catalog: the controller runs the flash
+/// protocol and reports its erase block size, and the board knows the size.
+pub fn open_hwseq<H: rflasher_internal::HostAccess>(
+    controller: rflasher_internal::IchSpiController<H>,
+    flash_size: u32,
+) -> Result<
+    rflasher_internal::HwseqFlash<rflasher_internal::IchSpiController<H>>,
+    rflasher_internal::InternalError,
+> {
+    rflasher_internal::HwseqFlash::with_size(controller, flash_size)
+}
+
 #[cfg(test)]
 extern crate std;
 #[cfg(test)]
