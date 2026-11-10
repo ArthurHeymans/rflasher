@@ -111,6 +111,13 @@ sequencing only sends opcodes it understands, and some depend on the chip:
 it, but enters QPI on others. An unlocked opcode menu gains the identified
 chip's status reads; a locked one is used as the firmware left it.
 
+Where a locked menu has no RDSR2, the CMP bit cannot be checked. Such a chip
+is still written, as long as its block protection bits are clear, and every
+program and erase is read back: a protected chip drops the command and keeps
+its contents, so that surfaces as an error with nothing changed. Set block
+protection is refused, since lifting it would rewrite a status register 2
+whose value is unknown.
+
 `SpiFlashDevice::check_writable` reports, without sending a command, whether
 the controller can program and erase the identified chip at all. Use it when
 opening the device to decide whether to offer a writable store, rather than

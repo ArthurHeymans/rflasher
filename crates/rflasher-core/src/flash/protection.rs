@@ -94,6 +94,23 @@ pub(crate) fn wps_unknown(ctx: &FlashContext) -> bool {
     ctx.chip.jedec_id() == 0xef4018 && !ctx.chip.features.contains(Features::EXPLICIT_PROFILE)
 }
 
+/// Whether the programmer cannot read the status register 2 that holds this
+/// chip's CMP bit: it only sends certain opcodes, and RDSR2 is not among them
+/// (a locked Intel opcode menu, typically).
+fn sr2_unreadable<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashContext) -> bool {
+    ctx.chip.features.documents_rdsr2() && !master.probe_opcode(0x35)
+}
+
+/// Whether protection that silently ignores program and erase cannot be
+/// ruled out, so that every array mutation must be read back whether or not
+/// the caller verifies: possible WPS block locks ([`wps_unknown`]), or CMP in
+/// a status register 2 the programmer cannot read. A protected chip drops
+/// the command and keeps its contents, so the read-back turns an unnoticed
+/// refusal into an error and nothing has been changed.
+pub(crate) fn needs_read_back<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashContext) -> bool {
+    wps_unknown(ctx) || sr2_unreadable(master, ctx)
+}
+
 /// Refuse, without sending a command, a chip whose protection this programmer
 /// cannot even inspect: whatever its registers hold, a mutation would fail.
 ///
@@ -130,9 +147,7 @@ pub(crate) fn check_supported<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashCont
         // CMP availability alone does not identify its register/bit.
         return Err(Error::ChipNotSupported);
     }
-    if features.documents_rdsr2() && !master.probe_opcode(0x35) {
-        return Err(Error::OpcodeNotSupported);
-    }
+    // An unreadable status register 2 is no refusal: see `needs_read_back`.
     Ok(())
 }
 
@@ -183,7 +198,19 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
         if sr1 & bp == 0 && !features.documents_rdsr2() {
             return Ok(SavedProtection::Unchanged);
         }
-        let sr2 = if features.documents_rdsr2() {
+        let sr2 = if sr2_unreadable(master, ctx) {
+            // CMP cannot be checked, and the callers read back instead. That
+            // only covers a chip left as it is: rewriting SR1 to lift block
+            // protection would, without SR2's value, also clear SR2 on parts
+            // that take both in one WRSR (quad enable included).
+            if sr1 & bp != 0 {
+                log::error!(
+                    "Block protection is set and status register 2 cannot be read to lift it"
+                );
+                return Err(Error::OpcodeNotSupported);
+            }
+            return Ok(SavedProtection::Unchanged);
+        } else if features.documents_rdsr2() {
             let value = protocol::read_status2(master).await?;
             // Check even with BP=0: CMP can then protect the entire array.
             // Never clear CMP/SRL, or reinterpret an unverified CMP layout.

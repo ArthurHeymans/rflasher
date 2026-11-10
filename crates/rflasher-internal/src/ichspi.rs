@@ -5162,18 +5162,20 @@ mod tests {
             follow_menu(c);
         };
 
-        // Locked without RDSR2: refused when opening, before any command.
-        let mut c = swseq_controller(vec![0; winbond.total_size as usize]);
+        // Locked without RDSR2: the menu stays as it is and CMP cannot be
+        // checked, so the chip is written as found and read back.
+        let mut c = swseq_controller(vec![0xff; winbond.total_size as usize]);
         c.locked = true;
         let mmio = c.spibar.clone();
+        let menu = c.opcodes.as_ref().unwrap().opcode.map(|o| o.opcode);
         let mut flash = SpiFlashDevice::new(c, FlashContext::new(winbond.clone()));
         assert!(mmio.writes().is_empty());
-        assert_eq!(flash.check_writable(), Err(CoreError::OpcodeNotSupported));
-        assert_eq!(
-            block_on(flash.write(0x10000, &[1])),
-            Err(CoreError::OpcodeNotSupported)
-        );
-        assert!(mmio.writes().is_empty());
+        assert!(!flash.master().probe_opcode(0x35));
+        flash.check_writable().unwrap();
+        block_on(flash.write(0x10000, &[1, 2])).unwrap();
+        assert_eq!(mmio.flash()[0x10000..0x10002], [1, 2]);
+        let c = flash.master();
+        assert_eq!(c.opcodes.as_ref().unwrap().opcode.map(|o| o.opcode), menu);
 
         // Locked with the firmware's own RDSR2 entry: usable for this chip.
         let mut c = swseq_controller(vec![0; winbond.total_size as usize]);

@@ -201,12 +201,13 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn erase_operation(&mut self, op: &operations::OptimalEraseOp) -> Result<EraseOutcome> {
-        if !super::protection::wps_unknown(&self.ctx) {
+        if !super::protection::needs_read_back(&self.master, &self.ctx) {
             operations::erase_spi_operation(&mut self.master, &self.ctx, op).await?;
             return Ok(EraseOutcome::Unverified);
         }
-        // Possible WPS individual locks ignore the erase without an error, so
-        // a direct caller must not see success unless the range reads erased.
+        // Protection that cannot be ruled out ignores the erase without an
+        // error, so a direct caller must not see success unless the range
+        // reads erased.
         self.master
             .check_access(crate::programmer::FlashAccess::Read, op.start, op.size)?;
         operations::erase_spi_operation(&mut self.master, &self.ctx, op).await?;

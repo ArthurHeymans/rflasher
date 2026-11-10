@@ -1350,7 +1350,7 @@ pub async fn write<M: SpiMaster + ?Sized>(
     }
     // In range, so the length fits. Refuse before the first page, not after.
     master.check_access(FlashAccess::Modify, addr, data.len() as u32)?;
-    let read_back = super::protection::wps_unknown(ctx);
+    let read_back = super::protection::needs_read_back(master, ctx);
     if read_back {
         master.check_access(FlashAccess::Read, addr, data.len() as u32)?;
     }
