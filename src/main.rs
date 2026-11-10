@@ -75,9 +75,12 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Probe => {
             // Probe doesn't use the device, just shows info
-            let _handle =
+            let handle =
                 open_flash_with_options(require_programmer(&programmer)?, &db, &open_options)
                     .await?;
+            if let Some(info) = handle.chip_info() {
+                print_chip_identity(info);
+            }
             Ok(())
         }
         Commands::Read { file, layout } => {
@@ -336,6 +339,28 @@ fn apply_region_filters(
     Ok(region_files)
 }
 
+/// Print only already-recorded identification data, without issuing commands.
+fn print_chip_identity(info: &rflasher_programmers::ChipInfo) {
+    println!("Vendor:          {}", info.vendor);
+    println!("Name:            {}", info.name);
+    print!("{}", commands::format_identity(info.identity));
+    match info.identity {
+        // The complete recorded RDID is already displayed, including prefixes.
+        Some(rflasher_core::chip::ChipIdentity::Rdid { .. }) => {}
+        Some(_) => println!(
+            "Initial RDID:    {:02X} {:02X} {:02X}",
+            info.jedec_manufacturer,
+            (info.jedec_device >> 8) as u8,
+            info.jedec_device as u8
+        ),
+        // Context-only handles have metadata, not a recorded wire response.
+        None => println!(
+            "ID metadata:     {:02X} {:04X}",
+            info.jedec_manufacturer, info.jedec_device
+        ),
+    }
+}
+
 /// Print chip metadata and attempt to read the factory-programmed unique ID.
 async fn print_chip_info(handle: &mut FlashHandle) {
     use rflasher_core::layout::parse_ifd;
@@ -363,12 +388,7 @@ async fn print_chip_info(handle: &mut FlashHandle) {
             println!("Source:          SFDP (chip not in database)");
         }
 
-        println!("Vendor:          {}", info.vendor);
-        println!("Name:            {}", info.name);
-        println!(
-            "JEDEC ID:        {:02X} {:04X}",
-            info.jedec_manufacturer, info.jedec_device
-        );
+        print_chip_identity(info);
         println!("Unique ID:       {unique_id}");
         println!(
             "Size:            {} bytes ({})",

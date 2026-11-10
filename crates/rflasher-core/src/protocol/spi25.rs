@@ -123,14 +123,6 @@ impl BankedJedecId {
     pub fn device_bytes(&self) -> &[u8] {
         &self.bytes[..self.len]
     }
-    #[cfg(feature = "std")]
-    pub fn device_id(&self) -> u16 {
-        if self.len == 1 {
-            u16::from(self.bytes[0])
-        } else {
-            u16::from_be_bytes(self.bytes)
-        }
-    }
 }
 
 /// Complete an RDID that started with 0x7f. Unknown or unreadable identity
