@@ -1,7 +1,26 @@
 //! rflasher-chips-codegen - Build-time code generator for flash chip database
 //!
-//! This crate parses RON chip definitions and generates Rust code
-//! that can be included in rflasher-core at build time.
+//! Parses RON definitions into read-only descriptors: either the full catalog
+//! or a small board selection. Both use the same allocation-independent model.
+//!
+//! ```no_run
+//! use rflasher_chips_codegen::{ChipDatabase, Error};
+//! use std::path::Path;
+//!
+//! fn board_catalog(data: &Path, output: &Path) -> Result<(), Error> {
+//!     ChipDatabase::load_from_dir(data)?
+//!         .select(&["W25Q128BV-WP", "W25Q128FVJV-WP"])?
+//!         .with_defaults(&["W25Q128FVJV-WP"])?
+//!         .write(output)
+//! }
+//! ```
+//!
+//! `rflasher_chips::bundled_data_dir()` supplies the bundled data path when
+//! that crate is a host build dependency. Generated firmware catalogs work
+//! with and without `alloc`, and expose a `ChipCatalog` for safe resolution.
+
+mod firmware;
+pub use firmware::SelectedChips;
 
 use proc_macro2::{Literal, TokenStream};
 use quote::quote;
@@ -220,6 +239,64 @@ fn write_granularity_to_tokens(granularity: WriteGranularity) -> TokenStream {
         WriteGranularity::Page => quote!(WriteGranularity::Page),
     }
 }
+/// One static descriptor representation for both full and selected catalogs.
+fn chip_to_tokens(vendor: &VendorDef, chip: &ChipDef) -> TokenStream {
+    let erase_blocks: Vec<_> = chip
+        .erase_blocks
+        .iter()
+        .map(|eb| {
+            let opcode = Literal::u8_unsuffixed(eb.opcode);
+            let opcode_4b = eb.opcode_4b.map_or_else(
+                || quote!(None),
+                |op| {
+                    let op = Literal::u8_unsuffixed(op);
+                    quote!(Some(#op))
+                },
+            );
+            let regions = eb.regions.iter().map(|r| {
+                let size = Literal::u32_unsuffixed(r.size.to_bytes());
+                let count = Literal::u32_unsuffixed(r.count);
+                quote!(EraseRegion::new(#size, #count))
+            });
+            quote!(EraseBlock::from_static_regions(#opcode, #opcode_4b, &[#(#regions),*]))
+        })
+        .collect();
+    let vendor_name = &vendor.vendor;
+    let chip_name = &chip.name;
+    let count = erase_blocks.len();
+    let erase_blocks = quote!({
+        static ERASE_BLOCKS: [EraseBlock; #count] = [#(#erase_blocks),*];
+        ChipSlice::borrowed(&ERASE_BLOCKS)
+    });
+    let mfr_id = Literal::u8_unsuffixed(vendor.manufacturer_id);
+    let dev_id = Literal::u16_unsuffixed(chip.device_id);
+    let total_size = Literal::u32_unsuffixed(chip.total_size.to_bytes());
+    let page_size = Literal::u16_unsuffixed(chip.page_size);
+    let features = features_to_tokens(chip.features);
+    let unlock = quote::format_ident!("{}", format!("{:?}", chip.unlock.unwrap_or_default()));
+    let voltage_min = Literal::u16_unsuffixed(chip.voltage.min);
+    let voltage_max = Literal::u16_unsuffixed(chip.voltage.max);
+    let write_gran = write_granularity_to_tokens(chip.write_granularity);
+    let tested = test_statuses_to_tokens(&chip.tested);
+    quote! {
+        FlashChip {
+            vendor: ChipName::borrowed(#vendor_name),
+            name: ChipName::borrowed(#chip_name),
+            jedec_manufacturer: #mfr_id,
+            jedec_device: #dev_id,
+            total_size: #total_size,
+            page_size: #page_size,
+            features: #features,
+            unlock: Unlock::#unlock,
+            voltage_min_mv: #voltage_min,
+            voltage_max_mv: #voltage_max,
+            write_granularity: #write_gran,
+            erase_blocks: #erase_blocks,
+            tested: #tested,
+        }
+    }
+}
+
 /// Complete chip database
 #[derive(Debug, Clone)]
 pub struct ChipDatabase {
@@ -269,83 +346,11 @@ impl ChipDatabase {
 
         for vendor in &self.vendors {
             for chip in &vendor.chips {
-                // Generate erase blocks using constructors
-                let erase_blocks: Vec<_> = chip
-                    .erase_blocks
-                    .iter()
-                    .map(|eb| {
-                        let opcode = Literal::u8_unsuffixed(eb.opcode);
-                        let has_opcode_4b = eb.opcode_4b.is_some();
-                        let opcode_4b = eb.opcode_4b.map_or_else(
-                            || quote!(None),
-                            |opcode| {
-                                let opcode = Literal::u8_unsuffixed(opcode);
-                                quote!(Some(#opcode))
-                            },
-                        );
-
-                        if eb.regions.len() == 1 && !has_opcode_4b {
-                            // Uniform erase block - use the simple constructor
-                            let size = Literal::u32_unsuffixed(eb.regions[0].size.to_bytes());
-                            let count = Literal::u32_unsuffixed(eb.regions[0].count);
-                            if eb.regions[0].count == 1 {
-                                // Single block (e.g., chip erase) - simplest form
-                                quote!(EraseBlock::new(#opcode, #size))
-                            } else {
-                                // Multiple uniform blocks
-                                quote!(EraseBlock::with_count(#opcode, #size, #count))
-                            }
-                        } else {
-                            // Non-uniform erase block - use with_regions
-                            let regions: Vec<_> = eb
-                                .regions
-                                .iter()
-                                .map(|region| {
-                                    let size = Literal::u32_unsuffixed(region.size.to_bytes());
-                                    let count = Literal::u32_unsuffixed(region.count);
-                                    quote!(EraseRegion::new(#size, #count))
-                                })
-                                .collect();
-                            quote!(EraseBlock::with_regions_and_4b(#opcode, #opcode_4b, &[#(#regions),*]))
-                        }
-                    })
-                    .collect();
-
-                // Generate chip definition
-                let vendor_name = &vendor.vendor;
-                let chip_name = &chip.name;
-                let mfr_id = Literal::u8_unsuffixed(vendor.manufacturer_id);
-                let dev_id = Literal::u16_unsuffixed(chip.device_id);
-                let total_size = Literal::u32_unsuffixed(chip.total_size.to_bytes());
-                let page_size = Literal::u16_unsuffixed(chip.page_size);
-                let features = features_to_tokens(chip.features);
-                let unlock =
-                    quote::format_ident!("{}", format!("{:?}", chip.unlock.unwrap_or_default()));
-                let voltage_min = Literal::u16_unsuffixed(chip.voltage.min);
-                let voltage_max = Literal::u16_unsuffixed(chip.voltage.max);
-                let write_gran = write_granularity_to_tokens(chip.write_granularity);
-                let tested = test_statuses_to_tokens(&chip.tested);
-
-                chip_defs.push(quote! {
-                    FlashChip {
-                        vendor: #vendor_name.to_string(),
-                        name: #chip_name.to_string(),
-                        jedec_manufacturer: #mfr_id,
-                        jedec_device: #dev_id,
-                        total_size: #total_size,
-                        page_size: #page_size,
-                        features: #features,
-                        unlock: Unlock::#unlock,
-                        voltage_min_mv: #voltage_min,
-                        voltage_max_mv: #voltage_max,
-                        write_granularity: #write_gran,
-                        erase_blocks: vec![#(#erase_blocks),*],
-                        tested: #tested,
-                    }
-                });
+                chip_defs.push(chip_to_tokens(vendor, chip));
             }
         }
 
+        let count = chip_defs.len();
         let tokens = quote! {
             // Auto-generated by rflasher-chips-codegen
             // Do not edit manually!
@@ -353,12 +358,8 @@ impl ChipDatabase {
             /// Static chip database
             ///
             /// Generated from the bundled `rflasher-chips/data/vendors` RON files.
-            /// Lazily initialized on first access.
-            pub static CHIPS: once_cell::sync::Lazy<Vec<FlashChip>> = once_cell::sync::Lazy::new(|| {
-                vec![
-                    #(#chip_defs),*
-                ]
-            });
+            /// Borrowed static descriptors, with no lazy initialization or heap.
+            pub static CHIPS: [FlashChip; #count] = [#(#chip_defs),*];
         };
 
         // Format the output with prettyplease

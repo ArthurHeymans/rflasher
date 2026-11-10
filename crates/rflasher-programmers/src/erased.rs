@@ -405,7 +405,7 @@ mod tests {
         use rflasher_core::error::Error;
         let db = rflasher_chips::ChipDatabase::new();
         let mut chip = db.find_by_name("W25Q128.V")[0].clone();
-        chip.erase_blocks.retain(|b| b.opcode == 0x20);
+        chip.erase_blocks.to_mut().retain(|b| b.opcode == 0x20);
         chip.unlock = rflasher_core::chip::Unlock::None;
         let erase_block = chip.erase_blocks[0].clone();
         let master = Restricted::default();

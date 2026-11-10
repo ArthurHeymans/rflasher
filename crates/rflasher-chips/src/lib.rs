@@ -23,8 +23,6 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::{string::String, vec::Vec};
-#[cfg(feature = "static-chips")]
-use std::{string::ToString, vec};
 
 pub use rflasher_chip_defs::Size;
 use rflasher_chip_defs::{
@@ -45,6 +43,16 @@ pub enum ChipDbError {
     /// Validation error
     #[error("Validation error: {0}")]
     Validation(String),
+}
+
+/// Location of the bundled RON definitions for host build scripts.
+///
+/// Pass this to `rflasher_chips_codegen::ChipDatabase::load_from_dir` to select
+/// firmware chips without enabling the full `static-chips` database. Track this
+/// directory with `cargo::rerun-if-changed` in the consuming build script.
+/// This path is only meaningful on the build host, not on a deployed target.
+pub fn bundled_data_dir() -> &'static Path {
+    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/data/vendors"))
 }
 
 // Convert the shared RON schema into the runtime chip model.
@@ -168,13 +176,8 @@ impl ChipProvider for ChipDatabase {
         index: usize,
     ) -> Option<&FlashChip> {
         self.chips
-            .iter()
-            .filter(|c| {
-                c.jedec_manufacturer == manufacturer
-                    && c.jedec_device == u16::from(device)
-                    && c.features.contains(Features::RES2_ID)
-            })
-            .nth(index)
+            .as_slice()
+            .find_nth_by_res2_id(manufacturer, device, index)
     }
 
     fn find_nth_by_banked_jedec_id(
@@ -184,24 +187,9 @@ impl ChipProvider for ChipDatabase {
         device: &[u8],
         index: usize,
     ) -> Option<&FlashChip> {
-        // These are the audited bank-one catalog identities. Length matters:
-        // PMC sends a single device byte (and may repeat it), AMIC sends two.
-        let id = match (bank, manufacturer, device) {
-            (1, 0x9d, [id]) => u16::from(*id),
-            (1, 0x37, [hi, lo]) => u16::from_be_bytes([*hi, *lo]),
-            _ => return None,
-        };
         self.chips
-            .iter()
-            .filter(|c| {
-                c.jedec_manufacturer == manufacturer
-                    && c.jedec_device == id
-                    && c.features.contains(Features::RDID_CONTINUATION)
-                    && !c
-                        .features
-                        .intersects(Features::RES2_ID | Features::AT25F_ID)
-            })
-            .nth(index)
+            .as_slice()
+            .find_nth_by_banked_jedec_id(bank, manufacturer, device, index)
     }
 
     fn find_nth_by_jedec_id(
@@ -211,9 +199,8 @@ impl ChipProvider for ChipDatabase {
         index: usize,
     ) -> Option<&FlashChip> {
         self.chips
-            .iter()
-            .filter(|c| c.matches_jedec_id(manufacturer, device))
-            .nth(index)
+            .as_slice()
+            .find_nth_by_jedec_id(manufacturer, device, index)
     }
 }
 
@@ -226,7 +213,7 @@ impl ChipDatabase {
     #[cfg(feature = "static-chips")]
     pub fn new() -> Self {
         Self {
-            chips: CHIPS.clone(),
+            chips: CHIPS.to_vec(),
         }
     }
 
@@ -266,8 +253,8 @@ impl ChipDatabase {
 
         for chip_def in vendor_def.chips {
             let chip = FlashChip {
-                vendor: vendor_def.vendor.clone(),
-                name: chip_def.name,
+                vendor: vendor_def.vendor.clone().into(),
+                name: chip_def.name.into(),
                 jedec_manufacturer: vendor_def.manufacturer_id,
                 jedec_device: chip_def.device_id,
                 total_size: chip_def.total_size.to_bytes(),

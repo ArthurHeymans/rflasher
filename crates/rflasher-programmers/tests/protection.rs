@@ -342,7 +342,8 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
         erase_blocks: vec![
             EraseBlock::with_count(0x20, 4096, size as u32 / 4096),
             EraseBlock::new(0xc7, size as u32),
-        ],
+        ]
+        .into(),
         tested: ChipTestStatus::default(),
     });
     (master, ctx)
@@ -1417,7 +1418,7 @@ fn erase_poll_error_waits_for_the_erase_budget_before_restoring_protection() {
                 Features::WRSR_WREN,
                 (block_size * count) as usize,
             );
-            ctx.chip.erase_blocks = vec![EraseBlock::with_count(opcode, block_size, count)];
+            ctx.chip.erase_blocks = vec![EraseBlock::with_count(opcode, block_size, count)].into();
             let state = master.0.clone();
             {
                 let mut s = state.lock().unwrap();

@@ -1613,7 +1613,11 @@ impl RflasherApp {
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.selected_chip, String::new(), "Automatic");
                     for chip in self.chip_db.iter() {
-                        ui.selectable_value(&mut self.selected_chip, chip.name.clone(), &chip.name);
+                        ui.selectable_value(
+                            &mut self.selected_chip,
+                            chip.name().to_owned(),
+                            chip.name(),
+                        );
                     }
                 });
             ui.checkbox(

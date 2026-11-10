@@ -64,8 +64,6 @@ syn = "2"
 prettyplease = "0.2"
 
 # no_std compatible
-heapless = "0.8"
-once_cell = { version = "1.21", default-features = false }
 zerocopy = { version = "0.8", features = ["derive"] }
 
 [package]

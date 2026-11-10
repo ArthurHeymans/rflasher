@@ -40,6 +40,7 @@
 //! unified::smart_write_with_policy(&mut mtd, &data, &mut progress, &mut policy)?;
 //! ```
 
+mod catalog;
 mod context;
 mod device;
 mod operations;
@@ -52,6 +53,7 @@ pub mod unified;
 #[cfg(feature = "alloc")]
 pub use policy::{MutationPolicy, RecoveryBackup};
 
+pub use catalog::probe_catalog;
 pub use context::{AddressMode, FlashContext};
 #[cfg(feature = "alloc")]
 pub use device::FlashDeviceExt;

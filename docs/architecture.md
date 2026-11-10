@@ -84,7 +84,8 @@ platform-specific access layer by implementing `rflasher_internal::HostAccess`:
 - `delay_us` for short controller polling delays.
 
 See [crates/rflasher-internal/README.md](../crates/rflasher-internal/README.md)
-for details.
+for details. Firmware can also [select database chips by name at build time](firmware-catalog.md)
+and declare board defaults without a runtime database or allocator.
 
 ## Programmer option catalog
 

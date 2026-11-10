@@ -7,6 +7,8 @@ use super::FlashChip;
 /// Providers may load chip definitions at runtime, compile them into the
 /// application, or obtain them from another source. Flash probing only needs
 /// JEDEC ID lookup, so the core trait intentionally exposes a small API.
+/// This is low-level enumeration, not identification policy: use
+/// [`crate::ChipCatalog`] to resolve board defaults and conflicting profiles.
 pub trait ChipProvider {
     /// Find a chip by its JEDEC manufacturer and device IDs.
     ///
@@ -58,5 +60,100 @@ pub trait ChipProvider {
         } else {
             None
         }
+    }
+}
+
+impl<const N: usize> ChipProvider for [FlashChip; N] {
+    fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
+        self.as_slice().find_by_jedec_id(manufacturer, device)
+    }
+
+    fn find_nth_by_jedec_id(
+        &self,
+        manufacturer: u8,
+        device: u16,
+        index: usize,
+    ) -> Option<&FlashChip> {
+        self.as_slice()
+            .find_nth_by_jedec_id(manufacturer, device, index)
+    }
+
+    fn find_nth_by_res2_id(
+        &self,
+        manufacturer: u8,
+        device: u8,
+        index: usize,
+    ) -> Option<&FlashChip> {
+        self.as_slice()
+            .find_nth_by_res2_id(manufacturer, device, index)
+    }
+
+    fn find_nth_by_banked_jedec_id(
+        &self,
+        bank: u8,
+        manufacturer: u8,
+        device: &[u8],
+        index: usize,
+    ) -> Option<&FlashChip> {
+        self.as_slice()
+            .find_nth_by_banked_jedec_id(bank, manufacturer, device, index)
+    }
+}
+
+/// Borrowed catalogs work directly with probing, without allocation.
+impl ChipProvider for [FlashChip] {
+    fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
+        self.find_nth_by_jedec_id(manufacturer, device, 0)
+    }
+
+    fn find_nth_by_jedec_id(
+        &self,
+        manufacturer: u8,
+        device: u16,
+        index: usize,
+    ) -> Option<&FlashChip> {
+        self.iter()
+            .filter(|c| c.matches_jedec_id(manufacturer, device))
+            .nth(index)
+    }
+
+    fn find_nth_by_res2_id(
+        &self,
+        manufacturer: u8,
+        device: u8,
+        index: usize,
+    ) -> Option<&FlashChip> {
+        self.iter()
+            .filter(|c| {
+                c.jedec_manufacturer == manufacturer
+                    && c.jedec_device == u16::from(device)
+                    && c.features.contains(crate::Features::RES2_ID)
+            })
+            .nth(index)
+    }
+
+    fn find_nth_by_banked_jedec_id(
+        &self,
+        bank: u8,
+        manufacturer: u8,
+        device: &[u8],
+        index: usize,
+    ) -> Option<&FlashChip> {
+        // Audited bank-one identities: PMC has one device byte, AMIC two.
+        let id = match (bank, manufacturer, device) {
+            (1, 0x9d, [id]) => u16::from(*id),
+            (1, 0x37, [hi, lo]) => u16::from_be_bytes([*hi, *lo]),
+            _ => return None,
+        };
+        self.iter()
+            .filter(|c| {
+                c.jedec_manufacturer == manufacturer
+                    && c.jedec_device == id
+                    && c.features.contains(crate::Features::RDID_CONTINUATION)
+                    && !c
+                        .features
+                        .intersects(crate::Features::RES2_ID | crate::Features::AT25F_ID)
+            })
+            .nth(index)
     }
 }

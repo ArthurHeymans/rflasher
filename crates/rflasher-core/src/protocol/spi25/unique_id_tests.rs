@@ -51,7 +51,7 @@ fn chip(manufacturer: u8, device: u16) -> FlashChip {
         voltage_min_mv: 2700,
         voltage_max_mv: 3600,
         write_granularity: WriteGranularity::Byte,
-        erase_blocks: vec![],
+        erase_blocks: vec![].into(),
         tested: ChipTestStatus::default(),
     }
 }

@@ -971,7 +971,7 @@ mod chip_selection_tests {
                 voltage_min_mv: 2700,
                 voltage_max_mv: 3600,
                 write_granularity: rflasher_core::chip::WriteGranularity::Page,
-                erase_blocks: blocks,
+                erase_blocks: blocks.into(),
                 tested: ChipTestStatus::default(),
             };
             Self(vec![

@@ -3625,6 +3625,33 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
     }
 }
 
+// Firmware uses the same SPI protocol/protection/geometry code as native
+// programmers. No Box or second firmware-specific flash implementation is needed.
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+impl<H: HostAccess> rflasher_core::programmer::SpiMaster for IchSpiController<H> {
+    fn features(&self) -> SpiFeatures {
+        Controller::features(self)
+    }
+    fn max_read_len(&self) -> usize {
+        Controller::max_read_len(self)
+    }
+    fn max_write_len(&self) -> usize {
+        Controller::max_write_len(self)
+    }
+    fn probe_opcode(&self, opcode: u8) -> bool {
+        Controller::probe_opcode(self, opcode)
+    }
+    fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> CoreResult<()> {
+        Controller::check_access(self, access, addr, len)
+    }
+    async fn execute(&mut self, command: &mut SpiCommand<'_>) -> CoreResult<()> {
+        Controller::execute(self, command)
+    }
+    async fn delay_us(&mut self, us: u32) {
+        self.host.delay_us(us);
+    }
+}
+
 // Unsupported std non-Linux stub.
 #[cfg(all(feature = "std", not(target_os = "linux")))]
 pub struct IchSpiController {
@@ -4913,6 +4940,60 @@ mod tests {
 
     #[cfg(all(feature = "std", target_os = "linux"))]
     #[test]
+    fn firmware_controller_uses_core_geometry_and_restores_bios_write_enable() {
+        use futures_lite::future::block_on;
+        use rflasher_core::flash::{FlashContext, FlashDevice, SpiFlashDevice};
+
+        let db = rflasher_chips::ChipDatabase::new();
+        let chip = db.find_by_name("SST25VF016B")[0].clone();
+        let mut controller = swseq_controller(vec![0; chip.total_size as usize]);
+        controller.locked = true;
+        // Only 4-KiB sector erase is in this menu; the chip also advertises
+        // 32/64-KiB erasers, so core must select supported geometry itself.
+        controller.opcodes.as_mut().unwrap().opcode[2].opcode = JEDEC_SE;
+        controller.spibar.set_swseq_menu(
+            controller.swseq.ssfsc,
+            controller
+                .opcodes
+                .as_ref()
+                .unwrap()
+                .opcode
+                .map(|o| o.opcode),
+        );
+        let mmio = controller.spibar.clone();
+        let host = controller.host.clone();
+        let bdf = controller.config_bdf;
+        let protected_register = controller.pr_registers().0;
+        mmio.set32(protected_register, pr(0x18000, 0x18fff, false, true));
+        // The concrete firmware controller is a SpiMaster: no Box or another
+        // chip protocol implementation between it and the core.
+        let mut flash = SpiFlashDevice::new(controller, FlashContext::new(chip));
+        assert_eq!(
+            block_on(flash.erase(0x10000, 0x10000)),
+            Err(CoreError::RegionProtected)
+        );
+        assert!(mmio.writes().is_empty());
+        assert!(host.writes().is_empty());
+
+        mmio.set32(protected_register, 0);
+        block_on(flash.erase(0x10000, 0x10000)).unwrap();
+        block_on(flash.write(0x10000, &[1, 2, 3, 4])).unwrap();
+        let mut read = [0; 4];
+        block_on(flash.read(0x10000, &mut read)).unwrap();
+        assert_eq!(read, [1, 2, 3, 4]);
+        let contents = mmio.flash();
+        assert!(contents[..0x10000].iter().all(|&b| b == 0));
+        assert!(contents[0x10004..0x20000].iter().all(|&b| b == 0xff));
+        assert!(contents[0x20000..].iter().all(|&b| b == 0));
+        drop(flash);
+        assert_eq!(
+            host.read8(bdf, PCI_REG_BIOS_CNTL as u16).unwrap() & BIOS_CNTL_BWE,
+            0
+        );
+    }
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
     fn swseq_mutations_check_planned_footprints_before_the_first_change() {
         use crate::programmer::InternalSpi;
         use rflasher_core::flash::{FlashContext, SpiFlashDevice};
@@ -4920,7 +5001,9 @@ mod tests {
         let db = rflasher_chips::ChipDatabase::new();
         let mut chip = db.find_by_name("W25Q128.V")[0].clone();
         // 64 KiB blocks only, the erase in the menu.
-        chip.erase_blocks.retain(|b| b.opcode == JEDEC_BE_D8);
+        chip.erase_blocks
+            .to_mut()
+            .retain(|b| b.opcode == JEDEC_BE_D8);
         // Its status unlock needs RDSR2 (0x35), which swseq refuses.
         chip.unlock = rflasher_core::chip::Unlock::None;
         let size = chip.total_size as usize;

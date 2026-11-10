@@ -1,4 +1,4 @@
-//! Flash context - runtime state for flash operations
+//! Flash context - runtime state for flash operations.
 
 use crate::chip::FlashChip;
 
@@ -12,86 +12,46 @@ pub enum AddressMode {
     FourByte,
 }
 
-/// Runtime context for flash operations
+/// Runtime state for either a borrowed catalog descriptor or an owned chip.
 ///
-/// This structure holds the state needed to interact with a specific
-/// flash chip through a programmer.
+/// The representation and API do not change with `alloc`. Cloning a static
+/// descriptor into a context borrows its names and erase maps without a heap.
 #[derive(Debug, Clone)]
-#[cfg(feature = "alloc")]
 pub struct FlashContext {
-    /// The identified flash chip (owned)
+    /// Identified flash chip and its operation metadata.
     pub chip: FlashChip,
-    /// Current address mode
+    /// Current address mode.
     pub address_mode: AddressMode,
 }
 
-/// Runtime context for flash operations (no_std version with static reference)
-#[derive(Debug)]
-#[cfg(not(feature = "alloc"))]
-pub struct FlashContext {
-    /// The identified flash chip (static reference)
-    pub chip: &'static FlashChip,
-    /// Current address mode
-    pub address_mode: AddressMode,
-}
-
-/// Shared methods for FlashContext that are identical across alloc/no_std.
-macro_rules! impl_flash_context_common {
-    () => {
-        /// Get the page size for this chip
-        pub fn page_size(&self) -> usize {
-            self.chip.page_size as usize
-        }
-
-        /// Get the total size of this chip
-        pub fn total_size(&self) -> usize {
-            self.chip.total_size as usize
-        }
-
-        /// Check if an address is valid for this chip
-        pub fn is_valid_address(&self, addr: u32) -> bool {
-            addr < self.chip.total_size
-        }
-
-        /// Check if an address range is valid for this chip
-        pub fn is_valid_range(&self, addr: u32, len: usize) -> bool {
-            if addr >= self.chip.total_size {
-                return false;
-            }
-            let end = addr as u64 + len as u64;
-            end <= self.chip.total_size as u64
-        }
-    };
-}
-
-#[cfg(feature = "alloc")]
 impl FlashContext {
-    /// Create a new flash context for the given chip
+    /// Create a context from an identified descriptor.
     pub fn new(chip: FlashChip) -> Self {
         let address_mode = if chip.requires_4byte_addr() {
             AddressMode::FourByte
         } else {
             AddressMode::ThreeByte
         };
-
         Self { chip, address_mode }
     }
 
-    impl_flash_context_common!();
-}
-
-#[cfg(not(feature = "alloc"))]
-impl FlashContext {
-    /// Create a new flash context for the given chip
-    pub fn new(chip: &'static FlashChip) -> Self {
-        let address_mode = if chip.requires_4byte_addr() {
-            AddressMode::FourByte
-        } else {
-            AddressMode::ThreeByte
-        };
-
-        Self { chip, address_mode }
+    /// Get the page size for this chip.
+    pub fn page_size(&self) -> usize {
+        self.chip.page_size as usize
     }
 
-    impl_flash_context_common!();
+    /// Get the total size of this chip.
+    pub fn total_size(&self) -> usize {
+        self.chip.total_size as usize
+    }
+
+    /// Check if an address is valid for this chip.
+    pub fn is_valid_address(&self, addr: u32) -> bool {
+        addr < self.chip.total_size
+    }
+
+    /// Check if an entire range is valid for this chip.
+    pub fn is_valid_range(&self, addr: u32, len: usize) -> bool {
+        addr < self.chip.total_size && len as u64 <= u64::from(self.chip.total_size - addr)
+    }
 }
