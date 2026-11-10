@@ -43,6 +43,8 @@
 mod catalog;
 mod context;
 mod device;
+#[cfg(feature = "std")]
+mod identification;
 mod operations;
 #[cfg(feature = "alloc")]
 mod policy;

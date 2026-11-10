@@ -15,6 +15,7 @@
 //! - SPI: Uses JEDEC ID probing
 //! - Opaque: Uses Intel Flash Descriptor
 
+mod identity;
 pub mod layout;
 mod list;
 pub mod unified;
@@ -23,6 +24,7 @@ pub mod wp;
 #[cfg(feature = "repl")]
 pub mod repl;
 
+pub use identity::format_identity;
 pub use list::{list_chips, list_programmers};
 
 /// Format a byte size as a human-readable string (e.g., "256 KiB", "4 MiB")
