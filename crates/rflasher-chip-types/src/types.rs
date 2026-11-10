@@ -1,26 +1,10 @@
 //! Flash chip type definitions
 
-#[cfg(feature = "alloc")]
-use alloc::{string::String, vec::Vec};
+use super::{ChipName, ChipSlice, EraseRegions, features::Features};
 
-use super::features::Features;
-
-/// Maximum number of erase regions per erase block (for no_std)
-pub const MAX_ERASE_REGIONS: usize = 8;
-
-/// Type alias for the regions collection.
-///
-/// Uses `heapless::Vec` for no_std (stack-allocated, max 8 regions),
-/// or `alloc::vec::Vec` for std/alloc (heap-allocated, unlimited).
-#[cfg(not(feature = "alloc"))]
-pub type RegionVec = heapless::Vec<EraseRegion, MAX_ERASE_REGIONS>;
-
-/// Type alias for the regions collection.
-///
-/// Uses `heapless::Vec` for no_std (stack-allocated, max 8 regions),
-/// or `alloc::vec::Vec` for std/alloc (heap-allocated, unlimited).
-#[cfg(feature = "alloc")]
-pub type RegionVec = Vec<EraseRegion>;
+/// Erase regions: one inline, or a map borrowed from a catalog or owned by
+/// runtime discovery.
+pub type RegionVec = EraseRegions;
 
 /// Region definition: size and count pair
 ///
@@ -68,7 +52,8 @@ pub struct EraseBlock {
     pub opcode: u8,
     /// Native 4-byte-address SPI opcode for this erase operation, if supported
     pub opcode_4b: Option<u8>,
-    /// Regions for this erase operation (up to 8 regions for no_std)
+    /// Complete regions for this operation, without a fixed-capacity limit.
+    /// A single region is held inline.
     pub regions: RegionVec,
 }
 
@@ -78,16 +63,31 @@ impl EraseBlock {
     /// Note: This creates a block with count=1, suitable for chip erase operations.
     /// For sector/block erase operations, use `with_count()` instead to specify
     /// the number of blocks on the chip.
-    pub fn new(opcode: u8, size: u32) -> Self {
+    pub const fn new(opcode: u8, size: u32) -> Self {
         Self::with_count(opcode, size, 1)
     }
 
     /// Create a new erase block with a single uniform region and specified count
     ///
     /// This is the correct way to create sector/block erase definitions where
-    /// multiple blocks of the same size exist on the chip.
-    pub fn with_count(opcode: u8, size: u32, count: u32) -> Self {
-        Self::with_regions(opcode, &[EraseRegion::new(size, count)])
+    /// multiple blocks of the same size exist on the chip. It needs neither a
+    /// heap nor a static table, so the geometry may be found at run time.
+    pub const fn with_count(opcode: u8, size: u32, count: u32) -> Self {
+        Self::with_count_and_4b(opcode, None, size, count)
+    }
+
+    /// [`Self::with_count`] with an optional native 4BA opcode.
+    pub const fn with_count_and_4b(
+        opcode: u8,
+        opcode_4b: Option<u8>,
+        size: u32,
+        count: u32,
+    ) -> Self {
+        Self {
+            opcode,
+            opcode_4b,
+            regions: RegionVec::uniform(size, count),
+        }
     }
 
     /// Create an erase block from multiple regions
@@ -102,27 +102,21 @@ impl EraseBlock {
         Self {
             opcode,
             opcode_4b,
-            regions: regions.to_vec(),
+            regions: regions.to_vec().into(),
         }
     }
 
-    /// Create an erase block from multiple regions
-    #[cfg(not(feature = "alloc"))]
-    pub fn with_regions(opcode: u8, regions: &[EraseRegion]) -> Self {
-        Self::with_regions_and_4b(opcode, None, regions)
-    }
-
-    /// Create an erase block from multiple regions and an optional native 4BA opcode
-    #[cfg(not(feature = "alloc"))]
-    pub fn with_regions_and_4b(opcode: u8, opcode_4b: Option<u8>, regions: &[EraseRegion]) -> Self {
-        let mut vec = RegionVec::new();
-        for region in regions.iter().take(MAX_ERASE_REGIONS) {
-            vec.push(*region).unwrap();
-        }
+    /// Borrow a complete compile-time erase map without allocating or truncating.
+    /// Available with and without `alloc`; cloning a borrowed map stays allocation-free.
+    pub const fn from_static_regions(
+        opcode: u8,
+        opcode_4b: Option<u8>,
+        regions: &'static [EraseRegion],
+    ) -> Self {
         Self {
             opcode,
             opcode_4b,
-            regions: vec,
+            regions: RegionVec::borrowed(regions),
         }
     }
 
@@ -260,19 +254,17 @@ pub struct ChipTestStatus {
     pub wp: TestStatus,
 }
 
-/// Flash chip definition (owned version for runtime use)
+/// Flash chip descriptor shared by static firmware catalogs and runtime databases.
 ///
-/// This structure contains all the information needed to identify and
-/// interact with a specific flash chip model. Uses owned types (String, Vec)
-/// for runtime flexibility.
+/// Names and erase maps can borrow read-only catalog data in every feature
+/// configuration. Enabling `alloc` additionally allows owned runtime data.
 #[derive(Debug, Clone)]
-#[cfg(feature = "alloc")]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FlashChip {
     /// Vendor name (e.g., "Winbond")
-    pub vendor: String,
+    pub vendor: ChipName,
     /// Chip model name (e.g., "W25Q128FV")
-    pub name: String,
+    pub name: ChipName,
     /// JEDEC manufacturer ID (first byte of RDID response)
     pub jedec_manufacturer: u8,
     /// JEDEC device ID (second and third bytes of RDID response)
@@ -297,7 +289,7 @@ pub struct FlashChip {
     #[cfg_attr(feature = "serde", serde(default))]
     pub write_granularity: WriteGranularity,
     /// Available erase block sizes (smallest to largest)
-    pub erase_blocks: Vec<EraseBlock>,
+    pub erase_blocks: ChipSlice<EraseBlock>,
     /// Test status
     #[cfg_attr(feature = "serde", serde(default))]
     pub tested: ChipTestStatus,
@@ -311,40 +303,6 @@ fn default_voltage_min() -> u16 {
 #[cfg(feature = "serde")]
 fn default_voltage_max() -> u16 {
     3600
-}
-
-/// Flash chip definition (static/const version for no_std)
-///
-/// This structure uses static references for zero-cost embedded use.
-#[derive(Debug, Clone, Copy)]
-#[cfg(not(feature = "alloc"))]
-pub struct FlashChip {
-    /// Vendor name (e.g., "Winbond")
-    pub vendor: &'static str,
-    /// Chip model name (e.g., "W25Q128FV")
-    pub name: &'static str,
-    /// JEDEC manufacturer ID (first byte of RDID response)
-    pub jedec_manufacturer: u8,
-    /// JEDEC device ID (second and third bytes of RDID response)
-    pub jedec_device: u16,
-    /// Total flash size in bytes
-    pub total_size: u32,
-    /// Page size in bytes (for programming)
-    pub page_size: u16,
-    /// Feature flags
-    pub features: Features,
-    /// Chip-specific software protection procedure.
-    pub unlock: crate::Unlock,
-    /// Minimum operating voltage in millivolts
-    pub voltage_min_mv: u16,
-    /// Maximum operating voltage in millivolts
-    pub voltage_max_mv: u16,
-    /// Write granularity
-    pub write_granularity: WriteGranularity,
-    /// Available erase block sizes (smallest to largest)
-    pub erase_blocks: &'static [EraseBlock],
-    /// Test status
-    pub tested: ChipTestStatus,
 }
 
 impl FlashChip {
@@ -433,43 +391,22 @@ impl FlashChip {
     }
 
     /// Get vendor name as a string slice
-    #[cfg(feature = "alloc")]
     pub fn vendor(&self) -> &str {
         &self.vendor
     }
 
     /// Get chip name as a string slice
-    #[cfg(feature = "alloc")]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Get erase blocks as a slice
-    #[cfg(feature = "alloc")]
     pub fn erase_blocks(&self) -> &[EraseBlock] {
         &self.erase_blocks
     }
-
-    /// Get vendor name as a string slice
-    #[cfg(not(feature = "alloc"))]
-    pub fn vendor(&self) -> &str {
-        self.vendor
-    }
-
-    /// Get chip name as a string slice
-    #[cfg(not(feature = "alloc"))]
-    pub fn name(&self) -> &str {
-        self.name
-    }
-
-    /// Get erase blocks as a slice
-    #[cfg(not(feature = "alloc"))]
-    pub fn erase_blocks(&self) -> &[EraseBlock] {
-        self.erase_blocks
-    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 mod tests {
     use super::*;
 
@@ -526,8 +463,8 @@ mod tests {
     #[test]
     fn test_flash_chip_serde_round_trip() {
         let chip = FlashChip {
-            vendor: alloc::string::String::from("Winbond"),
-            name: alloc::string::String::from("W25Q128FV"),
+            vendor: "Winbond".into(),
+            name: "W25Q128FV".into(),
             jedec_manufacturer: 0xEF,
             jedec_device: 0x4018,
             total_size: 16 * 1024 * 1024,
@@ -537,7 +474,7 @@ mod tests {
             voltage_min_mv: 2700,
             voltage_max_mv: 3600,
             write_granularity: WriteGranularity::Page,
-            erase_blocks: alloc::vec![EraseBlock::with_count(0x20, 4096, 4096)],
+            erase_blocks: alloc::vec![EraseBlock::with_count(0x20, 4096, 4096)].into(),
             tested: ChipTestStatus::default(),
         };
 

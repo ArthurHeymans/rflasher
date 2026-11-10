@@ -251,7 +251,7 @@ async fn validate_smart_plan<D: FlashDevice + ?Sized>(
     let mut current = vec![0; data.len()];
     device.read(addr, &mut current).await?;
     let ops = plan_optimal_erase(
-        device.erase_blocks(),
+        &super::policy::usable_erasers(device),
         device.size(),
         Some(&current),
         Some(data),
@@ -307,8 +307,7 @@ async fn smart_write_region_prepared<D: FlashDevice + ?Sized, P: WriteProgress>(
     }
 
     let flash_size = device.size();
-    // Clone erase blocks to avoid borrow checker issues
-    let erase_blocks: Vec<_> = device.erase_blocks().to_vec();
+    let erase_blocks = super::policy::usable_erasers(device);
     let granularity = device.write_granularity();
     // Safe: data.len() > 0 guaranteed by the early return above
     let page_size = device.page_size();
@@ -597,8 +596,7 @@ async fn erase_region_prepared<D: FlashDevice + ?Sized>(
     }
 
     let flash_size = device.size();
-    // Clone erase blocks to avoid borrow checker issues
-    let erase_blocks: Vec<_> = device.erase_blocks().to_vec();
+    let erase_blocks = super::policy::usable_erasers(device);
 
     // Plan optimal erase operations for this region
     let erase_ops = plan_optimal_erase_region(&erase_blocks, flash_size, region.start, region.end)?;

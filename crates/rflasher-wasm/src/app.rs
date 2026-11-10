@@ -102,6 +102,10 @@ impl SpiMaster for Programmer {
         dispatch!(self, m => SpiMaster::probe_opcode(m, opcode))
     }
 
+    fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        dispatch!(self, m => SpiMaster::chip_identified(m, chip))
+    }
+
     async fn delay_us(&mut self, us: u32) {
         dispatch!(self, m => SpiMaster::delay_us(m, us).await)
     }
@@ -1613,7 +1617,11 @@ impl RflasherApp {
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.selected_chip, String::new(), "Automatic");
                     for chip in self.chip_db.iter() {
-                        ui.selectable_value(&mut self.selected_chip, chip.name.clone(), &chip.name);
+                        ui.selectable_value(
+                            &mut self.selected_chip,
+                            chip.name().to_owned(),
+                            chip.name(),
+                        );
                     }
                 });
             ui.checkbox(

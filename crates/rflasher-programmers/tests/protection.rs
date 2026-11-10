@@ -77,7 +77,9 @@ impl State {
                 .iter()
                 .any(|p| *p)
         } else {
-            self.sr1 & self.unlock.status_masks().map_or(0x1c, |m| m.0) != 0
+            // Winbond CMP complements the protected range: with the block
+            // protection bits clear, that is the whole array.
+            self.sr1 & self.unlock.status_masks().map_or(0x1c, |m| m.0) != 0 || self.sr2 & 0x40 != 0
         }
     }
     fn program(&mut self, addr: usize, bytes: &[u8]) -> Result<()> {
@@ -342,7 +344,8 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
         erase_blocks: vec![
             EraseBlock::with_count(0x20, 4096, size as u32 / 4096),
             EraseBlock::new(0xc7, size as u32),
-        ],
+        ]
+        .into(),
         tested: ChipTestStatus::default(),
     });
     (master, ctx)
@@ -1202,11 +1205,18 @@ fn unknown_cmp_layouts_and_unavailable_sr2_reads_do_not_unlock() {
                     .any(|(op, _)| *op == 0x01)
             );
 
+            // Set block protection cannot be lifted without SR2's value; a
+            // chip without it is left alone and its mutations are read back.
             let (master, ctx) = fixture(Unlock::Status, sr1, features | Features::WP_CMP_SR2, 8192);
             let state = master.0.clone();
             state.lock().unwrap().deny_opcode = Some(0x35);
             let mut device = SpiFlashDevice::new(master, ctx);
-            assert_eq!(device.write(0, &[0]).await, Err(Error::OpcodeNotSupported));
+            let expected = if sr1 == 0 {
+                Ok(())
+            } else {
+                Err(Error::OpcodeNotSupported)
+            };
+            assert_eq!(device.write(0, &[0]).await, expected);
             assert!(
                 !state
                     .lock()
@@ -1214,6 +1224,51 @@ fn unknown_cmp_layouts_and_unavailable_sr2_reads_do_not_unlock() {
                     .commands
                     .iter()
                     .any(|(op, _)| *op == 0x01)
+            );
+        }
+    });
+}
+
+#[test]
+fn unreadable_sr2_reads_mutations_back_and_leaves_status_alone() {
+    block_on(async {
+        // A locked Intel opcode menu without RDSR2: CMP cannot be checked.
+        let features = Features::WRSR_WREN | Features::WP_CMP | Features::WP_CMP_SR2;
+        for cmp in [false, true] {
+            let (mut master, ctx) = fixture(Unlock::Status, 0, features, 8192);
+            let state = master.0.clone();
+            {
+                let mut s = state.lock().unwrap();
+                s.deny_opcode = Some(0x35);
+                s.sr2 = if cmp { 0x40 } else { 0 };
+                s.data[..2].copy_from_slice(&[0x5a, 0xff]);
+            }
+            let op = first_sector_op(&ctx, 0);
+            let written = flash::write(&mut master, &ctx, 0, &[0x5a, 0]).await;
+            let mut device = ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx));
+            let erased = device.erase_operation(&op).await;
+            if cmp {
+                // The chip dropped both commands; neither may report success.
+                assert_eq!(written, Err(Error::VerifyError { addr: 1 }));
+                assert_eq!(
+                    erased.map(drop),
+                    Err(Error::EraseError(EraseFailure::VerifyFailed {
+                        addr: 0,
+                        found: 0x5a,
+                    }))
+                );
+            } else {
+                assert_eq!(written, Ok(()));
+                assert_eq!(erased, Ok(EraseOutcome::VerifiedErased));
+            }
+            let s = state.lock().unwrap();
+            let expected: &[u8] = if cmp { &[0x5a, 0xff] } else { &[0xff, 0xff] };
+            assert_eq!(&s.data[..2], expected);
+            assert_eq!((s.sr1, s.sr2), (0, if cmp { 0x40 } else { 0 }));
+            assert!(
+                !s.commands
+                    .iter()
+                    .any(|(op, _)| matches!(op, 0x01 | 0x35 | 0x50))
             );
         }
     });
@@ -1417,7 +1472,7 @@ fn erase_poll_error_waits_for_the_erase_budget_before_restoring_protection() {
                 Features::WRSR_WREN,
                 (block_size * count) as usize,
             );
-            ctx.chip.erase_blocks = vec![EraseBlock::with_count(opcode, block_size, count)];
+            ctx.chip.erase_blocks = vec![EraseBlock::with_count(opcode, block_size, count)].into();
             let state = master.0.clone();
             {
                 let mut s = state.lock().unwrap();

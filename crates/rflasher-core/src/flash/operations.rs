@@ -959,7 +959,8 @@ fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::
         .iter()
         .map(|c| c.name())
         .collect::<Vec<_>>()
-        .join(" / ");
+        .join(" / ")
+        .into();
     profile.page_size = chips.iter().map(|c| c.page_size).min()?;
     if profile.page_size == 0 {
         return None;
@@ -998,6 +999,7 @@ fn common_operation_profile(chips: &[&crate::chip::FlashChip]) -> Option<crate::
     }
     profile
         .erase_blocks
+        .to_mut()
         .retain(|block| chips.iter().all(|c| c.erase_blocks().contains(block)));
     // Do not substitute an addressless chip erase for missing addressed geometry.
     if !profile.erase_blocks.iter().any(|b| !b.is_chip_erase()) {
@@ -1030,37 +1032,28 @@ pub(crate) async fn select_probed_chip<M: SpiMaster + ?Sized, P: ChipProvider + 
     if manufacturer != 0x7f {
         return select_database_chip(provider, manufacturer, device, sfdp, wanted);
     }
-    let [manufacturer, first] = device.to_be_bytes();
-    let mut bytes = [first, 0];
-    let len = match manufacturer {
-        0x9d => 1,
-        0x37 if master.max_read_len() >= 4 => {
-            let mut response = [0; 4];
-            let mut cmd =
-                crate::spi::SpiCommand::read_reg(crate::spi::opcodes::RDID, &mut response);
-            master.execute(&mut cmd).await?;
-            if response[..3] != [0x7f, manufacturer, first] {
-                log::error!("AMIC four-byte RDID prefix changed: {:02X?}", response);
-                return Err(Error::SpiTransferFailed);
-            }
-            bytes[1] = response[3];
-            2
-        }
-        _ => 0,
-    };
-    let candidates = if len == 0 {
+    let banked = protocol::read_banked_jedec_id(master, device).await?;
+    let candidates = if banked.device_bytes().is_empty() {
         Vec::new()
     } else {
         (0..)
-            .map_while(|i| provider.find_nth_by_banked_jedec_id(1, manufacturer, &bytes[..len], i))
+            .map_while(|i| {
+                provider.find_nth_by_banked_jedec_id(
+                    1,
+                    banked.manufacturer,
+                    banked.device_bytes(),
+                    i,
+                )
+            })
             .collect()
     };
-    let id = if len == 1 {
-        u16::from(first)
-    } else {
-        u16::from_be_bytes(bytes)
-    };
-    select_candidates(candidates, manufacturer, id, sfdp, wanted)
+    select_candidates(
+        candidates,
+        banked.manufacturer,
+        banked.device_id(),
+        sfdp,
+        wanted,
+    )
 }
 
 /// Probe for a flash chip with detailed results
@@ -1229,7 +1222,7 @@ where
     if let Some(info) = &result.sfdp {
         // BFPT can disprove an addressed erase opcode but does not advertise
         // addressless chip erase. Never execute a disputed database eraser.
-        result.chip.erase_blocks.retain(|block| {
+        result.chip.erase_blocks.to_mut().retain(|block| {
             block.is_chip_erase()
                 || (block.is_uniform()
                     && info.basic_params.erase_types.iter().any(|e| {
@@ -1238,7 +1231,7 @@ where
         });
         if info.four_byte_addr_table.is_some() {
             let validated = crate::sfdp::to_flash_chip(info, jedec_manufacturer, jedec_device);
-            for block in &mut result.chip.erase_blocks {
+            for block in result.chip.erase_blocks.iter_mut() {
                 if !block.is_chip_erase() {
                     let known = validated.erase_blocks.iter().find(|b| {
                         b.opcode == block.opcode && b.min_block_size() == block.min_block_size()
@@ -1253,11 +1246,12 @@ where
         }
     }
 
+    master.chip_identified(&result.chip);
     // Like flashprog, leave out erasers this programmer cannot issue (e.g. a
     // locked Intel opcode menu without chip erase), so that erases are
     // planned with smaller ones it can send instead of being refused.
     let (features, four_byte) = (result.chip.features, result.chip.requires_4byte_addr());
-    result.chip.erase_blocks.retain(|block| {
+    result.chip.erase_blocks.to_mut().retain(|block| {
         let usable = check_spi_eraser(&*master, features, four_byte, block).is_ok();
         if !usable {
             log::info!(
@@ -1356,7 +1350,7 @@ pub async fn write<M: SpiMaster + ?Sized>(
     }
     // In range, so the length fits. Refuse before the first page, not after.
     master.check_access(FlashAccess::Modify, addr, data.len() as u32)?;
-    let read_back = super::protection::wps_unknown(ctx);
+    let read_back = super::protection::needs_read_back(master, ctx);
     if read_back {
         master.check_access(FlashAccess::Read, addr, data.len() as u32)?;
     }
@@ -1415,6 +1409,27 @@ fn check_mutation_opcodes<M: SpiMaster + ?Sized>(master: &M) -> Result<()> {
     }
 }
 
+/// Whether `master` can program and erase the chip at all, judged without
+/// sending a command (see [`super::SpiFlashDevice::check_writable`]).
+pub(crate) fn check_spi_writable<M: SpiMaster + ?Sized>(
+    master: &M,
+    ctx: &FlashContext,
+) -> Result<()> {
+    // A word-aligned pair: what every program procedure can write, including
+    // AAI on a programmer without the byte-program opcode.
+    validate_spi_program(master, ctx, 0, 2)?;
+    let erasable = ctx
+        .chip
+        .erase_blocks()
+        .iter()
+        .any(|block| !block.is_chip_erase() && spi_eraser_usable(master, ctx, block));
+    if erasable {
+        Ok(())
+    } else {
+        Err(Error::OpcodeNotSupported)
+    }
+}
+
 pub(crate) fn validate_spi_program<M: SpiMaster + ?Sized>(
     master: &M,
     ctx: &FlashContext,
@@ -1428,6 +1443,7 @@ pub(crate) fn validate_spi_program<M: SpiMaster + ?Sized>(
         return Ok(());
     }
     check_mutation_opcodes(master)?;
+    super::protection::check_supported(master, ctx)?;
     if master.max_write_len() == 0 {
         return Err(Error::ProgrammerError);
     }
@@ -1622,17 +1638,27 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
     addr: u32,
     len: u32,
 ) -> Result<()> {
-    let block = if addr == 0 && len == ctx.chip.total_size {
-        ctx.chip
-            .erase_blocks()
-            .iter()
+    // Static catalogs cannot prune their maps at probe time. Select from the
+    // supported erasers here instead of requiring an allocating filtered copy.
+    let supported = ctx
+        .chip
+        .erase_blocks()
+        .iter()
+        .filter(|eb| spi_eraser_usable(master, ctx, eb));
+    let chip_erase = if addr == 0 && len == ctx.chip.total_size {
+        supported
+            .clone()
             .find(|eb| eb.is_chip_erase() && eb.total_size() == len)
             .cloned()
-            .or_else(|| select_erase_block(ctx.chip.erase_blocks(), addr, len))
     } else {
-        select_erase_block(ctx.chip.erase_blocks(), addr, len)
-    }
-    .ok_or(Error::InvalidAlignment)?;
+        None
+    };
+    let block = chip_erase
+        .or_else(|| select_erase_block_from(supported, addr, len))
+        // Preserve the specific opcode error if geometry exists but no menu
+        // entry can execute it. Validation still precedes any mutation.
+        .or_else(|| select_erase_block(ctx.chip.erase_blocks(), addr, len))
+        .ok_or(Error::InvalidAlignment)?;
     erase_spi_operation(
         master,
         ctx,
@@ -1658,6 +1684,7 @@ pub(crate) fn validate_spi_erase_operation<M: SpiMaster + ?Sized>(
         return Err(Error::InvalidAlignment);
     }
     check_mutation_opcodes(master)?;
+    super::protection::check_supported(master, ctx)?;
     let block = &op.erase_block;
     if block.is_chip_erase() {
         if op.start != 0 || op.size != ctx.chip.total_size || block.total_size() != op.size {
@@ -1682,6 +1709,16 @@ pub(crate) fn validate_spi_erase_operation<M: SpiMaster + ?Sized>(
     }
     let four_byte = ctx.address_mode == AddressMode::FourByte;
     check_spi_eraser(master, ctx.chip.features, four_byte, block)
+}
+
+/// Whether `master` can issue `block` on the chip of `ctx`.
+pub(crate) fn spi_eraser_usable<M: SpiMaster + ?Sized>(
+    master: &M,
+    ctx: &FlashContext,
+    block: &EraseBlock,
+) -> bool {
+    let four_byte = ctx.address_mode == AddressMode::FourByte;
+    check_spi_eraser(master, ctx.chip.features, four_byte, block).is_ok()
 }
 
 /// Check that `master` can issue `block`.
@@ -1841,12 +1878,19 @@ async fn erase_spi_unprotected<M: SpiMaster + ?Sized>(
 /// 3. The address is aligned to the minimum block size
 /// 4. The length is a multiple of the minimum block size
 pub fn select_erase_block(erase_blocks: &[EraseBlock], addr: u32, len: u32) -> Option<EraseBlock> {
+    select_erase_block_from(erase_blocks.iter(), addr, len)
+}
+
+fn select_erase_block_from<'a>(
+    erase_blocks: impl Iterator<Item = &'a EraseBlock>,
+    addr: u32,
+    len: u32,
+) -> Option<EraseBlock> {
     // Find the largest block size that:
     // 1. Evenly divides the length
     // 2. The address is aligned to
 
     erase_blocks
-        .iter()
         .filter(|eb| {
             // Skip chip erase for partial operations
             // Use min_block_size() to get the individual block size (not total coverage)
@@ -2432,7 +2476,8 @@ mod tests {
             erase_blocks: vec![EraseBlock::with_regions(
                 0x20,
                 &[EraseRegion::new(8, 2), EraseRegion::new(16, 2)],
-            )],
+            )]
+            .into(),
             tested: ChipTestStatus::default(),
         })
     }
@@ -2459,6 +2504,101 @@ mod tests {
     }
 
     #[test]
+    fn writability_is_judged_by_what_the_chip_and_programmer_share() {
+        use crate::flash::SpiFlashDevice;
+
+        struct Menu(&'static [u8]);
+        impl SpiMaster for Menu {
+            fn features(&self) -> SpiFeatures {
+                SpiFeatures::empty()
+            }
+            fn max_read_len(&self) -> usize {
+                64
+            }
+            fn max_write_len(&self) -> usize {
+                64
+            }
+            fn probe_opcode(&self, opcode: u8) -> bool {
+                self.0.contains(&opcode)
+            }
+            async fn execute(&mut self, _: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
+                Err(Error::SpiTransferFailed)
+            }
+            async fn delay_us(&mut self, _us: u32) {}
+        }
+        let db = rflasher_chips::ChipDatabase::new();
+        let sst = db.find_by_name("SST25VF016B")[0].clone();
+        let writable =
+            |menu| SpiFlashDevice::new(Menu(menu), FlashContext::new(sst.clone())).check_writable();
+        // Word programming alone programs the chip; so does byte programming.
+        writable(&[0x06, 0x05, 0xad, 0x04, 0x20]).unwrap();
+        writable(&[0x06, 0x05, 0x02, 0x20]).unwrap();
+        // No way to program, to erase a block, or to poll completion.
+        for menu in [
+            &[0x06, 0x05, 0x20][..],
+            &[0x06, 0x05, 0x02, 0xc7],
+            &[0x06, 0x02, 0x20],
+        ] {
+            assert_eq!(
+                writable(menu),
+                Err(Error::OpcodeNotSupported),
+                "{menu:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn erases_are_planned_with_erasers_the_programmer_can_send() {
+        use crate::flash::{SpiFlashDevice, unified};
+        use futures_lite::future::block_on;
+
+        // Like a locked Intel opcode menu holding only the sector erase.
+        struct SectorOnly(EraseMaster);
+        impl SpiMaster for SectorOnly {
+            fn features(&self) -> SpiFeatures {
+                self.0.features()
+            }
+            fn max_read_len(&self) -> usize {
+                self.0.max_read_len()
+            }
+            fn max_write_len(&self) -> usize {
+                self.0.max_write_len()
+            }
+            fn probe_opcode(&self, opcode: u8) -> bool {
+                !matches!(opcode, 0xd8 | 0xc7)
+            }
+            async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
+                self.0.execute(cmd).await
+            }
+            async fn delay_us(&mut self, _us: u32) {}
+        }
+
+        // A catalog descriptor keeps every eraser the chip has; nothing
+        // pruned it for this programmer as database probing would.
+        let mut ctx = nonuniform_context();
+        ctx.chip.erase_blocks = vec![
+            EraseBlock::with_count(0x20, 16, 3),
+            EraseBlock::new(0xd8, 48),
+            EraseBlock::new(0xc7, 48),
+        ]
+        .into();
+        let master = SectorOnly(EraseMaster {
+            commands: vec![],
+            fail_erase: false,
+        });
+        let mut device = SpiFlashDevice::new(master, ctx);
+        let whole = crate::layout::Region::new("all", 0, 47);
+        block_on(unified::erase_region(&mut device, &whole)).unwrap();
+        let erases: Vec<_> = (device.into_parts().0.0.commands.into_iter())
+            .filter(|(opcode, _)| matches!(opcode, 0x20 | 0xd8 | 0xc7))
+            .collect();
+        assert_eq!(
+            erases,
+            vec![(0x20, Some(0)), (0x20, Some(16)), (0x20, Some(32))]
+        );
+    }
+
+    #[test]
     fn exact_planned_opcode_survives_dispatch() {
         use crate::flash::{FlashDevice, SpiFlashDevice};
         use futures_lite::future::block_on;
@@ -2466,7 +2606,8 @@ mod tests {
         ctx.chip.erase_blocks = vec![
             EraseBlock::with_count(0x20, 16, 3),
             EraseBlock::new(0xc7, 48),
-        ];
+        ]
+        .into();
         let op = OptimalEraseOp {
             start: 0,
             size: 48,
@@ -2527,7 +2668,7 @@ mod tests {
     fn single_addressed_block_erase_keeps_its_address() {
         use futures_lite::future::block_on;
         let mut ctx = nonuniform_context();
-        ctx.chip.erase_blocks = vec![EraseBlock::new(0xD8, 48)];
+        ctx.chip.erase_blocks = vec![EraseBlock::new(0xD8, 48)].into();
         let plan = plan_optimal_erase_region(ctx.chip.erase_blocks(), 48, 0, 47).unwrap();
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].erase_block.opcode, 0xD8);
@@ -2546,7 +2687,7 @@ mod tests {
         use futures_lite::future::block_on;
         for opcode in [0x60, 0x62, 0xC7] {
             let mut ctx = nonuniform_context();
-            ctx.chip.erase_blocks = vec![EraseBlock::new(opcode, 48)];
+            ctx.chip.erase_blocks = vec![EraseBlock::new(opcode, 48)].into();
             let mut master = EraseMaster {
                 commands: vec![],
                 fail_erase: false,
@@ -2567,7 +2708,8 @@ mod tests {
         ctx.chip.erase_blocks = vec![
             EraseBlock::with_count(0x20, 16, 3),
             EraseBlock::new(0xC7, 48),
-        ];
+        ]
+        .into();
         let mut master = EraseMaster {
             commands: vec![],
             fail_erase: false,

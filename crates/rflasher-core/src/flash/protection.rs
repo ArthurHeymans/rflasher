@@ -94,17 +94,72 @@ pub(crate) fn wps_unknown(ctx: &FlashContext) -> bool {
     ctx.chip.jedec_id() == 0xef4018 && !ctx.chip.features.contains(Features::EXPLICIT_PROFILE)
 }
 
+/// Whether the programmer cannot read the status register 2 that holds this
+/// chip's CMP bit: it only sends certain opcodes, and RDSR2 is not among them
+/// (a locked Intel opcode menu, typically).
+fn sr2_unreadable<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashContext) -> bool {
+    ctx.chip.features.documents_rdsr2() && !master.probe_opcode(0x35)
+}
+
+/// Whether protection that silently ignores program and erase cannot be
+/// ruled out, so that every array mutation must be read back whether or not
+/// the caller verifies: possible WPS block locks ([`wps_unknown`]), or CMP in
+/// a status register 2 the programmer cannot read. A protected chip drops
+/// the command and keeps its contents, so the read-back turns an unnoticed
+/// refusal into an error and nothing has been changed.
+pub(crate) fn needs_read_back<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashContext) -> bool {
+    wps_unknown(ctx) || sr2_unreadable(master, ctx)
+}
+
+/// Refuse, without sending a command, a chip whose protection this programmer
+/// cannot even inspect: whatever its registers hold, a mutation would fail.
+///
+/// Lifting protection that turns out to be active needs further opcodes,
+/// which [`prepare`] checks once it has read the registers.
+pub(crate) fn check_supported<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashContext) -> Result<()> {
+    let features = ctx.chip.features;
+    if features.contains(Features::WP_WPS) && !master.probe_opcode(0x15) {
+        return Err(Error::OpcodeNotSupported);
+    }
+    let unlock = ctx.chip.unlock;
+    let bpr_len = match unlock {
+        Unlock::Unknown | Unlock::None => return Ok(()),
+        Unlock::Unsupported => return Err(Error::ChipNotSupported),
+        Unlock::Sst26_6 => 6,
+        Unlock::Sst26_10 => 10,
+        Unlock::Sst26_18 => 18,
+        _ => 0,
+    };
+    if bpr_len != 0 {
+        if master.max_read_len() < bpr_len || master.max_write_len() < bpr_len {
+            return Err(Error::ChipNotSupported);
+        }
+        if [0x06, 0x72, 0x98, 0x42]
+            .iter()
+            .any(|op| !master.probe_opcode(*op))
+        {
+            return Err(Error::OpcodeNotSupported);
+        }
+        return Ok(());
+    }
+    unlock.status_masks().ok_or(Error::ChipNotSupported)?;
+    if features.contains(Features::WP_CMP) && !features.documents_rdsr2() {
+        // CMP availability alone does not identify its register/bit.
+        return Err(Error::ChipNotSupported);
+    }
+    // An unreadable status register 2 is no refusal: see `needs_read_back`.
+    Ok(())
+}
+
 pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
 ) -> Result<SavedProtection> {
+    check_supported(master, ctx)?;
     if ctx.chip.features.contains(Features::WP_WPS) {
         // WPS=1 selects individual block locks, which are neither read nor
         // removed here and silently ignore program/erase. Fail closed rather
         // than rely on a later verify that the caller may skip.
-        if !master.probe_opcode(0x15) {
-            return Err(Error::OpcodeNotSupported);
-        }
         if protocol::read_status3(master).await? & 0x04 != 0 {
             log::error!("WPS=1: individual block locks are not supported for mutation");
             return Err(Error::WriteProtected);
@@ -120,15 +175,6 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
         _ => 0,
     };
     let saved = if bpr_len != 0 {
-        if master.max_read_len() < bpr_len || master.max_write_len() < bpr_len {
-            return Err(Error::ChipNotSupported);
-        }
-        if [0x06, 0x72, 0x98, 0x42]
-            .iter()
-            .any(|op| !master.probe_opcode(*op))
-        {
-            return Err(Error::OpcodeNotSupported);
-        }
         let mut bytes = [0; 18];
         master
             .execute(&mut SpiCommand::read_reg(0x72, &mut bytes[..bpr_len]))
@@ -149,22 +195,22 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
         let (bp, lock, wp, _) = unlock.status_masks().ok_or(Error::ChipNotSupported)?;
         let sr1 = protocol::read_status1(master).await?;
         let features = ctx.chip.features;
-        if features.contains(Features::WP_CMP)
-            && !features
-                .intersects(Features::WP_CMP_SR2 | Features::WP_WINBOND | Features::WRSR_EXT)
-        {
-            // CMP availability alone does not identify its register/bit.
-            return Err(Error::ChipNotSupported);
-        }
-        let needs_cmp_check =
-            features.intersects(Features::WP_CMP_SR2 | Features::WP_WINBOND | Features::WRSR_EXT);
-        if sr1 & bp == 0 && !needs_cmp_check {
+        if sr1 & bp == 0 && !features.documents_rdsr2() {
             return Ok(SavedProtection::Unchanged);
         }
-        let sr2 = if needs_cmp_check || features.contains(Features::WRSR_EXT) {
-            if !master.probe_opcode(0x35) {
+        let sr2 = if sr2_unreadable(master, ctx) {
+            // CMP cannot be checked, and the callers read back instead. That
+            // only covers a chip left as it is: rewriting SR1 to lift block
+            // protection would, without SR2's value, also clear SR2 on parts
+            // that take both in one WRSR (quad enable included).
+            if sr1 & bp != 0 {
+                log::error!(
+                    "Block protection is set and status register 2 cannot be read to lift it"
+                );
                 return Err(Error::OpcodeNotSupported);
             }
+            return Ok(SavedProtection::Unchanged);
+        } else if features.documents_rdsr2() {
             let value = protocol::read_status2(master).await?;
             // Check even with BP=0: CMP can then protect the entire array.
             // Never clear CMP/SRL, or reinterpret an unverified CMP layout.

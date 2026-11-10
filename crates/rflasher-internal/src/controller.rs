@@ -98,4 +98,7 @@ pub trait Controller {
 
     /// Check if an opcode is available
     fn probe_opcode(&self, opcode: u8) -> bool;
+
+    /// Adapt to the identified chip (see `SpiMaster::chip_identified`).
+    fn chip_identified(&mut self, _chip: &rflasher_core::chip::FlashChip) {}
 }

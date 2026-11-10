@@ -52,6 +52,7 @@ pub mod chipset;
 pub mod controller;
 pub mod error;
 pub mod host;
+pub mod hwseq;
 pub mod ich_regs;
 pub mod ichspi;
 pub mod intel_pci;
@@ -77,9 +78,9 @@ pub use pci::{
 #[cfg(feature = "alloc")]
 pub use pci::{scan_for_amd_chipsets, scan_for_intel_chipsets, scan_pci_bus};
 pub use physmap::PhysMap;
+pub use programmer::{HwseqFlash, InternalOptions, programmer_info};
 #[cfg(all(feature = "std", target_os = "linux"))]
-pub use programmer::{HwseqFlash, InternalProgrammer, InternalSpi};
-pub use programmer::{InternalOptions, programmer_info};
+pub use programmer::{InternalProgrammer, InternalSpi};
 
 // Re-export AnyDetectedChipset at crate root for convenience
 pub use AnyDetectedChipset as AnyChipset;

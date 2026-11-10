@@ -68,7 +68,8 @@ fn chip(size: u32, features: Features, four_byte_erase: bool) -> FlashChip {
             block(opcodes::BE_52, opcodes::BE_5C, 32 * KIB),
             block(opcodes::BE_D8, opcodes::BE_DC, 64 * KIB),
             EraseBlock::new(opcodes::CE_C7, size),
-        ],
+        ]
+        .into(),
         tested: ChipTestStatus::default(),
     }
 }

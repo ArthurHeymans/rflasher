@@ -46,8 +46,22 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// # Arguments
     /// * `master` - The SPI master to take ownership of
     /// * `ctx` - Flash context with chip metadata (from probing)
-    pub fn new(master: M, ctx: FlashContext) -> Self {
+    pub fn new(mut master: M, ctx: FlashContext) -> Self {
+        master.chip_identified(&ctx.chip);
         SpiFlashDevice { master, ctx }
+    }
+
+    /// Check, without sending a command, that this programmer can program
+    /// and erase the chip: the program opcode, an addressed eraser and the
+    /// chip's unprotect procedure.
+    ///
+    /// Firmware can decide at open time whether to offer a writable device.
+    /// Protection that is active on the chip is only discovered by a mutation,
+    /// which then also needs the status-write opcodes to lift it. A chip
+    /// programmed in words (AAI) passes with that alone; its odd bytes still
+    /// need the byte-program opcode.
+    pub fn check_writable(&self) -> Result<()> {
+        operations::check_spi_writable(&self.master, &self.ctx)
     }
 
     /// Get a mutable reference to the underlying SPI master
@@ -61,6 +75,10 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     }
 
     /// Get a mutable reference to the flash context
+    ///
+    /// The programmer was told about the chip this device was created with.
+    /// After replacing the chip, tell it again through
+    /// [`SpiMaster::chip_identified`] on [`Self::master`].
     pub fn context_mut(&mut self) -> &mut FlashContext {
         &mut self.ctx
     }
@@ -91,6 +109,10 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
 
     fn erase_blocks(&self) -> &[EraseBlock] {
         self.context().chip.erase_blocks()
+    }
+
+    fn can_erase_with(&self, block: &EraseBlock) -> bool {
+        operations::spi_eraser_usable(&self.master, &self.ctx, block)
     }
 
     fn page_size(&self) -> u32 {
@@ -179,12 +201,13 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
     }
 
     async fn erase_operation(&mut self, op: &operations::OptimalEraseOp) -> Result<EraseOutcome> {
-        if !super::protection::wps_unknown(&self.ctx) {
+        if !super::protection::needs_read_back(&self.master, &self.ctx) {
             operations::erase_spi_operation(&mut self.master, &self.ctx, op).await?;
             return Ok(EraseOutcome::Unverified);
         }
-        // Possible WPS individual locks ignore the erase without an error, so
-        // a direct caller must not see success unless the range reads erased.
+        // Protection that cannot be ruled out ignores the erase without an
+        // error, so a direct caller must not see success unless the range
+        // reads erased.
         self.master
             .check_access(crate::programmer::FlashAccess::Read, op.start, op.size)?;
         operations::erase_spi_operation(&mut self.master, &self.ctx, op).await?;

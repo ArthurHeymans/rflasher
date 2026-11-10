@@ -566,6 +566,9 @@ pub struct IchSpiController<H: HostAccess> {
     /// WREN/EWSR sent on its own; the next command uses it as its atomic
     /// prefix, like flashprog's `ich_spi_send_multicommand`.
     pending_preop: Option<u8>,
+    /// The identified chip reads status register 2 with 0x35, which is
+    /// otherwise too ambiguous to send (see `chip_identified`).
+    rdsr2: bool,
     /// BBAR value
     bbar: u32,
 }
@@ -708,6 +711,7 @@ impl<H: HostAccess> IchSpiController<H> {
             hwseq,
             opcodes: None,
             pending_preop: None,
+            rdsr2: false,
             bbar: 0,
         };
 
@@ -1525,8 +1529,8 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// What a software-sequencing command may change in the array.
-    fn command_footprint(opcode: u8, addr: u32, data_len: usize) -> Footprint {
-        match (opcode, Self::opcode_intent(opcode)) {
+    fn command_footprint(&self, opcode: u8, addr: u32, data_len: usize) -> Footprint {
+        match (opcode, self.opcode_intent(opcode)) {
             (_, Some(MutationIntent::ReadOnly)) => Footprint::Nothing,
             (JEDEC_WRSR | 0x31 | 0x11, _) => Footprint::Nothing,
             (JEDEC_BYTE_PROGRAM, _) => Footprint::Range {
@@ -1670,6 +1674,62 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
+    /// Admit the status reads the identified chip's protection needs.
+    ///
+    /// 0x35 is only sent as RDSR2 for a chip documented to read it that way.
+    /// An unlocked menu also gets RDSR2, and RDSR3 for a chip with WPS, in
+    /// place of opcodes that only identify a chip (REMS, RES) or that smaller
+    /// erasers replace (chip erase). A locked menu stays as the firmware left it.
+    fn adopt_chip(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        use rflasher_core::chip::Features;
+        self.rdsr2 = chip.features.documents_rdsr2();
+        if self.mode != SpiMode::SoftwareSequencing || self.locked || self.swseq_locked {
+            return;
+        }
+        let Some(mut opcodes) = self.opcodes.clone() else {
+            return;
+        };
+        let wanted = [
+            (self.rdsr2, 0x35),
+            (chip.features.contains(Features::WP_WPS), 0x15),
+        ];
+        let mut changed = false;
+        for (_, opcode) in wanted.into_iter().filter(|(needed, _)| *needed) {
+            if opcodes.opcode.iter().any(|op| op.opcode == opcode) {
+                continue;
+            }
+            let spare = [JEDEC_REMS, JEDEC_RES, JEDEC_CE_C7, JEDEC_CE_60]
+                .into_iter()
+                .find_map(|spare| opcodes.opcode.iter().position(|op| op.opcode == spare));
+            let Some(spare) = spare else {
+                continue;
+            };
+            opcodes.opcode[spare] = Opcode {
+                opcode,
+                spi_type: SPI_OPCODE_TYPE_READ_NO_ADDRESS,
+                atomic: 0,
+            };
+            changed = true;
+        }
+        if !changed {
+            return;
+        }
+        let programmed = if self.generation == IchChipset::Ich7 {
+            self.program_ich7_opcodes(&opcodes)
+        } else {
+            self.program_opcodes(&opcodes)
+        };
+        if let Err(error) = programmed {
+            log::warn!("Cannot add the chip's status reads to OPMENU: {error}");
+        }
+        // The registers decide what a cycle sends, whatever was accepted.
+        self.opcodes = Some(if self.generation == IchChipset::Ich7 {
+            self.generate_ich7_opcodes()
+        } else {
+            self.generate_opcodes()
+        });
+    }
+
     /// Check if any required opcodes are missing
     fn missing_opcodes(&self) -> bool {
         let required = [JEDEC_READ, JEDEC_RDSR];
@@ -1717,8 +1777,9 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    fn framing_fits(opcode: u8, spi_type: u8) -> bool {
+    fn framing_fits(&self, opcode: u8, spi_type: u8) -> bool {
         match opcode {
+            0x35 if self.rdsr2 => spi_type == SPI_OPCODE_TYPE_READ_NO_ADDRESS,
             JEDEC_READ | JEDEC_FAST_READ | JEDEC_REMS | JEDEC_RES => {
                 spi_type == SPI_OPCODE_TYPE_READ_WITH_ADDRESS
             }
@@ -1743,7 +1804,7 @@ impl<H: HostAccess> IchSpiController<H> {
             .ok_or(InternalError::NotSupported(
                 "Opcode not available in OPMENU",
             ))?;
-        if !Self::framing_fits(opcode, spi_type) {
+        if !self.framing_fits(opcode, spi_type) {
             return Err(InternalError::NotSupported(
                 "OPMENU frames the opcode wrongly",
             ));
@@ -1894,14 +1955,16 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 
     /// Classify supported commands by their effect, not their transfer framing.
-    fn opcode_intent(opcode: u8) -> Option<MutationIntent> {
+    fn opcode_intent(&self, opcode: u8) -> Option<MutationIntent> {
         match opcode {
+            // Only the identified chip establishes what 0x35 does: it reads
+            // status register 2 on some parts but enters QPI on Macronix
+            // ones, and the OPMENU transfer type cannot tell them apart.
+            0x35 if self.rdsr2 => Some(MutationIntent::ReadOnly),
             // RES can also release the device from deep power-down; it does not
             // modify flash contents or protection. 0x4b reads a unique ID.
             JEDEC_READ | JEDEC_FAST_READ | JEDEC_RDSR | 0x15 | JEDEC_REMS | JEDEC_RDID
             | JEDEC_RES | 0x4b => Some(MutationIntent::ReadOnly),
-            // 0x35 is RDSR2 on some parts but enters QPI on Macronix parts.
-            // OPMENU transfer type does not identify the flash's interpretation.
             JEDEC_BYTE_PROGRAM | JEDEC_SE | JEDEC_BE_52 | JEDEC_BE_D8 | JEDEC_CE_C7
             | JEDEC_CE_60 | JEDEC_WRSR | 0x31 | 0x11 => Some(MutationIntent::Mutating),
             _ => None,
@@ -1916,7 +1979,7 @@ impl<H: HostAccess> IchSpiController<H> {
         allow_unknown: bool,
         footprint: Footprint,
     ) -> Result<(), InternalError> {
-        match Self::opcode_intent(opcode) {
+        match self.opcode_intent(opcode) {
             Some(MutationIntent::ReadOnly) => Ok(()),
             None if !allow_unknown => Err(InternalError::NotSupported("Unclassified SPI opcode")),
             _ => {
@@ -2842,8 +2905,9 @@ impl<H: HostAccess> IchSpiController<H> {
     /// Send a raw SPI command using ICH7 software sequencing.
     ///
     /// Only classified opcodes in OPMENU are accepted. Mutating commands
-    /// enable BIOS writes first; unknown commands (including ambiguous 0x35)
-    /// are rejected. Opcode meanings must match the connected flash.
+    /// enable BIOS writes first; unknown commands are rejected, as is 0x35
+    /// unless the identified chip reads status register 2 with it. Opcode
+    /// meanings must match the connected flash.
     pub fn ich7_swseq_send_command(
         &mut self,
         writearr: &[u8],
@@ -2972,7 +3036,7 @@ impl<H: HostAccess> IchSpiController<H> {
 
         // For read operations, we need to use the readarr
         // For write operations, we use the data from writearr
-        let footprint = Self::command_footprint(opcode, addr, data_slice.len());
+        let footprint = self.command_footprint(opcode, addr, data_slice.len());
         self.gate_opcode(opcode, allow_unknown, footprint)?;
         if is_write {
             let mut data_buf: [u8; 64] = [0; 64];
@@ -3068,7 +3132,8 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Raw controller erase is unavailable without chip-specific geometry.
+    /// Raw controller erase is unavailable without chip-specific geometry;
+    /// see [`Self::swseq_erase_blocks`].
     pub fn ich7_swseq_erase(&mut self, _addr: u32, _len: u32) -> Result<(), InternalError> {
         Err(InternalError::NotSupported(
             "Software erase requires chip-specific geometry",
@@ -3115,8 +3180,9 @@ impl<H: HostAccess> IchSpiController<H> {
     /// The first byte of writearr is the opcode. For address-type commands,
     /// bytes 1-3 are the 24-bit address. Any remaining bytes are data to write.
     /// Only classified opcodes in OPMENU are accepted. Mutating commands enable
-    /// BIOS writes first; unknown commands (including ambiguous 0x35) are
-    /// rejected. Opcode meanings must match the connected flash.
+    /// BIOS writes first; unknown commands are rejected, as is 0x35 unless the
+    /// identified chip reads status register 2 with it. Opcode meanings must
+    /// match the connected flash.
     pub fn swseq_send_command(
         &mut self,
         writearr: &[u8],
@@ -3244,7 +3310,7 @@ impl<H: HostAccess> IchSpiController<H> {
             0
         };
 
-        let footprint = Self::command_footprint(opcode, addr, data_slice.len());
+        let footprint = self.command_footprint(opcode, addr, data_slice.len());
         self.gate_opcode(opcode, allow_unknown, footprint)?;
 
         // For read operations, we need to use the readarr
@@ -3345,11 +3411,61 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Raw controller erase is unavailable without chip-specific geometry.
+    /// Raw controller erase is unavailable without chip-specific geometry;
+    /// see [`Self::swseq_erase_blocks`].
     pub fn swseq_erase(&mut self, _addr: u32, _len: u32) -> Result<(), InternalError> {
         Err(InternalError::NotSupported(
             "Software erase requires chip-specific geometry",
         ))
+    }
+
+    /// Erase `len` bytes at `addr` in `block_size` blocks with `opcode`, then
+    /// wait for each to finish, using ICH7 or ICH9+ software sequencing.
+    ///
+    /// The caller supplies the geometry it verified for the connected chip:
+    /// `opcode` must erase exactly `block_size` bytes there. This is the raw
+    /// command path chip-aware callers already use, without a heap or the
+    /// chip database. The full range must be writable, and the opcode menu
+    /// must support RDSR polling; a fixed delay cannot guarantee completion.
+    pub fn swseq_erase_blocks(
+        &mut self,
+        opcode: u8,
+        block_size: u32,
+        addr: u32,
+        len: u32,
+    ) -> Result<(), InternalError> {
+        if self.mode == SpiMode::HardwareSequencing {
+            return Err(InternalError::NotSupported(
+                "Hardware sequencing erases by address",
+            ));
+        }
+        if !matches!(opcode, JEDEC_SE | JEDEC_BE_52 | JEDEC_BE_D8) {
+            return Err(InternalError::NotSupported("Not a block erase opcode"));
+        }
+        if !block_size.is_power_of_two()
+            || !addr.is_multiple_of(block_size)
+            || !len.is_multiple_of(block_size)
+        {
+            return Err(InternalError::Io("Erase address/length not aligned"));
+        }
+        // Reject the whole range before erasing any of it.
+        Self::check_swseq_range(addr, len as usize)?;
+        self.check_range(FlashAccess::Modify, addr, u64::from(len))?;
+        // The legacy wait helpers fall back to a fixed delay without RDSR.
+        // That cannot guarantee erase completion, so require real polling.
+        self.menu_type(JEDEC_RDSR)?;
+        for block in (addr..addr + len).step_by(block_size as usize) {
+            let [_, high, middle, low] = block.to_be_bytes();
+            let command = [opcode, high, middle, low];
+            if self.generation == IchChipset::Ich7 {
+                self.ich7_swseq_send_command(&command, &mut [])?;
+                self.ich7_swseq_wait_wip()?;
+            } else {
+                self.swseq_send_command(&command, &mut [])?;
+                self.swseq_wait_wip()?;
+            }
+        }
+        Ok(())
     }
 
     /// Wait for Write-In-Progress (WIP) bit to clear
@@ -3562,6 +3678,10 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
             .map_err(InternalError::to_core_error)
     }
 
+    fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        self.adopt_chip(chip);
+    }
+
     fn probe_opcode(&self, opcode: u8) -> bool {
         // In hwseq mode, no raw opcodes are available
         if self.mode == SpiMode::HardwareSequencing {
@@ -3569,8 +3689,38 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
         }
 
         // OPMENU opcodes, or WREN/EWSR sent atomically from the PREOP table.
-        (Self::opcode_intent(opcode).is_some() && self.menu_type(opcode).is_ok())
+        (self.opcode_intent(opcode).is_some() && self.menu_type(opcode).is_ok())
             || ((opcode == JEDEC_WREN || opcode == JEDEC_EWSR) && self.find_preop(opcode).is_some())
+    }
+}
+
+// Firmware uses the same SPI protocol/protection/geometry code as native
+// programmers. No Box or second firmware-specific flash implementation is needed.
+#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
+impl<H: HostAccess> rflasher_core::programmer::SpiMaster for IchSpiController<H> {
+    fn features(&self) -> SpiFeatures {
+        Controller::features(self)
+    }
+    fn max_read_len(&self) -> usize {
+        Controller::max_read_len(self)
+    }
+    fn max_write_len(&self) -> usize {
+        Controller::max_write_len(self)
+    }
+    fn probe_opcode(&self, opcode: u8) -> bool {
+        Controller::probe_opcode(self, opcode)
+    }
+    fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        Controller::chip_identified(self, chip)
+    }
+    fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> CoreResult<()> {
+        Controller::check_access(self, access, addr, len)
+    }
+    async fn execute(&mut self, command: &mut SpiCommand<'_>) -> CoreResult<()> {
+        Controller::execute(self, command)
+    }
+    async fn delay_us(&mut self, us: u32) {
+        self.host.delay_us(us);
     }
 }
 
@@ -3637,6 +3787,7 @@ mod tests {
             },
             opcodes: None,
             pending_preop: None,
+            rdsr2: false,
             bbar: 0,
         }
     }
@@ -3850,6 +4001,146 @@ mod tests {
             // The fake may report a cycle error, but the command was issued.
             assert!(!host.writes().is_empty());
             assert!(!mmio.writes().is_empty());
+        }
+    }
+
+    #[test]
+    fn erase_blocks_use_the_callers_geometry() {
+        for ich7 in [false, true] {
+            let mut c = test_controller();
+            c.mode = SpiMode::SoftwareSequencing;
+            c.generation = if ich7 {
+                IchChipset::Ich7
+            } else {
+                IchChipset::Ich9
+            };
+            c.opcodes = Some(Opcodes::default());
+            c.host.enable_write8_readback();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            let host = c.host.clone();
+            let mmio = c.spibar.clone();
+
+            // Rejected before any cycle: not an erase, misaligned, past 16 MiB.
+            for (opcode, size, addr, len) in [
+                (JEDEC_BYTE_PROGRAM, 4096, 0, 4096),
+                (JEDEC_CE_C7, 4096, 0, 4096),
+                (JEDEC_SE, 0, 0, 4096),
+                (JEDEC_SE, 3000, 0, 6000),
+                (JEDEC_SE, 4096, 2048, 4096),
+                (JEDEC_SE, 4096, 0, 2048),
+                (JEDEC_BE_D8, 65536, (1 << 24) - 65536, 2 * 65536),
+            ] {
+                assert!(c.swseq_erase_blocks(opcode, size, addr, len).is_err());
+            }
+            assert!(host.writes().is_empty());
+            assert!(mmio.writes().is_empty());
+
+            // The fake may report a cycle error, but the command was issued.
+            let _ = c.swseq_erase_blocks(JEDEC_SE, 4096, 0xff0000, 0x10000);
+            assert!(!host.writes().is_empty());
+            assert!(!mmio.writes().is_empty());
+
+            c.mode = SpiMode::HardwareSequencing;
+            assert!(c.swseq_erase_blocks(JEDEC_SE, 4096, 0, 4096).is_err());
+        }
+    }
+
+    #[test]
+    fn erase_blocks_preflight_the_entire_protected_range() {
+        for generation in [
+            IchChipset::Ich7,
+            IchChipset::Ich9,
+            IchChipset::Series100SunrisePoint,
+        ] {
+            // Protect either a later block's first page or a page inside it.
+            for protected in [0x10000, 0x11000] {
+                let mut c = test_controller();
+                c.generation = generation;
+                c.mode = SpiMode::SoftwareSequencing;
+                c.locked = true;
+                c.opcodes = Some(Opcodes::default());
+                let index = c.find_opcode_index(JEDEC_SE).unwrap();
+                c.opcodes.as_mut().unwrap().opcode[index].opcode = JEDEC_BE_D8;
+                let protection = if generation == IchChipset::Ich7 {
+                    (protected >> 12) | (protected >> 12) << 12 | 1 << PR_WP_OFF
+                } else {
+                    pr(protected, protected + 0xfff, false, true)
+                };
+                c.spibar.set32(c.pr_registers().0, protection);
+                assert!(matches!(
+                    c.swseq_erase_blocks(JEDEC_BE_D8, 0x10000, 0, 0x20000),
+                    Err(InternalError::AccessDenied {
+                        region: "protected range"
+                    })
+                ));
+                assert!(c.host.writes().is_empty());
+                assert!(c.spibar.writes().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn erase_blocks_require_status_polling_before_any_cycle() {
+        for generation in [IchChipset::Ich7, IchChipset::Ich9] {
+            for missing in [false, true] {
+                let mut c = test_controller();
+                c.generation = generation;
+                c.mode = SpiMode::SoftwareSequencing;
+                c.opcodes = Some(Opcodes::default());
+                c.host.enable_write8_readback();
+                c.host
+                    .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+                let index = c.find_opcode_index(JEDEC_RDSR).unwrap();
+                let status = &mut c.opcodes.as_mut().unwrap().opcode[index];
+                if missing {
+                    status.opcode = 0;
+                } else {
+                    status.spi_type = SPI_OPCODE_TYPE_WRITE_NO_ADDRESS;
+                }
+                assert!(c.swseq_erase_blocks(JEDEC_SE, 4096, 0, 4096).is_err());
+                assert!(c.host.writes().is_empty());
+                assert!(c.spibar.writes().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn erase_blocks_complete_each_block_and_leave_neighbors_untouched() {
+        for (opcode, size) in [(JEDEC_SE, 4096), (JEDEC_BE_52, 32768), (JEDEC_BE_D8, 65536)] {
+            let mut c = test_controller();
+            c.generation = IchChipset::Ich9;
+            c.mode = SpiMode::SoftwareSequencing;
+            c.opcodes = Some(Opcodes::default());
+            // Model a menu containing the caller's erase opcode.
+            let index = c.find_opcode_index(JEDEC_SE).unwrap();
+            c.opcodes.as_mut().unwrap().opcode[index].opcode = opcode;
+            c.spibar.set_swseq_menu(
+                c.swseq.ssfsc,
+                c.opcodes.as_ref().unwrap().opcode.map(|o| o.opcode),
+            );
+            c.spibar.set_flash(vec![0; 4 * size as usize]);
+            c.host.enable_write8_readback();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            c.swseq_erase_blocks(opcode, size, size, 2 * size).unwrap();
+            let menu = c.opcodes.as_ref().unwrap().opcode.map(|o| o.opcode);
+            let cycles: Vec<_> = c
+                .spibar
+                .writes()
+                .iter()
+                .filter(|&&(offset, value, _)| offset == c.swseq.ssfsc && value & SSFC_SCGO != 0)
+                .map(|&(_, value, _)| menu[((value & SSFC_COP) >> SSFC_COP_OFF) as usize])
+                .collect();
+            assert_eq!(cycles, [opcode, JEDEC_RDSR, opcode, JEDEC_RDSR]);
+            let flash = c.spibar.flash();
+            assert!(flash[..size as usize].iter().all(|&b| b == 0));
+            assert!(
+                flash[size as usize..3 * size as usize]
+                    .iter()
+                    .all(|&b| b == 0xff)
+            );
+            assert!(flash[3 * size as usize..].iter().all(|&b| b == 0));
         }
     }
 
@@ -4252,6 +4543,24 @@ mod tests {
 
     #[cfg(all(feature = "std", target_os = "linux"))]
     #[test]
+    fn hwseq_flash_needs_address_erase_and_whole_blocks() {
+        use crate::programmer::HwseqFlash;
+
+        // 64 KiB hardware blocks.
+        for size in [0, 4096, (1 << 20) + 4096] {
+            let refused = HwseqFlash::with_size(ich9_controller(3, 3, 0), size);
+            assert!(
+                matches!(refused, Err(InternalError::NotSupported(_))),
+                "{size}"
+            );
+        }
+        // Software sequencing sends raw commands: the chip decides geometry.
+        let refused = HwseqFlash::with_size(swseq_controller(vec![0; 1 << 20]), 1 << 20);
+        assert!(matches!(refused, Err(InternalError::NotSupported(_))));
+    }
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
     fn hwseq_flash_plans_with_the_controller_block_size() {
         use crate::programmer::HwseqFlash;
         use futures_lite::future::block_on;
@@ -4263,7 +4572,7 @@ mod tests {
             PCI_REG_BIOS_CNTL as u16,
             u32::from(BIOS_CNTL_SMM_BWP),
         );
-        let mut flash = HwseqFlash::with_size(Box::new(controller), 1 << 20).unwrap();
+        let mut flash = HwseqFlash::with_size(controller, 1 << 20).unwrap();
         assert_eq!(flash.erase_granularity(), 64 * 1024);
         assert_eq!(flash.erase_blocks()[0].total_size(), 1 << 20);
         // Writable SMM_BWP must not prevent the lazy enable.
@@ -4678,7 +4987,7 @@ mod tests {
                     let fake = (controller.spibar.clone(), controller.host.clone());
                     fake.0.set_flash(vec![0; 1 << 20]);
                     fake.0.set32(ICH9_REG_PR0, protection);
-                    let mut flash = HwseqFlash::with_size(Box::new(controller), 1 << 20).unwrap();
+                    let mut flash = HwseqFlash::with_size(controller, 1 << 20).unwrap();
                     check_mutation(
                         &mut flash,
                         (&fake.0, &fake.1),
@@ -4722,6 +5031,175 @@ mod tests {
 
     #[cfg(all(feature = "std", target_os = "linux"))]
     #[test]
+    fn firmware_controller_uses_core_geometry_and_restores_bios_write_enable() {
+        use futures_lite::future::block_on;
+        use rflasher_core::flash::{FlashContext, FlashDevice, SpiFlashDevice};
+
+        let db = rflasher_chips::ChipDatabase::new();
+        let chip = db.find_by_name("SST25VF016B")[0].clone();
+        let mut controller = swseq_controller(vec![0; chip.total_size as usize]);
+        controller.locked = true;
+        // Only 4-KiB sector erase is in this menu; the chip also advertises
+        // 32/64-KiB erasers, so core must select supported geometry itself.
+        controller.opcodes.as_mut().unwrap().opcode[2].opcode = JEDEC_SE;
+        controller.spibar.set_swseq_menu(
+            controller.swseq.ssfsc,
+            controller
+                .opcodes
+                .as_ref()
+                .unwrap()
+                .opcode
+                .map(|o| o.opcode),
+        );
+        let mmio = controller.spibar.clone();
+        let host = controller.host.clone();
+        let bdf = controller.config_bdf;
+        let protected_register = controller.pr_registers().0;
+        mmio.set32(protected_register, pr(0x18000, 0x18fff, false, true));
+        // The concrete firmware controller is a SpiMaster: no Box or another
+        // chip protocol implementation between it and the core.
+        let mut flash = SpiFlashDevice::new(controller, FlashContext::new(chip));
+        assert_eq!(
+            block_on(flash.erase(0x10000, 0x10000)),
+            Err(CoreError::RegionProtected)
+        );
+        assert!(mmio.writes().is_empty());
+        assert!(host.writes().is_empty());
+
+        mmio.set32(protected_register, 0);
+        block_on(flash.erase(0x10000, 0x10000)).unwrap();
+        block_on(flash.write(0x10000, &[1, 2, 3, 4])).unwrap();
+        let mut read = [0; 4];
+        block_on(flash.read(0x10000, &mut read)).unwrap();
+        assert_eq!(read, [1, 2, 3, 4]);
+        let contents = mmio.flash();
+        assert!(contents[..0x10000].iter().all(|&b| b == 0));
+        assert!(contents[0x10004..0x20000].iter().all(|&b| b == 0xff));
+        assert!(contents[0x20000..].iter().all(|&b| b == 0));
+        drop(flash);
+        assert_eq!(
+            host.read8(bdf, PCI_REG_BIOS_CNTL as u16).unwrap() & BIOS_CNTL_BWE,
+            0
+        );
+    }
+
+    /// Run the fake's cycles with the menu the controller now has.
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    fn follow_menu(c: &IchSpiController<FakeHost>) {
+        let menu = c.opcodes.as_ref().unwrap().opcode.map(|o| o.opcode);
+        c.spibar.set_swseq_menu(c.swseq.ssfsc, menu);
+    }
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
+    fn an_identified_chip_gets_its_status_reads_and_can_be_written() {
+        use futures_lite::future::block_on;
+        use rflasher_core::flash::{FlashContext, FlashDevice, SpiFlashDevice};
+
+        let db = rflasher_chips::ChipDatabase::new();
+        let chip = |name: &str| {
+            let found = db.find_by_name(name);
+            (*found.iter().find(|c| c.name() == name).unwrap()).clone()
+        };
+        // Parts whose unprotect procedure reads SR2 (and SR3 with WPS).
+        for (name, sr3) in [
+            ("W25Q32.V", false),
+            ("W25Q64.V", false),
+            ("W25Q128.V", false),
+            ("W25Q128FVJV-WP", true),
+        ] {
+            let chip = chip(name);
+            let controller = swseq_controller(vec![0; chip.total_size as usize]);
+            assert!(
+                !controller.probe_opcode(0x35),
+                "{name}: before identification"
+            );
+            let mmio = controller.spibar.clone();
+            let menu_before = [
+                mmio.read32(controller.swseq.opmenu),
+                mmio.read32(controller.swseq.opmenu + 4),
+            ];
+            let opmenu = controller.swseq.opmenu;
+            let mut flash = SpiFlashDevice::new(controller, FlashContext::new(chip));
+            let c = flash.master();
+            assert!(c.probe_opcode(0x35), "{name}");
+            assert_eq!(c.probe_opcode(0x15), sr3, "{name}");
+            // Identification opcodes made room; programming ones stayed.
+            assert!(!c.probe_opcode(JEDEC_REMS), "{name}");
+            for kept in [JEDEC_RDID, JEDEC_RDSR, JEDEC_WRSR, JEDEC_BYTE_PROGRAM] {
+                assert!(c.probe_opcode(kept), "{name}: {kept:#04x}");
+            }
+            follow_menu(c);
+            flash.check_writable().unwrap();
+            block_on(flash.erase(0x10000, 0x10000)).unwrap();
+            block_on(flash.write(0x10000, &[1, 2, 3, 4])).unwrap();
+            assert_eq!(mmio.flash()[0x10000..0x10004], [1, 2, 3, 4], "{name}");
+            // The menu is restored with the rest of the configuration.
+            drop(flash);
+            assert_eq!(
+                [mmio.read32(opmenu), mmio.read32(opmenu + 4)],
+                menu_before,
+                "{name}"
+            );
+        }
+    }
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
+    fn a_locked_menu_and_other_chips_do_not_gain_rdsr2() {
+        use futures_lite::future::block_on;
+        use rflasher_core::flash::{FlashContext, FlashDevice, SpiFlashDevice};
+
+        let db = rflasher_chips::ChipDatabase::new();
+        let winbond = db.find_by_name("W25Q64.V")[0].clone();
+        let macronix = db.find_by_name("MX25L6405D")[0].clone();
+        let with_rdsr2 = |c: &mut IchSpiController<FakeHost>| {
+            c.opcodes.as_mut().unwrap().opcode[4] = Opcode {
+                opcode: 0x35,
+                spi_type: SPI_OPCODE_TYPE_READ_NO_ADDRESS,
+                atomic: 0,
+            };
+            follow_menu(c);
+        };
+
+        // Locked without RDSR2: the menu stays as it is and CMP cannot be
+        // checked, so the chip is written as found and read back.
+        let mut c = swseq_controller(vec![0xff; winbond.total_size as usize]);
+        c.locked = true;
+        let mmio = c.spibar.clone();
+        let menu = c.opcodes.as_ref().unwrap().opcode.map(|o| o.opcode);
+        let mut flash = SpiFlashDevice::new(c, FlashContext::new(winbond.clone()));
+        assert!(mmio.writes().is_empty());
+        assert!(!flash.master().probe_opcode(0x35));
+        flash.check_writable().unwrap();
+        block_on(flash.write(0x10000, &[1, 2])).unwrap();
+        assert_eq!(mmio.flash()[0x10000..0x10002], [1, 2]);
+        let c = flash.master();
+        assert_eq!(c.opcodes.as_ref().unwrap().opcode.map(|o| o.opcode), menu);
+
+        // Locked with the firmware's own RDSR2 entry: usable for this chip.
+        let mut c = swseq_controller(vec![0; winbond.total_size as usize]);
+        c.locked = true;
+        with_rdsr2(&mut c);
+        let mut flash = SpiFlashDevice::new(c, FlashContext::new(winbond));
+        flash.check_writable().unwrap();
+        block_on(flash.write(0x10000, &[1])).unwrap();
+
+        // The same entry stays refused for a part where 0x35 enters QPI,
+        // which needs no status-register-2 read to be written.
+        let mut c = swseq_controller(vec![0; macronix.total_size as usize]);
+        with_rdsr2(&mut c);
+        let mmio = c.spibar.clone();
+        let writes = mmio.writes().len();
+        let mut flash = SpiFlashDevice::new(c, FlashContext::new(macronix));
+        assert_eq!(mmio.writes().len(), writes);
+        assert!(!flash.master().probe_opcode(0x35));
+        flash.check_writable().unwrap();
+        block_on(flash.write(0x10000, &[1])).unwrap();
+    }
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
     fn swseq_mutations_check_planned_footprints_before_the_first_change() {
         use crate::programmer::InternalSpi;
         use rflasher_core::flash::{FlashContext, SpiFlashDevice};
@@ -4729,8 +5207,10 @@ mod tests {
         let db = rflasher_chips::ChipDatabase::new();
         let mut chip = db.find_by_name("W25Q128.V")[0].clone();
         // 64 KiB blocks only, the erase in the menu.
-        chip.erase_blocks.retain(|b| b.opcode == JEDEC_BE_D8);
-        // Its status unlock needs RDSR2 (0x35), which swseq refuses.
+        chip.erase_blocks
+            .to_mut()
+            .retain(|b| b.opcode == JEDEC_BE_D8);
+        // This is about footprints; leave the status registers alone.
         chip.unlock = rflasher_core::chip::Unlock::None;
         let size = chip.total_size as usize;
         // The end of the 64 KiB block at 0x40000 is protected: the hardware

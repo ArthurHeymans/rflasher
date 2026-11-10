@@ -605,8 +605,8 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
     };
 
     FlashChip {
-        vendor: String::from("SFDP"),
-        name: String::from("Unknown"),
+        vendor: String::from("SFDP").into(),
+        name: String::from("Unknown").into(),
         jedec_manufacturer,
         jedec_device,
         total_size: params.density_bytes as u32,
@@ -616,7 +616,7 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         voltage_min_mv: 2700, // Default, SFDP doesn't specify voltage
         voltage_max_mv: 3600,
         write_granularity,
-        erase_blocks,
+        erase_blocks: erase_blocks.into(),
         tested: Default::default(),
     }
 }
@@ -1327,7 +1327,7 @@ mod tests {
     }
 
     fn with_erase_blocks(mut chip: FlashChip, blocks: Vec<EraseBlock>) -> FlashChip {
-        chip.erase_blocks = blocks;
+        chip.erase_blocks = blocks.into();
         chip
     }
 
@@ -1413,8 +1413,8 @@ mod tests {
 
         let common = probe_db(no_sfdp(), &db, &ProbeOptions::default()).unwrap();
         assert_eq!(
-            common.chip.erase_blocks,
-            vec![EraseBlock::with_count(0xD8, 65536, 128)]
+            common.chip.erase_blocks(),
+            &[EraseBlock::with_count(0xD8, 65536, 128)]
         );
 
         let pick = |name| ProbeOptions {

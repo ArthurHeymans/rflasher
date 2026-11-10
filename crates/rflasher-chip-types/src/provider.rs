@@ -1,12 +1,14 @@
 //! Flash chip database lookup abstraction.
 
-use super::FlashChip;
+use super::{ChipIdentity, FlashChip};
 
 /// A source of flash chip definitions.
 ///
 /// Providers may load chip definitions at runtime, compile them into the
 /// application, or obtain them from another source. Flash probing only needs
 /// JEDEC ID lookup, so the core trait intentionally exposes a small API.
+/// This is low-level enumeration, not identification policy: a board's
+/// [`crate::ChipCatalog`] holds one approved profile per identity.
 pub trait ChipProvider {
     /// Find a chip by its JEDEC manufacturer and device IDs.
     ///
@@ -58,5 +60,96 @@ pub trait ChipProvider {
         } else {
             None
         }
+    }
+}
+
+impl<const N: usize> ChipProvider for [FlashChip; N] {
+    fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
+        self.as_slice().find_by_jedec_id(manufacturer, device)
+    }
+
+    fn find_nth_by_jedec_id(
+        &self,
+        manufacturer: u8,
+        device: u16,
+        index: usize,
+    ) -> Option<&FlashChip> {
+        self.as_slice()
+            .find_nth_by_jedec_id(manufacturer, device, index)
+    }
+
+    fn find_nth_by_res2_id(
+        &self,
+        manufacturer: u8,
+        device: u8,
+        index: usize,
+    ) -> Option<&FlashChip> {
+        self.as_slice()
+            .find_nth_by_res2_id(manufacturer, device, index)
+    }
+
+    fn find_nth_by_banked_jedec_id(
+        &self,
+        bank: u8,
+        manufacturer: u8,
+        device: &[u8],
+        index: usize,
+    ) -> Option<&FlashChip> {
+        self.as_slice()
+            .find_nth_by_banked_jedec_id(bank, manufacturer, device, index)
+    }
+}
+
+/// Borrowed catalogs work directly with probing, without allocation.
+impl ChipProvider for [FlashChip] {
+    fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
+        self.find_nth_by_jedec_id(manufacturer, device, 0)
+    }
+
+    fn find_nth_by_jedec_id(
+        &self,
+        manufacturer: u8,
+        device: u16,
+        index: usize,
+    ) -> Option<&FlashChip> {
+        let identity = ChipIdentity::Jedec {
+            manufacturer,
+            device,
+        };
+        self.iter()
+            .filter(|c| c.matches_identity(identity))
+            .nth(index)
+    }
+
+    fn find_nth_by_res2_id(
+        &self,
+        manufacturer: u8,
+        device: u8,
+        index: usize,
+    ) -> Option<&FlashChip> {
+        let identity = ChipIdentity::Res2 {
+            manufacturer,
+            device,
+        };
+        self.iter()
+            .filter(|c| c.matches_identity(identity))
+            .nth(index)
+    }
+
+    fn find_nth_by_banked_jedec_id(
+        &self,
+        bank: u8,
+        manufacturer: u8,
+        device: &[u8],
+        index: usize,
+    ) -> Option<&FlashChip> {
+        let identity = ChipIdentity::BankedJedec {
+            bank,
+            manufacturer,
+            device,
+        };
+        self.iter()
+            .filter(|c| c.matches_identity(identity))
+            .nth(index)
     }
 }

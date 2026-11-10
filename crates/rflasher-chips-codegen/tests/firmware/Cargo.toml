@@ -1,0 +1,21 @@
+[package]
+name = "firmware-catalog-test"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Keep target features separate from the allocating workspace frontends.
+[workspace]
+resolver = "3"
+
+[features]
+# Exercise feature unification without changing generated source or call sites.
+alloc = ["rflasher-core/alloc", "rflasher-internal/alloc"]
+
+[dependencies]
+rflasher-core = { path = "../../../rflasher-core", default-features = false }
+rflasher-internal = { path = "../../../rflasher-internal", default-features = false }
+
+[build-dependencies]
+rflasher-chips = { path = "../../../rflasher-chips", default-features = false }
+rflasher-chips-codegen = { path = "../.." }

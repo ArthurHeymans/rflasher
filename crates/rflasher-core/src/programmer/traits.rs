@@ -4,6 +4,7 @@
 //! them at their outermost boundary (e.g. `futures_lite::future::block_on`
 //! in the CLI); WASM drives them from the browser event loop.
 
+use crate::chip::FlashChip;
 use crate::error::Result;
 use crate::flash::FlashContext;
 use crate::spi::SpiCommand;
@@ -146,6 +147,16 @@ pub trait SpiMaster {
     fn probe_opcode(&self, _opcode: u8) -> bool {
         true
     }
+
+    /// Adapt to the chip that was identified, before operating on it.
+    ///
+    /// A programmer that only sends opcodes it understands (Intel software
+    /// sequencing) cannot judge a chip-specific one until the chip is known:
+    /// 0x35 reads status register 2 on some parts and enters QPI on others.
+    /// Probing and [`crate::flash::SpiFlashDevice::new`] call this, after
+    /// which [`Self::probe_opcode`] answers for that chip. Wrappers must
+    /// forward it.
+    fn chip_identified(&mut self, _chip: &FlashChip) {}
 
     /// Delay for the specified number of microseconds
     async fn delay_us(&mut self, us: u32);

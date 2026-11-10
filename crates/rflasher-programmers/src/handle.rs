@@ -37,8 +37,8 @@ pub struct ChipInfo {
 impl From<&FlashContext> for ChipInfo {
     fn from(ctx: &FlashContext) -> Self {
         Self {
-            vendor: ctx.chip.vendor.clone(),
-            name: ctx.chip.name.clone(),
+            vendor: ctx.chip.vendor().to_owned(),
+            name: ctx.chip.name().to_owned(),
             jedec_manufacturer: ctx.chip.jedec_manufacturer,
             jedec_device: ctx.chip.jedec_device,
             total_size: ctx.chip.total_size,
@@ -54,8 +54,8 @@ impl From<&FlashContext> for ChipInfo {
 impl From<ProbeResult> for ChipInfo {
     fn from(result: ProbeResult) -> Self {
         Self {
-            vendor: result.chip.vendor.clone(),
-            name: result.chip.name.clone(),
+            vendor: result.chip.vendor().to_owned(),
+            name: result.chip.name().to_owned(),
             jedec_manufacturer: result.jedec_manufacturer,
             jedec_device: result.jedec_device,
             total_size: result.chip.total_size,

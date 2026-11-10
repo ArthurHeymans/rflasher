@@ -33,6 +33,7 @@ trait DynFlashDevice {
     fn erase_granularity(&self) -> u32;
     fn write_granularity(&self) -> WriteGranularity;
     fn erase_blocks(&self) -> &[EraseBlock];
+    fn can_erase_with(&self, block: &EraseBlock) -> bool;
     fn page_size(&self) -> u32;
     fn is_valid_range(&self, addr: u32, len: usize) -> bool;
     fn validate_write(&self, addr: u32, len: usize) -> Result<()>;
@@ -75,6 +76,9 @@ impl<D: FlashDevice> DynFlashDevice for D {
     }
     fn erase_blocks(&self) -> &[EraseBlock] {
         FlashDevice::erase_blocks(self)
+    }
+    fn can_erase_with(&self, block: &EraseBlock) -> bool {
+        FlashDevice::can_erase_with(self, block)
     }
     fn page_size(&self) -> u32 {
         FlashDevice::page_size(self)
@@ -171,6 +175,10 @@ impl FlashDevice for ErasedFlashDevice {
     fn erase_blocks(&self) -> &[EraseBlock] {
         self.inner.erase_blocks()
     }
+    // Forward the programmer's limits, or plans would use erasers it lacks.
+    fn can_erase_with(&self, block: &EraseBlock) -> bool {
+        self.inner.can_erase_with(block)
+    }
     fn page_size(&self) -> u32 {
         self.inner.page_size()
     }
@@ -235,6 +243,7 @@ trait DynSpiMaster {
     fn max_read_len(&self) -> usize;
     fn max_write_len(&self) -> usize;
     fn probe_opcode(&self, opcode: u8) -> bool;
+    fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip);
     fn execute<'a>(&'a mut self, cmd: &'a mut SpiCommand<'_>) -> BoxFuture<'a, Result<()>>;
     fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()>;
     fn delay_us(&mut self, us: u32) -> BoxFuture<'_, ()>;
@@ -264,6 +273,9 @@ impl<M: SpiMaster> DynSpiMaster for M {
     }
     fn probe_opcode(&self, opcode: u8) -> bool {
         SpiMaster::probe_opcode(self, opcode)
+    }
+    fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        SpiMaster::chip_identified(self, chip)
     }
     fn execute<'a>(&'a mut self, cmd: &'a mut SpiCommand<'_>) -> BoxFuture<'a, Result<()>> {
         Box::pin(SpiMaster::execute(self, cmd))
@@ -321,6 +333,10 @@ impl SpiMaster for ErasedSpiMaster {
     }
     fn probe_opcode(&self, opcode: u8) -> bool {
         self.inner.probe_opcode(opcode)
+    }
+    // Forward the chip, or an erased master would keep refusing its opcodes.
+    fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        self.inner.chip_identified(chip)
     }
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
         self.inner.execute(cmd).await
@@ -405,7 +421,7 @@ mod tests {
         use rflasher_core::error::Error;
         let db = rflasher_chips::ChipDatabase::new();
         let mut chip = db.find_by_name("W25Q128.V")[0].clone();
-        chip.erase_blocks.retain(|b| b.opcode == 0x20);
+        chip.erase_blocks.to_mut().retain(|b| b.opcode == 0x20);
         chip.unlock = rflasher_core::chip::Unlock::None;
         let erase_block = chip.erase_blocks[0].clone();
         let master = Restricted::default();

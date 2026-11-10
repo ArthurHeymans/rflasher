@@ -176,6 +176,15 @@ impl Features {
         self.intersects(Self::EXT_ADDR_REG_C5C8 | Self::EXT_ADDR_REG_1716)
     }
 
+    /// Whether the catalog establishes that 0x35 reads status register 2.
+    ///
+    /// The opcode is not universal: it enters QPI on some parts. A programmer
+    /// that only sends opcodes it understands can rely on this once the chip
+    /// is identified.
+    pub fn documents_rdsr2(self) -> bool {
+        self.intersects(Self::WP_CMP_SR2 | Self::WP_WINBOND | Self::WRSR_EXT)
+    }
+
     /// Whether the native 4BA 0x13 read opcode is supported.
     pub fn supports_4ba_read(self) -> bool {
         self.contains(Self::FOUR_BYTE_READ)

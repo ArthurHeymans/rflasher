@@ -111,6 +111,58 @@ pub async fn read_jedec_id<M: SpiMaster + ?Sized>(master: &mut M) -> Result<(u8,
     Ok((manufacturer, device))
 }
 
+/// Audited one-continuation-bank identity decoded from a raw RDID prefix.
+/// Shared by native SFDP probing and allocation-free board-catalog probing.
+pub(crate) struct BankedJedecId {
+    pub manufacturer: u8,
+    bytes: [u8; 2],
+    len: usize,
+}
+
+impl BankedJedecId {
+    pub fn device_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+    #[cfg(feature = "std")]
+    pub fn device_id(&self) -> u16 {
+        if self.len == 1 {
+            u16::from(self.bytes[0])
+        } else {
+            u16::from_be_bytes(self.bytes)
+        }
+    }
+}
+
+/// Complete an RDID that started with 0x7f. Unknown or unreadable identity
+/// formats have no device bytes and therefore cannot match catalog entries.
+pub(crate) async fn read_banked_jedec_id<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    raw_device: u16,
+) -> Result<BankedJedecId> {
+    let [manufacturer, first] = raw_device.to_be_bytes();
+    let mut bytes = [first, 0];
+    let len = match manufacturer {
+        0x9d => 1,
+        0x37 if master.max_read_len() >= 4 => {
+            let mut response = [0; 4];
+            master
+                .execute(&mut SpiCommand::read_reg(opcodes::RDID, &mut response))
+                .await?;
+            if response[..3] != [0x7f, manufacturer, first] {
+                return Err(Error::SpiTransferFailed);
+            }
+            bytes[1] = response[3];
+            2
+        }
+        _ => 0,
+    };
+    Ok(BankedJedecId {
+        manufacturer,
+        bytes,
+        len,
+    })
+}
+
 /// Read the complete 64-bit unique ID of a supported Winbond W25Q chip.
 ///
 /// Supported JEDEC profiles are W25Q80 through W25Q128 in the 0x40, 0x60,

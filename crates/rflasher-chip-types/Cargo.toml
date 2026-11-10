@@ -14,7 +14,6 @@ std = ["serde", "serde/std"]
 
 [dependencies]
 bitflags.workspace = true
-heapless.workspace = true
 serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
 
 [dev-dependencies]

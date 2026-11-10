@@ -39,6 +39,8 @@ jobs:
         run: |
           cargo clippy --workspace --exclude rflasher-wasm --all-targets --features rflasher/linux-gpio -- -D warnings
           cargo clippy -p rflasher --no-default-features --features portable-programmers --all-targets -- -D warnings
+          # Firmware builds these without alloc, where some types differ.
+          cargo clippy -p rflasher-chip-types -p rflasher-core -p rflasher-internal --no-default-features -- -D warnings
 
   test:
     name: Tests
@@ -111,6 +113,14 @@ jobs:
         run: cargo check -p rflasher-core --no-default-features --features alloc --target x86_64-unknown-none
       - name: Check rflasher-internal without std
         run: cargo check -p rflasher-internal --no-default-features --target x86_64-unknown-none
+      - name: Check selected firmware catalog without an allocator
+        run: cargo check --manifest-path crates/rflasher-chips-codegen/tests/firmware/Cargo.toml --target x86_64-unknown-none
+      - name: Check selected firmware catalog with alloc enabled
+        run: cargo check --manifest-path crates/rflasher-chips-codegen/tests/firmware/Cargo.toml --target x86_64-unknown-none --features alloc
+      - name: Test selected firmware catalog and SPI operations
+        run: cargo test --manifest-path crates/rflasher-chips-codegen/tests/firmware/Cargo.toml
+      - name: Test allocation-free operations with alloc enabled
+        run: cargo test --manifest-path crates/rflasher-chips-codegen/tests/firmware/Cargo.toml --features alloc
 
   wasm:
     name: WASM Build

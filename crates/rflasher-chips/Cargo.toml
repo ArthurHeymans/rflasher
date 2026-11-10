@@ -18,7 +18,6 @@ rflasher-chip-defs = { version = "0.1.0", path = "../rflasher-chip-defs" }
 rflasher-chip-types = { workspace = true, features = ["alloc"] }
 thiserror.workspace = true
 ron.workspace = true
-once_cell = { workspace = true, features = ["std"] }
 
 [build-dependencies]
 rflasher-chips-codegen = { version = "0.1.0", path = "../rflasher-chips-codegen", optional = true }
