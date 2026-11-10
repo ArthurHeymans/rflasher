@@ -1,6 +1,6 @@
-//! Allocation-free identification and board-profile selection.
+//! Allocation-free identification against a board's chip catalog.
 
-use crate::{ChipProvider, Features, FlashChip};
+use crate::{Features, FlashChip};
 
 /// A positively read identity, including the protocol that produced it.
 #[derive(Debug, Clone, Copy)]
@@ -30,12 +30,52 @@ pub enum ChipIdentity<'a> {
     },
 }
 
+impl FlashChip {
+    /// Whether this descriptor is identified by `identity`, read with the
+    /// protocol the descriptor expects.
+    #[must_use]
+    pub fn matches_identity(&self, identity: ChipIdentity<'_>) -> bool {
+        match identity {
+            ChipIdentity::Jedec {
+                manufacturer,
+                device,
+            } => self.matches_jedec_id(manufacturer, device),
+            ChipIdentity::BankedJedec {
+                bank,
+                manufacturer,
+                device,
+            } => {
+                // Audited bank-one identities: PMC has one device byte, AMIC two.
+                let id = match (bank, manufacturer, device) {
+                    (1, 0x9d, [id]) => u16::from(*id),
+                    (1, 0x37, [hi, lo]) => u16::from_be_bytes([*hi, *lo]),
+                    _ => return false,
+                };
+                self.jedec_manufacturer == manufacturer
+                    && self.jedec_device == id
+                    && self.features.contains(Features::RDID_CONTINUATION)
+                    && !self
+                        .features
+                        .intersects(Features::RES2_ID | Features::AT25F_ID)
+            }
+            ChipIdentity::Res2 {
+                manufacturer,
+                device,
+            } => {
+                self.jedec_manufacturer == manufacturer
+                    && self.jedec_device == u16::from(device)
+                    && self.features.contains(Features::RES2_ID)
+            }
+        }
+    }
+}
+
 /// An identity cannot safely be reduced to one operation profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolveError {
-    /// No eligible entry matches the observed identity.
+    /// No entry matches the observed identity.
     Unknown,
-    /// Matching entries or matching board defaults disagree on operations.
+    /// Matching entries disagree on operations.
     Ambiguous,
 }
 
@@ -43,32 +83,33 @@ impl core::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::Unknown => "unknown flash chip identity",
-            Self::Ambiguous => "ambiguous flash chip identity; select a board profile",
+            Self::Ambiguous => "ambiguous flash chip identity; keep one profile per identity",
         })
     }
 }
 impl core::error::Error for ResolveError {}
 
-/// Selected descriptors and the board's explicitly approved default profiles.
+/// The operation profiles a board accepts, one per chip identity.
 ///
-/// Defaults only choose among entries matching the observed identity. They
-/// never make an unknown chip writable. Explicit profiles require an exact
-/// board selection in `defaults`; merely including them is not authorization.
+/// A generated catalog is reduced to that at build time: the board's default
+/// profiles decide between entries sharing an identity, and a selection that
+/// leaves a conflict fails the build. Every entry of a catalog is approved for
+/// use, explicit profiles included. Entries that share an identity and operate
+/// alike are aliases; a hand-written catalog whose entries disagree is refused
+/// when that identity is observed, rather than answered by list order.
 #[derive(Debug, Clone, Copy)]
 pub struct ChipCatalog<'a> {
     chips: &'a [FlashChip],
-    defaults: &'a [&'a FlashChip],
 }
 
 impl<'a> ChipCatalog<'a> {
-    /// Declare a catalog. Default references must point into `chips`.
-    /// Generated catalogs establish this relation at build time.
-    pub const fn new(chips: &'a [FlashChip], defaults: &'a [&'a FlashChip]) -> Self {
-        Self { chips, defaults }
+    /// Declare the profiles a board accepts.
+    pub const fn new(chips: &'a [FlashChip]) -> Self {
+        Self { chips }
     }
 
-    /// Descriptors for diagnostics or enumeration, not automatic selection.
-    pub fn chips(&self) -> &'a [FlashChip] {
+    /// The catalog's descriptors.
+    pub const fn chips(&self) -> &'a [FlashChip] {
         self.chips
     }
 
@@ -81,59 +122,16 @@ impl<'a> ChipCatalog<'a> {
     }
 
     /// Resolve an observed identity without allocation or guessed procedures.
-    ///
-    /// Equivalent aliases are interchangeable. A single matching board default
-    /// takes precedence over conflicting candidates. Conflicting matching
-    /// defaults remain ambiguous. Non-default explicit profiles are excluded.
     pub fn resolve_identity(
         &self,
         identity: ChipIdentity<'_>,
     ) -> Result<&'a FlashChip, ResolveError> {
-        let mut first: Option<&FlashChip> = None;
-        let mut preferred: Option<&FlashChip> = None;
-        let mut conflict = false;
-        for index in 0.. {
-            let candidate = match identity {
-                ChipIdentity::Jedec {
-                    manufacturer,
-                    device,
-                } => self.chips.find_nth_by_jedec_id(manufacturer, device, index),
-                ChipIdentity::BankedJedec {
-                    bank,
-                    manufacturer,
-                    device,
-                } => self
-                    .chips
-                    .find_nth_by_banked_jedec_id(bank, manufacturer, device, index),
-                ChipIdentity::Res2 {
-                    manufacturer,
-                    device,
-                } => self.chips.find_nth_by_res2_id(manufacturer, device, index),
-            };
-            let Some(candidate) = candidate else {
-                break;
-            };
-            let is_default = self.defaults.iter().any(|d| core::ptr::eq(*d, candidate));
-            if is_default {
-                if preferred.is_some_and(|p| !p.is_equivalent_to(candidate)) {
-                    return Err(ResolveError::Ambiguous);
-                }
-                preferred.get_or_insert(candidate);
-            }
-            if candidate.features.contains(Features::EXPLICIT_PROFILE) && !is_default {
-                continue;
-            }
-            if first.is_some_and(|f| !f.is_equivalent_to(candidate)) {
-                conflict = true;
-            }
-            first.get_or_insert(candidate);
+        let mut matches = self.chips.iter().filter(|c| c.matches_identity(identity));
+        let first = matches.next().ok_or(ResolveError::Unknown)?;
+        if matches.all(|other| first.is_equivalent_to(other)) {
+            Ok(first)
+        } else {
+            Err(ResolveError::Ambiguous)
         }
-        if let Some(preferred) = preferred {
-            return Ok(preferred);
-        }
-        if conflict {
-            return Err(ResolveError::Ambiguous);
-        }
-        first.ok_or(ResolveError::Unknown)
     }
 }

@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo::rerun-if-changed={}", data.display());
     let db = rflasher_chips_codegen::ChipDatabase::load_from_dir(data)?;
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("flash_chips.rs");
-    db.select(&["W25Q128BV-WP", "W25Q128FVJV-WP", "SST25VF016B"])?
+    db.select(&["W25Q128FVJV-WP", "MX25L6405D", "SST25VF016B"])?
         .with_defaults(&["W25Q128FVJV-WP"])?
         .with_crate_path("rflasher_core::chip")?
         .write(&output)?;
@@ -54,23 +54,30 @@ the bundled data.
 
 ## Identification and defaults
 
-The output exports `CHIPS`, `DEFAULT_CHIPS` and `CATALOG`. Use **`CATALOG.resolve`**
-for an identity you already read, or **`probe_catalog`** to read and resolve it.
-Do not use the low-level provider's first-match lookup for automatic selection.
+The output exports `CHIPS` and `CATALOG`. Use **`CATALOG.resolve`** for an
+identity you already read, or **`probe_catalog`** to read and resolve it.
 
-The allocation-free resolver:
+The build script reduces the selection to one operation profile per chip
+identity, so the firmware only looks an identity up. Whatever the selection
+leaves undecided fails the build instead of surfacing as an ambiguous chip in
+the field:
 
-- considers only entries matching the observed identity and identity protocol;
-- excludes explicit profiles unless the board approved them as defaults;
-- accepts equivalent aliases, but rejects conflicting operation profiles;
-- uses a matching default to resolve a conflict;
-- rejects conflicting matching defaults rather than choosing by list order;
-- never uses a default as a fallback for an unknown identity.
+- entries that share an identity and operate alike are aliases; one is kept;
+- entries that share an identity but operate differently need a default, which
+  becomes that identity's profile. The others are not shipped;
+- conflicting defaults for one identity are an error;
+- an explicit profile must be a default. Selecting it is not approval;
+- identities read through different protocols (standard RDID, audited banked
+  identities, RES2) never compete.
 
 Every default must already be selected. An empty selection or default list is
 valid. Defaults assert board knowledge (for example a verified flash marking
 when several models share RDID); RDID alone cannot establish those differences.
-The same policy supports standard RDID, audited banked identities and RES2.
+A default is never a fallback: an identity outside the catalog stays unknown.
+
+A hand-written `ChipCatalog::new(&chips)` follows the same rule at run time:
+all its entries are approved, and an identity whose entries disagree is
+refused as ambiguous rather than answered by list order.
 
 ## Use existing core behaviour
 

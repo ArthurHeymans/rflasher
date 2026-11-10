@@ -6,9 +6,9 @@ use crate::error::{Error, Result};
 use crate::programmer::SpiMaster;
 use crate::protocol;
 
-/// Identify a connected chip using a board catalog and its approved defaults.
+/// Identify a connected chip among the profiles a board accepts.
 ///
-/// Reads RDID, resolves conflicting profiles without guessing, and borrows the
+/// Reads RDID, looks the identity up without guessing, and borrows the
 /// selected descriptor's static data into a context. This complete path is
 /// available with or without `alloc`/`std`. An unknown identity never falls
 /// back to a default, an SFDP-generated descriptor or a legacy identity.

@@ -1,14 +1,14 @@
 //! Flash chip database lookup abstraction.
 
-use super::FlashChip;
+use super::{ChipIdentity, FlashChip};
 
 /// A source of flash chip definitions.
 ///
 /// Providers may load chip definitions at runtime, compile them into the
 /// application, or obtain them from another source. Flash probing only needs
 /// JEDEC ID lookup, so the core trait intentionally exposes a small API.
-/// This is low-level enumeration, not identification policy: use
-/// [`crate::ChipCatalog`] to resolve board defaults and conflicting profiles.
+/// This is low-level enumeration, not identification policy: a board's
+/// [`crate::ChipCatalog`] holds one approved profile per identity.
 pub trait ChipProvider {
     /// Find a chip by its JEDEC manufacturer and device IDs.
     ///
@@ -112,8 +112,12 @@ impl ChipProvider for [FlashChip] {
         device: u16,
         index: usize,
     ) -> Option<&FlashChip> {
+        let identity = ChipIdentity::Jedec {
+            manufacturer,
+            device,
+        };
         self.iter()
-            .filter(|c| c.matches_jedec_id(manufacturer, device))
+            .filter(|c| c.matches_identity(identity))
             .nth(index)
     }
 
@@ -123,12 +127,12 @@ impl ChipProvider for [FlashChip] {
         device: u8,
         index: usize,
     ) -> Option<&FlashChip> {
+        let identity = ChipIdentity::Res2 {
+            manufacturer,
+            device,
+        };
         self.iter()
-            .filter(|c| {
-                c.jedec_manufacturer == manufacturer
-                    && c.jedec_device == u16::from(device)
-                    && c.features.contains(crate::Features::RES2_ID)
-            })
+            .filter(|c| c.matches_identity(identity))
             .nth(index)
     }
 
@@ -139,21 +143,13 @@ impl ChipProvider for [FlashChip] {
         device: &[u8],
         index: usize,
     ) -> Option<&FlashChip> {
-        // Audited bank-one identities: PMC has one device byte, AMIC two.
-        let id = match (bank, manufacturer, device) {
-            (1, 0x9d, [id]) => u16::from(*id),
-            (1, 0x37, [hi, lo]) => u16::from_be_bytes([*hi, *lo]),
-            _ => return None,
+        let identity = ChipIdentity::BankedJedec {
+            bank,
+            manufacturer,
+            device,
         };
         self.iter()
-            .filter(|c| {
-                c.jedec_manufacturer == manufacturer
-                    && c.jedec_device == id
-                    && c.features.contains(crate::Features::RDID_CONTINUATION)
-                    && !c
-                        .features
-                        .intersects(crate::Features::RES2_ID | crate::Features::AT25F_ID)
-            })
+            .filter(|c| c.matches_identity(identity))
             .nth(index)
     }
 }

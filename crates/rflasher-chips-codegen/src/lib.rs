@@ -9,7 +9,7 @@
 //!
 //! fn board_catalog(data: &Path, output: &Path) -> Result<(), Error> {
 //!     ChipDatabase::load_from_dir(data)?
-//!         .select(&["W25Q128BV-WP", "W25Q128FVJV-WP"])?
+//!         .select(&["W25Q128FVJV-WP", "MX25L6405D"])?
 //!         .with_defaults(&["W25Q128FVJV-WP"])?
 //!         .write(output)
 //! }

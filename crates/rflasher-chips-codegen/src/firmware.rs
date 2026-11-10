@@ -1,15 +1,17 @@
 //! Build-time selection for allocation-free firmware catalogs.
 
-use crate::{ChipDatabase, ChipDef, Error, VendorDef, chip_to_tokens};
+use crate::{ChipDatabase, ChipDef, Error, FeaturesDef, VendorDef, chip_to_tokens};
 use quote::quote;
 use rflasher_chip_types::name_matches;
 use std::path::Path;
 
 /// A board's selected chip definitions and explicit default profiles.
 ///
-/// Generated descriptors borrow static storage in every feature configuration.
-/// The generated `CATALOG` resolves matching board defaults and rejects unknown
-/// or conflicting identities, without a heap.
+/// Generation reduces them to one operation profile per chip identity, and
+/// fails where the selection leaves that undecided. Firmware then only looks
+/// an observed identity up: it cannot meet an ambiguous catalog in the field,
+/// and carries no descriptor it could never use. Generated descriptors borrow
+/// static storage in every feature configuration.
 #[derive(Debug)]
 pub struct SelectedChips<'a> {
     chips: Vec<(&'a VendorDef, &'a ChipDef)>,
@@ -86,11 +88,109 @@ impl ChipDatabase {
     }
 }
 
-impl SelectedChips<'_> {
-    /// Set ordered board-default profiles, all of which must already be selected.
+/// The protocol that reads a chip's identity; identities of different
+/// protocols never compete. Follows `FlashChip::matches_identity`, where the
+/// RES2 flag alone decides whether an entry answers a RES2 identity.
+fn identity_protocol(features: &FeaturesDef) -> u8 {
+    if features.res2_id {
+        2
+    } else if features.at25f_id {
+        3
+    } else {
+        u8::from(features.rdid_continuation)
+    }
+}
+
+/// Everything about a definition but its names, to tell aliases from
+/// definitions that share an identity and operate differently.
+fn operation_profile(vendor: &VendorDef, chip: &ChipDef) -> String {
+    let unnamed = |name: &mut String| name.clear();
+    let (mut vendor, mut chip) = (
+        VendorDef {
+            chips: Vec::new(),
+            ..vendor.clone()
+        },
+        chip.clone(),
+    );
+    unnamed(&mut vendor.vendor);
+    unnamed(&mut chip.name);
+    chip_to_tokens(&vendor, &chip).to_string()
+}
+
+impl<'a> SelectedChips<'a> {
+    /// The profile to operate each selected identity with, in selection order.
+    fn profiles(&self) -> Result<Vec<(&'a VendorDef, &'a ChipDef)>, Error> {
+        let name = |(v, c): &(&VendorDef, &ChipDef)| format!("{}::{}", v.vendor, c.name);
+        let names = |chips: &[usize]| {
+            chips
+                .iter()
+                .map(|i| name(&self.chips[*i]))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let identity = |(v, c): &(&VendorDef, &ChipDef)| {
+            (
+                identity_protocol(&c.features),
+                v.manufacturer_id,
+                c.device_id,
+            )
+        };
+        let alike = |chips: &[usize]| {
+            let profile = |i: &usize| operation_profile(self.chips[*i].0, self.chips[*i].1);
+            chips.iter().all(|i| profile(i) == profile(&chips[0]))
+        };
+        let mut profiles = Vec::new();
+        let mut seen = Vec::new();
+        for chip in &self.chips {
+            let id = identity(chip);
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            let sharing: Vec<usize> = (0..self.chips.len())
+                .filter(|i| identity(&self.chips[*i]) == id)
+                .collect();
+            let defaults: Vec<usize> = self
+                .defaults
+                .iter()
+                .copied()
+                .filter(|i| sharing.contains(i))
+                .collect();
+            let chosen = if let Some(first) = defaults.first() {
+                if !alike(&defaults) {
+                    return Err(Error::Validation(format!(
+                        "Conflicting default profiles for one chip identity: {}",
+                        names(&defaults)
+                    )));
+                }
+                *first
+            } else if let Some(explicit) = sharing
+                .iter()
+                .find(|i| self.chips[**i].1.features.explicit_profile)
+            {
+                return Err(Error::Validation(format!(
+                    "{} is an explicit profile: approve it as a default, or do not select it",
+                    name(&self.chips[*explicit])
+                )));
+            } else if alike(&sharing) {
+                sharing[0]
+            } else {
+                return Err(Error::Validation(format!(
+                    "Selected chips share an identity but operate differently; \
+                     make one of them a default: {}",
+                    names(&sharing)
+                )));
+            };
+            profiles.push(self.chips[chosen]);
+        }
+        Ok(profiles)
+    }
+
+    /// Set the board's default profiles, all of which must already be selected.
     ///
-    /// Defaults are emitted as `DEFAULT_CHIPS`, references into `CHIPS`. They are
-    /// explicit board configuration, never a fallback for an unknown JEDEC ID.
+    /// A default decides between selected entries that share a chip identity,
+    /// and approves an explicit profile. It asserts board knowledge (such as a
+    /// verified flash marking); it is never a fallback for an unknown identity.
     pub fn with_defaults(mut self, names: &[&str]) -> Result<Self, Error> {
         let mut defaults = Vec::new();
         for name in names {
@@ -116,14 +216,19 @@ impl SelectedChips<'_> {
         Ok(self)
     }
 
-    /// Generate `CHIPS`, `DEFAULT_CHIPS` and the resolving `CATALOG` in read-only storage.
+    /// Generate `CHIPS`, one profile per chip identity, and the `CATALOG` that
+    /// looks an identity up in them, in read-only storage.
+    ///
+    /// Fails if selected entries share an identity and operate differently
+    /// without a default deciding between them, if defaults conflict, or if an
+    /// explicit profile is selected without being a default.
     ///
     /// Include it in a module with `include!(concat!(env!("OUT_DIR"), "/chips.rs"))`.
     /// The same output works with and without `alloc` on the target.
-    pub fn generate_code(&self) -> String {
-        let chips = self.chips.iter().map(|(v, c)| chip_to_tokens(v, c));
-        let defaults = &self.defaults;
-        let count = self.chips.len();
+    pub fn generate_code(&self) -> Result<String, Error> {
+        let profiles = self.profiles()?;
+        let chips = profiles.iter().map(|(v, c)| chip_to_tokens(v, c));
+        let count = profiles.len();
         let crate_path: syn::Path = syn::parse_str(&self.crate_path).expect("validated type path");
         let tokens = quote! {
           #[allow(dead_code)] // Consumers may use only the resolver or only diagnostics.
@@ -133,22 +238,23 @@ impl SelectedChips<'_> {
                 FlashChip, EraseBlock, EraseRegion, Features, Unlock,
                 ChipTestStatus, TestStatus, WriteGranularity, ChipName, ChipSlice, ChipCatalog,
             };
-            /// Board-selected chip descriptors; no runtime initialization or heap.
+            /// The board's profile for each chip identity; no runtime
+            /// initialization or heap.
             pub static CHIPS: [FlashChip; #count] = [#(#chips),*];
-            /// Explicit defaults; callers must still verify the connected chip.
-            pub static DEFAULT_CHIPS: &[&FlashChip] = &[#(&CHIPS[#defaults]),*];
-            /// Identify matching chips using the board-approved defaults, without guessing.
-            pub static CATALOG: ChipCatalog<'static> = ChipCatalog::new(&CHIPS, DEFAULT_CHIPS);
+            /// Identify the connected chip among the board's profiles.
+            pub static CATALOG: ChipCatalog<'static> = ChipCatalog::new(&CHIPS);
           }
           #[allow(unused_imports)]
-          pub use generated_catalog::{CHIPS, DEFAULT_CHIPS, CATALOG};
+          pub use generated_catalog::{CHIPS, CATALOG};
         };
-        prettyplease::unparse(&syn::parse2(tokens).expect("valid catalog code"))
+        Ok(prettyplease::unparse(
+            &syn::parse2(tokens).expect("valid catalog code"),
+        ))
     }
 
     /// Write the selected firmware catalog to a build output file.
     pub fn write(&self, output_file: &Path) -> Result<(), Error> {
-        std::fs::write(output_file, self.generate_code())?;
+        std::fs::write(output_file, self.generate_code()?)?;
         Ok(())
     }
 }
@@ -189,12 +295,13 @@ mod tests {
         let code = selected
             .with_defaults(&["Part", "PartA"])
             .unwrap()
-            .generate_code();
+            .generate_code()
+            .unwrap();
         assert!(code.contains("Part(A)"));
         assert!(!code.contains("Other"));
         assert!(!code.contains("vec!"));
         assert!(!code.contains("to_string"));
-        assert_eq!(code.matches("&CHIPS[0").count(), 1);
+        assert!(!code.contains("DEFAULT_CHIPS"));
     }
 
     #[test]
@@ -247,24 +354,94 @@ mod tests {
             .unwrap()
             .with_crate_path("rflasher_core::chip")
             .unwrap()
-            .generate_code();
+            .generate_code()
+            .unwrap();
         assert!(code.contains("use rflasher_core::chip::"));
         assert!(!code.contains("rflasher_chip_types"));
         assert!(code.contains("pub static CATALOG:"));
     }
 
     #[test]
-    fn empty_selection_and_default_order_are_explicit() {
+    fn one_profile_per_identity_is_decided_at_build_time() {
         let db = database();
-        assert!(db.select(&[]).unwrap().chips.is_empty());
-        let selected = db
+        assert!(db.select(&[]).unwrap().profiles().unwrap().is_empty());
+        let both = || db.select(&["Part", "Other"]).unwrap();
+        // The two share an identity and erase differently.
+        let error = both().generate_code().unwrap_err().to_string();
+        assert!(error.contains("Test::Part(A), Test::Other"), "{error}");
+        let error = both()
+            .with_defaults(&["Other", "Part"])
+            .unwrap()
+            .generate_code()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Conflicting default"), "{error}");
+        // The default is the identity's profile; the other is not shipped.
+        let code = both()
+            .with_defaults(&["Other"])
+            .unwrap()
+            .generate_code()
+            .unwrap();
+        assert!(code.contains("Other") && code.contains("Some(220)"));
+        assert!(!code.contains("Part(A)"));
+        assert!(code.contains("static CHIPS: [FlashChip; 1"));
+        syn::parse_file(&code).unwrap();
+    }
+
+    #[test]
+    fn aliases_collapse_and_other_identities_do_not_compete() {
+        let mut db = database();
+        let mut alias = db.vendors[0].chips[0].clone();
+        alias.name = "Alias".into();
+        db.vendors[0].chips.push(alias);
+        let code = db
+            .select(&["Alias", "Part"])
+            .unwrap()
+            .generate_code()
+            .unwrap();
+        assert!(code.contains("Alias") && !code.contains("Part(A)"));
+        // The same bytes read through another protocol are another identity.
+        db.vendors[0].chips[1].features.res2_id = true;
+        let selected = db.select(&["Part", "Other"]).unwrap();
+        assert_eq!(selected.profiles().unwrap().len(), 2);
+        // Every entry flagged RES2 answers a RES2 identity, whatever else it
+        // is flagged with, so these two do compete.
+        db.vendors[0].chips[0].features.res2_id = true;
+        db.vendors[0].chips[0].features.at25f_id = true;
+        assert!(db.select(&["Part", "Other"]).unwrap().profiles().is_err());
+        db.vendors[0].chips[0].features.res2_id = false;
+        db.vendors[0].chips[0].features.at25f_id = false;
+        db.vendors[0].chips[1].features.res2_id = false;
+        db.vendors[0].chips[1].device_id = 2;
+        let selected = db.select(&["Other", "Part"]).unwrap();
+        let profiles = selected.profiles().unwrap();
+        assert_eq!(profiles[0].1.name, "Other");
+        assert_eq!(profiles[1].1.name, "Part(A)");
+    }
+
+    #[test]
+    fn explicit_profiles_are_approved_as_defaults_or_fail_the_build() {
+        let mut db = database();
+        db.vendors[0].chips[1].features.explicit_profile = true;
+        for selection in [&["Other"][..], &["Part", "Other"]] {
+            let error = db
+                .select(selection)
+                .unwrap()
+                .generate_code()
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("Test::Other is an explicit profile"),
+                "{error}"
+            );
+        }
+        let code = db
             .select(&["Part", "Other"])
             .unwrap()
-            .with_defaults(&["Other", "Part"])
+            .with_defaults(&["Other"])
+            .unwrap()
+            .generate_code()
             .unwrap();
-        assert_eq!(selected.defaults, [1, 0]);
-        let code = selected.generate_code();
-        assert!(code.contains("Some(220)"));
-        syn::parse_file(&code).unwrap();
+        assert!(code.contains("EXPLICIT_PROFILE") && !code.contains("Part(A)"));
     }
 }

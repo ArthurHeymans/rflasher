@@ -231,7 +231,7 @@ fn bad_geometry_and_protected_ranges_are_refused_before_unprotecting() {
     let forged = OptimalEraseOp {
         start: 4096,
         size: 4096,
-        erase_block: CHIPS[4].erase_blocks()[2].clone(), // 64-KiB, not a 4-KiB eraser.
+        erase_block: CHIPS[3].erase_blocks()[2].clone(), // 64-KiB, not a 4-KiB eraser.
     };
     assert_eq!(
         run(device.erase_operation(&forged)),
