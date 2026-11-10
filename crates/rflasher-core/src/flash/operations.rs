@@ -1418,11 +1418,11 @@ pub(crate) fn check_spi_writable<M: SpiMaster + ?Sized>(
     // A word-aligned pair: what every program procedure can write, including
     // AAI on a programmer without the byte-program opcode.
     validate_spi_program(master, ctx, 0, 2)?;
-    let four_byte = ctx.address_mode == AddressMode::FourByte;
-    let erasable = ctx.chip.erase_blocks().iter().any(|block| {
-        !block.is_chip_erase()
-            && check_spi_eraser(master, ctx.chip.features, four_byte, block).is_ok()
-    });
+    let erasable = ctx
+        .chip
+        .erase_blocks()
+        .iter()
+        .any(|block| !block.is_chip_erase() && spi_eraser_usable(master, ctx, block));
     if erasable {
         Ok(())
     } else {
@@ -1640,15 +1640,11 @@ pub(crate) async fn erase_spi_range<M: SpiMaster + ?Sized>(
 ) -> Result<()> {
     // Static catalogs cannot prune their maps at probe time. Select from the
     // supported erasers here instead of requiring an allocating filtered copy.
-    let supported = ctx.chip.erase_blocks().iter().filter(|eb| {
-        check_spi_eraser(
-            master,
-            ctx.chip.features,
-            ctx.address_mode == AddressMode::FourByte,
-            eb,
-        )
-        .is_ok()
-    });
+    let supported = ctx
+        .chip
+        .erase_blocks()
+        .iter()
+        .filter(|eb| spi_eraser_usable(master, ctx, eb));
     let chip_erase = if addr == 0 && len == ctx.chip.total_size {
         supported
             .clone()
@@ -1713,6 +1709,16 @@ pub(crate) fn validate_spi_erase_operation<M: SpiMaster + ?Sized>(
     }
     let four_byte = ctx.address_mode == AddressMode::FourByte;
     check_spi_eraser(master, ctx.chip.features, four_byte, block)
+}
+
+/// Whether `master` can issue `block` on the chip of `ctx`.
+pub(crate) fn spi_eraser_usable<M: SpiMaster + ?Sized>(
+    master: &M,
+    ctx: &FlashContext,
+    block: &EraseBlock,
+) -> bool {
+    let four_byte = ctx.address_mode == AddressMode::FourByte;
+    check_spi_eraser(master, ctx.chip.features, four_byte, block).is_ok()
 }
 
 /// Check that `master` can issue `block`.
@@ -2539,6 +2545,57 @@ mod tests {
                 "{menu:02x?}"
             );
         }
+    }
+
+    #[test]
+    fn erases_are_planned_with_erasers_the_programmer_can_send() {
+        use crate::flash::{SpiFlashDevice, unified};
+        use futures_lite::future::block_on;
+
+        // Like a locked Intel opcode menu holding only the sector erase.
+        struct SectorOnly(EraseMaster);
+        impl SpiMaster for SectorOnly {
+            fn features(&self) -> SpiFeatures {
+                self.0.features()
+            }
+            fn max_read_len(&self) -> usize {
+                self.0.max_read_len()
+            }
+            fn max_write_len(&self) -> usize {
+                self.0.max_write_len()
+            }
+            fn probe_opcode(&self, opcode: u8) -> bool {
+                !matches!(opcode, 0xd8 | 0xc7)
+            }
+            async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
+                self.0.execute(cmd).await
+            }
+            async fn delay_us(&mut self, _us: u32) {}
+        }
+
+        // A catalog descriptor keeps every eraser the chip has; nothing
+        // pruned it for this programmer as database probing would.
+        let mut ctx = nonuniform_context();
+        ctx.chip.erase_blocks = vec![
+            EraseBlock::with_count(0x20, 16, 3),
+            EraseBlock::new(0xd8, 48),
+            EraseBlock::new(0xc7, 48),
+        ]
+        .into();
+        let master = SectorOnly(EraseMaster {
+            commands: vec![],
+            fail_erase: false,
+        });
+        let mut device = SpiFlashDevice::new(master, ctx);
+        let whole = crate::layout::Region::new("all", 0, 47);
+        block_on(unified::erase_region(&mut device, &whole)).unwrap();
+        let erases: Vec<_> = (device.into_parts().0.0.commands.into_iter())
+            .filter(|(opcode, _)| matches!(opcode, 0x20 | 0xd8 | 0xc7))
+            .collect();
+        assert_eq!(
+            erases,
+            vec![(0x20, Some(0)), (0x20, Some(16)), (0x20, Some(32))]
+        );
     }
 
     #[test]

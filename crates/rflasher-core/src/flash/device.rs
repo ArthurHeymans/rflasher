@@ -74,6 +74,15 @@ pub trait FlashDevice {
     /// while SPI chips may have multiple (4KB, 32KB, 64KB, chip erase).
     fn erase_blocks(&self) -> &[EraseBlock];
 
+    /// Whether this device can issue `block`, one of [`Self::erase_blocks`].
+    ///
+    /// A chip's descriptor lists every eraser the chip has, and a programmer
+    /// limited to certain opcodes cannot send them all. Erases are planned
+    /// with the ones this accepts. Wrappers must forward it.
+    fn can_erase_with(&self, _block: &EraseBlock) -> bool {
+        true
+    }
+
     /// Get the page size in bytes for optimal write alignment.
     ///
     /// Writes aligned to this size can use hardware-accelerated bulk transfer

@@ -4,6 +4,7 @@ use super::{
     FlashDevice,
     operations::{OptimalEraseOp, plan_optimal_erase_region},
 };
+use crate::chip::EraseBlock;
 use crate::layout::{Layout, Region};
 use crate::programmer::FlashAccess;
 use crate::{Error, Refusal, Result};
@@ -25,6 +26,16 @@ pub struct MutationPolicy<'a> {
     pub allow_dangerous: bool,
     /// Optional durable storage for a full image taken before any mutation.
     pub recovery: Option<&'a mut dyn RecoveryBackup>,
+}
+
+/// The erasers to plan with: those of the chip that the device can issue.
+pub(super) fn usable_erasers<D: FlashDevice + ?Sized>(device: &D) -> alloc::vec::Vec<EraseBlock> {
+    device
+        .erase_blocks()
+        .iter()
+        .filter(|block| device.can_erase_with(block))
+        .cloned()
+        .collect()
 }
 
 /// Validate every included region and erase footprint before any mutation.
@@ -100,7 +111,7 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
 
     for region in regions {
         let plan = plan_optimal_erase_region(
-            device.erase_blocks(),
+            &usable_erasers(device),
             device.size(),
             region.start,
             region.end,
@@ -172,7 +183,7 @@ pub(super) fn check_erase_plan_access<D: FlashDevice + ?Sized>(
 ) -> Result<()> {
     layout.included_regions().try_for_each(|region| {
         plan_optimal_erase_region(
-            device.erase_blocks(),
+            &usable_erasers(device),
             device.size(),
             region.start,
             region.end,

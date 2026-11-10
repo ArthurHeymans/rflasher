@@ -33,6 +33,7 @@ trait DynFlashDevice {
     fn erase_granularity(&self) -> u32;
     fn write_granularity(&self) -> WriteGranularity;
     fn erase_blocks(&self) -> &[EraseBlock];
+    fn can_erase_with(&self, block: &EraseBlock) -> bool;
     fn page_size(&self) -> u32;
     fn is_valid_range(&self, addr: u32, len: usize) -> bool;
     fn validate_write(&self, addr: u32, len: usize) -> Result<()>;
@@ -75,6 +76,9 @@ impl<D: FlashDevice> DynFlashDevice for D {
     }
     fn erase_blocks(&self) -> &[EraseBlock] {
         FlashDevice::erase_blocks(self)
+    }
+    fn can_erase_with(&self, block: &EraseBlock) -> bool {
+        FlashDevice::can_erase_with(self, block)
     }
     fn page_size(&self) -> u32 {
         FlashDevice::page_size(self)
@@ -170,6 +174,10 @@ impl FlashDevice for ErasedFlashDevice {
     }
     fn erase_blocks(&self) -> &[EraseBlock] {
         self.inner.erase_blocks()
+    }
+    // Forward the programmer's limits, or plans would use erasers it lacks.
+    fn can_erase_with(&self, block: &EraseBlock) -> bool {
+        self.inner.can_erase_with(block)
     }
     fn page_size(&self) -> u32 {
         self.inner.page_size()

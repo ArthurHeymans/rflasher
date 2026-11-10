@@ -111,6 +111,10 @@ impl<M: SpiMaster> FlashDevice for SpiFlashDevice<M> {
         self.context().chip.erase_blocks()
     }
 
+    fn can_erase_with(&self, block: &EraseBlock) -> bool {
+        operations::spi_eraser_usable(&self.master, &self.ctx, block)
+    }
+
     fn page_size(&self) -> u32 {
         self.ctx.page_size() as u32
     }
