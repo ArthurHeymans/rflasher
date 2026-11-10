@@ -16,6 +16,10 @@ use crate::protocol::{self, CommandAddressing};
 
 use super::context::{AddressMode, FlashContext};
 
+#[cfg(all(test, feature = "std"))]
+#[path = "erase_addressing_tests.rs"]
+mod erase_addressing_tests;
+
 pub(crate) fn compatible_4byte_addressing(
     chip_features: Features,
     master_features: SpiFeatures,
@@ -1724,27 +1728,85 @@ pub(crate) fn spi_eraser_usable<M: SpiMaster + ?Sized>(
 /// Check that `master` can issue `block`.
 ///
 /// Some programmers only send an allowed set of opcodes (e.g. Intel software
-/// sequencing with a locked opcode menu). With 4-byte addressing a native
-/// opcode is preferred when the programmer can send it; otherwise the
-/// three-byte opcode needs a usable 4-byte addressing procedure.
+/// sequencing with a locked opcode menu). Prefer a documented mode-entered
+/// legacy erase when possible, as flashprog's equal-geometry alternatives do.
+/// Native opcodes remain available for masters/chips that cannot switch modes.
+/// Selection is made before any mutation; verification failure is not retried.
 fn check_spi_eraser<M: SpiMaster + ?Sized>(
     master: &M,
     chip_features: Features,
     four_byte: bool,
     block: &EraseBlock,
 ) -> Result<()> {
-    let four_byte = four_byte && !block.is_chip_erase();
+    select_erase_addressing(
+        master,
+        chip_features,
+        four_byte && !block.is_chip_erase(),
+        block,
+    )
+    .map(|_| ())
+}
+
+fn erase_mode_switch_supported<M: SpiMaster + ?Sized>(master: &M, features: Features) -> bool {
+    use crate::spi::opcodes;
+    if features.intersects(Features::FOUR_BYTE_ENTER | Features::FOUR_BYTE_ENTER_WREN) {
+        master.probe_opcode(opcodes::EN4B)
+            && master.probe_opcode(opcodes::EX4B)
+            && (!features.contains(Features::FOUR_BYTE_ENTER_WREN)
+                || master.probe_opcode(opcodes::WREN))
+    } else if features.contains(Features::FOUR_BYTE_ENTER_EAR7) {
+        master.probe_opcode(opcodes::WREAR_ALT) && master.probe_opcode(opcodes::WREN)
+    } else {
+        false
+    }
+}
+
+fn select_erase_addressing<M: SpiMaster + ?Sized>(
+    master: &M,
+    features: Features,
+    four_byte: bool,
+    block: &EraseBlock,
+) -> Result<(u8, CommandAddressing, bool)> {
+    let capabilities = master.features();
+    if four_byte
+        && features.supports_4ba_mode_switch()
+        && capabilities.contains(SpiFeatures::FOUR_BYTE_ADDR)
+        && !capabilities.contains(SpiFeatures::NO_4BA_MODES)
+        && master.probe_opcode(block.opcode)
+    {
+        let (addressing, enter) = compatible_4byte_addressing(features, capabilities)?;
+        // Check mode-entry prerequisites during preflight too.
+        if !erase_mode_switch_supported(master, features) {
+            return select_native_or_compatible_erase(master, features, four_byte, block);
+        }
+        return Ok((block.opcode, addressing, enter));
+    }
+    select_native_or_compatible_erase(master, features, four_byte, block)
+}
+
+fn select_native_or_compatible_erase<M: SpiMaster + ?Sized>(
+    master: &M,
+    features: Features,
+    four_byte: bool,
+    block: &EraseBlock,
+) -> Result<(u8, CommandAddressing, bool)> {
     let native = four_byte
         && block.opcode_4b.is_some_and(|opcode| {
             master.features().contains(SpiFeatures::FOUR_BYTE_ADDR) && master.probe_opcode(opcode)
         });
-    if !master.probe_opcode(block.opcode_for_address_width(native)) {
+    let opcode = block.opcode_for_address_width(native);
+    if !master.probe_opcode(opcode) {
         return Err(Error::OpcodeNotSupported);
     }
-    if four_byte {
-        addressing_for_4byte_operation(native, chip_features, master.features())?;
+    let (addressing, enter) = if four_byte {
+        addressing_for_4byte_operation(native, features, master.features())?
+    } else {
+        (CommandAddressing::ThreeByte, false)
+    };
+    if enter && !erase_mode_switch_supported(master, features) {
+        return Err(Error::OpcodeNotSupported);
     }
-    Ok(())
+    Ok((opcode, addressing, enter))
 }
 
 /// Execute exactly the validated eraser selected by the planner.
@@ -1802,20 +1864,8 @@ async fn erase_spi_unprotected<M: SpiMaster + ?Sized>(
     }
     let features = ctx.chip.features;
     let use_4byte = ctx.address_mode == AddressMode::FourByte;
-    let master_features = master.features();
-    let use_native = use_4byte
-        && block.opcode_4b.is_some_and(|opcode| {
-            master_features.contains(SpiFeatures::FOUR_BYTE_ADDR) && master.probe_opcode(opcode)
-        });
-    let opcode = block.opcode_for_address_width(use_native);
-    if !master.probe_opcode(opcode) {
-        return Err(Error::OpcodeNotSupported);
-    }
-    let (addressing, enter_exit_4byte) = if use_4byte {
-        addressing_for_4byte_operation(use_native, features, master_features)?
-    } else {
-        (CommandAddressing::ThreeByte, false)
-    };
+    let (opcode, addressing, enter_exit_4byte) =
+        select_erase_addressing(master, features, use_4byte, block)?;
     // Validate the complete walk before issuing any erase command.
     let mut current = addr;
     let end = addr.checked_add(len).ok_or(Error::AddressOutOfBounds)?;
