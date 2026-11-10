@@ -98,6 +98,17 @@ map, preflights the complete footprint, polls completion, and handles/restores
 chip protection. Unsupported AAI falls back to the documented byte-program
 path. Firmware need not supply raw `(opcode, block_size)` pairs.
 
+Identification also tells the controller which chip it drives. Intel software
+sequencing only sends opcodes it understands, and some depend on the chip:
+0x35 reads status register 2 on Winbond parts, whose unprotect procedure needs
+it, but enters QPI on others. An unlocked opcode menu gains the identified
+chip's status reads; a locked one is used as the firmware left it.
+
+`SpiFlashDevice::check_writable` reports, without sending a command, whether
+the controller can program and erase the identified chip at all. Use it when
+opening the device to decide whether to offer a writable store, rather than
+finding out from the first failing write.
+
 `probe_catalog` is available without `alloc` or `std`. It reads standard RDID
 and audited bank-one PMC/AMIC identities, with no SFDP synthesis or fallback to
 legacy identities. A caller explicitly using a legacy protocol can pass its

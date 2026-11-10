@@ -129,8 +129,9 @@ mod linux {
     /// # Intel software-sequencing limitations
     ///
     /// - Only classified opcodes in the OPMENU table can be executed;
-    ///   unknown opcodes, including ambiguous 0x35 (RDSR2 or QPI enter),
-    ///   are not advertised or executed
+    ///   unknown opcodes are not advertised or executed. 0x35 (RDSR2 or
+    ///   QPI enter) only is for an identified chip documented to read
+    ///   status register 2 with it, and an unlocked menu then gains it
     /// - Mutating commands enable BIOS writes first; opcode meanings must
     ///   match the connected flash
     /// - Programs and erases overlapping protected ranges, write-restricted
@@ -165,6 +166,10 @@ mod linux {
 
         fn probe_opcode(&self, opcode: u8) -> bool {
             self.controller.probe_opcode(opcode)
+        }
+
+        fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip) {
+            self.controller.chip_identified(chip)
         }
 
         fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> CoreResult<()> {

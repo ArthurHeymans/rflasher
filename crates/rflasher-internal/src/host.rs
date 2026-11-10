@@ -532,7 +532,8 @@ pub(crate) mod tests {
             let wren = ssfc & SSFC_ACS != 0;
             match opcode {
                 JEDEC_READ => self.set_fdata(&flash[addr..addr + len]),
-                JEDEC_RDSR => self.set_fdata(&[0]),
+                // Status registers 1-3, never busy or protected.
+                JEDEC_RDSR | 0x35 | 0x15 => self.set_fdata(&[0]),
                 JEDEC_BYTE_PROGRAM if wren => {
                     let data = self.fdata(len);
                     flash[addr..addr + len]

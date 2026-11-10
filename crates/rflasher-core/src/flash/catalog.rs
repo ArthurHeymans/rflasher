@@ -35,5 +35,6 @@ pub async fn probe_catalog<M: SpiMaster + ?Sized>(
         ResolveError::Unknown => Error::ChipNotFound,
         ResolveError::Ambiguous => Error::ChipAmbiguous,
     })?;
+    master.chip_identified(chip);
     Ok(FlashContext::new(chip.clone()))
 }

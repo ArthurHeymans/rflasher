@@ -235,6 +235,7 @@ trait DynSpiMaster {
     fn max_read_len(&self) -> usize;
     fn max_write_len(&self) -> usize;
     fn probe_opcode(&self, opcode: u8) -> bool;
+    fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip);
     fn execute<'a>(&'a mut self, cmd: &'a mut SpiCommand<'_>) -> BoxFuture<'a, Result<()>>;
     fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()>;
     fn delay_us(&mut self, us: u32) -> BoxFuture<'_, ()>;
@@ -264,6 +265,9 @@ impl<M: SpiMaster> DynSpiMaster for M {
     }
     fn probe_opcode(&self, opcode: u8) -> bool {
         SpiMaster::probe_opcode(self, opcode)
+    }
+    fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        SpiMaster::chip_identified(self, chip)
     }
     fn execute<'a>(&'a mut self, cmd: &'a mut SpiCommand<'_>) -> BoxFuture<'a, Result<()>> {
         Box::pin(SpiMaster::execute(self, cmd))
@@ -321,6 +325,10 @@ impl SpiMaster for ErasedSpiMaster {
     }
     fn probe_opcode(&self, opcode: u8) -> bool {
         self.inner.probe_opcode(opcode)
+    }
+    // Forward the chip, or an erased master would keep refusing its opcodes.
+    fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        self.inner.chip_identified(chip)
     }
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
         self.inner.execute(cmd).await

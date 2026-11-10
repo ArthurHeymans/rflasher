@@ -46,8 +46,22 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     /// # Arguments
     /// * `master` - The SPI master to take ownership of
     /// * `ctx` - Flash context with chip metadata (from probing)
-    pub fn new(master: M, ctx: FlashContext) -> Self {
+    pub fn new(mut master: M, ctx: FlashContext) -> Self {
+        master.chip_identified(&ctx.chip);
         SpiFlashDevice { master, ctx }
+    }
+
+    /// Check, without sending a command, that this programmer can program
+    /// and erase the chip: the program opcode, an addressed eraser and the
+    /// chip's unprotect procedure.
+    ///
+    /// Firmware can decide at open time whether to offer a writable device.
+    /// Protection that is active on the chip is only discovered by a mutation,
+    /// which then also needs the status-write opcodes to lift it. A chip
+    /// programmed in words (AAI) passes with that alone; its odd bytes still
+    /// need the byte-program opcode.
+    pub fn check_writable(&self) -> Result<()> {
+        operations::check_spi_writable(&self.master, &self.ctx)
     }
 
     /// Get a mutable reference to the underlying SPI master
@@ -61,6 +75,10 @@ impl<M: SpiMaster> SpiFlashDevice<M> {
     }
 
     /// Get a mutable reference to the flash context
+    ///
+    /// The programmer was told about the chip this device was created with.
+    /// After replacing the chip, tell it again through
+    /// [`SpiMaster::chip_identified`] on [`Self::master`].
     pub fn context_mut(&mut self) -> &mut FlashContext {
         &mut self.ctx
     }

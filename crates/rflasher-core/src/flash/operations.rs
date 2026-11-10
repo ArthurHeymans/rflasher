@@ -1246,6 +1246,7 @@ where
         }
     }
 
+    master.chip_identified(&result.chip);
     // Like flashprog, leave out erasers this programmer cannot issue (e.g. a
     // locked Intel opcode menu without chip erase), so that erases are
     // planned with smaller ones it can send instead of being refused.
@@ -1408,6 +1409,27 @@ fn check_mutation_opcodes<M: SpiMaster + ?Sized>(master: &M) -> Result<()> {
     }
 }
 
+/// Whether `master` can program and erase the chip at all, judged without
+/// sending a command (see [`super::SpiFlashDevice::check_writable`]).
+pub(crate) fn check_spi_writable<M: SpiMaster + ?Sized>(
+    master: &M,
+    ctx: &FlashContext,
+) -> Result<()> {
+    // A word-aligned pair: what every program procedure can write, including
+    // AAI on a programmer without the byte-program opcode.
+    validate_spi_program(master, ctx, 0, 2)?;
+    let four_byte = ctx.address_mode == AddressMode::FourByte;
+    let erasable = ctx.chip.erase_blocks().iter().any(|block| {
+        !block.is_chip_erase()
+            && check_spi_eraser(master, ctx.chip.features, four_byte, block).is_ok()
+    });
+    if erasable {
+        Ok(())
+    } else {
+        Err(Error::OpcodeNotSupported)
+    }
+}
+
 pub(crate) fn validate_spi_program<M: SpiMaster + ?Sized>(
     master: &M,
     ctx: &FlashContext,
@@ -1421,6 +1443,7 @@ pub(crate) fn validate_spi_program<M: SpiMaster + ?Sized>(
         return Ok(());
     }
     check_mutation_opcodes(master)?;
+    super::protection::check_supported(master, ctx)?;
     if master.max_write_len() == 0 {
         return Err(Error::ProgrammerError);
     }
@@ -1665,6 +1688,7 @@ pub(crate) fn validate_spi_erase_operation<M: SpiMaster + ?Sized>(
         return Err(Error::InvalidAlignment);
     }
     check_mutation_opcodes(master)?;
+    super::protection::check_supported(master, ctx)?;
     let block = &op.erase_block;
     if block.is_chip_erase() {
         if op.start != 0 || op.size != ctx.chip.total_size || block.total_size() != op.size {
@@ -2471,6 +2495,50 @@ mod tests {
             .map(|(_, addr)| addr)
             .collect();
         assert_eq!(erases, vec![Some(8), Some(16)]);
+    }
+
+    #[test]
+    fn writability_is_judged_by_what_the_chip_and_programmer_share() {
+        use crate::flash::SpiFlashDevice;
+
+        struct Menu(&'static [u8]);
+        impl SpiMaster for Menu {
+            fn features(&self) -> SpiFeatures {
+                SpiFeatures::empty()
+            }
+            fn max_read_len(&self) -> usize {
+                64
+            }
+            fn max_write_len(&self) -> usize {
+                64
+            }
+            fn probe_opcode(&self, opcode: u8) -> bool {
+                self.0.contains(&opcode)
+            }
+            async fn execute(&mut self, _: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
+                Err(Error::SpiTransferFailed)
+            }
+            async fn delay_us(&mut self, _us: u32) {}
+        }
+        let db = rflasher_chips::ChipDatabase::new();
+        let sst = db.find_by_name("SST25VF016B")[0].clone();
+        let writable =
+            |menu| SpiFlashDevice::new(Menu(menu), FlashContext::new(sst.clone())).check_writable();
+        // Word programming alone programs the chip; so does byte programming.
+        writable(&[0x06, 0x05, 0xad, 0x04, 0x20]).unwrap();
+        writable(&[0x06, 0x05, 0x02, 0x20]).unwrap();
+        // No way to program, to erase a block, or to poll completion.
+        for menu in [
+            &[0x06, 0x05, 0x20][..],
+            &[0x06, 0x05, 0x02, 0xc7],
+            &[0x06, 0x02, 0x20],
+        ] {
+            assert_eq!(
+                writable(menu),
+                Err(Error::OpcodeNotSupported),
+                "{menu:02x?}"
+            );
+        }
     }
 
     #[test]

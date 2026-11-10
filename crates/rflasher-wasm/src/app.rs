@@ -102,6 +102,10 @@ impl SpiMaster for Programmer {
         dispatch!(self, m => SpiMaster::probe_opcode(m, opcode))
     }
 
+    fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip) {
+        dispatch!(self, m => SpiMaster::chip_identified(m, chip))
+    }
+
     async fn delay_us(&mut self, us: u32) {
         dispatch!(self, m => SpiMaster::delay_us(m, us).await)
     }
