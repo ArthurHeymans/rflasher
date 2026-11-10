@@ -3360,7 +3360,8 @@ impl<H: HostAccess> IchSpiController<H> {
     /// The caller supplies the geometry it verified for the connected chip:
     /// `opcode` must erase exactly `block_size` bytes there. This is the raw
     /// command path chip-aware callers already use, without a heap or the
-    /// chip database.
+    /// chip database. The full range must be writable, and the opcode menu
+    /// must support RDSR polling; a fixed delay cannot guarantee completion.
     pub fn swseq_erase_blocks(
         &mut self,
         opcode: u8,
@@ -3384,6 +3385,10 @@ impl<H: HostAccess> IchSpiController<H> {
         }
         // Reject the whole range before erasing any of it.
         Self::check_swseq_range(addr, len as usize)?;
+        self.check_range(FlashAccess::Modify, addr, u64::from(len))?;
+        // The legacy wait helpers fall back to a fixed delay without RDSR.
+        // That cannot guarantee erase completion, so require real polling.
+        self.menu_type(JEDEC_RDSR)?;
         for block in (addr..addr + len).step_by(block_size as usize) {
             let [_, high, middle, low] = block.to_be_bytes();
             let command = [opcode, high, middle, low];
@@ -3938,6 +3943,104 @@ mod tests {
 
             c.mode = SpiMode::HardwareSequencing;
             assert!(c.swseq_erase_blocks(JEDEC_SE, 4096, 0, 4096).is_err());
+        }
+    }
+
+    #[test]
+    fn erase_blocks_preflight_the_entire_protected_range() {
+        for generation in [
+            IchChipset::Ich7,
+            IchChipset::Ich9,
+            IchChipset::Series100SunrisePoint,
+        ] {
+            // Protect either a later block's first page or a page inside it.
+            for protected in [0x10000, 0x11000] {
+                let mut c = test_controller();
+                c.generation = generation;
+                c.mode = SpiMode::SoftwareSequencing;
+                c.locked = true;
+                c.opcodes = Some(Opcodes::default());
+                let index = c.find_opcode_index(JEDEC_SE).unwrap();
+                c.opcodes.as_mut().unwrap().opcode[index].opcode = JEDEC_BE_D8;
+                let protection = if generation == IchChipset::Ich7 {
+                    (protected >> 12) | (protected >> 12) << 12 | 1 << PR_WP_OFF
+                } else {
+                    pr(protected, protected + 0xfff, false, true)
+                };
+                c.spibar.set32(c.pr_registers().0, protection);
+                assert!(matches!(
+                    c.swseq_erase_blocks(JEDEC_BE_D8, 0x10000, 0, 0x20000),
+                    Err(InternalError::AccessDenied {
+                        region: "protected range"
+                    })
+                ));
+                assert!(c.host.writes().is_empty());
+                assert!(c.spibar.writes().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn erase_blocks_require_status_polling_before_any_cycle() {
+        for generation in [IchChipset::Ich7, IchChipset::Ich9] {
+            for missing in [false, true] {
+                let mut c = test_controller();
+                c.generation = generation;
+                c.mode = SpiMode::SoftwareSequencing;
+                c.opcodes = Some(Opcodes::default());
+                c.host.enable_write8_readback();
+                c.host
+                    .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+                let index = c.find_opcode_index(JEDEC_RDSR).unwrap();
+                let status = &mut c.opcodes.as_mut().unwrap().opcode[index];
+                if missing {
+                    status.opcode = 0;
+                } else {
+                    status.spi_type = SPI_OPCODE_TYPE_WRITE_NO_ADDRESS;
+                }
+                assert!(c.swseq_erase_blocks(JEDEC_SE, 4096, 0, 4096).is_err());
+                assert!(c.host.writes().is_empty());
+                assert!(c.spibar.writes().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn erase_blocks_complete_each_block_and_leave_neighbors_untouched() {
+        for (opcode, size) in [(JEDEC_SE, 4096), (JEDEC_BE_52, 32768), (JEDEC_BE_D8, 65536)] {
+            let mut c = test_controller();
+            c.generation = IchChipset::Ich9;
+            c.mode = SpiMode::SoftwareSequencing;
+            c.opcodes = Some(Opcodes::default());
+            // Model a menu containing the caller's erase opcode.
+            let index = c.find_opcode_index(JEDEC_SE).unwrap();
+            c.opcodes.as_mut().unwrap().opcode[index].opcode = opcode;
+            c.spibar.set_swseq_menu(
+                c.swseq.ssfsc,
+                c.opcodes.as_ref().unwrap().opcode.map(|o| o.opcode),
+            );
+            c.spibar.set_flash(vec![0; 4 * size as usize]);
+            c.host.enable_write8_readback();
+            c.host
+                .set_config32(c.config_bdf, PCI_REG_BIOS_CNTL as u16, 0);
+            c.swseq_erase_blocks(opcode, size, size, 2 * size).unwrap();
+            let menu = c.opcodes.as_ref().unwrap().opcode.map(|o| o.opcode);
+            let cycles: Vec<_> = c
+                .spibar
+                .writes()
+                .iter()
+                .filter(|&&(offset, value, _)| offset == c.swseq.ssfsc && value & SSFC_SCGO != 0)
+                .map(|&(_, value, _)| menu[((value & SSFC_COP) >> SSFC_COP_OFF) as usize])
+                .collect();
+            assert_eq!(cycles, [opcode, JEDEC_RDSR, opcode, JEDEC_RDSR]);
+            let flash = c.spibar.flash();
+            assert!(flash[..size as usize].iter().all(|&b| b == 0));
+            assert!(
+                flash[size as usize..3 * size as usize]
+                    .iter()
+                    .all(|&b| b == 0xff)
+            );
+            assert!(flash[3 * size as usize..].iter().all(|&b| b == 0));
         }
     }
 
