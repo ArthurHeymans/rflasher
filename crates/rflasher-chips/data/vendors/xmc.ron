@@ -9,7 +9,7 @@
         (
             name: "XM25QH64C",
             unlock: Some(Status),
-            device_id: 0x4017,
+            ids: [Rdid(id: 0x204017)],
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -24,7 +24,7 @@
         (
             name: "XM25QH128C",
             unlock: Some(Status),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0x204018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
@@ -39,7 +39,7 @@
         (
             name: "XM25QH256C",
             unlock: Some(Bp3Srwd),
-            device_id: 0x4019,
+            ids: [Rdid(id: 0x204019)],
             total_size: MiB(32),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 2700, max: 3600),
@@ -56,7 +56,7 @@
         (
             name: "XM25QU64C",
             unlock: Some(Status),
-            device_id: 0x4117,
+            ids: [Rdid(id: 0x204117)],
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
@@ -71,7 +71,7 @@
         (
             name: "XM25QU128C",
             unlock: Some(Status),
-            device_id: 0x4118,
+            ids: [Rdid(id: 0x204118)],
             total_size: MiB(16),
             features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
@@ -86,7 +86,7 @@
         (
             name: "XM25QU256C",
             unlock: Some(Bp3Srwd),
-            device_id: 0x4119,
+            ids: [Rdid(id: 0x204119)],
             total_size: MiB(32),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 1650, max: 1950),
@@ -103,7 +103,7 @@
         (
             name: "XM25QH512C",
             unlock: Some(Bp3Srwd),
-            device_id: 0x4020,
+            ids: [Rdid(id: 0x204020)],
             total_size: MiB(64),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 2700, max: 3600),
@@ -120,7 +120,7 @@
         (
             name: "XM25RH256C",
             unlock: Some(Bp3Srwd),
-            device_id: 0x4319,
+            ids: [Rdid(id: 0x204319)],
             total_size: MiB(32),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 2700, max: 3600),
@@ -137,7 +137,7 @@
         (
             name: "XM25RH512C",
             unlock: Some(Bp3Srwd),
-            device_id: 0x4320,
+            ids: [Rdid(id: 0x204320)],
             total_size: MiB(64),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 2700, max: 3600),
@@ -154,7 +154,7 @@
         (
             name: "XM25QU512C",
             unlock: Some(Bp3Srwd),
-            device_id: 0x4120,
+            ids: [Rdid(id: 0x204120)],
             total_size: MiB(64),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, dual_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true),
             voltage: (min: 1650, max: 1950),
@@ -173,7 +173,7 @@
         // device reporting either ID is matched.
         (
             name: "XM25QU64A",
-            device_id: 0x3817,
+            ids: [Rdid(id: 0x203817)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 1650, max: 1950),
@@ -188,7 +188,7 @@
 
         (
             name: "XM25QH32C/XM25QH32D",
-            device_id: 0x4016,
+            ids: [Rdid(id: 0x204016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -202,7 +202,7 @@
         ),
         (
             name: "XM25RH128C",
-            device_id: 0x4318,
+            ids: [Rdid(id: 0x204318)],
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -216,7 +216,7 @@
         ),
         (
             name: "XM25RU256C",
-            device_id: 0x4419,
+            ids: [Rdid(id: 0x204419)],
             total_size: MiB(32),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
@@ -230,7 +230,7 @@
         ),
         (
             name: "XM25QU80B",
-            device_id: 0x5014,
+            ids: [Rdid(id: 0x205014)],
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -244,7 +244,7 @@
         ),
         (
             name: "XM25QU16C",
-            device_id: 0x5015,
+            ids: [Rdid(id: 0x205015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -258,7 +258,7 @@
         ),
         (
             name: "XM25QU32C",
-            device_id: 0x5016,
+            ids: [Rdid(id: 0x205016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -272,7 +272,7 @@
         ),
         (
             name: "XM25QH64A",
-            device_id: 0x7017,
+            ids: [Rdid(id: 0x207017)],
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -286,7 +286,7 @@
         ),
         (
             name: "XM25QH128A",
-            device_id: 0x7018,
+            ids: [Rdid(id: 0x207018)],
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),

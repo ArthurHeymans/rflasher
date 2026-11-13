@@ -9,7 +9,7 @@
         (
             name: "GD25T80",
             unlock: Some(Status),
-            device_id: 0x3114,
+            ids: [Rdid(id: 0xC83114)],
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -26,7 +26,7 @@
         (
             name: "GD25Q512",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4010,
+            ids: [Rdid(id: 0xC84010)],
             total_size: KiB(64),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -41,7 +41,7 @@
         (
             name: "GD25Q10",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4011,
+            ids: [Rdid(id: 0xC84011)],
             total_size: KiB(128),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -57,7 +57,7 @@
         (
             name: "GD25Q20",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4012,
+            ids: [Rdid(id: 0xC84012)],
             total_size: KiB(256),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -73,7 +73,7 @@
         (
             name: "GD25Q40",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4013,
+            ids: [Rdid(id: 0xC84013)],
             total_size: KiB(512),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -89,7 +89,7 @@
         (
             name: "GD25Q80",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4014,
+            ids: [Rdid(id: 0xC84014)],
             total_size: MiB(1),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -105,7 +105,7 @@
         (
             name: "GD25Q16",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4015,
+            ids: [Rdid(id: 0xC84015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -121,7 +121,7 @@
         (
             name: "GD25Q32",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4016,
+            ids: [Rdid(id: 0xC84016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -137,7 +137,7 @@
         (
             name: "GD25Q64",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4017,
+            ids: [Rdid(id: 0xC84017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -153,7 +153,7 @@
         (
             name: "GD25Q128",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0xC84018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -169,7 +169,7 @@
         (
             name: "GD25Q256D",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4019,
+            ids: [Rdid(id: 0xC84019)],
             total_size: MiB(32),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, qe_sr2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, status_reg_3: true, wrsr_ext: true),
             voltage: (min: 2700, max: 3600),
@@ -186,7 +186,7 @@
         (
             name: "GD25VQ21B",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4212,
+            ids: [Rdid(id: 0xC84212)],
             total_size: KiB(256),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 2300, max: 3600),
@@ -201,7 +201,7 @@
         (
             name: "GD25VQ40C",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4213,
+            ids: [Rdid(id: 0xC84213)],
             total_size: KiB(512),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2300, max: 3600),
@@ -216,7 +216,7 @@
         (
             name: "GD25VQ41B",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4213,
+            ids: [Rdid(id: 0xC84213)],
             total_size: KiB(512),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 2300, max: 3600),
@@ -232,7 +232,7 @@
         (
             name: "GD25VQ80C",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4214,
+            ids: [Rdid(id: 0xC84214)],
             total_size: MiB(1),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2300, max: 3600),
@@ -247,7 +247,7 @@
         (
             name: "GD25VQ16C",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4215,
+            ids: [Rdid(id: 0xC84215)],
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2300, max: 3600),
@@ -264,7 +264,7 @@
         (
             name: "GD25LQ20",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6012,
+            ids: [Rdid(id: 0xC86012)],
             total_size: KiB(256),
             features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 1950),
@@ -279,7 +279,7 @@
         (
             name: "GD25LQ40",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6013,
+            ids: [Rdid(id: 0xC86013)],
             total_size: KiB(512),
             features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 1950),
@@ -294,7 +294,7 @@
         (
             name: "GD25LQ80",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6014,
+            ids: [Rdid(id: 0xC86014)],
             total_size: MiB(1),
             features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 1950),
@@ -309,7 +309,7 @@
         (
             name: "GD25LQ16",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6015,
+            ids: [Rdid(id: 0xC86015)],
             total_size: MiB(2),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
@@ -324,7 +324,7 @@
         (
             name: "GD25LQ32",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6016,
+            ids: [Rdid(id: 0xC86016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
@@ -339,7 +339,7 @@
         (
             name: "GD25LQ64",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6017,
+            ids: [Rdid(id: 0xC86017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
@@ -354,7 +354,7 @@
         (
             name: "GD25LQ128",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6018,
+            ids: [Rdid(id: 0xC86018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
@@ -369,7 +369,7 @@
         (
             name: "GD25LQ256D",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6019,
+            ids: [Rdid(id: 0xC86019)],
             total_size: MiB(32),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, status_reg_2: true, qe_sr2: true, wrsr_ext: true),
             voltage: (min: 1650, max: 2000),
@@ -386,7 +386,7 @@
         (
             name: "GD25LF80E",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6314,
+            ids: [Rdid(id: 0xC86314)],
             total_size: MiB(1),
             features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 2000),
@@ -401,7 +401,7 @@
         (
             name: "GD25LF16E",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6315,
+            ids: [Rdid(id: 0xC86315)],
             total_size: MiB(2),
             features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 2000),
@@ -416,7 +416,7 @@
         (
             name: "GD25LF32E",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6316,
+            ids: [Rdid(id: 0xC86316)],
             total_size: MiB(4),
             features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 2000),
@@ -431,7 +431,7 @@
         (
             name: "GD25LF64E",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6317,
+            ids: [Rdid(id: 0xC86317)],
             total_size: MiB(8),
             features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 2000),
@@ -446,7 +446,7 @@
         (
             name: "GD25LF128E",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6318,
+            ids: [Rdid(id: 0xC86318)],
             total_size: MiB(16),
             features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 2000),
@@ -463,7 +463,7 @@
         (
             name: "GD25WQ80E",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6514,
+            ids: [Rdid(id: 0xC86514)],
             total_size: MiB(1),
             features: (wrsr_wren: true, wrsr_ewsr: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 1650, max: 3600),
@@ -478,7 +478,7 @@
         (
             name: "GD25LQ128C/GD25LQ128D/GD25LQ128E",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6018,
+            ids: [Rdid(id: 0xC86018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
@@ -494,7 +494,7 @@
         (
             name: "GD25LQ256D/GD25LE256D/GD25LB256D/GD25LQ255E",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6019,
+            ids: [Rdid(id: 0xC86019)],
             total_size: MiB(32),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, wrsr_ext: true),
             voltage: (min: 1650, max: 2000),
@@ -509,7 +509,7 @@
         (
             name: "GD25LQ256H/GD25LE256H/GD25LB256F",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6019,
+            ids: [Rdid(id: 0xC86019)],
             total_size: MiB(32),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
@@ -524,7 +524,7 @@
         (
             name: "GD25LE255E",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6019,
+            ids: [Rdid(id: 0xC86019)],
             total_size: MiB(32),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_program: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
@@ -539,7 +539,7 @@
         (
             name: "GD25LB256E/GD25LR256E",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6719,
+            ids: [Rdid(id: 0xC86719)],
             total_size: MiB(32),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1650, max: 2000),
@@ -554,7 +554,7 @@
         (
             name: "GD25LQ64(B)",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6017,
+            ids: [Rdid(id: 0xC86017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
@@ -570,7 +570,7 @@
         (
             name: "GD25LB512ME/GD25LR512ME",
             unlock: Some(Bp4Srwd),
-            device_id: 0x671A,
+            ids: [Rdid(id: 0xC8671A)],
             total_size: MiB(64),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1650, max: 2000),
@@ -586,7 +586,7 @@
         (
             name: "GD25LB512MF/GD25LR512MF",
             unlock: Some(Bp4Srwd),
-            device_id: 0x601A,
+            ids: [Rdid(id: 0xC8601A)],
             total_size: MiB(64),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
@@ -601,7 +601,7 @@
         (
             name: "GD55LB01GE",
             unlock: Some(Bp4Srwd),
-            device_id: 0x671B,
+            ids: [Rdid(id: 0xC8671B)],
             total_size: MiB(128),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1650, max: 2000),
@@ -616,7 +616,7 @@
         (
             name: "GD55LB01GF",
             unlock: Some(Bp4Srwd),
-            device_id: 0x601B,
+            ids: [Rdid(id: 0xC8601B)],
             total_size: MiB(128),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
@@ -631,7 +631,7 @@
         (
             name: "GD55LB02GE",
             unlock: Some(Bp4Srwd),
-            device_id: 0x671C,
+            ids: [Rdid(id: 0xC8671C)],
             total_size: MiB(256),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1650, max: 2000),
@@ -646,7 +646,7 @@
         (
             name: "GD55LB02GF",
             unlock: Some(Bp4Srwd),
-            device_id: 0x601C,
+            ids: [Rdid(id: 0xC8601C)],
             total_size: MiB(256),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 1650, max: 2000),
@@ -661,7 +661,7 @@
         (
             name: "GD25Q127C/GD25B127D",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0xC84018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -677,7 +677,7 @@
         (
             name: "GD25Q128B/GD25B128B",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0xC84018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -693,7 +693,7 @@
         (
             name: "GD25Q128C",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0xC84018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true),
             voltage: (min: 2700, max: 3600),
@@ -709,7 +709,7 @@
         (
             name: "GD25Q128E/GD25B128E/GD25R128E/GD25Q128H/GD25B128H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0xC84018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -724,7 +724,7 @@
         (
             name: "GD25Q16(B)",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4015,
+            ids: [Rdid(id: 0xC84015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -740,7 +740,7 @@
         (
             name: "GD25Q20(B)",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4012,
+            ids: [Rdid(id: 0xC84012)],
             total_size: KiB(256),
             features: (wrsr_wren: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -756,7 +756,7 @@
         (
             name: "GD25Q256D/GD25B256D/GD25R256D",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4019,
+            ids: [Rdid(id: 0xC84019)],
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, status_reg_3: true, dual_io: true, quad_io: true, wrsr_ext: true),
             voltage: (min: 2700, max: 3600),
@@ -772,7 +772,7 @@
         (
             name: "GD25Q257D/GD25B257D",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4019,
+            ids: [Rdid(id: 0xC84019)],
             total_size: MiB(32),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -787,7 +787,7 @@
         (
             name: "GD25Q256E/GD25B256E/GD25R256E",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4019,
+            ids: [Rdid(id: 0xC84019)],
             total_size: MiB(32),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -802,7 +802,7 @@
         (
             name: "GD25Q32(B)",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4016,
+            ids: [Rdid(id: 0xC84016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -818,7 +818,7 @@
         (
             name: "GD25Q40(B)",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4013,
+            ids: [Rdid(id: 0xC84013)],
             total_size: KiB(512),
             features: (wrsr_wren: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -834,7 +834,7 @@
         (
             name: "GD25Q64(B)",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4017,
+            ids: [Rdid(id: 0xC84017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -850,7 +850,7 @@
         (
             name: "GD25Q80(B)",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4014,
+            ids: [Rdid(id: 0xC84014)],
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -866,7 +866,7 @@
         (
             name: "GD25B512ME/GD25R512ME",
             unlock: Some(Bp4Srwd),
-            device_id: 0x471A,
+            ids: [Rdid(id: 0xC8471A)],
             total_size: MiB(64),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),
@@ -881,7 +881,7 @@
         (
             name: "GD25B512MF/GD25R512MF",
             unlock: Some(Bp4Srwd),
-            device_id: 0x401A,
+            ids: [Rdid(id: 0xC8401A)],
             total_size: MiB(64),
             features: (wp_cmp: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -896,7 +896,7 @@
         (
             name: "GD55B01GE",
             unlock: Some(Bp4Srwd),
-            device_id: 0x471B,
+            ids: [Rdid(id: 0xC8471B)],
             total_size: MiB(128),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, quad_io: true, four_byte_quad_out_read: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -911,7 +911,7 @@
         (
             name: "GD55B01GF",
             unlock: Some(Bp4Srwd),
-            device_id: 0x401B,
+            ids: [Rdid(id: 0xC8401B)],
             total_size: MiB(128),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -926,7 +926,7 @@
         (
             name: "GD55B02GE",
             unlock: Some(Bp4Srwd),
-            device_id: 0x471C,
+            ids: [Rdid(id: 0xC8471C)],
             total_size: MiB(256),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, quad_io: true, four_byte_quad_out_read: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -941,7 +941,7 @@
         (
             name: "GD55B02GF",
             unlock: Some(Bp4Srwd),
-            device_id: 0x401C,
+            ids: [Rdid(id: 0xC8401C)],
             total_size: MiB(256),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_quad_out_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -956,7 +956,7 @@
 
         (
             name: "GD25F64F",
-            device_id: 0x4317,
+            ids: [Rdid(id: 0xC84317)],
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -970,7 +970,7 @@
         ),
         (
             name: "GD25F128F",
-            device_id: 0x4318,
+            ids: [Rdid(id: 0xC84318)],
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -984,7 +984,7 @@
         ),
         (
             name: "GD25F256F",
-            device_id: 0x4319,
+            ids: [Rdid(id: 0xC84319)],
             total_size: MiB(32),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -998,7 +998,7 @@
         ),
         (
             name: "GD25LF256F",
-            device_id: 0x6319,
+            ids: [Rdid(id: 0xC86319)],
             total_size: MiB(32),
             features: (wrsr_wren: true, wrsr_ext: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true),
             voltage: (min: 1650, max: 2000),
@@ -1012,7 +1012,7 @@
         ),
         (
             name: "GD25LF512MF",
-            device_id: 0x631A,
+            ids: [Rdid(id: 0xC8631A)],
             total_size: MiB(64),
             features: (wrsr_wren: true, wrsr_ext: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true),
             voltage: (min: 1695, max: 1950),

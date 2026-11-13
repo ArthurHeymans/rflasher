@@ -13,7 +13,7 @@
         (
             name: "AT25DF021",
             unlock: Some(At2x),
-            device_id: 0x4300,
+            ids: [Rdid(id: 0x1F4300)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -28,7 +28,7 @@
         (
             name: "AT25DF021A",
             unlock: Some(At2x),
-            device_id: 0x4301,
+            ids: [Rdid(id: 0x1F4301)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 1650, max: 3600),
@@ -43,7 +43,7 @@
         (
             name: "AT25DF041A",
             unlock: Some(At2x),
-            device_id: 0x4401,
+            ids: [Rdid(id: 0x1F4401)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -58,7 +58,7 @@
         (
             name: "AT25DF081",
             unlock: Some(At2x),
-            device_id: 0x4502,
+            ids: [Rdid(id: 0x1F4502)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 1650, max: 1950),
@@ -73,7 +73,7 @@
         (
             name: "AT25DF081A",
             unlock: Some(At2x),
-            device_id: 0x4501,
+            ids: [Rdid(id: 0x1F4501)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -88,7 +88,7 @@
         (
             name: "AT25DF161",
             unlock: Some(At2x),
-            device_id: 0x4602,
+            ids: [Rdid(id: 0x1F4602)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -103,7 +103,7 @@
         (
             name: "AT25DF321",
             unlock: Some(At2x),
-            device_id: 0x4700,
+            ids: [Rdid(id: 0x1F4700)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -118,7 +118,7 @@
         (
             name: "AT25DF321A",
             unlock: Some(At2x),
-            device_id: 0x4701,
+            ids: [Rdid(id: 0x1F4701)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -133,7 +133,7 @@
         (
             name: "AT25DF641(A)",
             unlock: Some(At2x),
-            device_id: 0x4800,
+            ids: [Rdid(id: 0x1F4800)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -149,7 +149,7 @@
         (
             name: "AT25DL081",
             unlock: Some(At2x),
-            device_id: 0x4502,
+            ids: [Rdid(id: 0x1F4502)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 1650, max: 1950),
@@ -164,7 +164,7 @@
         (
             name: "AT25DL161",
             unlock: Some(At2x),
-            device_id: 0x4603,
+            ids: [Rdid(id: 0x1F4603)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 1650, max: 1950),
@@ -181,9 +181,9 @@
         (
             name: "AT25F512",
             unlock: Some(At25f),
-            device_id: 0x60,
+            ids: [At25f(id: 0x1F60)],
             total_size: KiB(64),
-            features: (wrsr_wren: true, at25f_id: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x52, regions: [(size: KiB(32), count: 2)]),
@@ -193,10 +193,10 @@
         (
             name: "AT25F512A",
             unlock: Some(At25f512a),
-            device_id: 0x65,
+            ids: [At25f(id: 0x1F65)],
             total_size: KiB(64),
             page_size: 128,
-            features: (wrsr_wren: true, at25f_id: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x52, regions: [(size: KiB(32), count: 2)]),
@@ -206,7 +206,7 @@
         (
             name: "AT25F512B",
             unlock: Some(At25f512b),
-            device_id: 0x6500,
+            ids: [Rdid(id: 0x1F6500)],
             total_size: KiB(64),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2300, max: 3600),
@@ -222,9 +222,9 @@
         (
             name: "AT25F1024(A)",
             unlock: Some(At25f),
-            device_id: 0x60,
+            ids: [At25f(id: 0x1F60)],
             total_size: KiB(128),
-            features: (wrsr_wren: true, at25f_id: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x52, regions: [(size: KiB(32), count: 4)]),
@@ -234,9 +234,9 @@
         (
             name: "AT25F2048",
             unlock: Some(At25f),
-            device_id: 0x63,
+            ids: [At25f(id: 0x1F63)],
             total_size: KiB(256),
-            features: (wrsr_wren: true, at25f_id: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x52, regions: [(size: KiB(64), count: 4)]),
@@ -246,9 +246,9 @@
         (
             name: "AT25F4096",
             unlock: Some(Bp2Srwd),
-            device_id: 0x64,
+            ids: [At25f(id: 0x1F64)],
             total_size: KiB(512),
-            features: (wrsr_wren: true, at25f_id: true),
+            features: (wrsr_wren: true, ),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x52, regions: [(size: KiB(64), count: 8)]),
@@ -259,7 +259,7 @@
         (
             name: "AT25FS010",
             unlock: Some(At25fs010),
-            device_id: 0x6601,
+            ids: [Rdid(id: 0x1F6601)],
             total_size: KiB(128),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -275,7 +275,7 @@
         (
             name: "AT25FS040",
             unlock: Some(At25fs040),
-            device_id: 0x6604,
+            ids: [Rdid(id: 0x1F6604)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -291,7 +291,7 @@
         (
             name: "AT25SF041",
             unlock: Some(Status),
-            device_id: 0x8401,
+            ids: [Rdid(id: 0x1F8401)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -306,7 +306,7 @@
         (
             name: "AT25SF081",
             unlock: Some(Status),
-            device_id: 0x8501,
+            ids: [Rdid(id: 0x1F8501)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -320,7 +320,7 @@
         ),
         (
             name: "AT25SF128A",
-            device_id: 0x8901,
+            ids: [Rdid(id: 0x1F8901)],
             total_size: MiB(16),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 2500, max: 3600),
@@ -335,7 +335,7 @@
         (
             name: "AT25SF161",
             unlock: Some(Status),
-            device_id: 0x8601,
+            ids: [Rdid(id: 0x1F8601)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2500, max: 3600),
@@ -350,7 +350,7 @@
         (
             name: "AT25SF321",
             unlock: Some(Status),
-            device_id: 0x8701,
+            ids: [Rdid(id: 0x1F8701)],
             total_size: MiB(4),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 2500, max: 3600),
@@ -366,7 +366,7 @@
         (
             name: "AT25SL128A",
             unlock: Some(Status),
-            device_id: 0x4218,
+            ids: [Rdid(id: 0x1F4218)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, quad_io: true),
             voltage: (min: 1700, max: 2000),
@@ -381,7 +381,7 @@
         (
             name: "AT25DQ161",
             unlock: Some(At2x),
-            device_id: 0x8600,
+            ids: [Rdid(id: 0x1F8600)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -396,9 +396,8 @@
         (
             name: "AT26DF041",
             unlock: Some(None),
-            device_id: 0x4400,
+            ids: [Rdid(id: 0x1F4400)],
             total_size: KiB(512),
-            features: (),
             voltage: (min: 2700, max: 3600),
             write_granularity: Byte,
             erase_blocks: [
@@ -411,7 +410,7 @@
         (
             name: "AT26DF081A",
             unlock: Some(At2x),
-            device_id: 0x4501,
+            ids: [Rdid(id: 0x1F4501)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -427,7 +426,7 @@
         (
             name: "AT26DF161",
             unlock: Some(At2x),
-            device_id: 0x4600,
+            ids: [Rdid(id: 0x1F4600)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -443,7 +442,7 @@
         (
             name: "AT26DF161A",
             unlock: Some(At2x),
-            device_id: 0x4601,
+            ids: [Rdid(id: 0x1F4601)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -459,7 +458,7 @@
         (
             name: "AT26F004",
             unlock: Some(None),
-            device_id: 0x0400,
+            ids: [Rdid(id: 0x1F0400)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -474,7 +473,7 @@
 
         (
             name: "AT25EU0041A",
-            device_id: 0x1401,
+            ids: [Rdid(id: 0x1F1401)],
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 3600),
@@ -490,7 +489,7 @@
         ),
         (
             name: "AT25EU0161A",
-            device_id: 0x1601,
+            ids: [Rdid(id: 0x1F1601)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 3600),
@@ -506,7 +505,7 @@
         ),
         (
             name: "AT25DF011",
-            device_id: 0x4200,
+            ids: [Rdid(id: 0x1F4200)],
             total_size: KiB(128),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 3600),
@@ -520,7 +519,7 @@
         ),
         (
             name: "AT25FF041A",
-            device_id: 0x4408,
+            ids: [Rdid(id: 0x1F4408)],
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 3600),

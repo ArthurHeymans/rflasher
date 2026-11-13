@@ -117,17 +117,9 @@ bitflags! {
         const WP_UNRESOLVED           = 1 << 43;
         /// Audited Winbond SR1/SR2 map, SPI25 range decoder and combined WRSR.
         const WP_WINBOND              = 1 << 44;
-        /// Legacy Atmel ID from opcode 0x15, not JEDEC RDID (0x9F).
-        /// Excluded from RDID lookup; legacy probing is not yet implemented.
-        const AT25F_ID                = 1 << 45;
         /// Audited CMP at SR2 bit 6 (read 0x35); bit 0 is SRL or reserved-zero.
         /// Independent of the status-write protocol and WP range decoder.
         const WP_CMP_SR2              = 1 << 46;
-        /// Identity is excluded from the unprefixed RDID lookup (banked
-        /// identity or legacy PMC RES2 identity).
-        const RDID_CONTINUATION       = 1 << 47;
-        /// Legacy RES2 identity, not a banked RDID identity.
-        const RES2_ID                 = 1 << 48;
         /// Variant profile requiring an exact, explicit user selection.
         const EXPLICIT_PROFILE        = 1 << 49;
     }

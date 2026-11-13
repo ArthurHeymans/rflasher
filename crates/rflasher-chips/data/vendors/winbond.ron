@@ -9,7 +9,7 @@
         (
             name: "W25Q16.V",
             unlock: Some(Status),
-            device_id: 0x4015,
+            ids: [Rdid(id: 0xEF4015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -25,7 +25,7 @@
         (
             name: "W25Q32.V",
             unlock: Some(Status),
-            device_id: 0x4016,
+            ids: [Rdid(id: 0xEF4016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -41,7 +41,7 @@
         (
             name: "W25Q64.V",
             unlock: Some(Status),
-            device_id: 0x4017,
+            ids: [Rdid(id: 0xEF4017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -57,7 +57,7 @@
         (
             name: "W25Q128.V",
             unlock: Some(Status),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0xEF4018)],
             total_size: MiB(16),
             features: (wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, wrsr_ext: true, wp_winbond: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 2700, max: 3600),
@@ -76,7 +76,7 @@
         (
             name: "W25Q128BV-WP",
             unlock: Some(Status),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0xEF4018)],
             total_size: MiB(16),
             features: (explicit_profile: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, wrsr_ext: true, wp_winbond: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 2700, max: 3600),
@@ -91,7 +91,7 @@
         (
             name: "W25Q128FVJV-WP",
             unlock: Some(Status),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0xEF4018)],
             total_size: MiB(16),
             features: (explicit_profile: true, wp_wps: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, wrsr_ext: true, wp_winbond: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, wp_tb: true, wp_sec: true, wp_cmp: true),
             voltage: (min: 2700, max: 3600),
@@ -106,7 +106,7 @@
         (
             name: "W25Q256JV_Q",
             unlock: Some(Status),
-            device_id: 0x4019,
+            ids: [Rdid(id: 0xEF4019)],
             total_size: MiB(32),
             features: (wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
             voltage: (min: 2700, max: 3600),
@@ -122,7 +122,7 @@
         (
             name: "W25Q512JV",
             unlock: Some(Status),
-            device_id: 0x4020,
+            ids: [Rdid(id: 0xEF4020)],
             total_size: MiB(64),
             features: (
                 wrsr_wren: true, wrsr_ext: true, fast_read: true, dual_io: true, quad_io: true, otp: true,
@@ -148,7 +148,7 @@
         (
             name: "W25Q16.W",
             unlock: Some(Status),
-            device_id: 0x6015,
+            ids: [Rdid(id: 0xEF6015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1700, max: 1950),
@@ -164,7 +164,7 @@
         (
             name: "W25Q32.W",
             unlock: Some(Status),
-            device_id: 0x6016,
+            ids: [Rdid(id: 0xEF6016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1700, max: 1950),
@@ -180,7 +180,7 @@
         (
             name: "W25Q64.W",
             unlock: Some(Status),
-            device_id: 0x6017,
+            ids: [Rdid(id: 0xEF6017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1700, max: 1950),
@@ -196,7 +196,7 @@
         (
             name: "W25Q128.W",
             unlock: Some(Status),
-            device_id: 0x6018,
+            ids: [Rdid(id: 0xEF6018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 1650, max: 1950),
@@ -212,7 +212,7 @@
         (
             name: "W25Q256JW",
             unlock: Some(Status),
-            device_id: 0x6019,
+            ids: [Rdid(id: 0xEF6019)],
             total_size: MiB(32),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true, qe_sr2: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
             voltage: (min: 1650, max: 1950),
@@ -230,7 +230,7 @@
         (
             name: "W25Q32JV_M",
             unlock: Some(Bp2Srwd),
-            device_id: 0x7016,
+            ids: [Rdid(id: 0xEF7016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -246,7 +246,7 @@
         (
             name: "W25Q64JV_M",
             unlock: Some(Bp2Srwd),
-            device_id: 0x7017,
+            ids: [Rdid(id: 0xEF7017)],
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -262,7 +262,7 @@
         (
             name: "W25Q128JV_M",
             unlock: Some(Status),
-            device_id: 0x7018,
+            ids: [Rdid(id: 0xEF7018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, otp: true, status_reg_2: true, status_reg_3: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -278,7 +278,7 @@
         (
             name: "W25Q256JV_M",
             unlock: Some(Status),
-            device_id: 0x7019,
+            ids: [Rdid(id: 0xEF7019)],
             total_size: MiB(32),
             features: (wp_cmp_sr2: true, wrsr_wren: true, fast_read: true, dual_io: true, quad_io: true, qpi: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, qe_sr2: true, wp_tb: true, wp_cmp: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, ext_addr_reg_c5c8: true),
             voltage: (min: 2700, max: 3600),
@@ -296,7 +296,7 @@
         (
             name: "W25X10",
             unlock: Some(Status),
-            device_id: 0x3011,
+            ids: [Rdid(id: 0xEF3011)],
             total_size: KiB(128),
             features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
@@ -310,7 +310,7 @@
         (
             name: "W25X20",
             unlock: Some(Status),
-            device_id: 0x3012,
+            ids: [Rdid(id: 0xEF3012)],
             total_size: KiB(256),
             features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
@@ -324,7 +324,7 @@
         (
             name: "W25X40",
             unlock: Some(Status),
-            device_id: 0x3013,
+            ids: [Rdid(id: 0xEF3013)],
             total_size: KiB(512),
             features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
@@ -338,7 +338,7 @@
         (
             name: "W25X80",
             unlock: Some(Status),
-            device_id: 0x3014,
+            ids: [Rdid(id: 0xEF3014)],
             total_size: MiB(1),
             features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
@@ -352,7 +352,7 @@
         (
             name: "W25X16",
             unlock: Some(Status),
-            device_id: 0x3015,
+            ids: [Rdid(id: 0xEF3015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
@@ -366,7 +366,7 @@
         (
             name: "W25X32",
             unlock: Some(Status),
-            device_id: 0x3016,
+            ids: [Rdid(id: 0xEF3016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
@@ -380,7 +380,7 @@
         (
             name: "W25X64",
             unlock: Some(Status),
-            device_id: 0x3017,
+            ids: [Rdid(id: 0xEF3017)],
             total_size: MiB(8),
             features: (wrsr_wren: true, fast_read: true),
             voltage: (min: 2700, max: 3600),
@@ -394,7 +394,7 @@
         (
             name: "W25P16",
             unlock: Some(Status),
-            device_id: 0x2015,
+            ids: [Rdid(id: 0xEF2015)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -406,7 +406,7 @@
         (
             name: "W25P32",
             unlock: Some(Status),
-            device_id: 0x2016,
+            ids: [Rdid(id: 0xEF2016)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -418,7 +418,7 @@
         (
             name: "W25P80",
             unlock: Some(Status),
-            device_id: 0x2014,
+            ids: [Rdid(id: 0xEF2014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -430,7 +430,7 @@
         (
             name: "W25Q128.V..M",
             unlock: Some(Status),
-            device_id: 0x7018,
+            ids: [Rdid(id: 0xEF7018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 2700, max: 3600),
@@ -446,7 +446,7 @@
         (
             name: "W25Q128.JW.DTR",
             unlock: Some(Status),
-            device_id: 0x8018,
+            ids: [Rdid(id: 0xEF8018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 1650, max: 1950),
@@ -462,7 +462,7 @@
         (
             name: "W25Q16JV_M",
             unlock: Some(Bp4Srwd),
-            device_id: 0x7015,
+            ids: [Rdid(id: 0xEF7015)],
             total_size: MiB(2),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -477,7 +477,7 @@
         (
             name: "W25Q20.W",
             unlock: Some(Status),
-            device_id: 0x5012,
+            ids: [Rdid(id: 0xEF5012)],
             total_size: KiB(256),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
@@ -492,7 +492,7 @@
         (
             name: "W25Q256FV",
             unlock: Some(Status),
-            device_id: 0x4019,
+            ids: [Rdid(id: 0xEF4019)],
             total_size: MiB(32),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true),
             voltage: (min: 2700, max: 3600),
@@ -508,7 +508,7 @@
         (
             name: "W25Q256JW_DTR",
             unlock: Some(Status),
-            device_id: 0x8019,
+            ids: [Rdid(id: 0xEF8019)],
             total_size: MiB(32),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, status_reg_2: true, status_reg_3: true, dual_io: true, quad_io: true),
             voltage: (min: 1700, max: 1950),
@@ -524,7 +524,7 @@
         (
             name: "W25Q32BV/W25Q32CV/W25Q32DV",
             unlock: Some(Status),
-            device_id: 0x4016,
+            ids: [Rdid(id: 0xEF4016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -540,7 +540,7 @@
         (
             name: "W25Q32FV",
             unlock: Some(Status),
-            device_id: 0x4016,
+            ids: [Rdid(id: 0xEF4016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -556,7 +556,7 @@
         (
             name: "W25Q32JV",
             unlock: Some(Status),
-            device_id: 0x4016,
+            ids: [Rdid(id: 0xEF4016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -572,7 +572,7 @@
         (
             name: "W25Q32JV-.M",
             unlock: Some(Bp2Srwd),
-            device_id: 0x7016,
+            ids: [Rdid(id: 0xEF7016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -588,7 +588,7 @@
         (
             name: "W25Q32BW/W25Q32CW/W25Q32DW",
             unlock: Some(Status),
-            device_id: 0x6016,
+            ids: [Rdid(id: 0xEF6016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
@@ -604,7 +604,7 @@
         (
             name: "W25Q32FW",
             unlock: Some(Status),
-            device_id: 0x6016,
+            ids: [Rdid(id: 0xEF6016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
@@ -620,7 +620,7 @@
         (
             name: "W25Q32JW...Q",
             unlock: Some(Status),
-            device_id: 0x6016,
+            ids: [Rdid(id: 0xEF6016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
@@ -636,7 +636,7 @@
         (
             name: "W25Q32JW...M",
             unlock: Some(Bp2Srwd),
-            device_id: 0x8016,
+            ids: [Rdid(id: 0xEF8016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
@@ -652,7 +652,7 @@
         (
             name: "W25Q40.V",
             unlock: Some(Status),
-            device_id: 0x4013,
+            ids: [Rdid(id: 0xEF4013)],
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -668,7 +668,7 @@
         (
             name: "W25Q40BW",
             unlock: Some(Status),
-            device_id: 0x5013,
+            ids: [Rdid(id: 0xEF5013)],
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
@@ -684,7 +684,7 @@
         (
             name: "W25Q40EW",
             unlock: Some(Status),
-            device_id: 0x6013,
+            ids: [Rdid(id: 0xEF6013)],
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
@@ -700,7 +700,7 @@
         (
             name: "W25R512NW/W74M51NW",
             unlock: Some(Status),
-            device_id: 0x6020,
+            ids: [Rdid(id: 0xEF6020)],
             total_size: MiB(64),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1700, max: 1950),
@@ -716,7 +716,7 @@
         (
             name: "W25Q512NW-IM",
             unlock: Some(Status),
-            device_id: 0x8020,
+            ids: [Rdid(id: 0xEF8020)],
             total_size: MiB(64),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, qpi: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, status_reg_2: true, status_reg_3: true, dual_io: true, quad_io: true),
             voltage: (min: 1650, max: 1950),
@@ -732,7 +732,7 @@
         (
             name: "W25Q64BV/W25Q64CV/W25Q64FV",
             unlock: Some(Status),
-            device_id: 0x4017,
+            ids: [Rdid(id: 0xEF4017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -748,7 +748,7 @@
         (
             name: "W25Q64JV-.Q",
             unlock: Some(Status),
-            device_id: 0x4017,
+            ids: [Rdid(id: 0xEF4017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -764,7 +764,7 @@
         (
             name: "W25Q64JV-.M",
             unlock: Some(Bp2Srwd),
-            device_id: 0x7017,
+            ids: [Rdid(id: 0xEF7017)],
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -780,7 +780,7 @@
         (
             name: "W25Q64DW",
             unlock: Some(Status),
-            device_id: 0x6017,
+            ids: [Rdid(id: 0xEF6017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
@@ -796,7 +796,7 @@
         (
             name: "W25Q64FW/W25Q64JW...Q",
             unlock: Some(Status),
-            device_id: 0x6017,
+            ids: [Rdid(id: 0xEF6017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 1700, max: 1950),
@@ -812,7 +812,7 @@
         (
             name: "W25Q64JW...M",
             unlock: Some(Status),
-            device_id: 0x8017,
+            ids: [Rdid(id: 0xEF8017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 1700, max: 1950),
@@ -828,7 +828,7 @@
         (
             name: "W25Q80.V",
             unlock: Some(Status),
-            device_id: 0x4014,
+            ids: [Rdid(id: 0xEF4014)],
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -844,7 +844,7 @@
         (
             name: "W25Q80BW",
             unlock: Some(Status),
-            device_id: 0x5014,
+            ids: [Rdid(id: 0xEF5014)],
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, status_reg_2: true),
             voltage: (min: 1700, max: 1950),
@@ -860,7 +860,7 @@
         (
             name: "W25Q80EW",
             unlock: Some(Status),
-            device_id: 0x6014,
+            ids: [Rdid(id: 0xEF6014)],
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
@@ -876,7 +876,7 @@
         (
             name: "W25X05",
             unlock: Some(Status),
-            device_id: 0x3010,
+            ids: [Rdid(id: 0xEF3010)],
             total_size: KiB(64),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -890,7 +890,7 @@
 
         (
             name: "W25Q01JV",
-            device_id: 0x4021,
+            ids: [Rdid(id: 0xEF4021)],
             total_size: MiB(128),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -904,7 +904,7 @@
         ),
         (
             name: "W77Q64JV",
-            device_id: 0x4A17,
+            ids: [Rdid(id: 0xEF4A17)],
             total_size: MiB(8),
             features: (wrsr_wren: true, wrsr_ext: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -918,7 +918,7 @@
         ),
         (
             name: "W77Q128JV",
-            device_id: 0x4A18,
+            ids: [Rdid(id: 0xEF4A18)],
             total_size: MiB(16),
             features: (wrsr_wren: true, wrsr_ext: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -932,7 +932,7 @@
         ),
         (
             name: "W25Q512JV_M",
-            device_id: 0x7020,
+            ids: [Rdid(id: 0xEF7020)],
             total_size: MiB(64),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -947,7 +947,7 @@
         // W77Q16JW (2 MiB) and W77Q32JW (4 MiB) both answer ef 8a 16; lookup is by id only, so neither is listed and SFDP sizes the chip.
         (
             name: "W77Q64JW",
-            device_id: 0x8A17,
+            ids: [Rdid(id: 0xEF8A17)],
             total_size: MiB(8),
             features: (wrsr_wren: true, wrsr_ext: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 1700, max: 1950),
@@ -961,7 +961,7 @@
         ),
         (
             name: "W77Q128JW",
-            device_id: 0x8A18,
+            ids: [Rdid(id: 0xEF8A18)],
             total_size: MiB(16),
             features: (wrsr_wren: true, wrsr_ext: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, otp: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 1700, max: 1950),
@@ -975,7 +975,7 @@
         ),
         (
             name: "W77Q25NWS",
-            device_id: 0x8A19,
+            ids: [Rdid(id: 0xEF8A19)],
             total_size: MiB(32),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1700, max: 1950),
@@ -989,7 +989,7 @@
         ),
         (
             name: "W77Q51NWD",
-            device_id: 0x8A1A,
+            ids: [Rdid(id: 0xEF8A1A)],
             total_size: MiB(64),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1700, max: 1950),
@@ -1001,7 +1001,7 @@
         ),
         (
             name: "W77Q01NWQ",
-            device_id: 0x8A1B,
+            ids: [Rdid(id: 0xEF8A1B)],
             total_size: MiB(128),
             features: (wrsr_wren: true, four_byte_addr: true, four_byte_enter: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1700, max: 1950),
@@ -1013,7 +1013,7 @@
         ),
         (
             name: "W25Q20CL",
-            device_id: 0x4012,
+            ids: [Rdid(id: 0xEF4012)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -1026,7 +1026,7 @@
         ),
         (
             name: "W25Q20EW",
-            device_id: 0x6012,
+            ids: [Rdid(id: 0xEF6012)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 1650, max: 1950),

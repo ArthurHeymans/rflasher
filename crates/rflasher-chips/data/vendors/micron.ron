@@ -9,7 +9,7 @@
         (
             name: "M25P05-A",
             unlock: Some(Bp3Srwd),
-            device_id: 0x2010,
+            ids: [Rdid(id: 0x202010)],
             total_size: KiB(64),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -21,7 +21,7 @@
         (
             name: "M25P10-A",
             unlock: Some(Bp3Srwd),
-            device_id: 0x2011,
+            ids: [Rdid(id: 0x202011)],
             total_size: KiB(128),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -33,7 +33,7 @@
         (
             name: "M25P20",
             unlock: Some(Status),
-            device_id: 0x2012,
+            ids: [Rdid(id: 0x202012)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -45,7 +45,7 @@
         (
             name: "M25P40",
             unlock: Some(Bp3Srwd),
-            device_id: 0x2013,
+            ids: [Rdid(id: 0x202013)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -57,7 +57,7 @@
         (
             name: "M25P80",
             unlock: Some(Bp3Srwd),
-            device_id: 0x2014,
+            ids: [Rdid(id: 0x202014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -69,7 +69,7 @@
         (
             name: "M25P16",
             unlock: Some(Bp3Srwd),
-            device_id: 0x2015,
+            ids: [Rdid(id: 0x202015)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -81,7 +81,7 @@
         (
             name: "M25P32",
             unlock: Some(Bp3Srwd),
-            device_id: 0x2016,
+            ids: [Rdid(id: 0x202016)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -93,7 +93,7 @@
         (
             name: "M25P64",
             unlock: Some(Bp3Srwd),
-            device_id: 0x2017,
+            ids: [Rdid(id: 0x202017)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -105,7 +105,7 @@
         (
             name: "M25P128",
             unlock: Some(Bp3Srwd),
-            device_id: 0x2018,
+            ids: [Rdid(id: 0x202018)],
             total_size: MiB(16),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -118,7 +118,7 @@
         (
             name: "M25PE10",
             unlock: Some(Status),
-            device_id: 0x8011,
+            ids: [Rdid(id: 0x208011)],
             total_size: KiB(128),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -131,7 +131,7 @@
         (
             name: "M25PE20",
             unlock: Some(Status),
-            device_id: 0x8012,
+            ids: [Rdid(id: 0x208012)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -144,7 +144,7 @@
         (
             name: "M25PE40",
             unlock: Some(Status),
-            device_id: 0x8013,
+            ids: [Rdid(id: 0x208013)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -157,7 +157,7 @@
         (
             name: "M25PE80",
             unlock: Some(Status),
-            device_id: 0x8014,
+            ids: [Rdid(id: 0x208014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -170,7 +170,7 @@
         (
             name: "M25PE16",
             unlock: Some(Status),
-            device_id: 0x8015,
+            ids: [Rdid(id: 0x208015)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -184,7 +184,7 @@
         (
             name: "M25PX80",
             unlock: Some(Bp2Srwd),
-            device_id: 0x7114,
+            ids: [Rdid(id: 0x207114)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -197,7 +197,7 @@
         (
             name: "M25PX16",
             unlock: Some(Bp2Srwd),
-            device_id: 0x7115,
+            ids: [Rdid(id: 0x207115)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2300, max: 3600),
@@ -210,7 +210,7 @@
         (
             name: "M25PX32",
             unlock: Some(Bp2Srwd),
-            device_id: 0x7116,
+            ids: [Rdid(id: 0x207116)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -223,7 +223,7 @@
         (
             name: "M25PX64",
             unlock: Some(Bp2Srwd),
-            device_id: 0x7117,
+            ids: [Rdid(id: 0x207117)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -237,7 +237,7 @@
         (
             name: "M45PE10",
             unlock: Some(Unsupported),
-            device_id: 0x4011,
+            ids: [Rdid(id: 0x204011)],
             total_size: KiB(128),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -249,7 +249,7 @@
         (
             name: "M45PE16",
             unlock: Some(Unsupported),
-            device_id: 0x4015,
+            ids: [Rdid(id: 0x204015)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -261,7 +261,7 @@
         (
             name: "M45PE20",
             unlock: Some(Unsupported),
-            device_id: 0x4012,
+            ids: [Rdid(id: 0x204012)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -273,7 +273,7 @@
         (
             name: "M45PE40",
             unlock: Some(Unsupported),
-            device_id: 0x4013,
+            ids: [Rdid(id: 0x204013)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -285,7 +285,7 @@
         (
             name: "M45PE80",
             unlock: Some(Unsupported),
-            device_id: 0x4014,
+            ids: [Rdid(id: 0x204014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -295,11 +295,11 @@
             ],
         ),
         // N25Q series - High performance Quad SPI
-        // N25Q016: device_id 0xBB15 → 1.8V (BB prefix)
+        // N25Q016: RDID device bytes 0xBB15 → 1.8V (BB prefix)
         (
             name: "N25Q016",
             unlock: Some(N25q),
-            device_id: 0xBB15,
+            ids: [Rdid(id: 0x20BB15)],
             total_size: MiB(2),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 1700, max: 2000),
@@ -313,7 +313,7 @@
         (
             name: "N25Q032",
             unlock: Some(N25q),
-            device_id: 0xBA16,
+            ids: [Rdid(id: 0x20BA16)],
             total_size: MiB(4),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 2700, max: 3600),
@@ -327,7 +327,7 @@
         (
             name: "N25Q032..1E",
             unlock: Some(N25q),
-            device_id: 0xBB16,
+            ids: [Rdid(id: 0x20BB16)],
             total_size: MiB(4),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 1700, max: 2000),
@@ -340,7 +340,7 @@
         (
             name: "N25Q064",
             unlock: Some(N25q),
-            device_id: 0xBA17,
+            ids: [Rdid(id: 0x20BA17)],
             total_size: MiB(8),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 2700, max: 3600),
@@ -354,7 +354,7 @@
         (
             name: "N25Q064..1E",
             unlock: Some(N25q),
-            device_id: 0xBB17,
+            ids: [Rdid(id: 0x20BB17)],
             total_size: MiB(8),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 1700, max: 2000),
@@ -367,7 +367,7 @@
         (
             name: "N25Q128",
             unlock: Some(N25q),
-            device_id: 0xBA18,
+            ids: [Rdid(id: 0x20BA18)],
             total_size: MiB(16),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 2700, max: 3600),
@@ -381,7 +381,7 @@
         (
             name: "N25Q128..1E",
             unlock: Some(N25q),
-            device_id: 0xBB18,
+            ids: [Rdid(id: 0x20BB18)],
             total_size: MiB(16),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 1700, max: 2000),
@@ -394,7 +394,7 @@
         (
             name: "N25Q256",
             unlock: Some(N25q),
-            device_id: 0xBA19,
+            ids: [Rdid(id: 0x20BA19)],
             total_size: MiB(32),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),
@@ -408,7 +408,7 @@
         (
             name: "N25Q256..1E",
             unlock: Some(N25q),
-            device_id: 0xBB19,
+            ids: [Rdid(id: 0x20BB19)],
             total_size: MiB(32),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1700, max: 2000),
@@ -421,7 +421,7 @@
         (
             name: "N25Q512",
             unlock: Some(N25q),
-            device_id: 0xBA20,
+            ids: [Rdid(id: 0x20BA20)],
             total_size: MiB(64),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),
@@ -435,7 +435,7 @@
         (
             name: "N25Q512..1G",
             unlock: Some(N25q),
-            device_id: 0xBB20,
+            ids: [Rdid(id: 0x20BB20)],
             total_size: MiB(64),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1700, max: 2000),
@@ -449,7 +449,7 @@
         (
             name: "MT25QL128",
             unlock: Some(N25q),
-            device_id: 0xBA18,
+            ids: [Rdid(id: 0x20BA18)],
             total_size: MiB(16),
             features: (wrsr_wren: true, quad_io: true),
             voltage: (min: 2700, max: 3600),
@@ -464,7 +464,7 @@
         (
             name: "MT25QL256",
             unlock: Some(N25q),
-            device_id: 0xBA19,
+            ids: [Rdid(id: 0x20BA19)],
             total_size: MiB(32),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),
@@ -479,7 +479,7 @@
         (
             name: "MT25QL512",
             unlock: Some(N25q),
-            device_id: 0xBA20,
+            ids: [Rdid(id: 0x20BA20)],
             total_size: MiB(64),
             features: (wrsr_wren: true, quad_io: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),
@@ -494,7 +494,7 @@
         (
             name: "MT25QL01G",
             unlock: Some(N25q),
-            device_id: 0xBA21,
+            ids: [Rdid(id: 0x20BA21)],
             total_size: MiB(128),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),
@@ -509,7 +509,7 @@
         (
             name: "MT25QU01G",
             unlock: Some(N25q),
-            device_id: 0xBB21,
+            ids: [Rdid(id: 0x20BB21)],
             total_size: MiB(128),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1700, max: 2000),
@@ -523,7 +523,7 @@
         (
             name: "MT25QL02G",
             unlock: Some(N25q),
-            device_id: 0xBA22,
+            ids: [Rdid(id: 0x20BA22)],
             total_size: MiB(256),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),
@@ -537,7 +537,7 @@
         (
             name: "MT25QU02G",
             unlock: Some(N25q),
-            device_id: 0xBB22,
+            ids: [Rdid(id: 0x20BB22)],
             total_size: MiB(256),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1700, max: 2000),
@@ -551,7 +551,7 @@
         (
             name: "MT25QU128",
             unlock: Some(N25q),
-            device_id: 0xBB18,
+            ids: [Rdid(id: 0x20BB18)],
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1700, max: 2000),
@@ -566,7 +566,7 @@
         (
             name: "MT25QU256",
             unlock: Some(N25q),
-            device_id: 0xBB19,
+            ids: [Rdid(id: 0x20BB19)],
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1700, max: 2000),
@@ -582,7 +582,7 @@
         (
             name: "MT25QU512",
             unlock: Some(N25q),
-            device_id: 0xBB20,
+            ids: [Rdid(id: 0x20BB20)],
             total_size: MiB(64),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter_wren: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1700, max: 2000),
@@ -602,7 +602,7 @@
         (
             name: "N25Q00A..1G",
             unlock: Some(N25q),
-            device_id: 0xBB21,
+            ids: [Rdid(id: 0x20BB21)],
             total_size: MiB(128),
             features: (wrsr_wren: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 1700, max: 2000),
@@ -615,7 +615,7 @@
         (
             name: "N25Q00A..3G",
             unlock: Some(N25q),
-            device_id: 0xBA21,
+            ids: [Rdid(id: 0x20BA21)],
             total_size: MiB(128),
             features: (wrsr_wren: true, quad_io: true, otp: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_wren: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),

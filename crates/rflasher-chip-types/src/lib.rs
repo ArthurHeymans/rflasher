@@ -12,6 +12,7 @@ extern crate alloc;
 
 mod catalog;
 mod features;
+mod identity;
 mod name;
 mod provider;
 mod regions;
@@ -19,8 +20,9 @@ mod storage;
 mod types;
 mod unlock;
 
-pub use catalog::{ChipCatalog, ChipIdentity, ResolveError};
+pub use catalog::{ChipCatalog, ResolveError};
 pub use features::Features;
+pub use identity::{ChipIdentity, ProbeMethod};
 pub use name::name_matches;
 pub use provider::ChipProvider;
 pub use regions::EraseRegions;

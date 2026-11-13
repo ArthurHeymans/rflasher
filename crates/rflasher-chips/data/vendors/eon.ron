@@ -9,7 +9,7 @@
         (
             name: "EN25Q40",
             unlock: Some(Status),
-            device_id: 0x3013,
+            ids: [Rdid(id: 0x1C3013)],
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -24,7 +24,7 @@
         (
             name: "EN25Q16",
             unlock: Some(Status),
-            device_id: 0x3015,
+            ids: [Rdid(id: 0x1C3015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -39,7 +39,7 @@
         (
             name: "EN25Q32",
             unlock: Some(Status),
-            device_id: 0x3016,
+            ids: [Rdid(id: 0x1C3016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -54,7 +54,7 @@
         (
             name: "EN25Q64",
             unlock: Some(Status),
-            device_id: 0x3017,
+            ids: [Rdid(id: 0x1C3017)],
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -69,7 +69,7 @@
         (
             name: "EN25Q128",
             unlock: Some(Status),
-            device_id: 0x3018,
+            ids: [Rdid(id: 0x1C3018)],
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -86,7 +86,7 @@
         (
             name: "EN25QH16",
             unlock: Some(Bp3Srwd),
-            device_id: 0x7015,
+            ids: [Rdid(id: 0x1C7015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -102,7 +102,7 @@
         (
             name: "EN25QH128",
             unlock: Some(Bp3Srwd),
-            device_id: 0x7018,
+            ids: [Rdid(id: 0x1C7018)],
             total_size: MiB(16),
             features: (wrsr_wren: true, fast_read: true, quad_io: true, qpi: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -117,7 +117,7 @@
         (
             name: "EN25B05",
             unlock: Some(Status),
-            device_id: 0x2010,
+            ids: [Rdid(id: 0x1C2010)],
             total_size: KiB(64),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -134,7 +134,7 @@
         (
             name: "EN25B05T",
             unlock: Some(Status),
-            device_id: 0x2010,
+            ids: [Rdid(id: 0x1C2010)],
             total_size: KiB(64),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -151,7 +151,7 @@
         (
             name: "EN25B10",
             unlock: Some(Status),
-            device_id: 0x2011,
+            ids: [Rdid(id: 0x1C2011)],
             total_size: KiB(128),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -168,7 +168,7 @@
         (
             name: "EN25B10T",
             unlock: Some(Status),
-            device_id: 0x2011,
+            ids: [Rdid(id: 0x1C2011)],
             total_size: KiB(128),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -186,7 +186,7 @@
         (
             name: "EN25B20",
             unlock: Some(Status),
-            device_id: 0x2012,
+            ids: [Rdid(id: 0x1C2012)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -204,7 +204,7 @@
         (
             name: "EN25B20T",
             unlock: Some(Status),
-            device_id: 0x2012,
+            ids: [Rdid(id: 0x1C2012)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -222,7 +222,7 @@
         (
             name: "EN25B40",
             unlock: Some(Status),
-            device_id: 0x2013,
+            ids: [Rdid(id: 0x1C2013)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -240,7 +240,7 @@
         (
             name: "EN25B40T",
             unlock: Some(Status),
-            device_id: 0x2013,
+            ids: [Rdid(id: 0x1C2013)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -258,7 +258,7 @@
         (
             name: "EN25B80",
             unlock: Some(Status),
-            device_id: 0x2014,
+            ids: [Rdid(id: 0x1C2014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -276,7 +276,7 @@
         (
             name: "EN25B80T",
             unlock: Some(Status),
-            device_id: 0x2014,
+            ids: [Rdid(id: 0x1C2014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -294,7 +294,7 @@
         (
             name: "EN25B16",
             unlock: Some(Status),
-            device_id: 0x2015,
+            ids: [Rdid(id: 0x1C2015)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -312,7 +312,7 @@
         (
             name: "EN25B16T",
             unlock: Some(Status),
-            device_id: 0x2015,
+            ids: [Rdid(id: 0x1C2015)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -330,7 +330,7 @@
         (
             name: "EN25B32",
             unlock: Some(Status),
-            device_id: 0x2016,
+            ids: [Rdid(id: 0x1C2016)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -348,7 +348,7 @@
         (
             name: "EN25B32T",
             unlock: Some(Status),
-            device_id: 0x2016,
+            ids: [Rdid(id: 0x1C2016)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -366,7 +366,7 @@
         (
             name: "EN25B64",
             unlock: Some(Status),
-            device_id: 0x2017,
+            ids: [Rdid(id: 0x1C2017)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -384,7 +384,7 @@
         (
             name: "EN25B64T",
             unlock: Some(Status),
-            device_id: 0x2017,
+            ids: [Rdid(id: 0x1C2017)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -402,7 +402,7 @@
         (
             name: "EN25F05",
             unlock: Some(Status),
-            device_id: 0x3110,
+            ids: [Rdid(id: 0x1C3110)],
             total_size: KiB(64),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -418,7 +418,7 @@
         (
             name: "EN25F10",
             unlock: Some(Status),
-            device_id: 0x3111,
+            ids: [Rdid(id: 0x1C3111)],
             total_size: KiB(128),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -434,7 +434,7 @@
         (
             name: "EN25F16",
             unlock: Some(Status),
-            device_id: 0x3115,
+            ids: [Rdid(id: 0x1C3115)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -449,7 +449,7 @@
         (
             name: "EN25F20",
             unlock: Some(Status),
-            device_id: 0x3112,
+            ids: [Rdid(id: 0x1C3112)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -464,7 +464,7 @@
         (
             name: "EN25F32",
             unlock: Some(Status),
-            device_id: 0x3116,
+            ids: [Rdid(id: 0x1C3116)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -479,7 +479,7 @@
         (
             name: "EN25F40",
             unlock: Some(Status),
-            device_id: 0x3113,
+            ids: [Rdid(id: 0x1C3113)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -494,7 +494,7 @@
         (
             name: "EN25F64",
             unlock: Some(Status),
-            device_id: 0x3117,
+            ids: [Rdid(id: 0x1C3117)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -509,7 +509,7 @@
         (
             name: "EN25F80",
             unlock: Some(Status),
-            device_id: 0x3114,
+            ids: [Rdid(id: 0x1C3114)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -524,7 +524,7 @@
         (
             name: "EN25P05",
             unlock: Some(Status),
-            device_id: 0x2010,
+            ids: [Rdid(id: 0x1C2010)],
             total_size: KiB(64),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -536,7 +536,7 @@
         (
             name: "EN25P10",
             unlock: Some(Status),
-            device_id: 0x2011,
+            ids: [Rdid(id: 0x1C2011)],
             total_size: KiB(128),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -548,7 +548,7 @@
         (
             name: "EN25P16",
             unlock: Some(Status),
-            device_id: 0x2015,
+            ids: [Rdid(id: 0x1C2015)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -560,7 +560,7 @@
         (
             name: "EN25P20",
             unlock: Some(Status),
-            device_id: 0x2012,
+            ids: [Rdid(id: 0x1C2012)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -572,7 +572,7 @@
         (
             name: "EN25P32",
             unlock: Some(Status),
-            device_id: 0x2016,
+            ids: [Rdid(id: 0x1C2016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -584,7 +584,7 @@
         (
             name: "EN25P40",
             unlock: Some(Status),
-            device_id: 0x2013,
+            ids: [Rdid(id: 0x1C2013)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -596,7 +596,7 @@
         (
             name: "EN25P64",
             unlock: Some(Status),
-            device_id: 0x2017,
+            ids: [Rdid(id: 0x1C2017)],
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -608,7 +608,7 @@
         (
             name: "EN25P80",
             unlock: Some(Status),
-            device_id: 0x2014,
+            ids: [Rdid(id: 0x1C2014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -620,7 +620,7 @@
         (
             name: "EN25Q32(A/B)",
             unlock: Some(Status),
-            device_id: 0x3016,
+            ids: [Rdid(id: 0x1C3016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -635,7 +635,7 @@
         (
             name: "EN25Q80(A)",
             unlock: Some(Status),
-            device_id: 0x3014,
+            ids: [Rdid(id: 0x1C3014)],
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -649,7 +649,7 @@
         (
             name: "EN25Q80",
             unlock: Some(Status),
-            device_id: 0x3014,
+            ids: [Rdid(id: 0x1C3014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -663,7 +663,7 @@
         (
             name: "EN25QH32B",
             unlock: Some(Bp3Srwd),
-            device_id: 0x7016,
+            ids: [Rdid(id: 0x1C7016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 2700, max: 3600),
@@ -679,7 +679,7 @@
         (
             name: "EN25QH64A",
             unlock: Some(Bp3Srwd),
-            device_id: 0x7017,
+            ids: [Rdid(id: 0x1C7017)],
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 2700, max: 3600),
@@ -695,7 +695,7 @@
         (
             name: "EN25QH32",
             unlock: Some(Bp3Srwd),
-            device_id: 0x7016,
+            ids: [Rdid(id: 0x1C7016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, qpi: true),
             voltage: (min: 2700, max: 3600),
@@ -709,7 +709,7 @@
         (
             name: "EN25QH64",
             unlock: Some(Bp3Srwd),
-            device_id: 0x7017,
+            ids: [Rdid(id: 0x1C7017)],
             total_size: MiB(8),
             features: (wrsr_wren: true, qpi: true),
             voltage: (min: 2700, max: 3600),
@@ -723,7 +723,7 @@
         (
             name: "EN25S10",
             unlock: Some(Status),
-            device_id: 0x3811,
+            ids: [Rdid(id: 0x1C3811)],
             total_size: KiB(128),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -737,7 +737,7 @@
         (
             name: "EN25S16",
             unlock: Some(Bp3Srwd),
-            device_id: 0x3815,
+            ids: [Rdid(id: 0x1C3815)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 1650, max: 1950),
@@ -752,7 +752,7 @@
         (
             name: "EN25S20",
             unlock: Some(Status),
-            device_id: 0x3812,
+            ids: [Rdid(id: 0x1C3812)],
             total_size: KiB(256),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -766,7 +766,7 @@
         (
             name: "EN25S32",
             unlock: Some(Bp3Srwd),
-            device_id: 0x3816,
+            ids: [Rdid(id: 0x1C3816)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 1650, max: 1950),
@@ -781,7 +781,7 @@
         (
             name: "EN25S40",
             unlock: Some(Status),
-            device_id: 0x3813,
+            ids: [Rdid(id: 0x1C3813)],
             total_size: KiB(512),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -796,7 +796,7 @@
         (
             name: "EN25S64",
             unlock: Some(Bp3Srwd),
-            device_id: 0x3817,
+            ids: [Rdid(id: 0x1C3817)],
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, qpi: true),
             voltage: (min: 1650, max: 1950),
@@ -811,7 +811,7 @@
         (
             name: "EN25S80",
             unlock: Some(Status),
-            device_id: 0x3814,
+            ids: [Rdid(id: 0x1C3814)],
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 1650, max: 1950),
@@ -825,7 +825,7 @@
 
         (
             name: "EN25QX128A",
-            device_id: 0x7118,
+            ids: [Rdid(id: 0x1C7118)],
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),

@@ -1,6 +1,6 @@
 //! Shared RON schema and validation for runtime and compiled chip databases.
 
-pub use rflasher_chip_types::Unlock;
+pub use rflasher_chip_types::{ChipIdentity, Unlock};
 use serde::Deserialize;
 use std::collections::HashSet;
 
@@ -40,7 +40,7 @@ impl Size {
 
 /// Feature flags for flash chips (structured for better RON ergonomics)
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct FeaturesDef {
     // Write enable behavior
     /// Use WREN (0x06) before WRSR
@@ -137,13 +137,6 @@ pub struct FeaturesDef {
     pub wp_wps: bool,
     /// Only select this profile when its exact name is requested.
     pub explicit_profile: bool,
-
-    /// Device ID uses legacy Atmel opcode 0x15 instead of JEDEC RDID.
-    pub at25f_id: bool,
-    /// Exclude banked identities and legacy RES2 IDs from ordinary RDID lookup.
-    pub rdid_continuation: bool,
-    /// Identity uses RES2 rather than RDID.
-    pub res2_id: bool,
 }
 
 // ============================================================================
@@ -224,12 +217,12 @@ impl Default for VoltageDef {
 
 /// Single chip definition in RON format
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChipDef {
     /// Chip model name (e.g., "W25Q128FV")
     pub name: String,
-    /// JEDEC device ID (2 bytes, e.g., 0x4018), or the legacy 0x15 ID
-    /// when `features.at25f_id` is set.
-    pub device_id: u16,
+    /// Non-empty list of exact method-specific identities, including their values.
+    pub ids: Vec<ChipIdentity>,
     /// Total flash size
     pub total_size: Size,
     /// Page size in bytes (for programming)
@@ -254,6 +247,23 @@ pub struct ChipDef {
     pub tested: TestStatusDef,
 }
 
+impl ChipDef {
+    /// Exact identities; no implicit identity is synthesized from other fields.
+    pub fn identities(&self) -> impl Iterator<Item = ChipIdentity> + '_ {
+        self.ids.iter().copied()
+    }
+
+    /// Derive manufacturer/device metadata for existing operational APIs.
+    /// Prefer RDID when available; this metadata is never a probing fallback.
+    pub fn canonical_id(&self) -> Option<(u8, u16)> {
+        self.ids
+            .iter()
+            .find(|id| matches!(id, ChipIdentity::Rdid { .. }))
+            .or_else(|| self.ids.first())
+            .map(|id| id.manufacturer_device())
+    }
+}
+
 fn default_page_size() -> u16 {
     256
 }
@@ -263,7 +273,7 @@ fn default_page_size() -> u16 {
 pub struct VendorDef {
     /// Vendor name (e.g., "Winbond")
     pub vendor: String,
-    /// JEDEC manufacturer ID (1 byte, e.g., 0xEF)
+    /// Informational vendor code; each chip's explicit IDs own their values.
     pub manufacturer_id: u8,
     /// List of chips from this vendor
     pub chips: Vec<ChipDef>,
@@ -280,6 +290,18 @@ impl VendorDef {
                     "Vendor {} defines chip name {} more than once",
                     self.vendor, chip.name
                 ));
+            }
+
+            if chip.ids.is_empty() {
+                return Err(format!("Chip {} has no identities defined", chip.name));
+            }
+            for (index, id) in chip.ids.iter().enumerate() {
+                if !id.is_valid() || chip.ids[..index].contains(id) {
+                    return Err(format!(
+                        "Chip {} has an invalid or duplicate identity",
+                        chip.name
+                    ));
+                }
             }
 
             // Validate erase blocks
@@ -327,11 +349,94 @@ mod tests {
     use super::*;
 
     #[test]
+    fn probe_values_validate_framing_duplicates_and_missing_identities() {
+        let mut vendor: VendorDef = ron::from_str(
+            r#"(
+            vendor: "Test", manufacturer_id: 1, chips: [(
+                name: "Chip", ids: [Rems(id: 0xBF48), Res2(id: 0xBF48)], total_size: KiB(64),
+                erase_blocks: [(opcode: 0xc7, regions: [(size: KiB(64), count: 1)])],
+            )],
+        )"#,
+        )
+        .unwrap();
+        assert!(vendor.validate().is_ok());
+        assert_eq!(vendor.chips[0].canonical_id(), Some((0xbf, 0x48)));
+        vendor.chips[0]
+            .ids
+            .push(ChipIdentity::Rdid { id: 0x12345678 });
+        assert!(
+            vendor
+                .validate()
+                .unwrap_err()
+                .contains("invalid or duplicate")
+        );
+        vendor.chips[0].ids.pop();
+        vendor.chips[0].ids.push(ChipIdentity::Rems { id: 0xbf48 });
+        assert!(
+            vendor
+                .validate()
+                .unwrap_err()
+                .contains("invalid or duplicate")
+        );
+        vendor.chips[0].ids.pop();
+        vendor.chips[0].ids.clear();
+        assert!(vendor.validate().unwrap_err().contains("no identities"));
+        assert_eq!(vendor.chips[0].canonical_id(), None);
+    }
+
+    #[test]
+    fn retired_identity_fields_and_missing_ids_are_rejected() {
+        let valid = r#"(
+            vendor: "Test", manufacturer_id: 1, chips: [(
+                name: "Chip", ids: [Rdid(id: 0x010001)], total_size: KiB(8),
+                erase_blocks: [(opcode: 0xc7, regions: [(size: KiB(8), count: 1)])],
+            )],
+        )"#;
+        for extra in [
+            "device_id: 1,",
+            "features: (at25f_id: true),",
+            "features: (res2_id: true),",
+            "features: (rdid_continuation: true),",
+        ] {
+            let input = valid.replace("name: \"Chip\",", &format!("name: \"Chip\", {extra}"));
+            assert!(ron::from_str::<VendorDef>(&input).is_err(), "{extra}");
+        }
+        assert!(
+            ron::from_str::<VendorDef>(&valid.replace("ids: [Rdid(id: 0x010001)],", "")).is_err()
+        );
+        // Unsupported qualifiers must not silently become an ordinary RDID.
+        for extra in ["device_id: 1", "opcode: 0xAF", "protocol: \"QPI\""] {
+            let input = valid.replace(
+                "Rdid(id: 0x010001)",
+                &format!("Rdid(id: 0x010001, {extra})"),
+            );
+            assert!(ron::from_str::<VendorDef>(&input).is_err(), "{extra}");
+        }
+    }
+
+    #[test]
+    fn canonical_metadata_is_derived_from_ids_not_the_vendor_header() {
+        let mut vendor: VendorDef = ron::from_str(
+            r#"(
+            vendor: "Test", manufacturer_id: 1, chips: [(
+                name: "Chip", ids: [Rems(id: 0xBF8D), Rdid(id: 0xBF258D)], total_size: KiB(8),
+                erase_blocks: [(opcode: 0xc7, regions: [(size: KiB(8), count: 1)])],
+            )],
+        )"#,
+        )
+        .unwrap();
+        assert!(vendor.validate().is_ok());
+        assert_eq!(vendor.chips[0].canonical_id(), Some((0xbf, 0x258d)));
+        vendor.chips[0].ids.pop();
+        assert_eq!(vendor.chips[0].canonical_id(), Some((0xbf, 0x8d)));
+    }
+
+    #[test]
     fn vendor_validation_covers_duplicates_and_erase_geometry() {
         let ron = r#"(
             vendor: "Test", manufacturer_id: 1,
             chips: [(
-                name: "Chip", device_id: 1, total_size: KiB(8),
+                name: "Chip", ids: [Rdid(id: 0x010001)], total_size: KiB(8),
                 erase_blocks: [(opcode: 0x20, regions: [(size: KiB(4), count: 2)])],
             )],
         )"#;

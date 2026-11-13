@@ -964,6 +964,7 @@ mod chip_selection_tests {
                 name: name.into(),
                 jedec_manufacturer: 0xEF,
                 jedec_device: 0x4018,
+                ids: vec![rflasher_core::chip::ChipIdentity::Rdid { id: 0xEF4018 }].into(),
                 total_size: 16 * 1024 * 1024,
                 page_size: 256,
                 features: Features::WRSR_WREN,

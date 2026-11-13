@@ -8,7 +8,7 @@
         (
             name: "BY25Q128FS",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4118,
+            ids: [Rdid(id: 0x684118)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -23,7 +23,7 @@
         (
             name: "B.25D05AS",
             unlock: Some(Bp2Srwd),
-            device_id: 0x4010,
+            ids: [Rdid(id: 0x684010)],
             total_size: KiB(64),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -38,7 +38,7 @@
         (
             name: "B.25D10AS",
             unlock: Some(Bp2Srwd),
-            device_id: 0x4011,
+            ids: [Rdid(id: 0x684011)],
             total_size: KiB(128),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -53,7 +53,7 @@
         (
             name: "B.25D20AS",
             unlock: Some(Bp2Srwd),
-            device_id: 0x4012,
+            ids: [Rdid(id: 0x684012)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -68,7 +68,7 @@
         (
             name: "B.25D40AS/BY25D40ES",
             unlock: Some(Bp2Srwd),
-            device_id: 0x4013,
+            ids: [Rdid(id: 0x684013)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -83,7 +83,7 @@
         (
             name: "B.25D80AS/BY25Q80BS/BY25Q80ES",
             unlock: Some(Bp2Srwd),
-            device_id: 0x4014,
+            ids: [Rdid(id: 0x684014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -98,7 +98,7 @@
         (
             name: "B.25D16AS/BY25Q16BS/BY25Q16ES",
             unlock: Some(Bp2Srwd),
-            device_id: 0x4015,
+            ids: [Rdid(id: 0x684015)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -113,7 +113,7 @@
         (
             name: "B.25Q32BS/BY25Q32CS/BY25Q32ES",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4016,
+            ids: [Rdid(id: 0x684016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true),
             voltage: (min: 2700, max: 3600),
@@ -128,7 +128,7 @@
         (
             name: "B.25Q64AS/BY25Q64ES",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4017,
+            ids: [Rdid(id: 0x684017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true),
             voltage: (min: 2700, max: 3600),
@@ -143,7 +143,7 @@
         (
             name: "B.25Q128AS/BY25Q128ES",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0x684018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true),
             voltage: (min: 2700, max: 3600),

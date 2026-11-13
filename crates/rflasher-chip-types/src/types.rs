@@ -265,10 +265,14 @@ pub struct FlashChip {
     pub vendor: ChipName,
     /// Chip model name (e.g., "W25Q128FV")
     pub name: ChipName,
-    /// JEDEC manufacturer ID (first byte of RDID response)
+    /// Manufacturer metadata derived from the primary identity, not a match key.
     pub jedec_manufacturer: u8,
-    /// JEDEC device ID (second and third bytes of RDID response)
+    /// Device metadata derived from the primary identity, not a match key.
     pub jedec_device: u16,
+    /// Exact alternative identities. Empty means no catalog identity, not a
+    /// fallback to the manufacturer/device metadata.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub ids: ChipSlice<crate::ChipIdentity>,
     /// Total flash size in bytes
     pub total_size: u32,
     /// Page size in bytes (for programming)
@@ -312,17 +316,25 @@ impl FlashChip {
         ((self.jedec_manufacturer as u32) << 16) | (self.jedec_device as u32)
     }
 
+    /// Iterate the explicitly recorded command-specific identities.
+    pub fn identities(&self) -> impl Iterator<Item = crate::ChipIdentity> + '_ {
+        self.ids.iter().copied()
+    }
+
+    /// Match a response without crossing identification command namespaces.
+    pub fn matches_identity(&self, identity: &crate::ChipIdentity) -> bool {
+        identity.is_valid() && self.identities().any(|candidate| candidate == *identity)
+    }
+
     /// Check if this chip matches the given RDID manufacturer and device IDs.
     /// Legacy Atmel opcode-0x15, RES2, and continuation-prefixed identities
     /// cannot be represented by this lookup and must not enter its candidates.
     #[must_use]
     pub fn matches_jedec_id(&self, manufacturer: u8, device: u16) -> bool {
         manufacturer != 0x7f
-            && !self
-                .features
-                .intersects(Features::AT25F_ID | Features::RDID_CONTINUATION | Features::RES2_ID)
-            && self.jedec_manufacturer == manufacturer
-            && self.jedec_device == device
+            && self.matches_identity(&crate::ChipIdentity::Rdid {
+                id: (u32::from(manufacturer) << 16) | u32::from(device),
+            })
     }
 
     /// Check whether two definitions modify flash in the same way.
@@ -459,6 +471,32 @@ mod tests {
         assert!(!boot_sector.is_uniform());
     }
 
+    #[test]
+    fn metadata_never_substitutes_for_explicit_identities() {
+        let mut chip = FlashChip {
+            vendor: "Test".into(),
+            name: "Part".into(),
+            jedec_manufacturer: 0xEF,
+            jedec_device: 0x4018,
+            ids: alloc::vec![crate::ChipIdentity::Rems { id: 0xBF48 }].into(),
+            total_size: 65536,
+            page_size: 256,
+            features: Features::empty(),
+            unlock: Default::default(),
+            voltage_min_mv: 2700,
+            voltage_max_mv: 3600,
+            write_granularity: WriteGranularity::Page,
+            erase_blocks: alloc::vec![EraseBlock::with_count(0x20, 4096, 16)].into(),
+            tested: ChipTestStatus::default(),
+        };
+        assert!(chip.matches_identity(&crate::ChipIdentity::Rems { id: 0xBF48 }));
+        assert!(!chip.matches_jedec_id(0xEF, 0x4018));
+        chip.ids = Default::default();
+        assert_eq!(chip.identities().count(), 0);
+        assert!(!chip.matches_jedec_id(0xEF, 0x4018));
+        assert!(!chip.matches_identity(&crate::ChipIdentity::Rems { id: 0xBF48 }));
+    }
+
     #[cfg(feature = "serde")]
     #[test]
     fn test_flash_chip_serde_round_trip() {
@@ -467,6 +505,7 @@ mod tests {
             name: "W25Q128FV".into(),
             jedec_manufacturer: 0xEF,
             jedec_device: 0x4018,
+            ids: alloc::vec![crate::ChipIdentity::Rdid { id: 0xEF4018 }].into(),
             total_size: 16 * 1024 * 1024,
             page_size: 256,
             features: Features::WRSR_WREN | Features::FAST_READ,
@@ -484,6 +523,7 @@ mod tests {
         assert_eq!(decoded.vendor, chip.vendor);
         assert_eq!(decoded.name, chip.name);
         assert_eq!(decoded.jedec_id(), chip.jedec_id());
+        assert_eq!(decoded.ids, chip.ids);
         assert_eq!(decoded.features, chip.features);
         assert_eq!(decoded.erase_blocks, chip.erase_blocks);
     }

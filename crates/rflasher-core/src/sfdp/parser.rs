@@ -609,6 +609,7 @@ pub fn to_flash_chip(info: &SfdpInfo, jedec_manufacturer: u8, jedec_device: u16)
         name: String::from("Unknown").into(),
         jedec_manufacturer,
         jedec_device,
+        ids: Default::default(),
         total_size: params.density_bytes as u32,
         page_size: params.page_size as u16,
         features,
@@ -1322,6 +1323,9 @@ mod tests {
         let mut mock = MockSfdpFlash::new();
         let info = futures_lite::future::block_on(probe(&mut mock)).unwrap();
         let mut chip = to_flash_chip(&info, 0xC2, 0x2017);
+        // A synthetic database fixture must declare its own matching identity;
+        // an SFDP-only operation profile does not implicitly advertise RDID.
+        chip.ids = alloc::vec![crate::chip::ChipIdentity::Rdid { id: 0xC22017 }].into();
         chip.name = name.into();
         chip
     }

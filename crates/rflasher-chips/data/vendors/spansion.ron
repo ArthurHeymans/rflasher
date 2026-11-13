@@ -9,7 +9,7 @@
         (
             name: "S25FL004A",
             unlock: Some(Status),
-            device_id: 0x0212,
+            ids: [Rdid(id: 0x010212)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -22,7 +22,7 @@
         (
             name: "S25FL008A",
             unlock: Some(Status),
-            device_id: 0x0213,
+            ids: [Rdid(id: 0x010213)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -35,7 +35,7 @@
         (
             name: "S25FL016A",
             unlock: Some(Status),
-            device_id: 0x0214,
+            ids: [Rdid(id: 0x010214)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -48,7 +48,7 @@
         (
             name: "S25FL032A",
             unlock: Some(Status),
-            device_id: 0x0215,
+            ids: [Rdid(id: 0x010215)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -61,7 +61,7 @@
         (
             name: "S25FL064A",
             unlock: Some(Status),
-            device_id: 0x0216,
+            ids: [Rdid(id: 0x010216)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -73,7 +73,7 @@
         ),
         (
             name: "S25FL128S",
-            device_id: 0x2018,
+            ids: [Rdid(id: 0x012018)],
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -87,7 +87,7 @@
         (
             name: "S25FL256",
             unlock: Some(Bp2Srwd),
-            device_id: 0x0219,
+            ids: [Rdid(id: 0x010219)],
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true),
             voltage: (min: 2700, max: 3600),
@@ -103,7 +103,7 @@
         (
             name: "S25FL128L",
             unlock: Some(Bp2Srwd),
-            device_id: 0x6018,
+            ids: [Rdid(id: 0x016018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, status_reg_2: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -118,7 +118,7 @@
         (
             name: "S25FL256L",
             unlock: Some(Bp3Srwd),
-            device_id: 0x6019,
+            ids: [Rdid(id: 0x016019)],
             total_size: MiB(32),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_enter: true, four_byte_native: true, status_reg_2: true, status_reg_3: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),
@@ -136,7 +136,7 @@
         (
             name: "S25FL116K",
             unlock: Some(Bp3Srwd),
-            device_id: 0x4015,
+            ids: [Rdid(id: 0x014015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -151,7 +151,7 @@
         (
             name: "S25FL132K",
             unlock: Some(Bp2Srwd),
-            device_id: 0x4016,
+            ids: [Rdid(id: 0x014016)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -166,7 +166,7 @@
         (
             name: "S25FL164K",
             unlock: Some(Bp2Srwd),
-            device_id: 0x4017,
+            ids: [Rdid(id: 0x014017)],
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, quad_io: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -181,7 +181,7 @@
         (
             name: "S25FL032A/P",
             unlock: Some(Status),
-            device_id: 0x0215,
+            ids: [Rdid(id: 0x010215)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -194,7 +194,7 @@
         (
             name: "S25FL064A/P",
             unlock: Some(Status),
-            device_id: 0x0216,
+            ids: [Rdid(id: 0x010216)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -207,7 +207,7 @@
         (
             name: "S25FL116K/S25FL216K",
             unlock: Some(Bp3Srwd),
-            device_id: 0x4015,
+            ids: [Rdid(id: 0x014015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -221,7 +221,7 @@
         (
             name: "S25FL127S-256kB",
             unlock: Some(Bp2Srwd),
-            device_id: 0x2018,
+            ids: [Rdid(id: 0x012018)],
             total_size: MiB(16),
             page_size: 512,
             features: (wrsr_wren: true, otp: true),
@@ -235,7 +235,7 @@
         (
             name: "S25FL127S-64kB",
             unlock: Some(Bp2Srwd),
-            device_id: 0x2018,
+            ids: [Rdid(id: 0x012018)],
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -249,7 +249,7 @@
         (
             name: "S25FL128P......0",
             unlock: Some(Bp3Srwd),
-            device_id: 0x2018,
+            ids: [Rdid(id: 0x012018)],
             total_size: MiB(16),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -264,7 +264,7 @@
         (
             name: "S25FL128P......1",
             unlock: Some(Bp2Srwd),
-            device_id: 0x2018,
+            ids: [Rdid(id: 0x012018)],
             total_size: MiB(16),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -276,7 +276,7 @@
         (
             name: "S25FL128S......0",
             unlock: Some(Bp2Srwd),
-            device_id: 0x2018,
+            ids: [Rdid(id: 0x012018)],
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -290,7 +290,7 @@
         (
             name: "S25FL128S......1",
             unlock: Some(Bp2Srwd),
-            device_id: 0x2018,
+            ids: [Rdid(id: 0x012018)],
             total_size: MiB(16),
             page_size: 512,
             features: (wrsr_wren: true, otp: true),
@@ -304,7 +304,7 @@
         (
             name: "S25FL129P......0",
             unlock: Some(Bp2Srwd),
-            device_id: 0x2018,
+            ids: [Rdid(id: 0x012018)],
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -318,7 +318,7 @@
         (
             name: "S25FL129P......1",
             unlock: Some(Bp2Srwd),
-            device_id: 0x2018,
+            ids: [Rdid(id: 0x012018)],
             total_size: MiB(16),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -331,7 +331,7 @@
         (
             name: "S25FL204K",
             unlock: Some(Bp3Srwd),
-            device_id: 0x4013,
+            ids: [Rdid(id: 0x014013)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -346,7 +346,7 @@
         (
             name: "S25FL208K",
             unlock: Some(Bp3Srwd),
-            device_id: 0x4014,
+            ids: [Rdid(id: 0x014014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -361,7 +361,7 @@
         (
             name: "S25FL256S......0",
             unlock: Some(Bp2Srwd),
-            device_id: 0x0219,
+            ids: [Rdid(id: 0x010219)],
             total_size: MiB(32),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_ear7: true, ext_addr_reg_1716: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),
@@ -375,7 +375,7 @@
         (
             name: "S25FL512S",
             unlock: Some(Bp2Srwd),
-            device_id: 0x0220,
+            ids: [Rdid(id: 0x010220)],
             total_size: MiB(64),
             features: (wrsr_wren: true, otp: true, four_byte_addr: true, four_byte_native: true, four_byte_enter_ear7: true, ext_addr_reg_1716: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true),
             voltage: (min: 2700, max: 3600),
