@@ -376,6 +376,23 @@
             tested: (probe: Ok, read: Ok, erase: Ok, write: Ok, wp: Ok),
         ),
         (
+            // Macronix PM1875 Rev.1.0 (Oct 19, 2012), pp.15, 18, 29.
+            // Native single-I/O reads only. Advanced protection is not audited.
+            name: "MX25L25655F",
+            unlock: Some(Unsupported),
+            ids: [Rdid(id: 0xC22619)],
+            total_size: MiB(32),
+            features: (four_byte_addr: true, four_byte_native: true, four_byte_read: true),
+            voltage: (min: 2700, max: 3600),
+            erase_blocks: [
+                (opcode: 0x20, opcode_4b: Some(0x21), regions: [(size: KiB(4), count: 8192)]),
+                (opcode: 0x52, opcode_4b: Some(0x5C), regions: [(size: KiB(32), count: 1024)]),
+                (opcode: 0xD8, opcode_4b: Some(0xDC), regions: [(size: KiB(64), count: 512)]),
+                (opcode: 0x60, regions: [(size: MiB(32), count: 1)]),
+                (opcode: 0xC7, regions: [(size: MiB(32), count: 1)]),
+            ],
+        ),
+        (
             name: "MX66L51235F",
             unlock: Some(Bp3Srwd),
             ids: [Rdid(id: 0xC2201A)],
