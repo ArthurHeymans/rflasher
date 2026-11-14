@@ -81,11 +81,13 @@
             ],
         ),
         (
+            // FMSH FM25Q04 Ver.1.4 (Sep 2017), pp.11-12, 24-26:
+            // CMP/WPS/SRP1 are SR2[4]/[5]/[0]; 01h accepts both SR bytes.
             name: "FM25Q04",
-            unlock: Some(Bp2Srwd),
+            unlock: Some(FudanQ04),
             ids: [Rdid(id: 0xA14013)],
             total_size: KiB(512),
-            features: (wp_cmp: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
+            features: (wp_cmp: true, wrsr_wren: true, wrsr_ewsr: true, wrsr_ext: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 128)]),
@@ -171,11 +173,13 @@
             ],
         ),
         (
+            // FMSH FM25Q128 Ver.1.1 (May 2019), pp.12-16, 25-26:
+            // CMP is SR1[6], WPS is SR3[2]; 01h writes SR1 alone.
             name: "FM25Q128",
-            unlock: Some(Bp2Srwd),
+            unlock: Some(FudanQ128),
             ids: [Rdid(id: 0xA14018)],
             total_size: MiB(16),
-            features: (wp_cmp: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
+            features: (wp_cmp: true, wp_wps: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),

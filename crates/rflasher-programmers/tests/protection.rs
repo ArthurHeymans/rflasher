@@ -79,7 +79,12 @@ impl State {
         } else {
             // Winbond CMP complements the protected range: with the block
             // protection bits clear, that is the whole array.
-            self.sr1 & self.unlock.status_masks().map_or(0x1c, |m| m.0) != 0 || self.sr2 & 0x40 != 0
+            let complement = match self.unlock {
+                Unlock::FudanQ04 => self.sr2 & 0x30 != 0,
+                Unlock::FudanQ128 => self.sr1 & 0x40 != 0,
+                _ => self.sr2 & 0x40 != 0,
+            };
+            self.sr1 & self.unlock.status_masks().map_or(0x1c, |m| m.0) != 0 || complement
         }
     }
     fn program(&mut self, addr: usize, bytes: &[u8]) -> Result<()> {
@@ -350,6 +355,113 @@ fn fixture(unlock: Unlock, sr1: u8, features: Features, size: usize) -> (Master,
         tested: ChipTestStatus::default(),
     });
     (master, ctx)
+}
+
+fn fudan_profile(name: &str, sr1: u8) -> (Master, FlashContext) {
+    let database = rflasher_chips::ChipDatabase::new();
+    let chip = database.iter().find(|chip| chip.name() == name).unwrap();
+    let (master, mut ctx) = fixture(chip.unlock, sr1, chip.features, chip.total_size as usize);
+    ctx.chip = chip.clone();
+    (master, ctx)
+}
+
+#[test]
+fn fudan_layouts_preserve_registers_on_success_and_failed_program() {
+    block_on(async {
+        for name in ["FM25Q04", "FM25Q128"] {
+            for sr1 in [0, 0xbc] {
+                for fail in [false, true] {
+                    for fast in [false, true] {
+                        let (master, ctx) = fudan_profile(name, sr1);
+                        let state = master.0.clone();
+                        let sr2 = if name == "FM25Q04" { 0x4e } else { 0xc2 };
+                        {
+                            let mut s = state.lock().unwrap();
+                            s.sr2 = sr2;
+                            s.data.fill(0xff);
+                            s.fail_mutation = fail;
+                        }
+                        let mut device = SpiFlashDevice::new(
+                            if fast {
+                                with_fast_paths(master)
+                            } else {
+                                master
+                            },
+                            ctx,
+                        );
+                        if !fail {
+                            device.erase(0, 4096).await.unwrap();
+                        }
+                        assert_eq!(
+                            device.write(0, &[0x5a]).await,
+                            if fail {
+                                Err(Error::SpiTransferFailed)
+                            } else {
+                                Ok(())
+                            }
+                        );
+                        let s = state.lock().unwrap();
+                        assert_eq!((s.sr1, s.sr2, s.sr3), (sr1, sr2, 0), "{name}");
+                        let writes: Vec<_> =
+                            s.commands.iter().filter(|(op, _)| *op == 0x01).collect();
+                        assert_eq!(writes.is_empty(), sr1 == 0);
+                        for (_, bytes) in writes {
+                            assert_eq!(bytes.len(), if name == "FM25Q04" { 2 } else { 1 });
+                            if name == "FM25Q04" {
+                                assert_eq!(bytes[1], sr2);
+                            }
+                        }
+                        for pair in s.commands.windows(2).filter(|pair| pair[1].0 == 0x01) {
+                            assert_eq!(pair[0].0, 0x50, "temporary writes must be volatile");
+                        }
+                        if name == "FM25Q128" {
+                            assert!(!s.commands.iter().any(|(op, _)| *op == 0x35));
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn fudan_complement_and_individual_locks_fail_before_any_mutation() {
+    block_on(async {
+        for (name, sr1, sr2, sr3) in [
+            ("FM25Q04", 0, 0x10, 0),
+            ("FM25Q04", 0x1c, 0x10, 0),
+            ("FM25Q04", 0, 0x20, 0),
+            ("FM25Q04", 0, 0x01, 0),
+            ("FM25Q128", 0x40, 0, 0),
+            ("FM25Q128", 0x5c, 0, 0),
+            ("FM25Q128", 0, 0, 4),
+        ] {
+            let (master, ctx) = fudan_profile(name, sr1);
+            let state = master.0.clone();
+            {
+                let mut s = state.lock().unwrap();
+                s.sr2 = sr2;
+                s.sr3 = sr3;
+            }
+            let mut device = SpiFlashDevice::new(master, ctx);
+            assert_eq!(device.erase(0, 4096).await, Err(Error::WriteProtected));
+            let s = state.lock().unwrap();
+            assert_eq!((s.sr1, s.sr2, s.sr3), (sr1, sr2, sr3));
+            assert!(
+                s.commands
+                    .iter()
+                    .all(|(op, _)| matches!(op, 0x05 | 0x35 | 0x15))
+            );
+        }
+        for (name, opcode) in [("FM25Q04", 0x35), ("FM25Q128", 0x15)] {
+            let (master, ctx) = fudan_profile(name, 0);
+            let state = master.0.clone();
+            state.lock().unwrap().deny_opcode = Some(opcode);
+            let mut device = SpiFlashDevice::new(master, ctx);
+            assert_eq!(device.erase(0, 4096).await, Err(Error::OpcodeNotSupported));
+            assert!(state.lock().unwrap().commands.is_empty());
+        }
+    });
 }
 
 #[test]
