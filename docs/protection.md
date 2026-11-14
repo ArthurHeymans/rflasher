@@ -132,6 +132,28 @@ SST26VF080A instead uses SR1 BP/BPL and must not receive ULBPR.
 AT26DF041 has a read-only status register and needs no status unlock. Intel S33
 uses BP2/SRWD with separate SR1 failure flags, not Winbond TB/SEC fields.
 
+**Read-only status with external protection:** `HardwarePin` covers the audited
+M45PE10/16/40/80 and LE25FW203A/403A descriptors. Their status register contains
+only read-only busy/write-enable indications; a low WP pin inhibits changes to
+the bottom 64 KiB. No status unlock or protect-pin manipulation is attempted.
+Instead, every primitive program and erase is read back, including bulk paths
+and direct callers, independently of optional high-level verification. An ignored
+or partial mutation is an error, not a successful no-op; unprotected bytes may
+already have changed. This does not qualify nominal XMC aliases sharing an ID.
+
+Sources (manufacturer-authored distributor/archive mirrors):
+[M45PE10 Rev.6](https://datasheet.lcsc.com/datasheet/pdf/c378f052cfd62fe5e609c1a320fb3751.pdf?productCode=C21955375),
+pp.8 and 20;
+[M45PE16 Rev.C](https://www.alliancememory.com/wp-content/uploads/Micron_Datasheet_M45PE16.pdf),
+pp.7 and 21;
+[M45PE40 Rev.9](https://www.ic-components.si/files/9d/M45PE40-VMP6G.pdf),
+pp.8 and 21;
+[M45PE80 Rev.4.0](https://media.digikey.com/pdf/Data%20Sheets/ST%20Microelectronics%20PDFS/M45PE80.pdf),
+pp.6 and 15;
+[Sanyo ENA1190B](https://www.radioradar.net/en/files.html?fid=652792) and
+[EN*A1229A](https://www.radioradar.net/en/files.html?fid=652793), pp.3, 6 and 12.
+Other unaudited siblings retain their existing mutation refusal.
+
 ## Separate WP configuration support
 
 Unlock masks are not range decoders. `wp` operations require `WP_WINBOND`, an

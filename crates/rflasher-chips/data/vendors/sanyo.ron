@@ -89,8 +89,9 @@
             tested: (probe: Ok, read: Ok, erase: Ok, write: Ok),
         ),
         (
+            // Sanyo ENA1190B, pp.3, 6, 12: external WP; read-only status.
             name: "LE25FW203A",
-            unlock: Some(Unsupported),
+            unlock: Some(HardwarePin),
             ids: [Rdid(id: 0x621600)],
             total_size: KiB(256),
             voltage: (min: 2700, max: 3600),
@@ -101,8 +102,9 @@
             ],
         ),
         (
+            // Sanyo EN*A1229A, pp.3, 6, 12: external WP; read-only status.
             name: "LE25FW403A",
-            unlock: Some(Unsupported),
+            unlock: Some(HardwarePin),
             ids: [Rdid(id: 0x621100)],
             total_size: KiB(512),
             voltage: (min: 2700, max: 3600),
