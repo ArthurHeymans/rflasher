@@ -34,6 +34,10 @@ pub enum Unlock {
     At25fs010,
     /// Atmel AT25FS040 block protection.
     At25fs040,
+    /// Fudan FM25Q04: CMP/WPS/SRP1 in SR2; combined SR1/SR2 writes.
+    FudanQ04,
+    /// Fudan FM25Q128: CMP in SR1; independent single-byte SR1 writes.
+    FudanQ128,
     /// Micron N25Q BP bits 2, 3, 4, 6 (bit 5 is TB, not BP).
     N25q,
     /// Intel S33 / Spansion protection with erase/program failure flags.
@@ -54,7 +58,9 @@ impl Unlock {
         Some(match self {
             Self::Status => (0x3c, 0, 0, 0xff),
             Self::Bp1Srwd | Self::At25f => (0x0c, 0x80, 0, 0xff),
-            Self::Bp2Srwd | Self::Bp2EpSrwd => (0x1c, 0x80, 0, 0xff),
+            Self::Bp2Srwd | Self::Bp2EpSrwd | Self::FudanQ04 | Self::FudanQ128 => {
+                (0x1c, 0x80, 0, 0xff)
+            }
             Self::Bp3Srwd => (0x3c, 0x80, 0, 0xff),
             Self::Bp4Srwd | Self::At25fs040 => (0x7c, 0x80, 0, 0xff),
             Self::At2x => (0x0c, 0x80, 0x10, 0),
