@@ -154,6 +154,15 @@ pp.6 and 15;
 [EN*A1229A](https://www.radioradar.net/en/files.html?fid=652793), pp.3, 6 and 12.
 Other unaudited siblings retain their existing mutation refusal.
 
+**MX25L25655F (`c2:2619`):** the 32 MiB read descriptor uses native single-I/O
+`13h` reads, without entering a global address mode or assuming a procedure from
+SFDP density. Mutation remains `Unsupported` until advanced protection is audited.
+The manufacturer-authored
+[PM1875 Rev.1.0](https://media.digikey.com/pdf/Data%20Sheets/Macronix/MX25L25655F_Rev1.0.pdf)
+(October 19, 2012; distributor mirror) documents addressing on pp.15 and 18,
+the ID on p.29, and the separate security/protection commands on pp.19–20.
+This does not qualify related Macronix variants or enable QPI/OTP operations.
+
 ## Separate WP configuration support
 
 Unlock masks are not range decoders. `wp` operations require `WP_WINBOND`, an

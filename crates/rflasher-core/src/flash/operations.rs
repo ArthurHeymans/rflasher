@@ -2262,6 +2262,7 @@ mod tests {
     #[derive(Default)]
     struct ReadMaster {
         commands: Vec<(u8, crate::spi::IoMode, crate::spi::AddressWidth, u8)>,
+        addresses: Vec<Option<u32>>,
         fail_read: bool,
         fail_exit: bool,
         reject_native: bool,
@@ -2285,6 +2286,7 @@ mod tests {
         async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
             self.commands
                 .push((cmd.opcode, cmd.io_mode, cmd.address_width, cmd.dummy_cycles));
+            self.addresses.push(cmd.address);
             if self.fail_read && matches!(cmd.opcode, opcodes::READ | opcodes::READ_4B) {
                 return Err(Error::SpiTransferFailed);
             }
@@ -2295,6 +2297,59 @@ mod tests {
             Ok(())
         }
         async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    #[test]
+    fn mx25l25655f_reads_use_native_addresses_without_mode_changes() {
+        use crate::chip::Unlock;
+        use crate::spi::{AddressWidth, IoMode};
+        use futures_lite::future::block_on;
+
+        let database = rflasher_chips::ChipDatabase::new();
+        let chip = database
+            .iter()
+            .find(|chip| chip.name() == "MX25L25655F")
+            .unwrap();
+        let ctx = FlashContext::new(chip.clone());
+        assert_eq!(ctx.chip.total_size, 32 * 1024 * 1024);
+        assert_eq!(ctx.chip.unlock, Unlock::Unsupported);
+        for addr in [0, 0x00ff_fff8, 0x0100_0008, 0x01ff_fff0] {
+            let mut master = ReadMaster::default();
+            let mut buf = [0; 16];
+            block_on(spi_read(&mut master, &ctx, addr, &mut buf)).unwrap();
+            assert_eq!(buf, [0x5a; 16]);
+            assert_eq!(master.addresses, vec![Some(addr)]);
+            assert_eq!(
+                master.commands,
+                vec![(opcodes::READ_4B, IoMode::Single, AddressWidth::FourByte, 0)]
+            );
+        }
+        let mut master = ReadMaster {
+            reject_native: true,
+            ..Default::default()
+        };
+        assert!(matches!(
+            block_on(spi_read(&mut master, &ctx, 0x0100_0000, &mut [0; 1])),
+            Err(Error::ChipNotSupported)
+        ));
+        assert!(master.commands.is_empty());
+
+        // A new read descriptor must not silently enable unaudited mutations.
+        let mut master = ReadMaster::default();
+        assert!(matches!(
+            block_on(write(&mut master, &ctx, 0, &[0])),
+            Err(Error::ChipNotSupported)
+        ));
+        let op = OptimalEraseOp {
+            start: 0,
+            size: 4096,
+            erase_block: ctx.chip.erase_blocks()[0].clone(),
+        };
+        assert!(matches!(
+            block_on(erase_spi_operation(&mut master, &ctx, &op)),
+            Err(Error::ChipNotSupported)
+        ));
+        assert!(master.commands.is_empty());
     }
 
     #[test]
