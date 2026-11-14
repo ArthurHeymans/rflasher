@@ -2,7 +2,7 @@
 
 use super::{
     FlashDevice,
-    operations::{OptimalEraseOp, plan_optimal_erase_region},
+    operations::{OptimalEraseOp, need_erase, plan_optimal_erase_region},
 };
 use crate::chip::EraseBlock;
 use crate::layout::{Layout, Region};
@@ -43,6 +43,7 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
     policy: &mut MutationPolicy<'_>,
+    write: Option<(u32, &[u8])>,
 ) -> Result<()> {
     layout
         .validate(device.size())
@@ -110,12 +111,35 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
     }
 
     for region in regions {
-        let plan = plan_optimal_erase_region(
+        let plan = match plan_optimal_erase_region(
             &usable_erasers(device),
             device.size(),
             region.start,
             region.end,
-        )?;
+        ) {
+            Ok(plan) => plan,
+            Err(Error::InvalidAlignment) => {
+                // Unsupported erase geometry must not prevent a write that
+                // provably needs no erasure. Keep all layout/descriptor checks
+                // above, and never use this exception for explicit erases.
+                let Some((base, data)) = write else {
+                    return Err(Error::InvalidAlignment);
+                };
+                let start = region
+                    .start
+                    .checked_sub(base)
+                    .ok_or(Error::BufferTooSmall)? as usize;
+                let len = (region.end - region.start + 1) as usize;
+                let want = data.get(start..start + len).ok_or(Error::BufferTooSmall)?;
+                let mut have = vec![0; len];
+                device.read(region.start, &mut have).await?;
+                if need_erase(&have, want, device.write_granularity()) {
+                    return Err(Error::InvalidAlignment);
+                }
+                vec![]
+            }
+            Err(error) => return Err(error),
+        };
         for op in plan {
             device.validate_erase_operation(&op)?;
             validate_neighbors(device, &op, region.start, region.end + 1)?;

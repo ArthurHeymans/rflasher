@@ -563,6 +563,20 @@ pub fn plan_optimal_erase(
     let mut layouts = create_erase_layout(erase_blocks, flash_size);
 
     if layouts.is_empty() {
+        // Programming an already-erased (or unchanged) range does not need
+        // an expressible erase plan. Restrict full-chip buffers to the target
+        // range before deciding; unrelated bytes must not force an erase.
+        if let (Some(have), Some(want)) = (have, want) {
+            let start = if have.len() == flash_size as usize {
+                region_start as usize
+            } else {
+                0
+            };
+            let end = start + (region_end - region_start + 1) as usize;
+            if !need_erase(&have[start..end], &want[start..end], granularity) {
+                return Ok(Vec::new());
+            }
+        }
         // There are no uniform sector erasers. A chip-erase-only device can
         // still erase the entire chip, but never report a partial erase as done.
         if region_start == 0
@@ -571,19 +585,11 @@ pub fn plan_optimal_erase(
                 .iter()
                 .find(|block| block.is_chip_erase() && block.total_size() == flash_size)
         {
-            let needs_erase = match (have, want) {
-                (Some(have), Some(want)) => need_erase(have, want, granularity),
-                _ => true,
-            };
-            return Ok(if needs_erase {
-                vec![OptimalEraseOp {
-                    start: 0,
-                    size: flash_size,
-                    erase_block: block.clone(),
-                }]
-            } else {
-                Vec::new()
-            });
+            return Ok(vec![OptimalEraseOp {
+                start: 0,
+                size: flash_size,
+                erase_block: block.clone(),
+            }]);
         }
         return Err(Error::InvalidAlignment);
     }
@@ -3292,6 +3298,49 @@ mod tests {
             ops.len()
         );
         assert_eq!(ops[0].erase_block.opcode, 0xC7);
+    }
+
+    #[test]
+    fn unsupported_erase_geometry_can_still_plan_non_erasing_writes() {
+        for granularity in [
+            WriteGranularity::Bit,
+            WriteGranularity::Byte,
+            WriteGranularity::Page,
+        ] {
+            // Differences outside the selected range must not request erasure.
+            let mut have = vec![0; 64];
+            let mut want = vec![0xff; 64];
+            have[16..24].fill(0xff);
+            want[16..24].fill(0x5a);
+            for (source, target) in [
+                (have.as_slice(), want.as_slice()),
+                (&have[16..24], &want[16..24]),
+            ] {
+                assert!(
+                    plan_optimal_erase(&[], 64, Some(source), Some(target), 16, 23, granularity)
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+            // Still refuse a real erase with no supported geometry.
+            assert!(matches!(
+                plan_optimal_erase(
+                    &[],
+                    64,
+                    Some(&[0; 8]),
+                    Some(&[0xff; 8]),
+                    16,
+                    23,
+                    granularity
+                ),
+                Err(Error::InvalidAlignment)
+            ));
+        }
+        // Explicit erase requests are never converted to successful no-ops.
+        assert!(matches!(
+            plan_optimal_erase(&[], 64, None, None, 16, 23, WriteGranularity::Byte),
+            Err(Error::InvalidAlignment)
+        ));
     }
 
     #[test]
