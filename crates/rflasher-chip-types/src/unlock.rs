@@ -12,6 +12,9 @@ pub enum Unlock {
     Unknown,
     /// The chip definition does not require an unlock command.
     None,
+    /// Read-only status; an external pin can silently inhibit array mutations.
+    /// Never issue an unlock command, and always read mutations back.
+    HardwarePin,
     /// Clear SR1 bits 2 through 5, preserving other bits.
     Status,
     /// SR1 BP0/BP1 and SRWD.

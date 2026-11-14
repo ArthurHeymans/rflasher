@@ -103,12 +103,12 @@ fn sr2_unreadable<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashContext) -> bool
 
 /// Whether protection that silently ignores program and erase cannot be
 /// ruled out, so that every array mutation must be read back whether or not
-/// the caller verifies: possible WPS block locks ([`wps_unknown`]), or CMP in
-/// a status register 2 the programmer cannot read. A protected chip drops
-/// the command and keeps its contents, so the read-back turns an unnoticed
-/// refusal into an error and nothing has been changed.
+/// the caller verifies: possible WPS block locks ([`wps_unknown`]), CMP in an
+/// unreadable SR2, or an external protect pin with no readable indication.
+/// Read-back reports ignored or partial mutations instead of silent success;
+/// it does not make a partially accepted mutation atomic.
 pub(crate) fn needs_read_back<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashContext) -> bool {
-    wps_unknown(ctx) || sr2_unreadable(master, ctx)
+    ctx.chip.unlock == Unlock::HardwarePin || wps_unknown(ctx) || sr2_unreadable(master, ctx)
 }
 
 /// Refuse, without sending a command, a chip whose protection this programmer
@@ -128,7 +128,7 @@ pub(crate) fn check_supported<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashCont
         return Err(Error::ChipNotSupported);
     }
     let bpr_len = match unlock {
-        Unlock::Unknown | Unlock::None => return Ok(()),
+        Unlock::Unknown | Unlock::None | Unlock::HardwarePin => return Ok(()),
         Unlock::Unsupported => return Err(Error::ChipNotSupported),
         Unlock::Sst26_6 => 6,
         Unlock::Sst26_10 => 10,
@@ -179,7 +179,9 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
     }
     let unlock = ctx.chip.unlock;
     let bpr_len = match unlock {
-        Unlock::Unknown | Unlock::None => return Ok(SavedProtection::Unchanged),
+        Unlock::Unknown | Unlock::None | Unlock::HardwarePin => {
+            return Ok(SavedProtection::Unchanged);
+        }
         Unlock::Unsupported => return Err(Error::ChipNotSupported),
         Unlock::Sst26_6 => 6,
         Unlock::Sst26_10 => 10,
