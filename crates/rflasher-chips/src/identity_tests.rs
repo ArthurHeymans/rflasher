@@ -61,3 +61,23 @@ fn sst040_rdid_no_longer_selects_non_b_byte_program_profile() {
         .collect();
     assert_eq!(names, ["SST25VF040B"]);
 }
+
+#[test]
+fn mx25l25655f_has_its_own_read_only_descriptor_in_both_catalogs() {
+    let mut runtime = ChipDatabase::empty();
+    runtime
+        .load_ron(include_str!("../data/vendors/macronix.ron"))
+        .unwrap();
+    for database in [ChipDatabase::new(), runtime] {
+        let id = ChipIdentity::Rdid { id: 0xc22619 };
+        let chip = database.find_nth_by_identity(&id, 0).unwrap();
+        assert_eq!(chip.name(), "MX25L25655F");
+        assert_eq!(chip.total_size, 32 * 1024 * 1024);
+        assert_eq!(chip.unlock, rflasher_chip_types::Unlock::Unsupported);
+        assert!(chip.features.supports_4ba_read());
+        assert!(!chip.features.supports_4ba_mode_switch());
+        assert!(!chip.features.supports_4ba_program());
+        assert!(!chip.features.documents_rdsr2());
+        assert!(database.find_nth_by_identity(&id, 1).is_none());
+    }
+}
