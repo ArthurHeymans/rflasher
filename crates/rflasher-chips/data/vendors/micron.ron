@@ -235,11 +235,11 @@
         ),
         // M45PE series - page erase only (no 4KB sector erase), uses 0xDB page erase
         (
+            // ST M45PE10 Rev.6: W# protects the first 256 pages; SR is read-only.
             name: "M45PE10",
-            unlock: Some(Unsupported),
+            unlock: Some(HardwarePin),
             ids: [Rdid(id: 0x204011)],
             total_size: KiB(128),
-            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xDB, regions: [(size: B(256), count: 512)]),
@@ -247,11 +247,11 @@
             ],
         ),
         (
+            // Micron M45PE16 Rev.C (Mar 2014): read-only SR; external W#.
             name: "M45PE16",
-            unlock: Some(Unsupported),
+            unlock: Some(HardwarePin),
             ids: [Rdid(id: 0x204015)],
             total_size: MiB(2),
-            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xDB, regions: [(size: B(256), count: 8192)]),
@@ -271,11 +271,11 @@
             ],
         ),
         (
+            // Numonyx M45PE40 Rev.9: W# protects the first 256 pages; read-only SR.
             name: "M45PE40",
-            unlock: Some(Unsupported),
+            unlock: Some(HardwarePin),
             ids: [Rdid(id: 0x204013)],
             total_size: KiB(512),
-            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xDB, regions: [(size: B(256), count: 2048)]),
@@ -283,11 +283,11 @@
             ],
         ),
         (
+            // ST M45PE80 Rev.4.0 (May 2004): external W#; read-only SR.
             name: "M45PE80",
-            unlock: Some(Unsupported),
+            unlock: Some(HardwarePin),
             ids: [Rdid(id: 0x204014)],
             total_size: MiB(1),
-            features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
             erase_blocks: [
                 (opcode: 0xDB, regions: [(size: B(256), count: 4096)]),
