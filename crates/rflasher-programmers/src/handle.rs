@@ -20,6 +20,8 @@ pub struct ChipInfo {
     pub jedec_manufacturer: u8,
     /// JEDEC device ID
     pub jedec_device: u16,
+    /// Actual response identity that matched, not a guessed catalog alternative.
+    pub identity: Option<rflasher_core::chip::ChipIdentity>,
     /// Total size in bytes
     pub total_size: u32,
     /// Page size in bytes
@@ -41,6 +43,7 @@ impl From<&FlashContext> for ChipInfo {
             name: ctx.chip.name().to_owned(),
             jedec_manufacturer: ctx.chip.jedec_manufacturer,
             jedec_device: ctx.chip.jedec_device,
+            identity: None,
             total_size: ctx.chip.total_size,
             page_size: ctx.chip.page_size,
             chip: ctx.chip.clone(),
@@ -58,6 +61,7 @@ impl From<ProbeResult> for ChipInfo {
             name: result.chip.name().to_owned(),
             jedec_manufacturer: result.jedec_manufacturer,
             jedec_device: result.jedec_device,
+            identity: result.identity,
             total_size: result.chip.total_size,
             page_size: result.chip.page_size,
             chip: result.chip,
