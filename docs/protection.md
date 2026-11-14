@@ -96,10 +96,23 @@ writable region. `WP_CMP_SR2` explicitly identifies CMP at bit 6 of the register
 read with `35`; CMP or bit 0 (SRL on these layouts) being set is refused before
 any status or array mutation. This check does not enable combined status writes
 or a WP range decoder. Catalog assignments use flashprog's per-chip register
-maps, not vendor defaults. Known CMP parts without this audited layout (including
-Fudan variants with CMP in SR1 or SR2 bit 4, and GigaDevice variants with CMP in
-SR3) carry only `WP_CMP` and are refused with `ChipNotSupported`. Aliases with
-different CMP checks cannot synthesize a common mutation profile.
+maps, not vendor defaults. Known CMP parts without an audited procedure (including
+other Fudan variants and GigaDevice variants with CMP in SR3) carry only `WP_CMP`
+and are refused with `ChipNotSupported`. Aliases with different CMP checks cannot
+synthesize a common mutation profile.
+
+**FM25Q04 / FM25Q128:** these have distinct, explicit procedures; neither uses
+Winbond's CMP layout or gains a WP range decoder. The
+[FM25Q04 Ver.1.4](https://eng.fmsh.com/nvm/FM25Q04_ds_eng.pdf) (September 2017),
+pp.11–12 and 24–26, places CMP/WPS/SRP1 at SR2 bits 4/5/0, read with `35h`.
+Any of those bits being set is refused. Temporary `50h` + two-byte `01h` writes
+preserve SR2, including QE and security-lock bits. The
+[FM25Q128 Ver.1.1](https://eng.fmsh.com/nvm/FM25Q128_ds_eng.pdf) (May 2019),
+pp.12–15 and 25–26, instead puts CMP at SR1 bit 6 and WPS at SR3 bit 2 (`15h`).
+Either being set is refused. Its temporary `50h` + single-byte `01h` procedure
+leaves the independent latency/QE register untouched. Unavailable protection
+reads fail closed, and saved BP/SRP state is restored after success or failure.
+These assignments do not establish the layout of other Fudan parts or suffixes.
 
 **AT25DF321 (`1f:4700`, 4 MiB):** unprotection writes SR1 `00`, including zeroes
 in bits 4 and 5. Clearing only bits 2 and 3 is insufficient. SPRL is cleared in a
