@@ -8,7 +8,7 @@
         (
             name: "ZD25D20",
             unlock: Some(Status),
-            device_id: 0x2012,
+            ids: [Rdid(id: 0xBA2012)],
             total_size: KiB(256),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -23,7 +23,7 @@
         (
             name: "ZD25D40",
             unlock: Some(Status),
-            device_id: 0x2013,
+            ids: [Rdid(id: 0xBA2013)],
             total_size: KiB(512),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -38,7 +38,7 @@
         (
             name: "ZD25LQ64",
             unlock: Some(Bp2Srwd),
-            device_id: 0x4317,
+            ids: [Rdid(id: 0xBA4317)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),
@@ -53,7 +53,7 @@
         (
             name: "ZD25LQ128",
             unlock: Some(Bp2Srwd),
-            device_id: 0x4218,
+            ids: [Rdid(id: 0xBA4218)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 1650, max: 1950),

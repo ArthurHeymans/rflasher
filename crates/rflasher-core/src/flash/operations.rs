@@ -2466,6 +2466,7 @@ mod tests {
             name: "test".into(),
             jedec_manufacturer: 0,
             jedec_device: 0,
+            ids: Default::default(),
             total_size: 48,
             page_size: 16,
             features: Features::empty(),

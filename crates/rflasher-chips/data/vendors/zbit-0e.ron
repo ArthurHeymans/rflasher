@@ -7,7 +7,7 @@
     chips: [
         (
             name: "ZB25VQ16",
-            device_id: 0x4015,
+            ids: [Rdid(id: 0x0E4015)],
             total_size: MiB(2),
             features: (wrsr_wren: true, wrsr_ewsr: true),
             voltage: (min: 2700, max: 3600),

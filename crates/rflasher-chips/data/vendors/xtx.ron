@@ -9,7 +9,7 @@
         (
             name: "XT25F02E",
             unlock: Some(Status),
-            device_id: 0x4012,
+            ids: [Rdid(id: 0x0B4012)],
             total_size: KiB(256),
             features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -24,7 +24,7 @@
         (
             name: "XT25F04D",
             unlock: Some(Bp2Srwd),
-            device_id: 0x4013,
+            ids: [Rdid(id: 0x0B4013)],
             total_size: KiB(512),
             features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -39,7 +39,7 @@
         (
             name: "XT25F08B",
             unlock: Some(Bp3Srwd),
-            device_id: 0x4014,
+            ids: [Rdid(id: 0x0B4014)],
             total_size: MiB(1),
             features: (wrsr_wren: true, wrsr_ewsr: true, quad_io: true, status_reg_2: true, qe_sr2: true),
             voltage: (min: 2700, max: 3600),
@@ -54,7 +54,7 @@
         (
             name: "XT25F16B",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4015,
+            ids: [Rdid(id: 0x0B4015)],
             total_size: MiB(2),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
@@ -69,7 +69,7 @@
         (
             name: "XT25F32B",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4016,
+            ids: [Rdid(id: 0x0B4016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
@@ -84,7 +84,7 @@
         (
             name: "XT25F64B",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4017,
+            ids: [Rdid(id: 0x0B4017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
@@ -99,7 +99,7 @@
         (
             name: "XT25F128B",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0x0B4018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, quad_io: true, qpi: true, otp: true, status_reg_2: true, qe_sr2: true, wp_tb: true),
             voltage: (min: 2700, max: 3600),
@@ -114,7 +114,7 @@
         (
             name: "XT25F16F",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4015,
+            ids: [Rdid(id: 0x0B4015)],
             total_size: MiB(2),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -129,7 +129,7 @@
         (
             name: "XT25F32F",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4016,
+            ids: [Rdid(id: 0x0B4016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -144,7 +144,7 @@
         (
             name: "XT25F64F",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4017,
+            ids: [Rdid(id: 0x0B4017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -159,7 +159,7 @@
         (
             name: "XT25F128F/XT25BF128F",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4018,
+            ids: [Rdid(id: 0x0B4018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -174,7 +174,7 @@
 
         (
             name: "XT25Q08",
-            device_id: 0x6014,
+            ids: [Rdid(id: 0x0B6014)],
             total_size: MiB(1),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -187,7 +187,7 @@
         ),
         (
             name: "XT25Q16",
-            device_id: 0x6015,
+            ids: [Rdid(id: 0x0B6015)],
             total_size: MiB(2),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -200,7 +200,7 @@
         ),
         (
             name: "XT25Q32",
-            device_id: 0x6016,
+            ids: [Rdid(id: 0x0B6016)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -213,7 +213,7 @@
         ),
         (
             name: "XT25Q64",
-            device_id: 0x6017,
+            ids: [Rdid(id: 0x0B6017)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -226,7 +226,7 @@
         ),
         (
             name: "XT25Q128",
-            device_id: 0x6018,
+            ids: [Rdid(id: 0x0B6018)],
             total_size: MiB(16),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),

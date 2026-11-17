@@ -44,6 +44,7 @@ fn chip(manufacturer: u8, device: u16) -> FlashChip {
         name: "test".into(),
         jedec_manufacturer: manufacturer,
         jedec_device: device,
+        ids: Default::default(),
         total_size: 8 * 1024 * 1024,
         page_size: 256,
         features: Features::empty(),

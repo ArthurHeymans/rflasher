@@ -8,7 +8,7 @@
         (
             name: "P25Q05H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6010,
+            ids: [Rdid(id: 0x856010)],
             total_size: KiB(64),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -24,7 +24,7 @@
         (
             name: "P25Q06H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4010,
+            ids: [Rdid(id: 0x854010)],
             total_size: KiB(64),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -40,7 +40,7 @@
         (
             name: "P25Q10H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6011,
+            ids: [Rdid(id: 0x856011)],
             total_size: KiB(128),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -56,7 +56,7 @@
         (
             name: "P25Q11H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4011,
+            ids: [Rdid(id: 0x854011)],
             total_size: KiB(128),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -72,7 +72,7 @@
         (
             name: "P25Q20H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6012,
+            ids: [Rdid(id: 0x856012)],
             total_size: KiB(256),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -88,7 +88,7 @@
         (
             name: "P25Q21H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x4012,
+            ids: [Rdid(id: 0x854012)],
             total_size: KiB(256),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -104,7 +104,7 @@
         (
             name: "P25Q40H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6013,
+            ids: [Rdid(id: 0x856013)],
             total_size: KiB(512),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -120,7 +120,7 @@
         (
             name: "P25Q40SH",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6013,
+            ids: [Rdid(id: 0x856013)],
             total_size: KiB(512),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -136,7 +136,7 @@
         (
             name: "P25Q80H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6014,
+            ids: [Rdid(id: 0x856014)],
             total_size: MiB(1),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -152,7 +152,7 @@
         (
             name: "P25Q80SH",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6014,
+            ids: [Rdid(id: 0x856014)],
             total_size: MiB(1),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -168,7 +168,7 @@
         (
             name: "P25Q16H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6015,
+            ids: [Rdid(id: 0x856015)],
             total_size: MiB(2),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -184,7 +184,7 @@
         (
             name: "P25Q16SH",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6015,
+            ids: [Rdid(id: 0x856015)],
             total_size: MiB(2),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -200,7 +200,7 @@
         (
             name: "P25Q32H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6016,
+            ids: [Rdid(id: 0x856016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
@@ -216,7 +216,7 @@
         (
             name: "P25Q32SH",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6016,
+            ids: [Rdid(id: 0x856016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
@@ -232,7 +232,7 @@
         (
             name: "P25Q64H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6017,
+            ids: [Rdid(id: 0x856017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
@@ -248,7 +248,7 @@
         (
             name: "P25Q64SH",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6017,
+            ids: [Rdid(id: 0x856017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
@@ -264,7 +264,7 @@
         (
             name: "P25Q128H",
             unlock: Some(Bp4Srwd),
-            device_id: 0x6018,
+            ids: [Rdid(id: 0x856018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true),
             voltage: (min: 2300, max: 3600),
@@ -280,7 +280,7 @@
         (
             name: "PY25Q40HB",
             unlock: Some(Bp4Srwd),
-            device_id: 0x2013,
+            ids: [Rdid(id: 0x852013)],
             total_size: KiB(512),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -295,7 +295,7 @@
         (
             name: "PY25Q80HB",
             unlock: Some(Bp4Srwd),
-            device_id: 0x2014,
+            ids: [Rdid(id: 0x852014)],
             total_size: MiB(1),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -310,7 +310,7 @@
         (
             name: "PY25Q16HB",
             unlock: Some(Bp4Srwd),
-            device_id: 0x2015,
+            ids: [Rdid(id: 0x852015)],
             total_size: MiB(2),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -325,7 +325,7 @@
         (
             name: "PY25Q32HB",
             unlock: Some(Bp4Srwd),
-            device_id: 0x2016,
+            ids: [Rdid(id: 0x852016)],
             total_size: MiB(4),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2300, max: 3600),
@@ -340,7 +340,7 @@
         (
             name: "PY25Q64HA",
             unlock: Some(Bp4Srwd),
-            device_id: 0x2017,
+            ids: [Rdid(id: 0x852017)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -355,7 +355,7 @@
         (
             name: "PY25F64HA",
             unlock: Some(Bp4Srwd),
-            device_id: 0x2317,
+            ids: [Rdid(id: 0x852317)],
             total_size: MiB(8),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -370,7 +370,7 @@
         (
             name: "PY25Q128HA",
             unlock: Some(Bp4Srwd),
-            device_id: 0x2018,
+            ids: [Rdid(id: 0x852018)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -385,7 +385,7 @@
         (
             name: "PY25F128HA/PY25R128HA",
             unlock: Some(Bp4Srwd),
-            device_id: 0x2318,
+            ids: [Rdid(id: 0x852318)],
             total_size: MiB(16),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, qpi: true, status_reg_2: true),
             voltage: (min: 2700, max: 3600),
@@ -400,7 +400,7 @@
         (
             name: "PY25Q256HB",
             unlock: Some(Bp4Srwd),
-            device_id: 0x2019,
+            ids: [Rdid(id: 0x852019)],
             total_size: MiB(32),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -415,7 +415,7 @@
         (
             name: "PY25F256HB",
             unlock: Some(Bp4Srwd),
-            device_id: 0x2319,
+            ids: [Rdid(id: 0x852319)],
             total_size: MiB(32),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -430,7 +430,7 @@
         (
             name: "PY25Q512HB",
             unlock: Some(Bp4Srwd),
-            device_id: 0x201A,
+            ids: [Rdid(id: 0x85201A)],
             total_size: MiB(64),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -445,7 +445,7 @@
         (
             name: "PY25F512HB",
             unlock: Some(Bp4Srwd),
-            device_id: 0x231A,
+            ids: [Rdid(id: 0x85231A)],
             total_size: MiB(64),
             features: (wp_cmp: true, wp_cmp_sr2: true, wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),
@@ -460,7 +460,7 @@
         (
             name: "PY25Q01GHB",
             unlock: Some(Bp4Srwd),
-            device_id: 0x201B,
+            ids: [Rdid(id: 0x85201B)],
             total_size: MiB(128),
             features: (wrsr_wren: true, wrsr_ewsr: true, otp: true, four_byte_addr: true, qpi: true, status_reg_2: true, ext_addr_reg_c5c8: true, four_byte_native: true, four_byte_read: true, four_byte_fast_read: true, four_byte_program: true, fast_read: true, dual_io: true, quad_io: true, four_byte_dual_out_read: true, four_byte_dual_io_read: true, four_byte_quad_out_read: true, four_byte_quad_io_read: true, wrsr_ext: true, status_reg_3: true),
             voltage: (min: 2700, max: 3600),

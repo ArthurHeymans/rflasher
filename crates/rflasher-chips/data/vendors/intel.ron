@@ -8,7 +8,7 @@
         (
             name: "25F160S33B8",
             unlock: Some(Bp2EpSrwd),
-            device_id: 0x8911,
+            ids: [Rdid(id: 0x898911)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -20,7 +20,7 @@
         (
             name: "25F160S33T8",
             unlock: Some(Bp2EpSrwd),
-            device_id: 0x8915,
+            ids: [Rdid(id: 0x898915)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -32,7 +32,7 @@
         (
             name: "25F320S33B8",
             unlock: Some(Bp2EpSrwd),
-            device_id: 0x8912,
+            ids: [Rdid(id: 0x898912)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -44,7 +44,7 @@
         (
             name: "25F320S33T8",
             unlock: Some(Bp2EpSrwd),
-            device_id: 0x8916,
+            ids: [Rdid(id: 0x898916)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -56,7 +56,7 @@
         (
             name: "25F640S33B8",
             unlock: Some(Bp2EpSrwd),
-            device_id: 0x8913,
+            ids: [Rdid(id: 0x898913)],
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -69,7 +69,7 @@
         (
             name: "25F640S33T8",
             unlock: Some(Bp2EpSrwd),
-            device_id: 0x8917,
+            ids: [Rdid(id: 0x898917)],
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),

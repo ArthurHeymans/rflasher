@@ -65,9 +65,6 @@ fn features_from(def: FeaturesDef) -> Features {
         (def.wp_winbond, Features::WP_WINBOND),
         (def.wp_wps, Features::WP_WPS),
         (def.explicit_profile, Features::EXPLICIT_PROFILE),
-        (def.at25f_id, Features::AT25F_ID),
-        (def.rdid_continuation, Features::RDID_CONTINUATION),
-        (def.res2_id, Features::RES2_ID),
         (def.wrsr_ext, Features::WRSR_EXT),
         (def.fast_read, Features::FAST_READ),
         (def.dual_io, Features::DUAL_IO),
@@ -165,6 +162,14 @@ pub struct ChipDatabase {
 }
 
 impl ChipProvider for ChipDatabase {
+    fn supports_probe_method(&self, method: ProbeMethod) -> bool {
+        self.chips.as_slice().supports_probe_method(method)
+    }
+
+    fn find_nth_by_identity(&self, identity: &ChipIdentity, index: usize) -> Option<&FlashChip> {
+        self.chips.as_slice().find_nth_by_identity(identity, index)
+    }
+
     fn find_by_jedec_id(&self, manufacturer: u8, device: u16) -> Option<&FlashChip> {
         ChipDatabase::find_by_jedec_id(self, manufacturer, device)
     }
@@ -252,11 +257,15 @@ impl ChipDatabase {
         let count = vendor_def.chips.len();
 
         for chip_def in vendor_def.chips {
+            let (manufacturer, device) = chip_def
+                .canonical_id()
+                .expect("validated chip has at least one identity");
             let chip = FlashChip {
                 vendor: vendor_def.vendor.clone().into(),
                 name: chip_def.name.into(),
-                jedec_manufacturer: vendor_def.manufacturer_id,
-                jedec_device: chip_def.device_id,
+                jedec_manufacturer: manufacturer,
+                jedec_device: device,
+                ids: chip_def.ids.into(),
                 total_size: chip_def.total_size.to_bytes(),
                 page_size: chip_def.page_size,
                 features: features_from(chip_def.features),
@@ -367,32 +376,62 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "static-chips")]
+    #[test]
+    fn every_catalog_identity_agrees_between_runtime_and_generated_descriptors() {
+        let runtime = ChipDatabase::from_dir(&vendors_dir()).unwrap();
+        let generated = ChipDatabase::new();
+        assert_eq!(runtime.chips().len(), generated.chips().len());
+        let mut seen = vec![false; generated.chips().len()];
+        for chip in runtime.chips() {
+            assert!(!chip.ids.is_empty(), "{}", chip.name());
+            let (index, matched) = generated
+                .chips()
+                .iter()
+                .enumerate()
+                .find(|(i, other)| {
+                    !seen[*i]
+                        && other.vendor == chip.vendor
+                        && other.name == chip.name
+                        && other.ids == chip.ids
+                })
+                .unwrap_or_else(|| panic!("Missing generated identities for {}", chip.name()));
+            seen[index] = true;
+            assert_eq!(matched.jedec_id(), chip.jedec_id(), "{}", chip.name());
+            assert!(matched.is_equivalent_to(chip), "{}", chip.name());
+            for identity in chip.identities() {
+                assert!(
+                    (0..)
+                        .map_while(|i| generated.find_nth_by_identity(&identity, i))
+                        .any(|candidate| core::ptr::eq(candidate, matched)),
+                    "{}: {:?}",
+                    chip.name(),
+                    identity
+                );
+            }
+        }
+    }
+
     #[test]
     fn standalone_res2_is_excluded_from_rdid_lookup() {
-        let ron = fs::read_to_string(vendors_dir().join("pmc.ron"))
-            .unwrap()
-            .replace("rdid_continuation: true, res2_id: true", "res2_id: true");
+        let ron = fs::read_to_string(vendors_dir().join("pmc.ron")).unwrap();
         let mut runtime = ChipDatabase::empty();
         runtime.load_ron(&ron).unwrap();
         let mut databases = vec![runtime];
         if cfg!(feature = "static-chips") {
-            let mut db = ChipDatabase::new();
-            for chip in &mut db.chips {
-                if chip.features.contains(Features::RES2_ID) {
-                    chip.features.remove(Features::RDID_CONTINUATION);
-                }
-            }
-            databases.push(db);
+            databases.push(ChipDatabase::new());
         }
         for db in databases {
             let chips: Vec<_> = db
                 .chips()
                 .iter()
-                .filter(|c| c.features.contains(Features::RES2_ID))
+                .filter(|c| {
+                    c.identities()
+                        .any(|id| matches!(id, ChipIdentity::Res2 { .. }))
+                })
                 .collect();
             assert!(!chips.is_empty());
             for chip in chips {
-                assert!(!chip.features.contains(Features::RDID_CONTINUATION));
                 assert!(!chip.matches_jedec_id(chip.jedec_manufacturer, chip.jedec_device));
                 assert!(
                     !(0..)
@@ -420,8 +459,7 @@ mod tests {
         }
         for db in databases {
             for chip in db.chips().iter().filter(|chip| {
-                chip.features.contains(Features::RDID_CONTINUATION)
-                    && !chip.features.contains(Features::RES2_ID)
+                chip.identities().any(|id| matches!(id, ChipIdentity::Rdid { id } if id >> 16 == 0x7f || id >> 24 == 0x7f))
             }) {
                 assert!(
                     matches!(chip.jedec_manufacturer, 0x37)
@@ -462,7 +500,6 @@ mod tests {
             ] {
                 let chip = db.find_by_name(name)[0];
                 let (manufacturer, device) = (chip.jedec_manufacturer, chip.jedec_device);
-                assert!(chip.features.contains(Features::RDID_CONTINUATION));
                 assert!(!chip.matches_jedec_id(manufacturer, device));
                 assert!(
                     !(0..)
@@ -503,7 +540,7 @@ mod tests {
             chips: [
                 (
                     name: "W25Q128FV",
-                    device_id: 0x4018,
+                    ids: [Rdid(id: 0xEF4018)],
                     total_size: MiB(16),
                     page_size: 256,
                     features: (
@@ -545,7 +582,7 @@ mod tests {
         let invalid = r#"(
             vendor: "Test", manufacturer_id: 1,
             chips: [(
-                name: "Broken", device_id: 1, total_size: KiB(8),
+                name: "Broken", ids: [Rdid(id: 0x010001)], total_size: KiB(8),
                 erase_blocks: [(opcode: 0x20, regions: [(size: KiB(4), count: 1)])],
             )],
         )"#;

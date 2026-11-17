@@ -2,10 +2,10 @@
 // Ported from flashprog/flashchips.c
 //
 // SST25 series write behaviour (from flashprog):
-//   - Chips with device_id >= 0x25xx ("B" suffix, RDID-probed):
+//   - Chips with RDID device bytes 0x25xx ("B" suffix, RDID-probed):
 //       use AAI word program (0xAD) → features: (aai_word: true)
 //       WRSR requires EWSR (0x50) prefix for most; SST25VF016B accepts either.
-//   - Chips with device_id 0x00xx (REMS-probed, older/non-B variants):
+//   - Older/non-B variants with short device IDs (REMS-probed):
 //       use single-byte page program (0x02) — no AAI, no aai_word flag.
 //       WRSR requires EWSR (0x50).
 //   - SST25VF064C and all SST25WFxxxA/B variants: standard 256-byte page program.
@@ -25,7 +25,7 @@
     chips: [
 
         // ====================================================================
-        // SST25VF series — RDID-probed (device_id 0x25xx)
+        // SST25VF series — RDID-probed (device bytes 0x25xx)
         // "B" suffix chips: AAI word program (0xAD), WRSR needs EWSR
         // Non-"B" chips below this group: single-byte PP, WRSR needs EWSR
         // ====================================================================
@@ -33,7 +33,7 @@
         (
             name: "SST25VF512",
             unlock: Some(Status),
-            device_id: 0x2548,
+            ids: [Rdid(id: 0xBF2548)],
             total_size: KiB(64),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
             // Byte program (0x02), no page program — matches flashprog spi_chip_write_1
@@ -49,7 +49,7 @@
         (
             name: "SST25VF512A",
             unlock: Some(Status),
-            device_id: 0x4800,
+            ids: [Rdid(id: 0xBF4800)],
             total_size: KiB(64),
             // Byte program (0x02); D8/C7 + fast read supported by A only (flashprog)
             // WRSR needs EWSR, like the combined SST25VF512(A) entry
@@ -67,7 +67,7 @@
         (
             name: "SST25VF010",
             unlock: Some(Status),
-            device_id: 0x2549,
+            ids: [Rdid(id: 0xBF2549)],
             total_size: KiB(128),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
             // Byte program (0x02), no page program — matches flashprog spi_chip_write_1
@@ -83,7 +83,7 @@
         (
             name: "SST25VF010A",
             unlock: Some(Status),
-            device_id: 0x4900,
+            ids: [Rdid(id: 0xBF4900)],
             total_size: KiB(128),
             // Byte program (0x02); D8/C7 + fast read supported by A only (flashprog)
             // WRSR needs EWSR, like the combined SST25VF010(A) entry
@@ -101,7 +101,7 @@
         (
             name: "SST25VF020",
             unlock: Some(Status),
-            device_id: 0x2543,
+            ids: [Rdid(id: 0xBF2543)],
             total_size: KiB(256),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
             // Byte program (0x02), no page program — matches flashprog spi_chip_write_1
@@ -117,7 +117,7 @@
         (
             name: "SST25VF020B",
             unlock: Some(Status),
-            device_id: 0x258C,
+            ids: [Rdid(id: 0xBF258C)],
             total_size: KiB(256),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
             features: (wrsr_persistent_ewsr: true, aai_word: true),
@@ -134,7 +134,7 @@
         (
             name: "SST25VF040",
             unlock: Some(Status),
-            device_id: 0x258D,
+            ids: [Rdid(id: 0xBF258D)],
             total_size: KiB(512),
             // Older chip, no AAI (uses 0xAF variant), WRSR needs EWSR
             // Byte program (0x02), no page program — matches flashprog spi_chip_write_1
@@ -152,10 +152,10 @@
         (
             name: "SST25VF040B",
             unlock: Some(Status),
-            device_id: 0x258D,
+            ids: [Rdid(id: 0xBF258D)],
             total_size: KiB(512),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
-            // Note: same RDID device_id as SST25VF040; differentiated by REMS probe
+            // Note: same RDID as SST25VF040; differentiated by REMS probe
             // in flashprog. rflasher uses RDID only, so incompatible procedures
             // require explicit --chip selection.
             features: (wrsr_persistent_ewsr: true, aai_word: true),
@@ -172,7 +172,7 @@
         (
             name: "SST25VF080B",
             unlock: Some(Status),
-            device_id: 0x258E,
+            ids: [Rdid(id: 0xBF258E)],
             total_size: MiB(1),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
             features: (wrsr_persistent_ewsr: true, aai_word: true),
@@ -189,7 +189,7 @@
         (
             name: "SST25VF016B",
             unlock: Some(Status),
-            device_id: 0x2541,
+            ids: [Rdid(id: 0xBF2541)],
             total_size: MiB(2),
             // AAI word program (0xAD); WRSR accepts both EWSR and WREN (flashprog: EITHER)
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
@@ -206,7 +206,7 @@
         (
             name: "SST25VF032B",
             unlock: Some(Status),
-            device_id: 0x254A,
+            ids: [Rdid(id: 0xBF254A)],
             total_size: MiB(4),
             // AAI word program (0xAD); WRSR needs EWSR (not WREN)
             features: (wrsr_persistent_ewsr: true, aai_word: true),
@@ -223,7 +223,7 @@
         (
             name: "SST25VF064C",
             unlock: Some(Status),
-            device_id: 0x254B,
+            ids: [Rdid(id: 0xBF254B)],
             total_size: MiB(8),
             // Standard 256-byte page program (unlike older SST25 chips); WRSR needs EWSR
             features: (wrsr_persistent_ewsr: true),
@@ -238,14 +238,14 @@
         ),
 
         // ====================================================================
-        // SST25VF / SST25LF / SST25WF — REMS-probed (device_id 0x00xx)
+        // SST25VF / SST25LF / SST25WF — REMS-probed (short device IDs)
         // Single-byte page program; WRSR needs EWSR
         // ====================================================================
 
         (
             name: "SST25LF020A",
             unlock: Some(Status),
-            device_id: 0x0043,
+            ids: [Rdid(id: 0xBF0043)],
             total_size: KiB(256),
             // EWSR required; AAI uses 0xAF (not standard 0xAD), fall back to byte PP
             write_granularity: Byte,
@@ -261,7 +261,7 @@
         (
             name: "SST25LF040A",
             unlock: Some(Status),
-            device_id: 0x0044,
+            ids: [Rdid(id: 0xBF0044)],
             total_size: KiB(512),
             write_granularity: Byte,
             features: (wrsr_persistent_ewsr: true),
@@ -276,7 +276,7 @@
         (
             name: "SST25LF080(A)",
             unlock: Some(Status),
-            device_id: 0x0080,
+            ids: [Rdid(id: 0xBF0080)],
             total_size: MiB(1),
             // Accepts both EWSR and WREN (flashprog: FEATURE_WRSR_EITHER)
             write_granularity: Byte,
@@ -291,7 +291,7 @@
         (
             name: "SST25VF010(A)",
             unlock: Some(Status),
-            device_id: 0x0049,
+            ids: [Rdid(id: 0xBF0049)],
             total_size: KiB(128),
             write_granularity: Byte,
             features: (wrsr_persistent_ewsr: true),
@@ -310,7 +310,7 @@
             // identified via REMS (0x90) command returning 0x008D
             name: "SST25VF040B.REMS",
             unlock: Some(Status),
-            device_id: 0x008D,
+            ids: [Rdid(id: 0xBF008D)],
             total_size: KiB(512),
             features: (wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
@@ -327,7 +327,7 @@
         (
             name: "SST25VF512(A)",
             unlock: Some(Status),
-            device_id: 0x0048,
+            ids: [Rdid(id: 0xBF0048)],
             total_size: KiB(64),
             write_granularity: Byte,
             features: (wrsr_persistent_ewsr: true),
@@ -351,7 +351,7 @@
         (
             name: "SST25WF512",
             unlock: Some(Bp2Srwd),
-            device_id: 0x2501,
+            ids: [Rdid(id: 0xBF2501)],
             total_size: KiB(64),
             // AAI word program (0xAD); WRSR accepts both EWSR and WREN
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
@@ -367,7 +367,7 @@
         (
             name: "SST25WF010",
             unlock: Some(Bp2Srwd),
-            device_id: 0x2502,
+            ids: [Rdid(id: 0xBF2502)],
             total_size: KiB(128),
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
@@ -382,7 +382,7 @@
         (
             name: "SST25WF020",
             unlock: Some(Bp2Srwd),
-            device_id: 0x2503,
+            ids: [Rdid(id: 0xBF2503)],
             total_size: KiB(256),
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
@@ -398,7 +398,7 @@
         (
             name: "SST25WF040",
             unlock: Some(Bp2Srwd),
-            device_id: 0x2504,
+            ids: [Rdid(id: 0xBF2504)],
             total_size: KiB(512),
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
@@ -414,7 +414,7 @@
         (
             name: "SST25WF080",
             unlock: Some(Bp3Srwd),
-            device_id: 0x2505,
+            ids: [Rdid(id: 0xBF2505)],
             total_size: MiB(1),
             features: (wrsr_wren: true, wrsr_persistent_ewsr: true, aai_word: true),
             write_granularity: Byte,
@@ -447,7 +447,7 @@
             // Legacy SQI part: no documented single-SPI ULBPR procedure.
             name: "SST26VF016",
             unlock: Some(Unsupported),
-            device_id: 0x2601,
+            ids: [Rdid(id: 0xBF2601)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, sst26_bpr: true),
             voltage: (min: 2700, max: 3600),
@@ -466,7 +466,7 @@
         (
             name: "SST26VF016B(A)",
             unlock: Some(Sst26_6),
-            device_id: 0x2641,
+            ids: [Rdid(id: 0xBF2641)],
             total_size: MiB(2),
             features: (wrsr_wren: true, otp: true, sst26_bpr: true),
             voltage: (min: 2700, max: 3600),
@@ -487,7 +487,7 @@
             // Legacy SQI part: no documented single-SPI ULBPR procedure.
             name: "SST26VF032",
             unlock: Some(Unsupported),
-            device_id: 0x2602,
+            ids: [Rdid(id: 0xBF2602)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, sst26_bpr: true),
             voltage: (min: 2700, max: 3600),
@@ -506,7 +506,7 @@
         (
             name: "SST26VF032B(A)",
             unlock: Some(Sst26_10),
-            device_id: 0x2642,
+            ids: [Rdid(id: 0xBF2642)],
             total_size: MiB(4),
             features: (wrsr_wren: true, otp: true, sst26_bpr: true),
             voltage: (min: 2700, max: 3600),
@@ -525,7 +525,7 @@
         (
             name: "SST26VF064B(A)",
             unlock: Some(Sst26_18),
-            device_id: 0x2643,
+            ids: [Rdid(id: 0xBF2643)],
             total_size: MiB(8),
             features: (wrsr_wren: true, otp: true, sst26_bpr: true),
             voltage: (min: 2700, max: 3600),
@@ -545,7 +545,7 @@
         (
             name: "SST26VF080A",
             unlock: Some(Bp3Srwd),
-            device_id: 0x2618,
+            ids: [Rdid(id: 0xBF2618)],
             total_size: MiB(1),
             features: (wrsr_wren: true, otp: true),
             voltage: (min: 2700, max: 3600),
@@ -563,7 +563,7 @@
         (
             name: "XM25QU64A",
             unlock: Some(Bp3Srwd),
-            device_id: 0x3817,
+            ids: [Rdid(id: 0xBF3817)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 1650, max: 1950),

@@ -226,13 +226,13 @@ All operational APIs are async and executor-independent on every target: the CLI
 
 1. Find the datasheet for your chip.
 2. Create or update the vendor file under `crates/rflasher-chips/data/vendors/`.
-3. Add the chip definition with JEDEC ID, size, erase blocks, and features.
+3. Add the chip definition with explicit method-specific IDs, size, erase blocks, and features.
 4. Submit a pull request.
 
 ```ron
 (
     name: "W25Q128.V",
-    device_id: 0x4018,
+    ids: [Rdid(id: 0xEF4018)],
     total_size: MiB(16),
     features: (
         wrsr_wren: true,
@@ -241,13 +241,19 @@ All operational APIs are async and executor-independent on every target: the CLI
     ),
     voltage: (min: 2700, max: 3600),
     erase_blocks: [
-        (opcode: 0x20, size: KiB(4)),
-        (opcode: 0xD8, size: KiB(64)),
-        (opcode: 0xC7, size: MiB(16)),
+        (opcode: 0x20, regions: [(size: KiB(4), count: 4096)]),
+        (opcode: 0xD8, regions: [(size: KiB(64), count: 256)]),
+        (opcode: 0xC7, regions: [(size: MiB(16), count: 1)]),
     ],
     tested: (probe: Ok, read: Ok, erase: Ok, write: Ok, wp: Ok),
 )
 ```
+
+`ids` is the only catalog identity input and must be non-empty. Each value
+includes its command-specific manufacturer/device bytes; for example,
+`[Rdid(id: 0xBF258D), Rems(id: 0xBF8D)]` records two alternative IDs for one
+chip. RDID continuation bytes belong in the explicit value. Legacy `device_id`
+and identification feature flags are rejected, not combined with `ids`.
 
 ### Adding a programmer
 

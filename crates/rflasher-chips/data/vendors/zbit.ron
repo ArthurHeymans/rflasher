@@ -6,7 +6,7 @@
     chips: [
         (
             name: "ZB25VQ32",
-            device_id: 0x4016,
+            ids: [Rdid(id: 0x5E4016)],
             total_size: MiB(4),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -19,7 +19,7 @@
         ),
         (
             name: "ZB25VQ64",
-            device_id: 0x4017,
+            ids: [Rdid(id: 0x5E4017)],
             total_size: MiB(8),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),
@@ -32,7 +32,7 @@
         ),
         (
             name: "ZB25VQ128",
-            device_id: 0x4018,
+            ids: [Rdid(id: 0x5E4018)],
             total_size: MiB(16),
             features: (wrsr_wren: true),
             voltage: (min: 2700, max: 3600),

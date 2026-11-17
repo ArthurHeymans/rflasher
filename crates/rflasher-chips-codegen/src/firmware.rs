@@ -1,6 +1,6 @@
 //! Build-time selection for allocation-free firmware catalogs.
 
-use crate::{ChipDatabase, ChipDef, Error, FeaturesDef, VendorDef, chip_to_tokens};
+use crate::{ChipDatabase, ChipDef, Error, VendorDef, chip_to_tokens};
 use quote::quote;
 use rflasher_chip_types::name_matches;
 use std::path::Path;
@@ -88,19 +88,6 @@ impl ChipDatabase {
     }
 }
 
-/// The protocol that reads a chip's identity; identities of different
-/// protocols never compete. Follows `FlashChip::matches_identity`, where the
-/// RES2 flag alone decides whether an entry answers a RES2 identity.
-fn identity_protocol(features: &FeaturesDef) -> u8 {
-    if features.res2_id {
-        2
-    } else if features.at25f_id {
-        3
-    } else {
-        u8::from(features.rdid_continuation)
-    }
-}
-
 /// Everything about a definition but its names, to tell aliases from
 /// definitions that share an identity and operate differently.
 fn operation_profile(vendor: &VendorDef, chip: &ChipDef) -> String {
@@ -114,12 +101,16 @@ fn operation_profile(vendor: &VendorDef, chip: &ChipDef) -> String {
     );
     unnamed(&mut vendor.vendor);
     unnamed(&mut chip.name);
+    vendor.manufacturer_id = 0;
+    // Normalize all identity-derived fields for comparison only. The selected
+    // descriptors below always retain their real, explicitly assigned IDs.
+    chip.ids = vec![rflasher_chip_types::ChipIdentity::Rdid { id: 0 }];
     chip_to_tokens(&vendor, &chip).to_string()
 }
 
 impl<'a> SelectedChips<'a> {
     /// The profile to operate each selected identity with, in selection order.
-    fn profiles(&self) -> Result<Vec<(&'a VendorDef, &'a ChipDef)>, Error> {
+    fn profiles(&self) -> Result<Vec<(&'a VendorDef, ChipDef)>, Error> {
         let name = |(v, c): &(&VendorDef, &ChipDef)| format!("{}::{}", v.vendor, c.name);
         let names = |chips: &[usize]| {
             chips
@@ -128,27 +119,24 @@ impl<'a> SelectedChips<'a> {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let identity = |(v, c): &(&VendorDef, &ChipDef)| {
-            (
-                identity_protocol(&c.features),
-                v.manufacturer_id,
-                c.device_id,
-            )
-        };
+        let identities: Vec<Vec<_>> = self
+            .chips
+            .iter()
+            .map(|(_, c)| c.identities().collect())
+            .collect();
         let alike = |chips: &[usize]| {
             let profile = |i: &usize| operation_profile(self.chips[*i].0, self.chips[*i].1);
             chips.iter().all(|i| profile(i) == profile(&chips[0]))
         };
-        let mut profiles = Vec::new();
+        let mut assigned = vec![Vec::new(); self.chips.len()];
         let mut seen = Vec::new();
-        for chip in &self.chips {
-            let id = identity(chip);
-            if seen.contains(&id) {
+        for id in identities.iter().flatten() {
+            if seen.contains(id) {
                 continue;
             }
-            seen.push(id);
+            seen.push(*id);
             let sharing: Vec<usize> = (0..self.chips.len())
-                .filter(|i| identity(&self.chips[*i]) == id)
+                .filter(|i| identities[*i].contains(id))
                 .collect();
             let defaults: Vec<usize> = self
                 .defaults
@@ -181,9 +169,23 @@ impl<'a> SelectedChips<'a> {
                     names(&sharing)
                 )));
             };
-            profiles.push(self.chips[chosen]);
+            assigned[chosen].push(*id);
         }
-        Ok(profiles)
+        // A default can decide only one of another chip's alternative IDs.
+        // Keep its other identities, but never reintroduce the overridden one.
+        Ok(assigned
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, ids)| {
+                if ids.is_empty() {
+                    return None;
+                }
+                let (vendor, chip) = self.chips[index];
+                let mut chip = chip.clone();
+                chip.ids = ids;
+                Some((vendor, chip))
+            })
+            .collect())
     }
 
     /// Set the board's default profiles, all of which must already be selected.
@@ -236,7 +238,7 @@ impl<'a> SelectedChips<'a> {
             #[allow(unused_imports)]
             use #crate_path::{
                 FlashChip, EraseBlock, EraseRegion, Features, Unlock,
-                ChipTestStatus, TestStatus, WriteGranularity, ChipName, ChipSlice, ChipCatalog,
+                ChipTestStatus, TestStatus, WriteGranularity, ChipName, ChipSlice, ChipCatalog, ChipIdentity,
             };
             /// The board's profile for each chip identity; no runtime
             /// initialization or heap.
@@ -268,11 +270,11 @@ mod tests {
             r#"(
             vendor: "Test", manufacturer_id: 1,
             chips: [
-                (name: "Part(A)", device_id: 1, total_size: KiB(8), erase_blocks: [
+                (name: "Part(A)", ids: [Rdid(id: 0x010001)], total_size: KiB(8), erase_blocks: [
                     (opcode: 0x20, regions: [(size: KiB(4), count: 2)]),
                     (opcode: 0xc7, regions: [(size: KiB(8), count: 1)]),
                 ]),
-                (name: "Other", device_id: 1, total_size: KiB(8), erase_blocks: [
+                (name: "Other", ids: [Rdid(id: 0x010001)], total_size: KiB(8), erase_blocks: [
                     (opcode: 0xd8, opcode_4b: Some(0xdc), regions: [
                         (size: KiB(4), count: 1), (size: KiB(2), count: 2)
                     ]),
@@ -400,23 +402,46 @@ mod tests {
             .generate_code()
             .unwrap();
         assert!(code.contains("Alias") && !code.contains("Part(A)"));
-        // The same bytes read through another protocol are another identity.
-        db.vendors[0].chips[1].features.res2_id = true;
+        // Another command namespace is a different identity.
+        db.vendors[0].chips[1].ids = vec![rflasher_chip_types::ChipIdentity::Res2 { id: 0x0101 }];
         let selected = db.select(&["Part", "Other"]).unwrap();
         assert_eq!(selected.profiles().unwrap().len(), 2);
-        // Every entry flagged RES2 answers a RES2 identity, whatever else it
-        // is flagged with, so these two do compete.
-        db.vendors[0].chips[0].features.res2_id = true;
-        db.vendors[0].chips[0].features.at25f_id = true;
-        assert!(db.select(&["Part", "Other"]).unwrap().profiles().is_err());
-        db.vendors[0].chips[0].features.res2_id = false;
-        db.vendors[0].chips[0].features.at25f_id = false;
-        db.vendors[0].chips[1].features.res2_id = false;
-        db.vendors[0].chips[1].device_id = 2;
+        // Missing explicit identities fail validation, never synthesize RDID.
+        let ids = std::mem::take(&mut db.vendors[0].chips[0].ids);
+        assert!(db.select(&["Part", "Other"]).is_err());
+        db.vendors[0].chips[0].ids = ids;
+        db.vendors[0].chips[1].ids = vec![rflasher_chip_types::ChipIdentity::Rdid { id: 0x010002 }];
         let selected = db.select(&["Other", "Part"]).unwrap();
         let profiles = selected.profiles().unwrap();
         assert_eq!(profiles[0].1.name, "Other");
         assert_eq!(profiles[1].1.name, "Part(A)");
+    }
+
+    #[test]
+    fn defaults_resolve_overlapping_alternative_ids_without_losing_other_ids() {
+        use rflasher_chip_types::ChipIdentity;
+        let mut db = database();
+        let rdid = ChipIdentity::Rdid { id: 0x010001 };
+        let rems = ChipIdentity::Rems { id: 0x0101 };
+        db.vendors[0].chips[0].ids = vec![rdid, rems];
+        db.vendors[0].chips[1].ids = vec![rems];
+        assert!(db.select(&["Part", "Other"]).unwrap().profiles().is_err());
+        let selected = db
+            .select(&["Part", "Other"])
+            .unwrap()
+            .with_defaults(&["Other"])
+            .unwrap();
+        let profiles = selected.profiles().unwrap();
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].1.ids, [rdid]);
+        assert_eq!(profiles[1].1.ids, [rems]);
+        let code = selected
+            .with_crate_path("rflasher_core::chip")
+            .unwrap()
+            .generate_code()
+            .unwrap();
+        assert!(!code.contains("rflasher_chip_types"));
+        syn::parse_file(&code).unwrap();
     }
 
     #[test]

@@ -64,8 +64,8 @@ cleanup retain their existing behavior, including cleanup after an error.
 Catalog assignments follow flashprog's exact chip identity (manufacturer ID,
 device ID and capacity); consistent aliases share the same procedure. Legacy
 Atmel F parts also have explicit, name-specific assignments. Their legacy
-opcode-`15` identities are marked `AT25F_ID` and excluded from RDID (`9f`)
-candidate lookup; legacy probing is not yet implemented. AT25F512B uses RDID
+opcode-`15` identities are recorded as `At25f` values and excluded from RDID
+(`9f`) candidate lookup; they require a method-specific probe. AT25F512B uses RDID
 and remains independently detectable. Unmatched and conflicting identities remain `Unknown` rather than receiving a vendor default.
 
 | Procedure | SR1 protection / lock / WP indication / preserved bits |
