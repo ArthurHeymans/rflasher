@@ -270,8 +270,8 @@ fn build_register_masks(bit_map: &WpRegBitMap, bits: &WpBits) -> (u8, u8, u8) {
     if bits.tb.is_some() {
         add_mask(&mut mask1, &mut mask2, &mut mask3, &bit_map.tb);
     }
-    for i in 0..bits.bp_count {
-        add_mask(&mut mask1, &mut mask2, &mut mask3, &bit_map.bp[i]);
+    for info in &bit_map.bp[..bits.bp_count] {
+        add_mask(&mut mask1, &mut mask2, &mut mask3, info);
     }
 
     (mask1, mask2, mask3)
