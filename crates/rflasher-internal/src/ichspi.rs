@@ -990,20 +990,20 @@ impl<H: HostAccess> IchSpiController<H> {
         };
 
         let mut optype_val = optype;
-        for i in 0..8 {
-            opcodes.opcode[i].spi_type = (optype_val & 0x3) as u8;
+        for op in &mut opcodes.opcode {
+            op.spi_type = (optype_val & 0x3) as u8;
             optype_val >>= 2;
         }
 
         let mut opmenu = opmenu_lo;
-        for i in 0..4 {
-            opcodes.opcode[i].opcode = (opmenu & 0xFF) as u8;
+        for op in &mut opcodes.opcode[..4] {
+            op.opcode = (opmenu & 0xFF) as u8;
             opmenu >>= 8;
         }
 
         opmenu = opmenu_hi;
-        for i in 4..8 {
-            opcodes.opcode[i].opcode = (opmenu & 0xFF) as u8;
+        for op in &mut opcodes.opcode[4..] {
+            op.opcode = (opmenu & 0xFF) as u8;
             opmenu >>= 8;
         }
 
@@ -1020,13 +1020,13 @@ impl<H: HostAccess> IchSpiController<H> {
         }
 
         let mut opmenu_lo: u32 = 0;
-        for i in 0..4 {
-            opmenu_lo |= (opcodes.opcode[i].opcode as u32) << (i * 8);
+        for (i, op) in opcodes.opcode[..4].iter().enumerate() {
+            opmenu_lo |= (op.opcode as u32) << (i * 8);
         }
 
         let mut opmenu_hi: u32 = 0;
-        for i in 4..8 {
-            opmenu_hi |= (opcodes.opcode[i].opcode as u32) << ((i - 4) * 8);
+        for (i, op) in opcodes.opcode[4..].iter().enumerate() {
+            opmenu_hi |= (op.opcode as u32) << (i * 8);
         }
 
         self.change_register(self.ich7_swseq.preop, true, preop.into(), 0xffff);
@@ -1162,20 +1162,20 @@ impl<H: HostAccess> IchSpiController<H> {
         };
 
         let mut optype_val = optype;
-        for i in 0..8 {
-            opcodes.opcode[i].spi_type = (optype_val & 0x3) as u8;
+        for op in &mut opcodes.opcode {
+            op.spi_type = (optype_val & 0x3) as u8;
             optype_val >>= 2;
         }
 
         let mut opmenu = opmenu_lo;
-        for i in 0..4 {
-            opcodes.opcode[i].opcode = (opmenu & 0xFF) as u8;
+        for op in &mut opcodes.opcode[..4] {
+            op.opcode = (opmenu & 0xFF) as u8;
             opmenu >>= 8;
         }
 
         opmenu = opmenu_hi;
-        for i in 4..8 {
-            opcodes.opcode[i].opcode = (opmenu & 0xFF) as u8;
+        for op in &mut opcodes.opcode[4..] {
+            op.opcode = (opmenu & 0xFF) as u8;
             opmenu >>= 8;
         }
 
@@ -1192,13 +1192,13 @@ impl<H: HostAccess> IchSpiController<H> {
         }
 
         let mut opmenu_lo: u32 = 0;
-        for i in 0..4 {
-            opmenu_lo |= (opcodes.opcode[i].opcode as u32) << (i * 8);
+        for (i, op) in opcodes.opcode[..4].iter().enumerate() {
+            opmenu_lo |= (op.opcode as u32) << (i * 8);
         }
 
         let mut opmenu_hi: u32 = 0;
-        for i in 4..8 {
-            opmenu_hi |= (opcodes.opcode[i].opcode as u32) << ((i - 4) * 8);
+        for (i, op) in opcodes.opcode[4..].iter().enumerate() {
+            opmenu_hi |= (op.opcode as u32) << (i * 8);
         }
 
         self.change_register(self.swseq.preop, true, preop.into(), 0xffff);
