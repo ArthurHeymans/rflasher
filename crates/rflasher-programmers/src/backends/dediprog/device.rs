@@ -245,7 +245,7 @@ impl Dediprog {
     /// Natively, find devices with [`crate::UsbProgrammer::candidates`]; in
     /// the browser, use `request_device`.
     pub async fn open(device_info: nusb::DeviceInfo, config: DediprogConfig) -> Result<Self> {
-        log::info!(
+        log::debug!(
             "Opening Dediprog device VID={:04X} PID={:04X}",
             device_info.vendor_id(),
             device_info.product_id()
@@ -299,13 +299,18 @@ impl crate::UsbProgrammer for Dediprog {
 
         let mut matching = Vec::new();
         for device_info in devices {
+            log::debug!(
+                "Checking Dediprog ID at USB bus {} address {}",
+                device_info.bus_id(),
+                device_info.device_address()
+            );
             let Ok(mut dediprog) = Self::open(device_info.clone(), config.clone()).await else {
                 continue;
             };
             if let Ok(id) = dediprog.read_device_id().await {
                 let id_str = format!("SF{:06}", id);
                 if id_str.contains(target_id.as_str()) || target_id.contains(&id_str) {
-                    log::info!("Found Dediprog with ID {}", id_str);
+                    log::debug!("Found Dediprog with ID {}", id_str);
                     matching.push(device_info);
                 }
             }
@@ -400,7 +405,7 @@ impl Dediprog {
             ));
         }
 
-        log::info!(
+        log::debug!(
             "Dediprog {}: firmware {:X}.{:X}.{:X}, protocol {:?}",
             self.device_type,
             (self.firmware_version >> 16) & 0xFF,

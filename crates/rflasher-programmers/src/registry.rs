@@ -433,8 +433,6 @@ async fn open_dediprog_master(
 ) -> Result<crate::dediprog::Dediprog, Box<dyn std::error::Error>> {
     use crate::dediprog::{Dediprog, parse_options};
 
-    log::info!("Opening Dediprog programmer...");
-
     let options = params.as_option_pairs();
 
     let config =
