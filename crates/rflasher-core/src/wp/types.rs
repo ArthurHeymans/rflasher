@@ -77,8 +77,8 @@ impl WpBits {
     /// BP0 is the LSB, higher BP bits are in higher positions
     pub fn bp_value(&self) -> u8 {
         let mut val = 0u8;
-        for i in 0..self.bp_count {
-            if self.bp[i] != 0 {
+        for (i, &bit) in self.bp[..self.bp_count].iter().enumerate() {
+            if bit != 0 {
                 val |= 1 << i;
             }
         }
