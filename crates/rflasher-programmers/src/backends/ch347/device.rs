@@ -16,19 +16,8 @@ use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
 
 use super::error::{Ch347Error, Result};
 use super::protocol::*;
+use crate::time::delay;
 use crate::usb_ep::EpWaitExt;
-
-// ---------------------------------------------------------------------------
-// Platform-specific endpoint wait macro
-// ---------------------------------------------------------------------------
-
-/// Wait for the next completion on an endpoint, giving up after the timeout.
-/// Returns `Option<Completion>` (`None` on timeout).
-macro_rules! ep_wait {
-    ($ep:expr, $timeout:expr) => {
-        $ep.next_complete_timeout($timeout).await
-    };
-}
 
 // ---------------------------------------------------------------------------
 // CH347 device struct
@@ -278,17 +267,14 @@ impl Ch347 {
             return;
         }
         // Drain any pending transfers
-        #[cfg(not(target_arch = "wasm32"))]
-        self.out_ep.cancel_all();
-        while self.out_ep.pending() > 0 {
-            let _ = ep_wait!(self.out_ep, Duration::from_secs(1));
+        let remaining = self.out_ep.cancel_and_drain(Duration::from_secs(1)).await
+            + self.in_ep.cancel_and_drain(Duration::from_secs(1)).await;
+        if remaining > 0 {
+            self.failed = true;
+            log::warn!("CH347 shutdown timed out with {remaining} pending transfer(s)");
+        } else {
+            log::info!("CH347 shutdown complete");
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.in_ep.cancel_all();
-        while self.in_ep.pending() > 0 {
-            let _ = ep_wait!(self.in_ep, Duration::from_secs(1));
-        }
-        log::info!("CH347 shutdown complete");
     }
 }
 
@@ -454,17 +440,16 @@ impl Ch347 {
 
         self.out_ep.submit(buf);
 
-        let completion = match ep_wait!(self.out_ep, Duration::from_secs(5)) {
+        let completion = match self
+            .out_ep
+            .next_complete_timeout(Duration::from_secs(5))
+            .await
+        {
             Some(completion) => completion,
             None => {
                 self.failed = true;
                 #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.out_ep.cancel_all();
-                    while self.out_ep.pending() > 0 {
-                        self.out_ep.next_complete().await;
-                    }
-                }
+                self.out_ep.cancel_and_drain(Duration::from_secs(1)).await;
                 return Err(Ch347Error::TransferFailed("USB write timed out".into()));
             }
         };
@@ -498,17 +483,16 @@ impl Ch347 {
 
         self.in_ep.submit(in_buf);
 
-        let completion = match ep_wait!(self.in_ep, Duration::from_secs(5)) {
+        let completion = match self
+            .in_ep
+            .next_complete_timeout(Duration::from_secs(5))
+            .await
+        {
             Some(completion) => completion,
             None => {
                 self.failed = true;
                 #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.in_ep.cancel_all();
-                    while self.in_ep.pending() > 0 {
-                        self.in_ep.next_complete().await;
-                    }
-                }
+                self.in_ep.cancel_and_drain(Duration::from_secs(1)).await;
                 return Err(Ch347Error::TransferFailed("USB read timed out".into()));
             }
         };
@@ -572,28 +556,7 @@ impl SpiMaster for Ch347 {
     async fn delay_us(&mut self, us: u32) {
         // Simple delay
         // The CH347 doesn't have a built-in delay command like the CH341A
-        if us > 0 {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                std::thread::sleep(Duration::from_micros(us as u64));
-            }
-
-            #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-            {
-                let delay_ms = ((us as f64) / 1000.0).ceil() as i32;
-                if delay_ms > 0 {
-                    let promise = js_sys::Promise::new(&mut |resolve, _| {
-                        let window = web_sys::window().unwrap();
-                        window
-                            .set_timeout_with_callback_and_timeout_and_arguments_0(
-                                &resolve, delay_ms,
-                            )
-                            .unwrap();
-                    });
-                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-                }
-            }
-        }
+        delay(Duration::from_micros(u64::from(us))).await;
     }
 }
 

@@ -6,7 +6,6 @@
 //! ftdi-nusb handles USB communication, MPSSE state, and SPI transactions. This
 //! module only maps rflasher's flashrom-compatible configuration and traits.
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use ftdi_nusb::{
@@ -284,28 +283,7 @@ impl SpiMaster for Ftdi {
     }
 
     async fn delay_us(&mut self, us: u32) {
-        if us > 0 {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                std::thread::sleep(Duration::from_micros(us as u64));
-            }
-
-            #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-            {
-                let delay_ms = ((us as f64) / 1000.0).ceil() as i32;
-                if delay_ms > 0 {
-                    let promise = js_sys::Promise::new(&mut |resolve, _| {
-                        let window = web_sys::window().unwrap();
-                        window
-                            .set_timeout_with_callback_and_timeout_and_arguments_0(
-                                &resolve, delay_ms,
-                            )
-                            .unwrap();
-                    });
-                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-                }
-            }
-        }
+        crate::time::delay(Duration::from_micros(u64::from(us))).await;
     }
 }
 

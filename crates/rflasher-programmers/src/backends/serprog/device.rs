@@ -416,17 +416,7 @@ impl<T: Transport> SpiMaster for Serprog<T> {
     async fn delay_us(&mut self, us: u32) {
         // For serprog, we just use a standard delay
         // The protocol has O_DELAY but it's for the operation buffer (non-SPI)
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            std::thread::sleep(std::time::Duration::from_micros(us as u64));
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            // No async timer is wired up for serprog on WASM; the WebSerial
-            // transport's own pacing dominates, so this stays a no-op.
-            let _ = us;
-        }
+        crate::time::delay(std::time::Duration::from_micros(u64::from(us))).await;
     }
 }
 

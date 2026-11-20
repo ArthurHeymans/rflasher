@@ -55,6 +55,11 @@ pub mod serprog;
 #[path = "backends/sunxi_fel/mod.rs"]
 pub mod sunxi_fel;
 
+// Shared platform-aware async delay helper for programmer backends.
+#[cfg(feature = "std")]
+#[path = "backends/time.rs"]
+pub(crate) mod time;
+
 // Shared endpoint-completion timeout helper for the nusb-backed programmers.
 #[cfg(any(
     feature = "ch341a",

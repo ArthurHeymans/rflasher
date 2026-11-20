@@ -16,26 +16,8 @@ use rflasher_core::spi::SpiCommand;
 
 use super::error::{Ft4222Error, Result};
 use super::protocol::*;
+use crate::time::delay;
 use crate::usb_ep::EpWaitExt;
-
-// ---------------------------------------------------------------------------
-// Platform-specific endpoint/future helpers
-// ---------------------------------------------------------------------------
-
-/// Wait for the next completion on an endpoint, giving up after the timeout.
-/// Returns `Option<Completion>` (`None` on timeout).
-macro_rules! ep_wait {
-    ($ep:expr, $timeout:expr) => {
-        $ep.next_complete_timeout($timeout).await
-    };
-}
-
-/// Resolve an nusb `MaybeFuture` to its output.
-/// In sync mode: calls `.await`.
-/// In async mode: awaits the future.
-macro_rules! nusb_await {
-    ($expr:expr) => {{ $expr.await }};
-}
 
 /// FT4222H USB SPI Master programmer
 ///
@@ -129,23 +111,20 @@ impl Ft4222 {
         let _ = self.set_io_lines(1).await;
         let _ = self.flush().await;
 
+        let mut remaining = 0;
         if let Some(out_ep) = self.out_endpoint.as_mut() {
-            #[cfg(not(target_arch = "wasm32"))]
-            out_ep.cancel_all();
-            while out_ep.pending() > 0 {
-                let _ = ep_wait!(out_ep, Duration::from_secs(1));
-            }
+            remaining += out_ep.cancel_and_drain(Duration::from_secs(1)).await;
         }
 
         if let Some(in_ep) = self.in_endpoint.as_mut() {
-            #[cfg(not(target_arch = "wasm32"))]
-            in_ep.cancel_all();
-            while in_ep.pending() > 0 {
-                let _ = ep_wait!(in_ep, Duration::from_secs(1));
-            }
+            remaining += in_ep.cancel_and_drain(Duration::from_secs(1)).await;
         }
 
-        log::info!("FT4222H shutdown complete");
+        if remaining > 0 {
+            log::warn!("FT4222H shutdown timed out with {remaining} pending transfer(s)");
+        } else {
+            log::info!("FT4222H shutdown complete");
+        }
     }
 }
 
@@ -166,8 +145,10 @@ impl Ft4222 {
             device_info.product_id()
         );
 
-        let device =
-            nusb_await!(device_info.open()).map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?;
+        let device = device_info
+            .open()
+            .await
+            .map_err(|e| Ft4222Error::OpenFailed(e.to_string()))?;
 
         log::debug!(
             "Device: VID={:04X} PID={:04X}",
@@ -216,7 +197,9 @@ impl Ft4222 {
             out_ep
         );
 
-        let interface = nusb_await!(device.claim_interface(iface_num))
+        let interface = device
+            .claim_interface(iface_num)
+            .await
             .map_err(|e| Ft4222Error::ClaimFailed(e.to_string()))?;
 
         let clock_config = find_clock_config(config.speed_khz);
@@ -294,18 +277,21 @@ impl Ft4222 {
 
     /// Get device version information (matching flashprog's `ft4222_get_version`).
     async fn get_version(&self) -> Result<(u32, u32, u32)> {
-        let data = nusb_await!(self.interface.control_in(
-            ControlIn {
-                control_type: ControlType::Vendor,
-                recipient: Recipient::Device,
-                request: FT4222_INFO_REQUEST,
-                value: FT4222_GET_VERSION,
-                index: self.control_index as u16,
-                length: 12,
-            },
-            Duration::from_secs(5),
-        ))
-        .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get version: {}", e)))?;
+        let data = self
+            .interface
+            .control_in(
+                ControlIn {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request: FT4222_INFO_REQUEST,
+                    value: FT4222_GET_VERSION,
+                    index: self.control_index as u16,
+                    length: 12,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get version: {}", e)))?;
 
         if data.len() < 12 {
             return Err(Ft4222Error::InvalidResponse(format!(
@@ -323,18 +309,21 @@ impl Ft4222 {
 
     /// Get the number of CS channels available.
     async fn get_num_channels(&self) -> Result<u8> {
-        let data = nusb_await!(self.interface.control_in(
-            ControlIn {
-                control_type: ControlType::Vendor,
-                recipient: Recipient::Device,
-                request: FT4222_INFO_REQUEST,
-                value: FT4222_GET_CONFIG,
-                index: self.control_index as u16,
-                length: 13,
-            },
-            Duration::from_secs(5),
-        ))
-        .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get config: {}", e)))?;
+        let data = self
+            .interface
+            .control_in(
+                ControlIn {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request: FT4222_INFO_REQUEST,
+                    value: FT4222_GET_CONFIG,
+                    index: self.control_index as u16,
+                    length: 13,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .map_err(|e| Ft4222Error::TransferFailed(format!("Failed to get config: {}", e)))?;
 
         if data.is_empty() {
             return Err(Ft4222Error::InvalidResponse(
@@ -450,18 +439,20 @@ impl Ft4222 {
         index: u16,
         data: &[u8],
     ) -> Result<()> {
-        nusb_await!(self.interface.control_out(
-            ControlOut {
-                control_type: ControlType::Vendor,
-                recipient: Recipient::Device,
-                request,
-                value,
-                index,
-                data,
-            },
-            Duration::from_secs(5),
-        ))
-        .map_err(|e| Ft4222Error::TransferFailed(format!("Control transfer failed: {}", e)))?;
+        self.interface
+            .control_out(
+                ControlOut {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request,
+                    value,
+                    index,
+                    data,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .map_err(|e| Ft4222Error::TransferFailed(format!("Control transfer failed: {}", e)))?;
 
         Ok(())
     }
@@ -469,18 +460,20 @@ impl Ft4222 {
     /// Send an FT4222 config request.
     async fn config_request(&self, cmd: u8, data: u8) -> Result<()> {
         let value = ((data as u16) << 8) | (cmd as u16);
-        nusb_await!(self.interface.control_out(
-            ControlOut {
-                control_type: ControlType::Vendor,
-                recipient: Recipient::Device,
-                request: FT4222_CONFIG_REQUEST,
-                value,
-                index: self.control_index as u16,
-                data: &[],
-            },
-            Duration::from_secs(5),
-        ))
-        .map_err(|e| Ft4222Error::TransferFailed(format!("Control transfer failed: {}", e)))?;
+        self.interface
+            .control_out(
+                ControlOut {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request: FT4222_CONFIG_REQUEST,
+                    value,
+                    index: self.control_index as u16,
+                    data: &[],
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .map_err(|e| Ft4222Error::TransferFailed(format!("Control transfer failed: {}", e)))?;
 
         Ok(())
     }
@@ -494,8 +487,10 @@ impl Ft4222 {
 
         if data.is_empty() {
             out_ep.submit(Buffer::new(0));
-            let completion =
-                ep_wait!(out_ep, Duration::from_secs(30)).ok_or(Ft4222Error::Timeout)?;
+            let completion = out_ep
+                .next_complete_timeout(Duration::from_secs(30))
+                .await
+                .ok_or(Ft4222Error::Timeout)?;
             completion
                 .status
                 .map_err(|e| Ft4222Error::TransferFailed(format!("Empty packet failed: {}", e)))?;
@@ -514,8 +509,10 @@ impl Ft4222 {
             out_buf.extend_from_slice(chunk);
             out_ep.submit(out_buf);
 
-            let completion =
-                ep_wait!(out_ep, Duration::from_secs(30)).ok_or(Ft4222Error::Timeout)?;
+            let completion = out_ep
+                .next_complete_timeout(Duration::from_secs(30))
+                .await
+                .ok_or(Ft4222Error::Timeout)?;
             completion.status.map_err(|e| {
                 Ft4222Error::TransferFailed(format!(
                     "Bulk write failed at offset {}: {}",
@@ -549,8 +546,10 @@ impl Ft4222 {
             in_buf.set_requested_len(aligned_len);
             in_ep.submit(in_buf);
 
-            let completion =
-                ep_wait!(in_ep, Duration::from_secs(30)).ok_or(Ft4222Error::Timeout)?;
+            let completion = in_ep
+                .next_complete_timeout(Duration::from_secs(30))
+                .await
+                .ok_or(Ft4222Error::Timeout)?;
             completion
                 .status
                 .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk read failed: {}", e)))?;
@@ -614,8 +613,10 @@ impl Ft4222 {
             in_buf.set_requested_len(request_len);
             in_ep.submit(in_buf);
 
-            let completion =
-                ep_wait!(in_ep, Duration::from_secs(30)).ok_or(Ft4222Error::Timeout)?;
+            let completion = in_ep
+                .next_complete_timeout(Duration::from_secs(30))
+                .await
+                .ok_or(Ft4222Error::Timeout)?;
             completion
                 .status
                 .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk read failed: {e}")))?;
@@ -637,8 +638,10 @@ impl Ft4222 {
 
         let expected_out = if read_len > 0 { 3 } else { 2 };
         for _ in 0..expected_out {
-            let completion =
-                ep_wait!(out_ep, Duration::from_secs(30)).ok_or(Ft4222Error::Timeout)?;
+            let completion = out_ep
+                .next_complete_timeout(Duration::from_secs(30))
+                .await
+                .ok_or(Ft4222Error::Timeout)?;
             completion
                 .status
                 .map_err(|e| Ft4222Error::TransferFailed(format!("Bulk write failed: {e}")))?;
@@ -770,36 +773,15 @@ impl SpiMaster for Ft4222 {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        const SPIN_THRESHOLD_US: u32 = 100;
-        #[cfg(target_arch = "wasm32")]
-        const SPIN_THRESHOLD_US: u32 = 1_000;
-
-        if us < SPIN_THRESHOLD_US {
-            let deadline = std::time::Instant::now() + Duration::from_micros(us as u64);
+        if us < 100 {
+            let deadline = std::time::Instant::now() + Duration::from_micros(u64::from(us));
             while std::time::Instant::now() < deadline {
                 std::hint::spin_loop();
             }
             return;
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            std::thread::sleep(Duration::from_micros(us as u64));
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            let delay_ms = ((us as f64) / 1000.0).ceil() as i32;
-            if delay_ms > 0 {
-                let promise = js_sys::Promise::new(&mut |resolve, _| {
-                    let window = web_sys::window().unwrap();
-                    window
-                        .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, delay_ms)
-                        .unwrap();
-                });
-                let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-            }
-        }
+        delay(Duration::from_micros(u64::from(us))).await;
     }
 }
 
