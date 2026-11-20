@@ -147,47 +147,45 @@ pub async fn open_spi_programmer(
 
     match params.name.as_str() {
         #[cfg(feature = "dummy")]
-        "dummy" => {
-            Ok(ErasedSpiMaster::new(open_dummy_master(&params).await?))
-        }
+        "dummy" => Ok(ErasedSpiMaster::new(open_dummy_master(&params).await?)),
 
         #[cfg(feature = "ch341a")]
-        "ch341a" | "ch341a_spi" => {
-            Ok(ErasedSpiMaster::new(open_ch341a_master(&params, choose_usb_device).await?))
-        }
+        "ch341a" | "ch341a_spi" => Ok(ErasedSpiMaster::new(
+            open_ch341a_master(&params, choose_usb_device).await?,
+        )),
 
         #[cfg(feature = "ch347")]
-        "ch347" | "ch347_spi" => {
-            Ok(ErasedSpiMaster::new(open_ch347_master(&params, choose_usb_device).await?))
-        }
+        "ch347" | "ch347_spi" => Ok(ErasedSpiMaster::new(
+            open_ch347_master(&params, choose_usb_device).await?,
+        )),
 
         #[cfg(feature = "dediprog")]
-        "dediprog" | "dediprog_spi" => {
-            Ok(ErasedSpiMaster::new(open_dediprog_master(&params, choose_usb_device).await?))
-        }
+        "dediprog" | "dediprog_spi" => Ok(ErasedSpiMaster::new(
+            open_dediprog_master(&params, choose_usb_device).await?,
+        )),
 
         #[cfg(feature = "serprog-native")]
         "serprog" => {
             let config = parse_serprog_config(&params)?;
             match config.connection()? {
-                crate::serprog::SerprogConnection::Serial { device, baud } => {
-                    Ok(ErasedSpiMaster::new(open_serprog_serial(&device, baud, &config).await?))
-                }
-                crate::serprog::SerprogConnection::Tcp { host, port } => {
-                    Ok(ErasedSpiMaster::new(open_serprog_tcp(&host, port, &config).await?))
-                }
+                crate::serprog::SerprogConnection::Serial { device, baud } => Ok(
+                    ErasedSpiMaster::new(open_serprog_serial(&device, baud, &config).await?),
+                ),
+                crate::serprog::SerprogConnection::Tcp { host, port } => Ok(ErasedSpiMaster::new(
+                    open_serprog_tcp(&host, port, &config).await?,
+                )),
             }
         }
 
         #[cfg(feature = "ftdi")]
-        "ftdi" | "ft2232_spi" | "ft4232_spi" => {
-            Ok(ErasedSpiMaster::new(open_ftdi_master(&params, choose_usb_device).await?))
-        }
+        "ftdi" | "ft2232_spi" | "ft4232_spi" => Ok(ErasedSpiMaster::new(
+            open_ftdi_master(&params, choose_usb_device).await?,
+        )),
 
         #[cfg(feature = "ft4222")]
-        "ft4222" | "ft4222_spi" => {
-            Ok(ErasedSpiMaster::new(open_ft4222_master(&params, choose_usb_device).await?))
-        }
+        "ft4222" | "ft4222_spi" => Ok(ErasedSpiMaster::new(
+            open_ft4222_master(&params, choose_usb_device).await?,
+        )),
 
         #[cfg(feature = "linux-spi")]
         "linux_spi" | "linux-spi" | "spidev" => {
@@ -195,37 +193,54 @@ pub async fn open_spi_programmer(
         }
 
         #[cfg(feature = "linux-gpio")]
-        "linux_gpio_spi" | "linux-gpio-spi" | "linux_gpio" | "linux-gpio" => {
-            Ok(ErasedSpiMaster::new(open_linux_gpio_spi_master(&params).await?))
-        }
+        "linux_gpio_spi" | "linux-gpio-spi" | "linux_gpio" | "linux-gpio" => Ok(
+            ErasedSpiMaster::new(open_linux_gpio_spi_master(&params).await?),
+        ),
 
         #[cfg(feature = "raiden")]
-        "raiden_debug_spi" | "raiden" | "raiden_spi" => {
-            Ok(ErasedSpiMaster::new(open_raiden_master(&params, choose_usb_device).await?))
-        }
+        "raiden_debug_spi" | "raiden" | "raiden_spi" => Ok(ErasedSpiMaster::new(
+            open_raiden_master(&params, choose_usb_device).await?,
+        )),
 
         #[cfg(feature = "sunxi-fel")]
-        "sunxi_fel" | "sunxi-fel" | "fel" => {
-            Ok(ErasedSpiMaster::new(open_sunxi_fel_master(&params, choose_usb_device).await?))
-        }
+        "sunxi_fel" | "sunxi-fel" | "fel" => Ok(ErasedSpiMaster::new(
+            open_sunxi_fel_master(&params, choose_usb_device).await?,
+        )),
 
         #[cfg(all(feature = "ati-spi", target_os = "linux"))]
-        "ati_spi" | "ati-spi" | "ati" | "amdgpu" => {
-            Ok(ErasedSpiMaster::new(crate::ati_spi::open(&params.as_option_pairs())?))
+        "ati_spi" | "ati-spi" | "ati" | "amdgpu" => Ok(ErasedSpiMaster::new(crate::ati_spi::open(
+            &params.as_option_pairs(),
+        )?)),
+
+        #[cfg(all(feature = "internal", target_os = "linux"))]
+        "internal" => {
+            use rflasher_internal::{InternalOptions, InternalProgrammer};
+
+            let options = params.as_option_pairs();
+            let internal_opts = InternalOptions::from_options(&options)
+                .map_err(|e| format!("Invalid internal programmer options: {}", e))?;
+
+            match InternalProgrammer::open(internal_opts)
+                .map_err(|error| format_internal_init_error(&error))?
+            {
+                InternalProgrammer::Spi(spi) => Ok(ErasedSpiMaster::new(spi)),
+                InternalProgrammer::HardwareSequencing(_) => Err(
+                    "The REPL is only supported for SPI-based programmers. \
+                     The internal programmer opened in hardware sequencing mode, which doesn't support raw SPI commands. \
+                     If your chipset supports it, try internal:ich_spi_mode=swseq."
+                        .into(),
+                ),
+            }
         }
 
-        // Internal and MTD are opaque-only or not SPI-based
-        #[cfg(feature = "internal")]
-        "internal" => {
-            Err("The REPL is only supported for SPI-based programmers. \
-                 The internal programmer in hardware sequencing mode doesn't support raw SPI commands. \
-                 If you need raw SPI access, try internal:ich_spi_mode=swseq (if supported).".into())
-        }
+        #[cfg(all(feature = "internal", not(target_os = "linux")))]
+        "internal" => Err("The internal programmer is only supported on Linux".into()),
 
         #[cfg(feature = "linux-mtd")]
         "linux_mtd" | "linux-mtd" | "mtd" => {
             Err("The REPL is only supported for SPI-based programmers. \
-                 The linux_mtd programmer uses the MTD subsystem and doesn't expose raw SPI.".into())
+                 The linux_mtd programmer uses the MTD subsystem and doesn't expose raw SPI."
+                .into())
         }
 
         _ => Err(format!("Unknown programmer: {}", params.name).into()),

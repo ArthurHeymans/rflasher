@@ -19,11 +19,6 @@
 //! - **Software Sequencing**: We control the SPI protocol directly.
 //!   More flexible but may not be available on locked-down systems.
 
-#![cfg_attr(
-    all(feature = "std", not(target_os = "linux")),
-    allow(dead_code, unused_imports)
-)]
-
 use crate::DetectedChipset;
 use crate::chipset::IchChipset;
 use crate::controller::Controller;
@@ -33,73 +28,56 @@ use crate::host::LinuxHost;
 use crate::host::{HostAccess, MmioAccess, PciAddress, PciConfigAccess};
 use crate::ich_regs::*;
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
+use rflasher_core::programmer::{FlashAccess, SpiFeatures};
+use rflasher_core::spi::SpiCommand;
 
-#[inline]
-fn spin_loop() {
-    core::hint::spin_loop();
-}
-
-#[cfg(all(feature = "std", target_os = "linux"))]
+#[cfg(all(feature = "std", not(target_os = "uefi")))]
 struct Deadline {
-    end_sec: i64,
-    end_nsec: i64,
+    end: std::time::Instant,
 }
 
-#[cfg(all(feature = "std", target_os = "linux"))]
-impl Deadline {
-    fn new(timeout_us: u32) -> Self {
-        let mut start = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        // SAFETY: clock_gettime writes to a valid stack timespec.
-        unsafe {
-            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut start);
-        }
-
-        let timeout_ns = (timeout_us as i64) * 1000;
-        let end_nsec = start.tv_nsec + timeout_ns;
-        let end_sec = start.tv_sec + (end_nsec / 1_000_000_000);
-        let end_nsec = end_nsec % 1_000_000_000;
-
-        Self { end_sec, end_nsec }
-    }
-
-    fn expired(&mut self) -> bool {
-        let mut now = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        // SAFETY: clock_gettime writes to a valid stack timespec.
-        unsafe {
-            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
-        }
-
-        now.tv_sec > self.end_sec || (now.tv_sec == self.end_sec && now.tv_nsec >= self.end_nsec)
-    }
-}
-
-#[cfg(not(feature = "std"))]
-struct Deadline {
-    polls_left: u32,
-}
-
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "std", not(target_os = "uefi")))]
 impl Deadline {
     fn new(timeout_us: u32) -> Self {
         Self {
-            polls_left: timeout_us.saturating_mul(64).max(1),
+            end: std::time::Instant::now()
+                + std::time::Duration::from_micros(u64::from(timeout_us)),
         }
     }
 
-    fn expired(&mut self) -> bool {
-        let expired = self.polls_left == 0;
-        self.polls_left = self.polls_left.saturating_sub(1);
-        expired
+    fn expired(&self) -> bool {
+        std::time::Instant::now() >= self.end
+    }
+
+    fn wait_step<H: HostAccess>(&mut self, _host: &H) {
+        core::hint::spin_loop();
     }
 }
-use rflasher_core::programmer::{FlashAccess, SpiFeatures};
-use rflasher_core::spi::SpiCommand;
+
+#[cfg(any(not(feature = "std"), target_os = "uefi"))]
+struct Deadline {
+    remaining_us: u32,
+}
+
+#[cfg(any(not(feature = "std"), target_os = "uefi"))]
+impl Deadline {
+    fn new(timeout_us: u32) -> Self {
+        Self {
+            remaining_us: timeout_us,
+        }
+    }
+
+    fn expired(&self) -> bool {
+        self.remaining_us == 0
+    }
+
+    fn wait_step<H: HostAccess>(&mut self, host: &H) {
+        if self.remaining_us > 0 {
+            host.delay_us(1);
+            self.remaining_us -= 1;
+        }
+    }
+}
 
 /// Maximum SPI data transfer size for hardware sequencing
 pub const HWSEQ_MAX_DATA: usize = 64;
@@ -527,7 +505,6 @@ struct RegisterChange {
 }
 
 /// Intel ICH/PCH SPI Controller
-#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
 pub struct IchSpiController<H: HostAccess> {
     /// Platform access backend
     host: H,
@@ -576,7 +553,6 @@ pub struct IchSpiController<H: HostAccess> {
     bbar: u32,
 }
 
-#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
 impl<H: HostAccess> Drop for IchSpiController<H> {
     fn drop(&mut self) {
         if self.restore_pci_bwe {
@@ -626,7 +602,6 @@ impl IchSpiController<LinuxHost> {
     }
 }
 
-#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
 impl<H: HostAccess> IchSpiController<H> {
     /// Initialize a new SPI controller for the detected chipset.
     pub fn new_with_host(
@@ -739,7 +714,7 @@ impl<H: HostAccess> IchSpiController<H> {
                 if deadline.expired() {
                     return Err(InternalError::Io("hardware sequencing busy"));
                 }
-                spin_loop();
+                deadline.wait_step(&self.host);
             }
         }
     }
@@ -2201,10 +2176,7 @@ impl<H: HostAccess> IchSpiController<H> {
     /// Wait for hardware sequencing cycle to complete
     ///
     /// Polls for FDONE or FCERR in HSFS register.
-    /// Uses a busy-loop with clock_gettime for precise sub-microsecond timing,
-    /// matching flashprog's approach for maximum throughput.
     #[inline(always)]
-    #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
     fn hwseq_wait_for_cycle(&self, timeout_us: u32) -> Result<(), InternalError> {
         let done_or_err = HSFS_FDONE | HSFS_FCERR;
 
@@ -2228,8 +2200,7 @@ impl<H: HostAccess> IchSpiController<H> {
                 return Err(InternalError::Io("Hardware sequencing timeout"));
             }
 
-            // Hint to CPU that we're spinning (reduces power, improves perf on hyperthreaded cores)
-            spin_loop();
+            deadline.wait_step(&self.host);
         }
     }
 
@@ -2507,7 +2478,6 @@ impl<H: HostAccess> IchSpiController<H> {
     ///
     /// This should be called before starting a new cycle to ensure the
     /// previous one has completed.
-    #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
     fn swseq_wait_idle(&self, timeout_us: u32) -> Result<(), InternalError> {
         let mut deadline = Deadline::new(timeout_us);
 
@@ -2522,12 +2492,11 @@ impl<H: HostAccess> IchSpiController<H> {
                 return Err(InternalError::Io("SCIP never cleared (swseq busy timeout)"));
             }
 
-            spin_loop();
+            deadline.wait_step(&self.host);
         }
     }
 
     /// Wait for software sequencing cycle to complete
-    #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
     fn swseq_wait_complete(&self, timeout_us: u32) -> Result<(), InternalError> {
         let done_or_err = SSFS_FDONE | SSFS_FCERR;
 
@@ -2554,7 +2523,7 @@ impl<H: HostAccess> IchSpiController<H> {
                 return Err(InternalError::Io("Software sequencing timeout"));
             }
 
-            spin_loop();
+            deadline.wait_step(&self.host);
         }
     }
 
@@ -2668,7 +2637,6 @@ impl<H: HostAccess> IchSpiController<H> {
     ///
     /// This should be called before starting a new cycle to ensure the
     /// previous one has completed.
-    #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
     fn ich7_swseq_wait_idle(&self, timeout_us: u32) -> Result<(), InternalError> {
         let mut deadline = Deadline::new(timeout_us);
 
@@ -2685,12 +2653,11 @@ impl<H: HostAccess> IchSpiController<H> {
                 ));
             }
 
-            spin_loop();
+            deadline.wait_step(&self.host);
         }
     }
 
     /// Wait for ICH7 software sequencing cycle to complete
-    #[allow(clippy::unnecessary_cast)] // Casts needed for i686 where tv_sec/tv_nsec are i32
     fn ich7_swseq_wait_complete(&self, timeout_us: u32) -> Result<(), InternalError> {
         let done_or_err = SPIS_CDS | SPIS_FCERR;
 
@@ -2718,7 +2685,7 @@ impl<H: HostAccess> IchSpiController<H> {
                 return Err(InternalError::Io("ICH7: Software sequencing timeout"));
             }
 
-            spin_loop();
+            deadline.wait_step(&self.host);
         }
     }
 
@@ -3500,7 +3467,6 @@ impl<H: HostAccess> IchSpiController<H> {
     }
 }
 
-#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
 impl<H: HostAccess> Controller for IchSpiController<H> {
     fn is_locked(&self) -> bool {
         self.locked
@@ -3699,7 +3665,6 @@ impl<H: HostAccess> Controller for IchSpiController<H> {
 
 // Firmware uses the same SPI protocol/protection/geometry code as native
 // programmers. No Box or second firmware-specific flash implementation is needed.
-#[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
 impl<H: HostAccess> rflasher_core::programmer::SpiMaster for IchSpiController<H> {
     fn features(&self) -> SpiFeatures {
         Controller::features(self)
@@ -3724,21 +3689,6 @@ impl<H: HostAccess> rflasher_core::programmer::SpiMaster for IchSpiController<H>
     }
     async fn delay_us(&mut self, us: u32) {
         self.host.delay_us(us);
-    }
-}
-
-// Unsupported std non-Linux stub.
-#[cfg(all(feature = "std", not(target_os = "linux")))]
-pub struct IchSpiController {
-    _private: (),
-}
-
-#[cfg(all(feature = "std", not(target_os = "linux")))]
-impl IchSpiController {
-    pub fn new(_chipset: &DetectedChipset, _mode: SpiMode) -> Result<Self, InternalError> {
-        Err(InternalError::NotSupported(
-            "Intel internal programmer not available on this target",
-        ))
     }
 }
 
