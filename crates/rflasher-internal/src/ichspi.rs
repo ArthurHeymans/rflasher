@@ -267,7 +267,8 @@ pub fn get_spibar_address_with_host<H: PciConfigAccess<Error = InternalError>>(
             device == chipset.enable.device_id
         } else {
             match generation {
-                IchChipset::Series100SunrisePoint => matches!(device, 0x9d24 | 0xa2a4),
+                // SPT-LP, SPT-H (332691: D31:F5 DID A124h) and the 200 Series.
+                IchChipset::Series100SunrisePoint => matches!(device, 0x9d24 | 0xa124 | 0xa2a4),
                 IchChipset::C620Lewisburg => matches!(device, 0xa1a4 | 0xa224),
                 IchChipset::Series300CannonPoint => device == 0xa3a4,
                 IchChipset::ApolloLake => device == 0x5a96,
@@ -5456,6 +5457,7 @@ mod tests {
     fn pch_spi_mapping_and_identity() {
         for (id, target, spi_id) in [
             (0x9d48, (0x1f, 5), 0x9d24),
+            (0xa146, (0x1f, 5), 0xa124),
             (0xa1c0, (0x1f, 5), 0xa1a4),
             (0xa3c8, (0x1f, 5), 0xa3a4),
             (0x5ae8, (0x0d, 2), 0x5a96),
