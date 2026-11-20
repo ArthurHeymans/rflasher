@@ -348,7 +348,14 @@ mod tests {
 
     #[test]
     fn prefers_visible_spi_to_bridge_in_either_order() {
-        for (bridge, spi) in [(0xa1c0, 0xa1a4), (0xa303, 0xa324), (0x4380, 0x43a4)] {
+        for (bridge, spi) in [
+            (0xa146, 0xa124),
+            (0xa2c5, 0xa2a4),
+            (0xa1c0, 0xa1a4),
+            (0xa240, 0xa224),
+            (0xa303, 0xa324),
+            (0x4380, 0x43a4),
+        ] {
             let bridge = pci_device(INTEL_VID, bridge, 0);
             let mut spi = pci_device(INTEL_VID, spi, 0);
             spi.address = PciAddress::new(0, 0, 0x1f, 5);

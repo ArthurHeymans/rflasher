@@ -158,8 +158,10 @@ pub(crate) fn is_visible_spi_id(id: u16) -> bool {
     matches!(
         id,
         0x9d24
+            | 0xa124
             | 0xa2a4
             | 0xa1a4
+            | 0xa224
             | 0x9da4
             | 0xa324
             | 0x02a4
@@ -214,7 +216,7 @@ pub(crate) fn intel_config_function(
     // (enable_flash_pch100_or_c620) because the SPI function may be hidden.
     let location = match (chipset.chipset_type(), id) {
         (IchChipset::Series100SunrisePoint, _)
-        | (IchChipset::C620Lewisburg, 0xa1c0..=0xa1c7)
+        | (IchChipset::C620Lewisburg, 0xa1c0..=0xa1cd | 0xa240..=0xa249)
         | (IchChipset::Series300CannonPoint, 0xa3c8 | 0xa3da) => (0x1f, 5),
         (IchChipset::ApolloLake, 0x5ae8) | (IchChipset::GeminiLake, 0x31e8 | 0x3197) => (0x0d, 2),
         (generation, _) if !generation.is_pch100_compatible() => return Ok(actual),
@@ -5458,7 +5460,13 @@ mod tests {
         for (id, target, spi_id) in [
             (0x9d48, (0x1f, 5), 0x9d24),
             (0xa146, (0x1f, 5), 0xa124),
+            (0xa155, (0x1f, 5), 0xa124),
+            (0xa2c5, (0x1f, 5), 0xa2a4),
+            (0xa2cc, (0x1f, 5), 0xa2a4),
             (0xa1c0, (0x1f, 5), 0xa1a4),
+            (0xa1cd, (0x1f, 5), 0xa1a4),
+            (0xa240, (0x1f, 5), 0xa224),
+            (0xa249, (0x1f, 5), 0xa224),
             (0xa3c8, (0x1f, 5), 0xa3a4),
             (0x5ae8, (0x0d, 2), 0x5a96),
             (0x31e8, (0x0d, 2), 0x3196),
@@ -5478,7 +5486,7 @@ mod tests {
             assert!(host.writes().is_empty());
         }
         for id in [
-            0xa1a4, 0xa324, 0x43a4, 0x4b24, 0x5a96, 0x3196, 0x7e23, 0xa823, 0xae23,
+            0xa124, 0xa1a4, 0xa224, 0xa324, 0x43a4, 0x4b24, 0x5a96, 0x3196, 0x7e23, 0xa823, 0xae23,
         ] {
             let mut chipset = detected_id(id);
             chipset.device = 12;
@@ -5647,7 +5655,6 @@ mod tests {
             );
         }
         assert!(host.writes().is_empty());
-        assert!(crate::intel_pci::find_chipset(0x8086, 0xa124, None).is_none());
     }
 
     #[test]
