@@ -6,9 +6,8 @@
 use super::error::{LinuxSpiError, Result};
 
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
-use rflasher_core::programmer::default_execute;
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::SpiCommand;
+use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
@@ -379,10 +378,15 @@ impl SpiMaster for LinuxSpi {
     }
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        default_execute(cmd, self.features(), |write_data, read_buf| {
-            self.spi_transfer(write_data, read_buf)
-                .map_err(|_| CoreError::ProgrammerError)
-        })
+        check_io_mode_supported(cmd.io_mode, self.features())?;
+
+        let header_len = cmd.header_len();
+        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
+        cmd.encode_header(&mut write_data);
+        write_data[header_len..].copy_from_slice(cmd.write_data);
+
+        self.spi_transfer(&write_data, cmd.read_buf)
+            .map_err(|_| CoreError::ProgrammerError)
     }
 
     async fn delay_us(&mut self, us: u32) {

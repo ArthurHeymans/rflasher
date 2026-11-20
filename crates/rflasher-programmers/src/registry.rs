@@ -250,7 +250,7 @@ pub async fn open_spi_programmer(
 /// # Example
 /// ```ignore
 /// let db = ChipDatabase::new();
-/// let mut handle = open_flash("ch341a", &db)?;
+/// let mut handle = open_flash("ch341a", &db).await?;
 ///
 /// // Use the handle - works the same for all programmer types
 /// let size = handle.size();

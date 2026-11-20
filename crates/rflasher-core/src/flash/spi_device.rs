@@ -23,13 +23,13 @@ use crate::wp::{
 /// # Example
 ///
 /// ```ignore
-/// use rflasher_core::flash::{SpiFlashDevice, probe};
+/// use rflasher_core::flash::{SpiFlashDevice, probe_detailed};
 /// use rflasher_core::chip::ChipProvider;
 /// use rflasher_programmers::ch341a::Ch341a;
 ///
-/// fn create_flash_handle(db: &dyn ChipProvider) -> SpiFlashDevice<Ch341a> {
-///     let mut master = Ch341a::open().unwrap();
-///     let ctx = probe(&mut master, db).unwrap();
+/// async fn create_flash_handle(db: &dyn ChipProvider) -> SpiFlashDevice<Ch341a> {
+///     let mut master = Ch341a::open().await.unwrap();
+///     let ctx = probe_detailed(&mut master, db).await.unwrap().into_context();
 ///     SpiFlashDevice::new(master, ctx)
 /// }
 /// ```

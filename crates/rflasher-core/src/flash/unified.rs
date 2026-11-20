@@ -207,7 +207,7 @@ const WRITE_CHUNK_SIZE: usize = 256 * 1024;
 /// Read flash contents into a buffer
 ///
 /// This is a convenience function that reads with progress reporting.
-pub async fn read_with_progress<D: FlashDevice, P: WriteProgress>(
+pub async fn read_with_progress<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     buf: &mut [u8],
     progress: &mut P,
@@ -530,7 +530,7 @@ async fn smart_write_by_layout_prepared<D: FlashDevice + ?Sized, P: WriteProgres
 /// Read all included regions from flash into a buffer
 ///
 /// Regions that are not included will be left unchanged in the buffer.
-pub async fn read_by_layout<D: FlashDevice>(
+pub async fn read_by_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
     buffer: &mut [u8],
@@ -820,7 +820,7 @@ pub async fn verify<D: FlashDevice + ?Sized>(
 }
 
 /// Verify all included regions match expected data
-pub async fn verify_by_layout<D: FlashDevice>(
+pub async fn verify_by_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
     expected: &[u8],

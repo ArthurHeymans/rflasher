@@ -42,9 +42,9 @@ pub enum EraseOutcome {
 /// ```ignore
 /// use rflasher_core::flash::FlashDevice;
 ///
-/// fn read_first_sector<D: FlashDevice>(device: &mut D) -> Result<Vec<u8>> {
+/// async fn read_first_sector<D: FlashDevice>(device: &mut D) -> Result<Vec<u8>> {
 ///     let mut buf = vec![0u8; 4096];
-///     device.read(0, &mut buf)?;
+///     device.read(0, &mut buf).await?;
 ///     Ok(buf)
 /// }
 /// ```
