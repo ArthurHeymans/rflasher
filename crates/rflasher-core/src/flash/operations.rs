@@ -1392,7 +1392,11 @@ async fn check_programmed_range<M: SpiMaster + ?Sized>(
                 "Program at 0x{addr:08X} was ignored or incomplete; WPS individual \
                  locks may protect it. Select W25Q128BV-WP or W25Q128FVJV-WP if the marking is known"
             );
-            return Err(Error::VerifyError { addr });
+            return Err(Error::VerifyError {
+                addr,
+                expected: expected[pos],
+                found: actual[pos],
+            });
         }
     }
     Ok(())

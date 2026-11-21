@@ -867,63 +867,16 @@ pub async fn run_erase_with_layout<D: FlashDevice + ?Sized>(
 // Verify operations
 // =============================================================================
 
-/// Compare a chunk with expected data and return detailed error on mismatch
-fn verify_chunk(
-    chunk: &[u8],
-    expected_chunk: &[u8],
-    base_offset: usize,
-    region_name: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    chunk
-        .iter()
-        .zip(expected_chunk.iter())
-        .enumerate()
-        .find(|(_, (a, b))| a != b)
-        .map_or(Ok(()), |(i, (a, b))| {
-            let error_msg = match region_name {
-                Some(name) => format!(
-                    "Verification failed in region '{}' at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
-                    name,
-                    base_offset + i,
-                    b,
-                    a
-                ),
-                None => format!(
-                    "Verification failed at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
-                    base_offset + i,
-                    b,
-                    a
-                ),
-            };
-            Err(error_msg.into())
-        })
-}
-
 /// Verify flash contents against expected data
 pub async fn verify_flash<D: FlashDevice + ?Sized>(
     device: &mut D,
     expected: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let total_size = expected.len();
-    let mut buf = vec![0u8; READ_CHUNK_SIZE];
+    let pb = create_progress_bar_with_phase(expected.len() as u64, "Verifying")?;
 
-    let pb = create_progress_bar_with_phase(total_size as u64, "Verifying")?;
-
-    let result = async {
-        for offset in (0..total_size).step_by(READ_CHUNK_SIZE) {
-            let chunk_size = std::cmp::min(READ_CHUNK_SIZE, total_size - offset);
-            let chunk = &mut buf[..chunk_size];
-
-            device.read(offset as u32, chunk).await?;
-
-            // Compare
-            let expected_chunk = &expected[offset..offset + chunk_size];
-            verify_chunk(chunk, expected_chunk, offset, None)?;
-
-            pb.set_position((offset + chunk_size) as u64);
-        }
-        Ok::<_, Box<dyn std::error::Error>>(())
-    }
+    let result = unified::verify_with_progress(device, expected, 0, |bytes| {
+        pb.set_position(bytes as u64);
+    })
     .await;
 
     match result {
@@ -931,9 +884,20 @@ pub async fn verify_flash<D: FlashDevice + ?Sized>(
             pb.finish_with_message("Verification passed");
             Ok(())
         }
+        Err(rflasher_core::Error::VerifyError {
+            addr,
+            expected,
+            found,
+        }) => {
+            pb.abandon_with_message("Verification failed!");
+            Err(format!(
+                "Verification failed at offset 0x{addr:08X}: expected 0x{expected:02X}, got 0x{found:02X}"
+            )
+            .into())
+        }
         Err(e) => {
             pb.abandon_with_message("Verification failed!");
-            Err(e)
+            Err(e.into())
         }
     }
 }
@@ -1009,44 +973,42 @@ pub async fn verify_by_layout<D: FlashDevice + ?Sized>(
     layout: &Layout,
     expected: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let included: Vec<_> = layout.included_regions().collect();
-    let total_bytes: usize = included.iter().map(|r| r.size() as usize).sum();
-
+    let total_bytes: usize = layout.included_regions().map(|r| r.size() as usize).sum();
     let pb = create_progress_bar_with_phase(total_bytes as u64, "Verifying")?;
 
-    let mut buf = vec![0u8; READ_CHUNK_SIZE];
-
-    let result = async {
-        let mut bytes_verified = 0usize;
-        for (region, offset) in included.iter().flat_map(|region| {
-            (region.start..=region.end)
-                .step_by(READ_CHUNK_SIZE)
-                .map(move |offset| (region, offset))
-        }) {
-            let chunk_size = std::cmp::min(READ_CHUNK_SIZE, (region.end - offset + 1) as usize);
-            let chunk = &mut buf[..chunk_size];
-
-            device.read(offset, chunk).await?;
-
-            // Compare
-            let expected_chunk = &expected[offset as usize..offset as usize + chunk_size];
-            verify_chunk(chunk, expected_chunk, offset as usize, Some(&region.name))?;
-
-            bytes_verified += chunk_size;
-            pb.set_position(bytes_verified as u64);
-        }
-        Ok::<_, Box<dyn std::error::Error>>(())
-    }
+    let result = unified::verify_by_layout_with_progress(device, layout, expected, |bytes| {
+        pb.set_position(bytes as u64);
+    })
     .await;
 
     match result {
-        Ok(_) => {
+        Ok(()) => {
             pb.finish_with_message("Verification passed");
             Ok(())
         }
+        Err(rflasher_core::Error::VerifyError {
+            addr,
+            expected,
+            found,
+        }) => {
+            pb.abandon_with_message("Verification failed!");
+            let region_name = layout
+                .included_regions()
+                .find(|r| addr >= r.start && addr <= r.end)
+                .map(|r| r.name.as_str());
+            let msg = match region_name {
+                Some(name) => format!(
+                    "Verification failed in region '{name}' at offset 0x{addr:08X}: expected 0x{expected:02X}, got 0x{found:02X}"
+                ),
+                None => format!(
+                    "Verification failed at offset 0x{addr:08X}: expected 0x{expected:02X}, got 0x{found:02X}"
+                ),
+            };
+            Err(msg.into())
+        }
         Err(e) => {
             pb.abandon_with_message("Verification failed!");
-            Err(e)
+            Err(e.into())
         }
     }
 }
