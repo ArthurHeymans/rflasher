@@ -65,7 +65,9 @@ impl State {
         protection | if self.wel { 2 } else { 0 } | if self.busy_us > 0 { 1 } else { 0 }
     }
     fn protected(&self, addr: usize, len: usize) -> bool {
-        if self.unlock == Unlock::At2x {
+        if self.unlock == Unlock::HardwarePin {
+            !self.wp_high && addr < 65536
+        } else if self.unlock == Unlock::At2x {
             self.sectors[addr / 4096..(addr + len).div_ceil(4096)]
                 .iter()
                 .any(|p| *p)
@@ -235,13 +237,15 @@ impl SpiMaster for Master {
                     return Err(Error::SpiTransferFailed);
                 }
             }
-            0x20 | 0x52 | 0xc4 | 0xc7 => {
+            0x20 | 0x52 | 0xdb | 0xd8 | 0xc4 | 0xc7 => {
                 if s.fail_mutation {
                     return Err(Error::SpiTransferFailed);
                 }
                 let len = match cmd.opcode {
                     0x20 => 4096,
                     0x52 => 8192,
+                    0xdb => 256,
+                    0xd8 => 65536,
                     0xc4 => s.data.len() / 2,
                     _ => s.data.len(),
                 };
@@ -608,6 +612,95 @@ fn sst26_registers_are_unlocked_and_restored_at_each_documented_width() {
                 assert!(!s.commands.iter().any(|(op, _)| *op == 0x01));
             }
         }
+    });
+}
+
+#[test]
+fn read_only_status_profiles_read_back_pin_inhibited_mutations() {
+    block_on(async {
+        let database = rflasher_chips::ChipDatabase::new();
+        for name in [
+            "M45PE10",
+            "M45PE16",
+            "M45PE40",
+            "M45PE80",
+            "LE25FW203A",
+            "LE25FW403A",
+        ] {
+            let chip = database.iter().find(|chip| chip.name() == name).unwrap();
+            assert_eq!(chip.unlock, Unlock::HardwarePin);
+            for fast in [false, true] {
+                for wp_high in [false, true] {
+                    let (master, mut ctx) =
+                        fixture(chip.unlock, 0, chip.features, chip.total_size as usize);
+                    ctx.chip = chip.clone();
+                    let state = master.0.clone();
+                    {
+                        let mut s = state.lock().unwrap();
+                        s.wp_high = wp_high;
+                        s.data[..2].fill(0xff);
+                        s.data[65536] = 0xff;
+                    }
+                    let mut master = if fast {
+                        with_fast_paths(master)
+                    } else {
+                        master
+                    };
+                    assert_eq!(
+                        flash::write(&mut master, &ctx, 0, &[0x5a]).await,
+                        if wp_high {
+                            Ok(())
+                        } else {
+                            Err(Error::VerifyError { addr: 0 })
+                        }
+                    );
+                    let op = OptimalEraseOp {
+                        start: 0,
+                        size: 256,
+                        erase_block: chip.erase_blocks()[0].clone(),
+                    };
+                    let mut device = ErasedFlashDevice::new(SpiFlashDevice::new(master, ctx));
+                    assert_eq!(
+                        device.write(1, &[0xa5]).await,
+                        if wp_high {
+                            Ok(())
+                        } else {
+                            Err(Error::VerifyError { addr: 1 })
+                        }
+                    );
+                    assert_eq!(
+                        device.erase_operation(&op).await,
+                        if wp_high {
+                            Ok(EraseOutcome::VerifiedErased)
+                        } else {
+                            Err(Error::EraseError(EraseFailure::VerifyFailed {
+                                addr: 2,
+                                found: 0,
+                            }))
+                        }
+                    );
+                    // The pin protects only the bottom 64 KiB, not the whole array.
+                    device.write(65536, &[0x3c]).await.unwrap();
+                    let s = state.lock().unwrap();
+                    assert_eq!(s.data[65536], 0x3c);
+                    assert_eq!((s.sr1, s.sr2, s.sr3), (0, 2, 0));
+                    assert!(
+                        !s.commands
+                            .iter()
+                            .any(|(op, _)| matches!(op, 0x01 | 0x31 | 0x11 | 0x50 | 0x98))
+                    );
+                }
+            }
+        }
+        // No manufacturer-wide default: the unaudited sibling stays closed.
+        assert_eq!(
+            database
+                .iter()
+                .find(|chip| chip.name() == "M45PE20")
+                .unwrap()
+                .unlock,
+            Unlock::Unsupported
+        );
     });
 }
 
