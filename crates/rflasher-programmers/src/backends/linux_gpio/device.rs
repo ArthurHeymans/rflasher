@@ -687,7 +687,7 @@ impl SpiMaster for LinuxGpioSpi {
 /// - `io2=N` - IO2 GPIO line offset (optional, for quad mode)
 /// - `io3=N` - IO3 GPIO line offset (optional, for quad mode)
 /// - `spispeed=N` - SPI speed in kHz (optional, default ~100 kHz)
-pub fn parse_options(options: &[(&str, &str)]) -> std::result::Result<LinuxGpioSpiConfig, String> {
+pub fn parse_options(options: &[(&str, &str)]) -> Result<LinuxGpioSpiConfig> {
     let mut config = LinuxGpioSpiConfig::default();
     let mut have_cs = false;
     let mut have_sck = false;
@@ -701,57 +701,78 @@ pub fn parse_options(options: &[(&str, &str)]) -> std::result::Result<LinuxGpioS
                 config.device = value.to_string();
             }
             "gpiochip" => {
-                gpiochip = Some(
-                    value
-                        .parse()
-                        .map_err(|_| format!("Invalid gpiochip value: {}", value))?,
-                );
+                gpiochip = Some(value.parse().map_err(|_| {
+                    LinuxGpioError::InvalidParameter(format!("Invalid gpiochip value: {}", value))
+                })?);
             }
             "cs" => {
                 config.cs = value
                     .parse()
-                    .map_err(|_| format!("Invalid cs value: {}", value))?;
+                    .map_err(|_| LinuxGpioError::InvalidLineNumber {
+                        name: "cs",
+                        value: (*value).to_string(),
+                    })?;
                 have_cs = true;
             }
             "sck" => {
                 config.sck = value
                     .parse()
-                    .map_err(|_| format!("Invalid sck value: {}", value))?;
+                    .map_err(|_| LinuxGpioError::InvalidLineNumber {
+                        name: "sck",
+                        value: (*value).to_string(),
+                    })?;
                 have_sck = true;
             }
             "mosi" | "io0" => {
                 config.mosi = value
                     .parse()
-                    .map_err(|_| format!("Invalid mosi/io0 value: {}", value))?;
+                    .map_err(|_| LinuxGpioError::InvalidLineNumber {
+                        name: "mosi/io0",
+                        value: (*value).to_string(),
+                    })?;
                 have_mosi = true;
             }
             "miso" | "io1" => {
                 config.miso = value
                     .parse()
-                    .map_err(|_| format!("Invalid miso/io1 value: {}", value))?;
+                    .map_err(|_| LinuxGpioError::InvalidLineNumber {
+                        name: "miso/io1",
+                        value: (*value).to_string(),
+                    })?;
                 have_miso = true;
             }
             "io2" => {
-                config.io2 = Some(
-                    value
-                        .parse()
-                        .map_err(|_| format!("Invalid io2 value: {}", value))?,
-                );
+                config.io2 =
+                    Some(
+                        value
+                            .parse()
+                            .map_err(|_| LinuxGpioError::InvalidLineNumber {
+                                name: "io2",
+                                value: (*value).to_string(),
+                            })?,
+                    );
             }
             "io3" => {
-                config.io3 = Some(
-                    value
-                        .parse()
-                        .map_err(|_| format!("Invalid io3 value: {}", value))?,
-                );
+                config.io3 =
+                    Some(
+                        value
+                            .parse()
+                            .map_err(|_| LinuxGpioError::InvalidLineNumber {
+                                name: "io3",
+                                value: (*value).to_string(),
+                            })?,
+                    );
             }
             "spispeed" => {
-                let speed_khz = crate::catalog::parse_speed_khz(value)
-                    .ok_or_else(|| format!("Invalid spispeed value: {value}"))?;
+                let speed_khz = crate::catalog::parse_speed_khz(value).ok_or_else(|| {
+                    LinuxGpioError::InvalidParameter(format!("Invalid spispeed value: {value}"))
+                })?;
                 config = config.with_speed_hz(speed_khz * 1000);
             }
             _ => {
-                return Err(format!("unknown option: {key}"));
+                return Err(LinuxGpioError::InvalidParameter(format!(
+                    "unknown option: {key}"
+                )));
             }
         }
     }
@@ -760,35 +781,37 @@ pub fn parse_options(options: &[(&str, &str)]) -> std::result::Result<LinuxGpioS
     if config.device.is_empty() {
         if let Some(n) = gpiochip {
             if n > 9 {
-                return Err("Maximum gpiochip number supported is 9".to_string());
+                return Err(LinuxGpioError::InvalidParameter(
+                    "Maximum gpiochip number supported is 9".to_string(),
+                ));
             }
             config.device = format!("/dev/gpiochip{}", n);
         } else {
-            return Err("Either 'dev' or 'gpiochip' must be specified.\n\
-                 e.g. linux_gpio_spi:dev=/dev/gpiochip0,cs=25,sck=11,mosi=10,miso=9"
-                .to_string());
+            return Err(LinuxGpioError::NoDevice);
         }
     } else if gpiochip.is_some() {
-        return Err("Only one of 'dev' or 'gpiochip' can be specified".to_string());
+        return Err(LinuxGpioError::InvalidParameter(
+            "Only one of 'dev' or 'gpiochip' can be specified".to_string(),
+        ));
     }
 
     // Check required parameters
     if !have_cs {
-        return Err("Missing required parameter: cs".to_string());
+        return Err(LinuxGpioError::MissingParameter("cs"));
     }
     if !have_sck {
-        return Err("Missing required parameter: sck".to_string());
+        return Err(LinuxGpioError::MissingParameter("sck"));
     }
     if !have_mosi {
-        return Err("Missing required parameter: mosi (or io0)".to_string());
+        return Err(LinuxGpioError::MissingParameter("mosi (or io0)"));
     }
     if !have_miso {
-        return Err("Missing required parameter: miso (or io1)".to_string());
+        return Err(LinuxGpioError::MissingParameter("miso (or io1)"));
     }
 
     // Check quad I/O consistency
     if config.io2.is_some() != config.io3.is_some() {
-        return Err("Both io2 and io3 must be specified for quad I/O mode".to_string());
+        return Err(LinuxGpioError::IncompleteQuadIo);
     }
 
     Ok(config)

@@ -1,18 +1,24 @@
+use super::AtiSpiError;
 use rflasher_pci::PciAddress;
 
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct AtiSpiOptions {
+pub struct AtiSpiConfig {
     /// Exact domain:bus:device.function address; required for multiple GPUs.
     pub pci: Option<PciAddress>,
 }
 
-pub fn parse_options(options: &[(&str, &str)]) -> Result<AtiSpiOptions, String> {
-    let mut config = AtiSpiOptions::default();
+/// Alias kept for backwards compatibility with earlier callers.
+pub type AtiSpiOptions = AtiSpiConfig;
+
+pub fn parse_options(options: &[(&str, &str)]) -> Result<AtiSpiConfig, AtiSpiError> {
+    let mut config = AtiSpiConfig::default();
     for &(key, value) in options {
         match key {
-            "pci" if config.pci.is_none() => config.pci = Some(parse_address(value)?),
-            "pci" => return Err("duplicate pci option".into()),
-            _ => return Err(format!("unknown option: {key}")),
+            "pci" if config.pci.is_none() => {
+                config.pci = Some(parse_address(value).map_err(AtiSpiError::Options)?);
+            }
+            "pci" => return Err(AtiSpiError::Options("duplicate pci option".into())),
+            _ => return Err(AtiSpiError::Options(format!("unknown option: {key}"))),
         }
     }
     Ok(config)
@@ -56,7 +62,9 @@ pub mod schema {
     }];
 
     pub fn validate_options(options: &[(&str, &str)]) -> Result<(), String> {
-        super::parse_options(options).map(|_| ())
+        super::parse_options(options)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 }
 

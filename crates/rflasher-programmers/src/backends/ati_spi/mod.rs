@@ -17,7 +17,7 @@ mod ownership;
 pub use driver::AtiSpiController;
 pub use error::AtiSpiError;
 pub use ids::{ATI_SPI_DEVICES, ATI_VID, AtiSpiDevice, AtiSpiType, TestStatus};
-pub use options::{AtiSpiOptions, parse_options, schema};
+pub use options::{AtiSpiConfig, AtiSpiOptions, parse_options, schema};
 
 /// A supported ATI/AMD GPU discovered on the PCI bus.
 #[derive(Debug, Clone)]
@@ -72,7 +72,7 @@ pub fn find_ati_gpu() -> Result<Option<DetectedAtiGpu>, AtiSpiError> {
 
 /// Select and open a GPU using the same options as the programmer catalog.
 pub fn open(options: &[(&str, &str)]) -> Result<AtiSpiController, AtiSpiError> {
-    let config = parse_options(options).map_err(AtiSpiError::Options)?;
+    let config = parse_options(options)?;
     let gpu = select_gpu(scan_for_ati_gpus()?, config.pci)?
         .ok_or_else(|| AtiSpiError::Selection("No matching ATI/AMD GPU found".into()))?;
     log::info!(

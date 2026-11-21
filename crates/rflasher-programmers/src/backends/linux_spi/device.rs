@@ -416,7 +416,7 @@ fn get_max_kernel_buf_size() -> usize {
 }
 
 /// Parse programmer options from a list of key-value pairs
-pub fn parse_options(options: &[(&str, &str)]) -> std::result::Result<LinuxSpiConfig, String> {
+pub fn parse_options(options: &[(&str, &str)]) -> Result<LinuxSpiConfig> {
     let mut config = LinuxSpiConfig::default();
 
     for (key, value) in options {
@@ -426,27 +426,33 @@ pub fn parse_options(options: &[(&str, &str)]) -> std::result::Result<LinuxSpiCo
             }
             "spispeed" => {
                 // Accepts kHz with an optional k/m/g suffix.
-                let speed_khz = crate::catalog::parse_speed_khz(value)
-                    .ok_or_else(|| format!("Invalid spispeed value: {value}"))?;
+                let speed_khz = crate::catalog::parse_speed_khz(value).ok_or_else(|| {
+                    LinuxSpiError::InvalidParameter(format!("Invalid spispeed value: {value}"))
+                })?;
                 config.speed_hz = speed_khz * 1000;
             }
             "mode" => {
-                let mode: u8 = value
-                    .parse()
-                    .map_err(|_| format!("Invalid mode value: {}", value))?;
+                let mode: u8 = value.parse().map_err(|_| {
+                    LinuxSpiError::InvalidParameter(format!("Invalid mode value: {}", value))
+                })?;
                 if mode > 3 {
-                    return Err(format!("Invalid SPI mode: {} (must be 0-3)", mode));
+                    return Err(LinuxSpiError::InvalidParameter(format!(
+                        "Invalid SPI mode: {} (must be 0-3)",
+                        mode
+                    )));
                 }
                 config.mode = mode;
             }
             _ => {
-                return Err(format!("unknown option: {key}"));
+                return Err(LinuxSpiError::InvalidParameter(format!(
+                    "unknown option: {key}"
+                )));
             }
         }
     }
 
     if config.device.is_empty() {
-        return Err("No device specified. Use dev=/dev/spidevX.Y".to_string());
+        return Err(LinuxSpiError::NoDevice);
     }
 
     Ok(config)

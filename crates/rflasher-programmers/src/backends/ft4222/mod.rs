@@ -103,6 +103,10 @@ pub use error::{Ft4222Error, Result};
 #[cfg(any(feature = "std", feature = "wasm"))]
 pub use protocol::{ClockConfig, ClockDivisor, IoMode, SpiConfig, SystemClock};
 
+/// Configuration type alias following the `<Backend>Config` convention.
+#[cfg(any(feature = "std", feature = "wasm"))]
+pub type Ft4222Config = SpiConfig;
+
 // ---------------------------------------------------------------------------
 // Option schema shared by the CLI and the web frontend.
 // The table sits next to the parser it describes; `crate::catalog` only

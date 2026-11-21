@@ -113,7 +113,8 @@ pub(crate) async fn open_programmer(
 ) -> Result<(Programmer, String), String> {
     match name {
         "serprog" => {
-            let config = rflasher_programmers::serprog::parse_options(options)?;
+            let config =
+                rflasher_programmers::serprog::parse_options(options).map_err(|e| e.to_string())?;
             let baud = config.baud.unwrap_or(DEFAULT_SERPROG_BAUD);
             let transport = WebSerialTransport::request_and_open(baud)
                 .await
