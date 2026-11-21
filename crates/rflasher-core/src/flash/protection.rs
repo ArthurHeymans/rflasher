@@ -118,10 +118,15 @@ pub(crate) fn needs_read_back<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashCont
 /// which [`prepare`] checks once it has read the registers.
 pub(crate) fn check_supported<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashContext) -> Result<()> {
     let features = ctx.chip.features;
-    if features.contains(Features::WP_WPS) && !master.probe_opcode(0x15) {
+    let unlock = ctx.chip.unlock;
+    if (features.contains(Features::WP_WPS) || unlock == Unlock::FudanQ128)
+        && !master.probe_opcode(0x15)
+    {
         return Err(Error::OpcodeNotSupported);
     }
-    let unlock = ctx.chip.unlock;
+    if unlock == Unlock::FudanQ04 && !features.contains(Features::WRSR_EXT) {
+        return Err(Error::ChipNotSupported);
+    }
     let bpr_len = match unlock {
         Unlock::Unknown | Unlock::None => return Ok(()),
         Unlock::Unsupported => return Err(Error::ChipNotSupported),
@@ -143,7 +148,14 @@ pub(crate) fn check_supported<M: SpiMaster + ?Sized>(master: &M, ctx: &FlashCont
         return Ok(());
     }
     unlock.status_masks().ok_or(Error::ChipNotSupported)?;
-    if features.contains(Features::WP_CMP) && !features.documents_rdsr2() {
+    if unlock == Unlock::FudanQ04 && !master.probe_opcode(0x35) {
+        // This layout also holds WPS in SR2: do not guess the selected mode.
+        return Err(Error::OpcodeNotSupported);
+    }
+    if features.contains(Features::WP_CMP)
+        && !features.documents_rdsr2()
+        && unlock != Unlock::FudanQ128
+    {
         // CMP availability alone does not identify its register/bit.
         return Err(Error::ChipNotSupported);
     }
@@ -156,7 +168,7 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
     ctx: &FlashContext,
 ) -> Result<SavedProtection> {
     check_supported(master, ctx)?;
-    if ctx.chip.features.contains(Features::WP_WPS) {
+    if ctx.chip.features.contains(Features::WP_WPS) || ctx.chip.unlock == Unlock::FudanQ128 {
         // WPS=1 selects individual block locks, which are neither read nor
         // removed here and silently ignore program/erase. Fail closed rather
         // than rely on a later verify that the caller may skip.
@@ -194,6 +206,10 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
     } else {
         let (bp, lock, wp, _) = unlock.status_masks().ok_or(Error::ChipNotSupported)?;
         let sr1 = protocol::read_status1(master).await?;
+        if unlock == Unlock::FudanQ128 && sr1 & 0x40 != 0 {
+            // FM25Q128 puts CMP in SR1, not in its latency/QE register.
+            return Err(Error::WriteProtected);
+        }
         let features = ctx.chip.features;
         if sr1 & bp == 0 && !features.documents_rdsr2() {
             return Ok(SavedProtection::Unchanged);
@@ -213,8 +229,14 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
         } else if features.documents_rdsr2() {
             let value = protocol::read_status2(master).await?;
             // Check even with BP=0: CMP can then protect the entire array.
-            // Never clear CMP/SRL, or reinterpret an unverified CMP layout.
-            if value & 0x41 != 0 {
+            // Never clear CMP, register locks or individual-lock selection.
+            // FM25Q04: CMP=4, WPS=5, SRP1=0; bit 6 is ERR, not CMP.
+            let forbidden = if unlock == Unlock::FudanQ04 {
+                0x31
+            } else {
+                0x41
+            };
+            if value & forbidden != 0 {
                 return Err(Error::WriteProtected);
             }
             Some(value)
@@ -224,7 +246,10 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
         if sr1 & bp == 0 {
             return Ok(SavedProtection::Unchanged);
         }
-        if sr2.is_none() && features.intersects(Features::STATUS_REG_2 | Features::QE_SR2) {
+        if sr2.is_none()
+            && features.intersects(Features::STATUS_REG_2 | Features::QE_SR2)
+            && unlock != Unlock::FudanQ128
+        {
             // These flags do not identify either RDSR2 or the WRSR wire format.
             return Err(Error::ChipNotSupported);
         }
