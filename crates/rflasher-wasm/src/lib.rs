@@ -6,7 +6,10 @@
 #![warn(missing_docs)]
 
 mod app;
+mod file_dialog;
 mod form;
+mod programmer;
+mod state;
 mod transport;
 
 pub use app::RflasherApp;

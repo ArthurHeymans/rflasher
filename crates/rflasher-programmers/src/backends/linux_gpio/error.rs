@@ -38,7 +38,10 @@ pub enum LinuxGpioError {
     MissingParameter(&'static str),
 
     /// GPIO chip or device not specified
-    #[error("No GPIO chip specified. Use dev=/dev/gpiochipN or gpiochip=N")]
+    #[error(
+        "Either 'dev' or 'gpiochip' must be specified.\n\
+         e.g. linux_gpio_spi:dev=/dev/gpiochip0,cs=25,sck=11,mosi=10,miso=9"
+    )]
     NoDevice,
 
     /// Invalid GPIO line number

@@ -23,13 +23,13 @@ use crate::wp::{
 /// # Example
 ///
 /// ```ignore
-/// use rflasher_core::flash::{SpiFlashDevice, probe};
+/// use rflasher_core::flash::{SpiFlashDevice, probe_detailed};
 /// use rflasher_core::chip::ChipProvider;
 /// use rflasher_programmers::ch341a::Ch341a;
 ///
-/// fn create_flash_handle(db: &dyn ChipProvider) -> SpiFlashDevice<Ch341a> {
-///     let mut master = Ch341a::open().unwrap();
-///     let ctx = probe(&mut master, db).unwrap();
+/// async fn create_flash_handle(db: &dyn ChipProvider) -> SpiFlashDevice<Ch341a> {
+///     let mut master = Ch341a::open().await.unwrap();
+///     let ctx = probe_detailed(&mut master, db).await.unwrap().into_context();
 ///     SpiFlashDevice::new(master, ctx)
 /// }
 /// ```
@@ -620,6 +620,94 @@ mod tests {
                 assert_eq!(dev.master.persistent, [0x1c, 0x00, 0x04]);
                 assert!(!dev.master.commands.iter().any(|(op, _)| *op == 0x06));
             }
+        });
+    }
+
+    #[test]
+    fn spi_flash_device_forwards_master_capabilities_and_fast_paths() {
+        use crate::programmer::{FlashAccess, SpiFeatures};
+
+        #[derive(Default)]
+        struct ForwardingMaster {
+            identified: bool,
+            fast_reads: usize,
+            fast_writes: usize,
+        }
+
+        impl SpiMaster for ForwardingMaster {
+            fn features(&self) -> SpiFeatures {
+                SpiFeatures::empty()
+            }
+            fn max_read_len(&self) -> usize {
+                64
+            }
+            fn max_write_len(&self) -> usize {
+                64
+            }
+            fn probe_opcode(&self, opcode: u8) -> bool {
+                opcode != 0xd8
+            }
+            fn chip_identified(&mut self, _chip: &crate::chip::FlashChip) {
+                self.identified = true;
+            }
+            fn check_access(&self, access: FlashAccess, addr: u32, len: u32) -> Result<()> {
+                if access == FlashAccess::Modify && addr < 0x1000 && len > 0 {
+                    return Err(Error::RegionProtected);
+                }
+                Ok(())
+            }
+            async fn execute(&mut self, cmd: &mut crate::spi::SpiCommand<'_>) -> Result<()> {
+                // Return idle, unprotected status registers for write preflight/restore.
+                match cmd.opcode {
+                    0x05 | 0x35 | 0x15 => {
+                        cmd.read_buf.fill(0);
+                        Ok(())
+                    }
+                    _ => Err(Error::SpiTransferFailed),
+                }
+            }
+            async fn delay_us(&mut self, _us: u32) {}
+            async fn read_flash(
+                &mut self,
+                _ctx: &FlashContext,
+                _addr: u32,
+                buf: &mut [u8],
+            ) -> Result<()> {
+                self.fast_reads += 1;
+                buf.fill(0x5a);
+                Ok(())
+            }
+            async fn program_flash(
+                &mut self,
+                _ctx: &FlashContext,
+                _addr: u32,
+                _data: &[u8],
+            ) -> Result<()> {
+                self.fast_writes += 1;
+                Ok(())
+            }
+        }
+
+        futures_lite::future::block_on(async {
+            let db = rflasher_chips::ChipDatabase::new();
+            let chip = db.find_by_name("W25Q128.V")[0].clone();
+            let mut dev = SpiFlashDevice::new(ForwardingMaster::default(), FlashContext::new(chip));
+            assert!(dev.master().identified);
+            assert_eq!(
+                dev.check_access(FlashAccess::Modify, 0, 16),
+                Err(Error::RegionProtected)
+            );
+            assert_eq!(dev.check_access(FlashAccess::Read, 0, 16), Ok(()));
+            assert!(!dev.can_erase_with(&EraseBlock::new(0xd8, 65536)));
+            assert!(dev.can_erase_with(&EraseBlock::new(0x20, 4096)));
+
+            let mut buf = [0u8; 4];
+            dev.read(0, &mut buf).await.unwrap();
+            assert_eq!(buf, [0x5a; 4]);
+            assert_eq!(dev.master().fast_reads, 1);
+
+            dev.write(0x1000, &[0x5a; 4]).await.unwrap();
+            assert_eq!(dev.master().fast_writes, 1);
         });
     }
 }

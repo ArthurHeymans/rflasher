@@ -13,39 +13,8 @@ use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
 
 use super::error::{RaidenError, Result};
 use super::protocol::*;
+use crate::time::delay;
 use crate::usb_ep::EpWaitExt;
-
-/// Wait for the next completion on an endpoint, giving up after the timeout.
-/// Returns `Option<Completion>` (`None` on timeout).
-macro_rules! ep_wait {
-    ($ep:expr, $timeout:expr) => {
-        $ep.next_complete_timeout($timeout).await
-    };
-}
-
-macro_rules! nusb_await {
-    ($expr:expr) => {{ $expr.await }};
-}
-
-macro_rules! platform_sleep {
-    ($dur:expr) => {{
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            std::thread::sleep($dur);
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let ms = $dur.as_millis() as i32;
-            let promise = js_sys::Promise::new(&mut |resolve, _| {
-                let window = web_sys::window().unwrap();
-                window
-                    .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms)
-                    .unwrap();
-            });
-            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-        }
-    }};
-}
 
 /// Configuration options for opening a Raiden device
 #[derive(Debug, Clone, Default)]
@@ -230,20 +199,22 @@ impl RaidenDebugSpi {
             self.interface_num
         );
 
-        nusb_await!(self.interface.control_out(
-            nusb::transfer::ControlOut {
-                control_type: nusb::transfer::ControlType::Vendor,
-                recipient: nusb::transfer::Recipient::Interface,
-                request: request as u8,
-                value: 0,
-                index: self.interface_num as u16,
-                data: &[],
-            },
-            Duration::from_secs(5),
-        ))
-        .map_err(|e| RaidenError::EnableFailed(e.to_string()))?;
+        self.interface
+            .control_out(
+                nusb::transfer::ControlOut {
+                    control_type: nusb::transfer::ControlType::Vendor,
+                    recipient: nusb::transfer::Recipient::Interface,
+                    request: request as u8,
+                    value: 0,
+                    index: self.interface_num as u16,
+                    data: &[],
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .map_err(|e| RaidenError::EnableFailed(e.to_string()))?;
 
-        platform_sleep!(Duration::from_millis(ENABLE_DELAY_MS));
+        delay(Duration::from_millis(ENABLE_DELAY_MS)).await;
 
         log::info!("SPI bridge enabled for target: {}", target);
         Ok(())
@@ -253,18 +224,20 @@ impl RaidenDebugSpi {
     async fn disable(&mut self) -> Result<()> {
         log::debug!("Disabling SPI bridge (interface {})", self.interface_num);
 
-        nusb_await!(self.interface.control_out(
-            nusb::transfer::ControlOut {
-                control_type: nusb::transfer::ControlType::Vendor,
-                recipient: nusb::transfer::Recipient::Interface,
-                request: ControlRequest::Disable as u8,
-                value: 0,
-                index: self.interface_num as u16,
-                data: &[],
-            },
-            Duration::from_secs(5),
-        ))
-        .map_err(|e| RaidenError::EnableFailed(e.to_string()))?;
+        self.interface
+            .control_out(
+                nusb::transfer::ControlOut {
+                    control_type: nusb::transfer::ControlType::Vendor,
+                    recipient: nusb::transfer::Recipient::Interface,
+                    request: ControlRequest::Disable as u8,
+                    value: 0,
+                    index: self.interface_num as u16,
+                    data: &[],
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .map_err(|e| RaidenError::EnableFailed(e.to_string()))?;
 
         Ok(())
     }
@@ -299,7 +272,7 @@ impl RaidenDebugSpi {
                 "Invalid config response (attempt {}), retrying...",
                 retry + 1
             );
-            platform_sleep!(Duration::from_millis(RETRY_DELAY_MS));
+            delay(Duration::from_millis(RETRY_DELAY_MS)).await;
         }
 
         Err(RaidenError::InvalidResponse(
@@ -315,7 +288,10 @@ impl RaidenDebugSpi {
             .map_err(|e| RaidenError::TransferFailed(e.to_string()))?;
 
         out_ep.submit(Buffer::from(data.to_vec()));
-        let completion = ep_wait!(out_ep, Duration::from_secs(5)).ok_or(RaidenError::Timeout)?;
+        let completion = out_ep
+            .next_complete_timeout(Duration::from_secs(5))
+            .await
+            .ok_or(RaidenError::Timeout)?;
         completion
             .status
             .map_err(|e| RaidenError::TransferFailed(e.to_string()))?;
@@ -334,7 +310,10 @@ impl RaidenDebugSpi {
         let mut buf = Buffer::new(USB_PACKET_SIZE);
         buf.set_requested_len(USB_PACKET_SIZE);
         in_ep.submit(buf);
-        let completion = ep_wait!(in_ep, Duration::from_secs(5)).ok_or(RaidenError::Timeout)?;
+        let completion = in_ep
+            .next_complete_timeout(Duration::from_secs(5))
+            .await
+            .ok_or(RaidenError::Timeout)?;
         completion
             .status
             .map_err(|e| RaidenError::TransferFailed(e.to_string()))?;
@@ -481,7 +460,7 @@ impl RaidenDebugSpi {
                 Ok(data) => return Ok(data),
                 Err(RaidenError::ProtocolError(code)) if code == StatusCode::Busy as u16 => {
                     log::warn!("SPI busy (attempt {}), retrying...", retry + 1);
-                    platform_sleep!(Duration::from_millis(RETRY_DELAY_MS));
+                    delay(Duration::from_millis(RETRY_DELAY_MS)).await;
                 }
                 Err(e) => return Err(e),
             }
@@ -541,9 +520,7 @@ impl SpiMaster for RaidenDebugSpi {
     }
 
     async fn delay_us(&mut self, us: u32) {
-        if us > 0 {
-            platform_sleep!(Duration::from_micros(us as u64));
-        }
+        delay(Duration::from_micros(u64::from(us))).await;
     }
 }
 

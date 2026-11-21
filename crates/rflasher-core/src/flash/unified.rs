@@ -207,7 +207,7 @@ const WRITE_CHUNK_SIZE: usize = 256 * 1024;
 /// Read flash contents into a buffer
 ///
 /// This is a convenience function that reads with progress reporting.
-pub async fn read_with_progress<D: FlashDevice, P: WriteProgress>(
+pub async fn read_with_progress<D: FlashDevice + ?Sized, P: WriteProgress>(
     device: &mut D,
     buf: &mut [u8],
     progress: &mut P,
@@ -530,7 +530,7 @@ async fn smart_write_by_layout_prepared<D: FlashDevice + ?Sized, P: WriteProgres
 /// Read all included regions from flash into a buffer
 ///
 /// Regions that are not included will be left unchanged in the buffer.
-pub async fn read_by_layout<D: FlashDevice>(
+pub async fn read_by_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
     buffer: &mut [u8],
@@ -733,6 +733,8 @@ async fn verify_neighbor<D: FlashDevice + ?Sized>(
             return Err((
                 Error::VerifyError {
                     addr: addr + pos as u32,
+                    expected: expected[pos],
+                    found: chunk[pos],
                 },
                 true,
             ));
@@ -788,15 +790,24 @@ pub async fn verify<D: FlashDevice + ?Sized>(
     expected: &[u8],
     addr: u32,
 ) -> Result<()> {
+    verify_with_progress(device, expected, addr, |_| {}).await
+}
+
+async fn verify_with_buf<D: FlashDevice + ?Sized, F: FnMut(usize)>(
+    device: &mut D,
+    expected: &[u8],
+    addr: u32,
+    buf: &mut [u8],
+    mut on_progress: F,
+) -> Result<()> {
     if !device.is_valid_range(addr, expected.len()) {
         return Err(Error::AddressOutOfBounds);
     }
 
-    let mut buf = vec![0u8; READ_CHUNK_SIZE];
     let mut offset = 0usize;
 
     while offset < expected.len() {
-        let chunk_size = core::cmp::min(READ_CHUNK_SIZE, expected.len() - offset);
+        let chunk_size = core::cmp::min(buf.len(), expected.len() - offset);
         let chunk_buf = &mut buf[..chunk_size];
         device.read(addr + offset as u32, chunk_buf).await?;
 
@@ -810,20 +821,54 @@ pub async fn verify<D: FlashDevice + ?Sized>(
                 .expect("chunks differ, so a differing byte must exist");
             return Err(Error::VerifyError {
                 addr: addr + (offset + rel) as u32,
+                expected: expected_chunk[rel],
+                found: chunk_buf[rel],
             });
         }
 
         offset += chunk_size;
+        on_progress(offset);
     }
 
     Ok(())
 }
 
+/// Verify flash contents against expected data, calling `on_progress` with the
+/// cumulative number of verified bytes after each chunk.
+pub async fn verify_with_progress<D: FlashDevice + ?Sized, F: FnMut(usize)>(
+    device: &mut D,
+    expected: &[u8],
+    addr: u32,
+    on_progress: F,
+) -> Result<()> {
+    if expected.is_empty() {
+        return if device.is_valid_range(addr, 0) {
+            Ok(())
+        } else {
+            Err(Error::AddressOutOfBounds)
+        };
+    }
+
+    let mut buf = vec![0u8; READ_CHUNK_SIZE.min(expected.len())];
+    verify_with_buf(device, expected, addr, &mut buf, on_progress).await
+}
+
 /// Verify all included regions match expected data
-pub async fn verify_by_layout<D: FlashDevice>(
+pub async fn verify_by_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
     expected: &[u8],
+) -> Result<()> {
+    verify_by_layout_with_progress(device, layout, expected, |_| {}).await
+}
+
+/// Verify all included regions match expected data, calling `on_progress` with
+/// the cumulative number of verified bytes across all included regions.
+pub async fn verify_by_layout_with_progress<D: FlashDevice + ?Sized, F: FnMut(usize)>(
+    device: &mut D,
+    layout: &Layout,
+    expected: &[u8],
+    mut on_progress: F,
 ) -> Result<()> {
     let flash_size = device.size();
 
@@ -837,9 +882,24 @@ pub async fn verify_by_layout<D: FlashDevice>(
         return Err(Error::BufferTooSmall);
     }
 
+    let max_region = layout
+        .included_regions()
+        .map(|r| r.size() as usize)
+        .max()
+        .unwrap_or(0);
+    if max_region == 0 {
+        return Ok(());
+    }
+
+    let mut buf = vec![0u8; READ_CHUNK_SIZE.min(max_region)];
+    let mut verified_before = 0usize;
     for region in layout.included_regions() {
         let expected_region = &expected[region.start as usize..=region.end as usize];
-        verify(device, expected_region, region.start).await?;
+        verify_with_buf(device, expected_region, region.start, &mut buf, |n| {
+            on_progress(verified_before + n);
+        })
+        .await?;
+        verified_before += expected_region.len();
     }
 
     Ok(())
@@ -964,10 +1024,15 @@ mod tests {
                 self.bytes[at] = value;
             }
             if self.verifies_write
-                && let Some(i) = self.bytes[range].iter().zip(data).position(|(a, b)| a != b)
+                && let Some(i) = self.bytes[range.clone()]
+                    .iter()
+                    .zip(data)
+                    .position(|(a, b)| a != b)
             {
                 return Err(Error::VerifyError {
                     addr: addr + i as u32,
+                    expected: data[i],
+                    found: self.bytes[range.start + i],
                 });
             }
             Ok(())
@@ -1134,7 +1199,11 @@ mod tests {
             flash.miswritten = vec![(2, 0)];
             assert_eq!(
                 boundary_mutation(&mut flash, smart),
-                Err(Error::VerifyError { addr: 2 })
+                Err(Error::VerifyError {
+                    addr: 2,
+                    expected: 2,
+                    found: 0,
+                })
             );
             assert_eq!(&flash.bytes[12..16], &[12, 13, 14, 15]);
 
@@ -1161,7 +1230,11 @@ mod tests {
                 let expected = if partial {
                     Error::EraseError(EraseFailure::VerifyFailed { addr: 6, found: 0 })
                 } else {
-                    Error::VerifyError { addr: 2 }
+                    Error::VerifyError {
+                        addr: 2,
+                        expected: 2,
+                        found: 0,
+                    }
                 };
                 assert_eq!(boundary_mutation(&mut flash, smart), Err(expected));
                 assert_eq!(&flash.bytes[12..16], &[12, 13, 14, 15]);
@@ -1726,5 +1799,58 @@ mod tests {
         );
         assert_eq!(device.mutations, 0);
         assert!(device.bytes.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn verify_by_layout_with_progress_tracks_chunks_and_reports_mismatch() {
+        let total = (READ_CHUNK_SIZE * 2 + 128) as u32;
+        let mut device = FakeFlash::new(total);
+        for (i, b) in device.bytes.iter_mut().enumerate() {
+            *b = (i % 251) as u8;
+        }
+        let expected = device.bytes.clone();
+
+        let mut layout = Layout::new();
+        let mut r1 = Region::new("first", 0, (READ_CHUNK_SIZE + 31) as u32);
+        r1.included = true;
+        let mut r2 = Region::new("second", (READ_CHUNK_SIZE + 64) as u32, total - 1);
+        r2.included = true;
+        layout.add_region(r1);
+        layout.add_region(r2);
+
+        let expected_total = layout
+            .included_regions()
+            .map(|r| r.size() as usize)
+            .sum::<usize>();
+        let mut progress = Vec::new();
+        block_on(verify_by_layout_with_progress(
+            &mut device,
+            &layout,
+            &expected,
+            |n| progress.push(n),
+        ))
+        .unwrap();
+        assert!(progress.len() >= 3);
+        assert_eq!(progress.last().copied(), Some(expected_total));
+
+        let mismatch_addr = READ_CHUNK_SIZE + 70;
+        device.bytes[mismatch_addr] ^= 0x55;
+        let mut fail_progress = Vec::new();
+        let err = block_on(verify_by_layout_with_progress(
+            &mut device,
+            &layout,
+            &expected,
+            |n| fail_progress.push(n),
+        ))
+        .unwrap_err();
+        assert_eq!(
+            err,
+            Error::VerifyError {
+                addr: mismatch_addr as u32,
+                expected: expected[mismatch_addr],
+                found: device.bytes[mismatch_addr],
+            }
+        );
+        assert_eq!(fail_progress.last().copied(), Some(READ_CHUNK_SIZE + 32));
     }
 }

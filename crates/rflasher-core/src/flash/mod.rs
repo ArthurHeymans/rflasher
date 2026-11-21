@@ -26,18 +26,17 @@
 //! # Example
 //!
 //! ```ignore
-//! use rflasher_core::flash::{FlashDevice, MutationPolicy, SpiFlashDevice};
-//! use rflasher_core::flash::unified;
+//! use rflasher_core::flash::{self, FlashDevice, MutationPolicy, SpiFlashDevice, unified};
 //!
 //! let mut policy = MutationPolicy::default();
 //!
 //! // Using SPI programmer
-//! let ctx = flash::probe(master, &db)?;
+//! let ctx = flash::probe_detailed(&mut master, &db).await?.into_context();
 //! let mut device = SpiFlashDevice::new(master, ctx);
-//! unified::smart_write_with_policy(&mut device, &data, &mut progress, &mut policy)?;
+//! unified::smart_write_with_policy(&mut device, &data, &mut progress, &mut policy).await?;
 //!
 //! // Using an opaque programmer, which is a FlashDevice itself
-//! unified::smart_write_with_policy(&mut mtd, &data, &mut progress, &mut policy)?;
+//! unified::smart_write_with_policy(&mut mtd, &data, &mut progress, &mut policy).await?;
 //! ```
 
 mod catalog;

@@ -37,14 +37,23 @@ pub enum EraseOutcome {
 /// `WpError::ChipUnsupported`. SPI-based devices override these to provide
 /// actual WP functionality.
 ///
+/// # Wrapper forwarding checklist
+///
+/// Any new defaulted method on `FlashDevice` must be forwarded by:
+/// - `ErasedFlashDevice` / `DynFlashDevice` (`crates/rflasher-programmers/src/erased.rs`,
+///   including both the mirror trait and blanket adapter)
+///
+/// Also review `SpiFlashDevice` (`crates/rflasher-core/src/flash/spi_device.rs`)
+/// to decide whether SPI devices should override it.
+///
 /// # Example
 ///
 /// ```ignore
 /// use rflasher_core::flash::FlashDevice;
 ///
-/// fn read_first_sector<D: FlashDevice>(device: &mut D) -> Result<Vec<u8>> {
+/// async fn read_first_sector<D: FlashDevice>(device: &mut D) -> Result<Vec<u8>> {
 ///     let mut buf = vec![0u8; 4096];
-///     device.read(0, &mut buf)?;
+///     device.read(0, &mut buf).await?;
 ///     Ok(buf)
 /// }
 /// ```

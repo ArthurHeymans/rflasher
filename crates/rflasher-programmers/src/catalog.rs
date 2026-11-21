@@ -347,6 +347,15 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
     programmers
 }
 
+/// Resolve a programmer name or alias to its canonical name (if enabled at
+/// compile time).
+pub fn canonical_programmer_name(name: &str) -> Option<&'static str> {
+    available_programmers()
+        .into_iter()
+        .find(|info| info.name == name || info.aliases.contains(&name))
+        .map(|info| info.name)
+}
+
 /// Generate a short list of programmer names for CLI help.
 pub fn programmer_names_short() -> String {
     let programmers = available_programmers();
@@ -450,7 +459,7 @@ impl ProgrammerParams {
 /// assert_eq!(params.name, "ch347");
 /// assert_eq!(params.get("cs"), Some("1"));
 /// ```
-pub fn parse_programmer_params(s: &str) -> Result<ProgrammerParams, Box<dyn std::error::Error>> {
+pub fn parse_programmer_params(s: &str) -> crate::Result<ProgrammerParams> {
     let (name, opts_str) = s.split_once(':').unwrap_or((s, ""));
 
     let mut options: Vec<(String, String)> = Vec::new();
@@ -462,9 +471,9 @@ pub fn parse_programmer_params(s: &str) -> Result<ProgrammerParams, Box<dyn std:
                     None => options.push((key.to_string(), value.to_string())),
                 }
             } else {
-                return Err(
-                    format!("Invalid parameter format: '{opt}' (expected key=value)").into(),
-                );
+                return Err(crate::Error::InvalidOptions(format!(
+                    "Invalid parameter format: '{opt}' (expected key=value)"
+                )));
             }
         }
     }

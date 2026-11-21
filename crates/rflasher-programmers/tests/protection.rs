@@ -980,7 +980,11 @@ fn generic_w25q128_reads_back_mutations_ignored_by_wps_locks() {
                 s.data[..2].copy_from_slice(&[0x5a, 0xff]);
             }
             // The first byte already matches, so only the second can differ.
-            let ignored = Err(Error::VerifyError { addr: 1 });
+            let ignored = Err(Error::VerifyError {
+                addr: 1,
+                expected: 0,
+                found: 0xff,
+            });
             assert_eq!(
                 flash::write(&mut master, &ctx, 0, &[0x5a, 0]).await,
                 ignored
@@ -1016,7 +1020,11 @@ fn generic_w25q128_reads_back_mutations_ignored_by_wps_locks() {
         let mut device = SpiFlashDevice::new(master, ctx);
         assert_eq!(
             device.write(4090, &[0; 12]).await,
-            Err(Error::VerifyError { addr: 4096 })
+            Err(Error::VerifyError {
+                addr: 4096,
+                expected: 0,
+                found: 0xff,
+            })
         );
         let s = state.lock().unwrap();
         assert_eq!(&s.data[4094..4098], &[0, 0, 0xff, 0xff]);
@@ -1250,7 +1258,14 @@ fn unreadable_sr2_reads_mutations_back_and_leaves_status_alone() {
             let erased = device.erase_operation(&op).await;
             if cmp {
                 // The chip dropped both commands; neither may report success.
-                assert_eq!(written, Err(Error::VerifyError { addr: 1 }));
+                assert_eq!(
+                    written,
+                    Err(Error::VerifyError {
+                        addr: 1,
+                        expected: 0,
+                        found: 0xff,
+                    })
+                );
                 assert_eq!(
                     erased.map(drop),
                     Err(Error::EraseError(EraseFailure::VerifyFailed {

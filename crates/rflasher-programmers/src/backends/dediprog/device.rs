@@ -18,59 +18,12 @@ use rflasher_core::spi::{SpiCommand, check_io_mode_supported, opcodes};
 
 use super::error::{DediprogError, Result};
 use super::protocol::*;
+use crate::time::delay;
 use crate::usb_ep::EpWaitExt;
 
 #[cfg(test)]
 #[path = "device_tests.rs"]
 mod tests;
-
-// ---------------------------------------------------------------------------
-// Platform-specific endpoint wait macros
-// ---------------------------------------------------------------------------
-// These macros provide a uniform interface over nusb's blocking (native)
-// and async (WASM) completion APIs.
-
-/// Wait for the next completion on an endpoint, giving up after the timeout.
-/// Returns `Option<Completion>` (`None` on timeout).
-macro_rules! ep_wait {
-    ($ep:expr, $timeout:expr) => {
-        $ep.next_complete_timeout($timeout).await
-    };
-}
-
-/// Resolve an nusb `MaybeFuture` to its output.
-/// In sync mode: calls `.await` (blocking).
-/// In async mode: `.await`s the future.
-macro_rules! nusb_await {
-    ($expr:expr) => {{ $expr.await }};
-}
-
-/// Platform-aware sleep/delay.
-/// In sync mode: std::thread::sleep.
-/// In async mode (WASM): setTimeout-based delay.
-macro_rules! platform_sleep {
-    ($dur:expr) => {{
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            std::thread::sleep($dur);
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Browser setTimeout resolution is 1 ms minimum.  For sub-ms
-            // durations we still yield via setTimeout(0) so the event loop
-            // (and UI) can run -- without this, tight polling loops
-            // (e.g. WIP status in slow_write) would busy-spin.
-            let ms = $dur.as_millis() as i32;
-            let promise = js_sys::Promise::new(&mut |resolve, _| {
-                let window = web_sys::window().unwrap();
-                window
-                    .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms)
-                    .unwrap();
-            });
-            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-        }
-    }};
-}
 
 // USB bulk completion does not mean the firmware has released the SPI bus.
 // Some firmware stalls control SPI until buffered programming and settling finish.
@@ -98,7 +51,7 @@ where
                 if remaining.is_zero() {
                     return Err(DediprogError::Timeout);
                 }
-                platform_sleep!(remaining.min(STATUS_ACCESS_POLL));
+                delay(remaining.min(STATUS_ACCESS_POLL)).await;
                 if web_time::Instant::now() >= deadline {
                     return Err(DediprogError::Timeout);
                 }
@@ -621,7 +574,7 @@ impl Dediprog {
 
         if selector == 0 {
             // Delay before turning off voltage
-            platform_sleep!(Duration::from_millis(200));
+            delay(Duration::from_millis(200)).await;
         }
 
         self.control_write(Command::SetVcc, selector, 0, &[])
@@ -629,7 +582,7 @@ impl Dediprog {
 
         if selector != 0 {
             // Delay after turning on voltage
-            platform_sleep!(Duration::from_millis(200));
+            delay(Duration::from_millis(200)).await;
         }
 
         Ok(())
@@ -698,18 +651,21 @@ impl Dediprog {
         #[cfg(target_arch = "wasm32")]
         let recipient = nusb::transfer::Recipient::Device;
 
-        let data = nusb_await!(self.iface().control_in(
-            nusb::transfer::ControlIn {
-                control_type: nusb::transfer::ControlType::Vendor,
-                recipient,
-                request,
-                value,
-                index,
-                length: buf.len() as u16,
-            },
-            Duration::from_secs(5),
-        ))
-        .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
+        let data = self
+            .iface()
+            .control_in(
+                nusb::transfer::ControlIn {
+                    control_type: nusb::transfer::ControlType::Vendor,
+                    recipient,
+                    request,
+                    value,
+                    index,
+                    length: buf.len() as u16,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
 
         let len = data.len().min(buf.len());
         buf[..len].copy_from_slice(&data[..len]);
@@ -735,18 +691,20 @@ impl Dediprog {
         #[cfg(target_arch = "wasm32")]
         let recipient = nusb::transfer::Recipient::Device;
 
-        nusb_await!(self.iface().control_out(
-            nusb::transfer::ControlOut {
-                control_type: nusb::transfer::ControlType::Vendor,
-                recipient,
-                request,
-                value,
-                index,
-                data,
-            },
-            Duration::from_secs(5),
-        ))
-        .map_err(DediprogError::UsbTransfer)?;
+        self.iface()
+            .control_out(
+                nusb::transfer::ControlOut {
+                    control_type: nusb::transfer::ControlType::Vendor,
+                    recipient,
+                    request,
+                    value,
+                    index,
+                    data,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .map_err(DediprogError::UsbTransfer)?;
 
         Ok(())
     }
@@ -765,7 +723,10 @@ impl Dediprog {
         in_buf.set_requested_len(request_len);
 
         in_ep.submit(in_buf);
-        let completion = ep_wait!(in_ep, Duration::from_secs(5)).ok_or(DediprogError::Timeout)?;
+        let completion = in_ep
+            .next_complete_timeout(Duration::from_secs(5))
+            .await
+            .ok_or(DediprogError::Timeout)?;
         completion
             .status
             .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
@@ -788,7 +749,10 @@ impl Dediprog {
         out_buf.extend_from_slice(data);
 
         out_ep.submit(out_buf);
-        let completion = ep_wait!(out_ep, Duration::from_secs(5)).ok_or(DediprogError::Timeout)?;
+        let completion = out_ep
+            .next_complete_timeout(Duration::from_secs(5))
+            .await
+            .ok_or(DediprogError::Timeout)?;
         completion
             .status
             .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
@@ -838,18 +802,21 @@ impl Dediprog {
             #[cfg(target_arch = "wasm32")]
             let recipient = nusb::transfer::Recipient::Device;
 
-            let data = nusb_await!(self.iface().control_in(
-                nusb::transfer::ControlIn {
-                    control_type: nusb::transfer::ControlType::Vendor,
-                    recipient,
-                    request: Command::Transceive as u8,
-                    value: 0,
-                    index: 0,
-                    length: to_read as u16,
-                },
-                Duration::from_secs(5),
-            ))
-            .map_err(DediprogError::UsbTransfer)?;
+            let data = self
+                .iface()
+                .control_in(
+                    nusb::transfer::ControlIn {
+                        control_type: nusb::transfer::ControlType::Vendor,
+                        recipient,
+                        request: Command::Transceive as u8,
+                        value: 0,
+                        index: 0,
+                        length: to_read as u16,
+                    },
+                    Duration::from_secs(5),
+                )
+                .await
+                .map_err(DediprogError::UsbTransfer)?;
 
             if data.len() != to_read {
                 return Err(DediprogError::InvalidResponse(format!(
@@ -995,7 +962,10 @@ impl Dediprog {
         let timeout =
             Duration::from_secs(ASYNC_TIMEOUT_SECS) + Duration::from_micros(len as u64 * 30);
 
-        let result = ep_wait!(in_ep, timeout).ok_or(DediprogError::Timeout)?;
+        let result = in_ep
+            .next_complete_timeout(timeout)
+            .await
+            .ok_or(DediprogError::Timeout)?;
         result
             .status
             .map_err(|e| DediprogError::TransferFailed(e.to_string()))?;
@@ -1056,7 +1026,9 @@ impl Dediprog {
             out_buf.extend_from_slice(&[0xFF; BULK_CHUNK_SIZE - PAGE_SIZE]);
             out_ep.submit(out_buf);
 
-            let result = ep_wait!(out_ep, Duration::from_secs(ASYNC_TIMEOUT_SECS))
+            let result = out_ep
+                .next_complete_timeout(Duration::from_secs(ASYNC_TIMEOUT_SECS))
+                .await
                 .ok_or(DediprogError::Timeout)?;
             result
                 .status
@@ -1301,7 +1273,7 @@ impl SpiMaster for Dediprog {
     }
 
     async fn delay_us(&mut self, us: u32) {
-        platform_sleep!(Duration::from_micros(us as u64));
+        delay(Duration::from_micros(u64::from(us))).await;
     }
 
     /// CMD_READ bulk transfers for aligned 512-byte chunks.

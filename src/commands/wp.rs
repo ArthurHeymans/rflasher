@@ -3,7 +3,6 @@
 use crate::cli::WpWriteArgs;
 use rflasher_core::wp::{WpMode, WpRange, WriteOptions};
 use rflasher_programmers::FlashHandle;
-use std::error::Error;
 
 /// Format a range as a human-readable string with fraction of chip
 fn format_range(range: &WpRange, total_size: u32) -> String {
@@ -59,7 +58,7 @@ fn format_mode(mode: WpMode) -> &'static str {
 }
 
 /// Parse a range specification like "0,0x100000" or "0x10000,65536"
-fn parse_range(spec: &str) -> Result<WpRange, Box<dyn Error>> {
+fn parse_range(spec: &str) -> crate::error::Result<WpRange> {
     let parts: Vec<&str> = spec.split(',').collect();
     if parts.len() != 2 {
         return Err(format!(
@@ -76,7 +75,7 @@ fn parse_range(spec: &str) -> Result<WpRange, Box<dyn Error>> {
 }
 
 /// Parse a number that may be decimal or hex
-fn parse_number(s: &str) -> Result<u32, Box<dyn Error>> {
+fn parse_number(s: &str) -> crate::error::Result<u32> {
     let s = s.trim();
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         u32::from_str_radix(hex, 16)
@@ -104,7 +103,7 @@ fn persistence_note(args: WpWriteArgs) -> &'static str {
 }
 
 /// Show current write protection status
-pub async fn cmd_status(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_status(handle: &mut FlashHandle) -> crate::error::Result<()> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
@@ -127,7 +126,7 @@ pub async fn cmd_status(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> 
 }
 
 /// List available protection ranges
-pub async fn cmd_list(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_list(handle: &mut FlashHandle) -> crate::error::Result<()> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
@@ -154,7 +153,7 @@ pub async fn cmd_list(handle: &mut FlashHandle) -> Result<(), Box<dyn Error>> {
 }
 
 /// Enable hardware write protection
-pub async fn cmd_enable(handle: &mut FlashHandle, args: WpWriteArgs) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_enable(handle: &mut FlashHandle, args: WpWriteArgs) -> crate::error::Result<()> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
@@ -172,10 +171,7 @@ pub async fn cmd_enable(handle: &mut FlashHandle, args: WpWriteArgs) -> Result<(
 }
 
 /// Disable write protection
-pub async fn cmd_disable(
-    handle: &mut FlashHandle,
-    args: WpWriteArgs,
-) -> Result<(), Box<dyn Error>> {
+pub async fn cmd_disable(handle: &mut FlashHandle, args: WpWriteArgs) -> crate::error::Result<()> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
@@ -194,7 +190,7 @@ pub async fn cmd_range(
     handle: &mut FlashHandle,
     range_spec: &str,
     args: WpWriteArgs,
-) -> Result<(), Box<dyn Error>> {
+) -> crate::error::Result<()> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }
@@ -232,7 +228,7 @@ pub async fn cmd_region(
     layout: &rflasher_core::layout::Layout,
     region_name: &str,
     args: WpWriteArgs,
-) -> Result<(), Box<dyn Error>> {
+) -> crate::error::Result<()> {
     if !handle.wp_supported() {
         return Err("Write protection operations are not supported for this chip".into());
     }

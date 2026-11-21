@@ -59,7 +59,7 @@ fn print_flash_size(flash_size: u32) {
 }
 
 /// Read file contents into a Vec
-fn read_file(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn read_file(path: &Path) -> crate::error::Result<Vec<u8>> {
     let mut file = File::open(path)?;
     let mut data = Vec::new();
     file.read_to_end(&mut data)?;
@@ -68,17 +68,14 @@ fn read_file(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 }
 
 /// Create a standard progress bar style
-fn create_progress_bar_style() -> Result<ProgressStyle, Box<dyn std::error::Error>> {
+fn create_progress_bar_style() -> crate::error::Result<ProgressStyle> {
     Ok(ProgressStyle::default_bar()
         .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")?
         .progress_chars("#>-"))
 }
 
 /// Create a progress bar with custom phase message
-fn create_progress_bar_with_phase(
-    total: u64,
-    phase: &str,
-) -> Result<ProgressBar, Box<dyn std::error::Error>> {
+fn create_progress_bar_with_phase(total: u64, phase: &str) -> crate::error::Result<ProgressBar> {
     let pb = ProgressBar::new(total);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -92,7 +89,7 @@ fn create_progress_bar_with_phase(
 }
 
 /// Create a standard spinner style
-fn create_spinner_style() -> Result<ProgressStyle, Box<dyn std::error::Error>> {
+fn create_spinner_style() -> crate::error::Result<ProgressStyle> {
     Ok(ProgressStyle::default_spinner().template("{spinner:.green} {msg}")?)
 }
 
@@ -111,7 +108,7 @@ fn display_included_regions(included: &[&rflasher_core::layout::Region], action:
 }
 
 /// Validate a layout against the flash size with a friendly error message
-fn validate_layout(layout: &Layout, flash_size: u32) -> Result<(), Box<dyn std::error::Error>> {
+fn validate_layout(layout: &Layout, flash_size: u32) -> crate::error::Result<()> {
     layout.validate(flash_size).map_err(|e| match e {
         LayoutError::RegionOutOfBounds => format!(
             "Layout region extends beyond flash size ({} bytes)",
@@ -126,7 +123,7 @@ fn validate_layout(layout: &Layout, flash_size: u32) -> Result<(), Box<dyn std::
 pub(crate) fn validate_region_files(
     layout: &Layout,
     region_files: &RegionFiles,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     let mut seen = HashSet::new();
 
     for (name, _) in region_files {
@@ -150,7 +147,7 @@ pub(crate) fn validate_region_files(
 fn open_output_files(
     output: Option<&Path>,
     region_files: &RegionFiles,
-) -> Result<Vec<File>, Box<dyn std::error::Error>> {
+) -> crate::error::Result<Vec<File>> {
     struct CreatedOutputs<'a>(Vec<&'a Path>);
     impl Drop for CreatedOutputs<'_> {
         fn drop(&mut self) {
@@ -213,7 +210,7 @@ fn require_full_region_file_coverage(
     included: &[&rflasher_core::layout::Region],
     region_files: &RegionFiles,
     what: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     let missing: Vec<_> = included
         .iter()
         .filter(|r| {
@@ -244,7 +241,7 @@ fn apply_region_files(
     layout: &Layout,
     image: &mut [u8],
     region_files: &RegionFiles,
-) -> Result<Layout, Box<dyn std::error::Error>> {
+) -> crate::error::Result<Layout> {
     validate_region_files(layout, region_files)?;
 
     let mut effective = layout.clone();
@@ -299,7 +296,7 @@ fn build_image(
     region_files: &RegionFiles,
     included: &[&rflasher_core::layout::Region],
     flash_size: u32,
-) -> Result<(Vec<u8>, Layout, usize), Box<dyn std::error::Error>> {
+) -> crate::error::Result<(Vec<u8>, Layout, usize)> {
     build_image_with_size_requirement(input, layout, region_files, included, flash_size, false)
 }
 
@@ -310,7 +307,7 @@ fn build_image_with_size_requirement(
     included: &[&rflasher_core::layout::Region],
     flash_size: u32,
     require_full_image: bool,
-) -> Result<(Vec<u8>, Layout, usize), Box<dyn std::error::Error>> {
+) -> crate::error::Result<(Vec<u8>, Layout, usize)> {
     validate_region_files(layout, region_files)?;
     if !region_files.is_empty() {
         // Per-region files, optionally on top of a full chip image
@@ -536,7 +533,7 @@ const READ_CHUNK_SIZE: usize = 4096;
 pub async fn run_read<D: FlashDevice + ?Sized>(
     device: &mut D,
     output: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     let layout = full_flash_layout(device.size());
     run_read_with_layout(device, Some(output), &layout, &[]).await
 }
@@ -552,7 +549,7 @@ pub async fn run_read_with_layout<D: FlashDevice + ?Sized>(
     output: Option<&Path>,
     layout: &Layout,
     region_files: &RegionFiles,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     let flash_size = device.size();
 
     // Validate region bounds against the actual chip before slicing into a
@@ -647,11 +644,7 @@ pub async fn run_read_with_layout<D: FlashDevice + ?Sized>(
 /// Writing a wrong image to these can leave the machine unbootable, and unlike
 /// a mistyped region name the request looks perfectly valid, so it needs an
 /// explicit acknowledgement. `action` is "write to" or "erase".
-fn check_dangerous_regions(
-    layout: &Layout,
-    action: &str,
-    force: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn check_dangerous_regions(layout: &Layout, action: &str, force: bool) -> crate::error::Result<()> {
     let dangerous: Vec<_> = layout
         .regions_overlapping_included()
         .filter(|r| r.dangerous)
@@ -683,7 +676,7 @@ pub async fn run_write<D: FlashDevice + ?Sized>(
     input: &Path,
     do_verify: bool,
     policy: &mut MutationPolicy<'_>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     let mut layout = full_flash_layout(device.size());
     run_write_impl(
         device,
@@ -710,7 +703,7 @@ pub async fn run_write_with_layout<D: FlashDevice + ?Sized>(
     region_files: &RegionFiles,
     do_verify: bool,
     policy: &mut MutationPolicy<'_>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     run_write_impl(
         device,
         input,
@@ -731,7 +724,7 @@ async fn run_write_impl<D: FlashDevice + ?Sized>(
     do_verify: bool,
     policy: &mut MutationPolicy<'_>,
     require_full_image: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     let flash_size = device.size();
 
     // Validate region bounds against the actual chip before constructing or
@@ -804,7 +797,7 @@ async fn run_write_impl<D: FlashDevice + ?Sized>(
 pub async fn run_erase<D: FlashDevice + ?Sized>(
     device: &mut D,
     policy: &mut MutationPolicy<'_>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     let layout = full_flash_layout(device.size());
     run_erase_with_layout(device, &layout, policy).await
 }
@@ -814,7 +807,7 @@ pub async fn run_erase_with_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
     policy: &mut MutationPolicy<'_>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     validate_layout(layout, device.size())?;
 
     let readonly: Vec<_> = layout
@@ -867,63 +860,16 @@ pub async fn run_erase_with_layout<D: FlashDevice + ?Sized>(
 // Verify operations
 // =============================================================================
 
-/// Compare a chunk with expected data and return detailed error on mismatch
-fn verify_chunk(
-    chunk: &[u8],
-    expected_chunk: &[u8],
-    base_offset: usize,
-    region_name: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    chunk
-        .iter()
-        .zip(expected_chunk.iter())
-        .enumerate()
-        .find(|(_, (a, b))| a != b)
-        .map_or(Ok(()), |(i, (a, b))| {
-            let error_msg = match region_name {
-                Some(name) => format!(
-                    "Verification failed in region '{}' at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
-                    name,
-                    base_offset + i,
-                    b,
-                    a
-                ),
-                None => format!(
-                    "Verification failed at offset 0x{:08X}: expected 0x{:02X}, got 0x{:02X}",
-                    base_offset + i,
-                    b,
-                    a
-                ),
-            };
-            Err(error_msg.into())
-        })
-}
-
 /// Verify flash contents against expected data
 pub async fn verify_flash<D: FlashDevice + ?Sized>(
     device: &mut D,
     expected: &[u8],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let total_size = expected.len();
-    let mut buf = vec![0u8; READ_CHUNK_SIZE];
+) -> crate::error::Result<()> {
+    let pb = create_progress_bar_with_phase(expected.len() as u64, "Verifying")?;
 
-    let pb = create_progress_bar_with_phase(total_size as u64, "Verifying")?;
-
-    let result = async {
-        for offset in (0..total_size).step_by(READ_CHUNK_SIZE) {
-            let chunk_size = std::cmp::min(READ_CHUNK_SIZE, total_size - offset);
-            let chunk = &mut buf[..chunk_size];
-
-            device.read(offset as u32, chunk).await?;
-
-            // Compare
-            let expected_chunk = &expected[offset..offset + chunk_size];
-            verify_chunk(chunk, expected_chunk, offset, None)?;
-
-            pb.set_position((offset + chunk_size) as u64);
-        }
-        Ok::<_, Box<dyn std::error::Error>>(())
-    }
+    let result = unified::verify_with_progress(device, expected, 0, |bytes| {
+        pb.set_position(bytes as u64);
+    })
     .await;
 
     match result {
@@ -931,9 +877,20 @@ pub async fn verify_flash<D: FlashDevice + ?Sized>(
             pb.finish_with_message("Verification passed");
             Ok(())
         }
+        Err(rflasher_core::Error::VerifyError {
+            addr,
+            expected,
+            found,
+        }) => {
+            pb.abandon_with_message("Verification failed!");
+            Err(format!(
+                "Verification failed at offset 0x{addr:08X}: expected 0x{expected:02X}, got 0x{found:02X}"
+            )
+            .into())
+        }
         Err(e) => {
             pb.abandon_with_message("Verification failed!");
-            Err(e)
+            Err(e.into())
         }
     }
 }
@@ -945,7 +902,7 @@ pub async fn verify_flash<D: FlashDevice + ?Sized>(
 pub async fn run_verify<D: FlashDevice + ?Sized>(
     device: &mut D,
     input: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     let flash_size = device.size();
     print_flash_size(flash_size);
 
@@ -977,7 +934,7 @@ pub async fn run_verify_with_layout<D: FlashDevice + ?Sized>(
     input: Option<&Path>,
     layout: &Layout,
     region_files: &RegionFiles,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     let flash_size = device.size();
 
     // Validate region bounds against the actual chip before slicing into a
@@ -1008,45 +965,43 @@ pub async fn verify_by_layout<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
     expected: &[u8],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let included: Vec<_> = layout.included_regions().collect();
-    let total_bytes: usize = included.iter().map(|r| r.size() as usize).sum();
-
+) -> crate::error::Result<()> {
+    let total_bytes: usize = layout.included_regions().map(|r| r.size() as usize).sum();
     let pb = create_progress_bar_with_phase(total_bytes as u64, "Verifying")?;
 
-    let mut buf = vec![0u8; READ_CHUNK_SIZE];
-
-    let result = async {
-        let mut bytes_verified = 0usize;
-        for (region, offset) in included.iter().flat_map(|region| {
-            (region.start..=region.end)
-                .step_by(READ_CHUNK_SIZE)
-                .map(move |offset| (region, offset))
-        }) {
-            let chunk_size = std::cmp::min(READ_CHUNK_SIZE, (region.end - offset + 1) as usize);
-            let chunk = &mut buf[..chunk_size];
-
-            device.read(offset, chunk).await?;
-
-            // Compare
-            let expected_chunk = &expected[offset as usize..offset as usize + chunk_size];
-            verify_chunk(chunk, expected_chunk, offset as usize, Some(&region.name))?;
-
-            bytes_verified += chunk_size;
-            pb.set_position(bytes_verified as u64);
-        }
-        Ok::<_, Box<dyn std::error::Error>>(())
-    }
+    let result = unified::verify_by_layout_with_progress(device, layout, expected, |bytes| {
+        pb.set_position(bytes as u64);
+    })
     .await;
 
     match result {
-        Ok(_) => {
+        Ok(()) => {
             pb.finish_with_message("Verification passed");
             Ok(())
         }
+        Err(rflasher_core::Error::VerifyError {
+            addr,
+            expected,
+            found,
+        }) => {
+            pb.abandon_with_message("Verification failed!");
+            let region_name = layout
+                .included_regions()
+                .find(|r| addr >= r.start && addr <= r.end)
+                .map(|r| r.name.as_str());
+            let msg = match region_name {
+                Some(name) => format!(
+                    "Verification failed in region '{name}' at offset 0x{addr:08X}: expected 0x{expected:02X}, got 0x{found:02X}"
+                ),
+                None => format!(
+                    "Verification failed at offset 0x{addr:08X}: expected 0x{expected:02X}, got 0x{found:02X}"
+                ),
+            };
+            Err(msg.into())
+        }
         Err(e) => {
             pb.abandon_with_message("Verification failed!");
-            Err(e)
+            Err(e.into())
         }
     }
 }

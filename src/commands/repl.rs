@@ -8,7 +8,7 @@ pub async fn cmd_repl(
     programmer: &str,
     script: Option<&Path>,
     choose_usb_device: Option<ChooseUsbDevice<'_>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> crate::error::Result<()> {
     // Open the programmer
     let master = open_spi_programmer(programmer, choose_usb_device).await?;
 

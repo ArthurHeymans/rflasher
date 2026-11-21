@@ -88,6 +88,19 @@ pub enum FlashAccess {
 ///      the `bitbang` module
 /// 3. Fall back to single I/O mode if a requested mode isn't supported
 ///
+/// ## Wrapper forwarding checklist
+///
+/// Any new defaulted method on `SpiMaster` must be forwarded by all `SpiMaster`
+/// wrappers (including the `DynSpiMaster` mirror trait and blanket impl in
+/// `erased.rs`) so capabilities, access checks, and fast paths are not silently
+/// dropped:
+/// - `ErasedSpiMaster` / `DynSpiMaster` (`crates/rflasher-programmers/src/erased.rs`)
+/// - `Programmer` (`crates/rflasher-wasm/src/programmer.rs`)
+/// - `InternalSpi` (`crates/rflasher-internal/src/programmer.rs`)
+///
+/// Also check `SpiFlashDevice` (`crates/rflasher-core/src/flash/spi_device.rs`)
+/// to see whether the new hook should map onto `FlashDevice`.
+///
 /// ## Example: Hardware-accelerated programmer
 ///
 /// ```ignore
@@ -192,95 +205,6 @@ pub trait SpiMaster {
 // Note: `SpiMaster` uses `async fn` and is therefore not directly usable as
 // a trait object. Dynamic dispatch is provided by the object-erasure
 // adapters in `rflasher-programmers`.
-
-/// Helper function for implementing `SpiMaster::execute()`.
-///
-/// Most programmer implementations follow the same pattern:
-/// 1. Check I/O mode is supported
-/// 2. Build a write buffer from the command header + write data
-/// 3. Call an internal transfer method
-/// 4. Copy any read data back into the command's read buffer
-///
-/// This function handles steps 1, 2, and 4, delegating step 3 to the
-/// provided closure. The closure receives the write data and the read buffer
-/// to fill directly.
-///
-/// # Example
-///
-/// ```ignore
-/// fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-///     default_execute(cmd, self.features(), |write_data, read_buf| {
-///         self.spi_transfer(write_data, read_buf)
-///             .map_err(|_| CoreError::ProgrammerError)
-///     })
-/// }
-/// ```
-#[cfg(feature = "alloc")]
-pub fn default_execute<F>(
-    cmd: &mut SpiCommand<'_>,
-    features: SpiFeatures,
-    transfer_fn: F,
-) -> Result<()>
-where
-    F: FnOnce(&[u8], &mut [u8]) -> Result<()>,
-{
-    use crate::spi::check_io_mode_supported;
-
-    check_io_mode_supported(cmd.io_mode, features)?;
-
-    let header_len = cmd.header_len();
-    let mut write_data = alloc::vec![0u8; header_len + cmd.write_data.len()];
-    cmd.encode_header(&mut write_data);
-    write_data[header_len..].copy_from_slice(cmd.write_data);
-
-    transfer_fn(&write_data, cmd.read_buf)
-}
-
-/// Helper function for implementing `SpiMaster::execute()` when the
-/// internal transfer method returns a `Vec<u8>` instead of writing
-/// directly into the read buffer.
-///
-/// # Example
-///
-/// ```ignore
-/// fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-///     default_execute_with_vec(cmd, self.features(), |write_data, read_len| {
-///         self.spi_transfer(write_data, read_len)
-///             .map_err(|_| CoreError::ProgrammerError)
-///     })
-/// }
-/// ```
-#[cfg(feature = "alloc")]
-pub fn default_execute_with_vec<F>(
-    cmd: &mut SpiCommand<'_>,
-    features: SpiFeatures,
-    transfer_fn: F,
-) -> Result<()>
-where
-    F: FnOnce(&[u8], usize) -> Result<alloc::vec::Vec<u8>>,
-{
-    use crate::spi::check_io_mode_supported;
-
-    check_io_mode_supported(cmd.io_mode, features)?;
-
-    let header_len = cmd.header_len();
-    let mut write_data = alloc::vec![0u8; header_len + cmd.write_data.len()];
-    cmd.encode_header(&mut write_data);
-    write_data[header_len..].copy_from_slice(cmd.write_data);
-
-    let read_len = cmd.read_buf.len();
-    if read_len > 0 {
-        let result = transfer_fn(&write_data, read_len)?;
-        if result.len() < read_len {
-            return Err(crate::error::Error::ProgrammerError);
-        }
-        cmd.read_buf.copy_from_slice(&result[..read_len]);
-    } else {
-        transfer_fn(&write_data, 0)?;
-    }
-
-    Ok(())
-}
 
 /// Information about a programmer
 #[derive(Debug, Clone)]

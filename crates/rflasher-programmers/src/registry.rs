@@ -6,7 +6,7 @@
 #[cfg(feature = "usb")]
 use crate::UsbProgrammer;
 #[allow(unused_imports)] // Only used when at least one programmer backend is enabled
-use crate::catalog::{ProgrammerParams, parse_programmer_params};
+use crate::catalog::{ProgrammerParams, canonical_programmer_name, parse_programmer_params};
 use crate::erased::{ErasedFlashDevice, ErasedSpiMaster};
 use crate::handle::{ChipInfo, FlashHandle};
 use crate::usb::ChooseUsbDevice;
@@ -102,10 +102,7 @@ impl Probing<'_> {
 }
 
 /// Common probe and create handle logic for SPI programmers
-async fn probe_and_create_handle<M>(
-    master: M,
-    db: &Probing<'_>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>>
+async fn probe_and_create_handle<M>(master: M, db: &Probing<'_>) -> crate::Result<FlashHandle>
 where
     M: rflasher_core::programmer::SpiMaster + Send + 'static,
 {
@@ -140,95 +137,128 @@ pub type BoxedSpiMaster = ErasedSpiMaster;
 pub async fn open_spi_programmer(
     programmer: &str,
     choose_usb_device: Option<ChooseUsbDevice<'_>>,
-) -> Result<BoxedSpiMaster, Box<dyn std::error::Error>> {
+) -> crate::Result<BoxedSpiMaster> {
+    let params = parse_programmer_params(programmer)?;
+    let Some(canonical) = canonical_programmer_name(&params.name) else {
+        return Err(crate::Error::UnknownProgrammer(params.name));
+    };
+    open_spi_master_params(canonical, &params, choose_usb_device).await
+}
+
+async fn open_spi_master_params(
+    canonical: &str,
+    params: &ProgrammerParams,
+    choose_usb_device: Option<ChooseUsbDevice<'_>>,
+) -> crate::Result<BoxedSpiMaster> {
     // Not every feature combination has a USB backend.
     let _ = choose_usb_device;
-    let params = parse_programmer_params(programmer)?;
 
-    match params.name.as_str() {
+    match canonical {
         #[cfg(feature = "dummy")]
-        "dummy" => {
-            Ok(ErasedSpiMaster::new(open_dummy_master(&params).await?))
-        }
+        "dummy" => Ok(ErasedSpiMaster::new(open_dummy_master(params).await?)),
 
         #[cfg(feature = "ch341a")]
-        "ch341a" | "ch341a_spi" => {
-            Ok(ErasedSpiMaster::new(open_ch341a_master(&params, choose_usb_device).await?))
-        }
+        "ch341a" => Ok(ErasedSpiMaster::new(
+            open_ch341a_master(params, choose_usb_device).await?,
+        )),
 
         #[cfg(feature = "ch347")]
-        "ch347" | "ch347_spi" => {
-            Ok(ErasedSpiMaster::new(open_ch347_master(&params, choose_usb_device).await?))
-        }
+        "ch347" => Ok(ErasedSpiMaster::new(
+            open_ch347_master(params, choose_usb_device).await?,
+        )),
 
         #[cfg(feature = "dediprog")]
-        "dediprog" | "dediprog_spi" => {
-            Ok(ErasedSpiMaster::new(open_dediprog_master(&params, choose_usb_device).await?))
-        }
+        "dediprog" => Ok(ErasedSpiMaster::new(
+            open_dediprog_master(params, choose_usb_device).await?,
+        )),
 
         #[cfg(feature = "serprog-native")]
         "serprog" => {
-            let config = parse_serprog_config(&params)?;
-            match config.connection()? {
-                crate::serprog::SerprogConnection::Serial { device, baud } => {
-                    Ok(ErasedSpiMaster::new(open_serprog_serial(&device, baud, &config).await?))
-                }
-                crate::serprog::SerprogConnection::Tcp { host, port } => {
-                    Ok(ErasedSpiMaster::new(open_serprog_tcp(&host, port, &config).await?))
-                }
+            log::info!("Opening serprog programmer...");
+            let config = parse_serprog_config(params)?;
+            match config.connection().map_err(crate::Error::InvalidOptions)? {
+                crate::serprog::SerprogConnection::Serial { device, baud } => Ok(
+                    ErasedSpiMaster::new(open_serprog_serial(&device, baud, &config).await?),
+                ),
+                crate::serprog::SerprogConnection::Tcp { host, port } => Ok(ErasedSpiMaster::new(
+                    open_serprog_tcp(&host, port, &config).await?,
+                )),
             }
         }
 
         #[cfg(feature = "ftdi")]
-        "ftdi" | "ft2232_spi" | "ft4232_spi" => {
-            Ok(ErasedSpiMaster::new(open_ftdi_master(&params, choose_usb_device).await?))
-        }
+        "ftdi" => Ok(ErasedSpiMaster::new(
+            open_ftdi_master(params, choose_usb_device).await?,
+        )),
 
         #[cfg(feature = "ft4222")]
-        "ft4222" | "ft4222_spi" => {
-            Ok(ErasedSpiMaster::new(open_ft4222_master(&params, choose_usb_device).await?))
-        }
+        "ft4222" => Ok(ErasedSpiMaster::new(
+            open_ft4222_master(params, choose_usb_device).await?,
+        )),
 
-        #[cfg(feature = "linux-spi")]
-        "linux_spi" | "linux-spi" | "spidev" => {
-            Ok(ErasedSpiMaster::new(open_linux_spi_master(&params).await?))
-        }
+        #[cfg(all(feature = "linux-spi", target_os = "linux"))]
+        "linux_spi" => Ok(ErasedSpiMaster::new(open_linux_spi_master(params).await?)),
 
-        #[cfg(feature = "linux-gpio")]
-        "linux_gpio_spi" | "linux-gpio-spi" | "linux_gpio" | "linux-gpio" => {
-            Ok(ErasedSpiMaster::new(open_linux_gpio_spi_master(&params).await?))
-        }
+        #[cfg(all(feature = "linux-gpio", target_os = "linux"))]
+        "linux_gpio_spi" => Ok(ErasedSpiMaster::new(
+            open_linux_gpio_spi_master(params).await?,
+        )),
 
         #[cfg(feature = "raiden")]
-        "raiden_debug_spi" | "raiden" | "raiden_spi" => {
-            Ok(ErasedSpiMaster::new(open_raiden_master(&params, choose_usb_device).await?))
-        }
+        "raiden_debug_spi" => Ok(ErasedSpiMaster::new(
+            open_raiden_master(params, choose_usb_device).await?,
+        )),
 
         #[cfg(feature = "sunxi-fel")]
-        "sunxi_fel" | "sunxi-fel" | "fel" => {
-            Ok(ErasedSpiMaster::new(open_sunxi_fel_master(&params, choose_usb_device).await?))
-        }
+        "sunxi_fel" => Ok(ErasedSpiMaster::new(
+            open_sunxi_fel_master(params, choose_usb_device).await?,
+        )),
 
         #[cfg(all(feature = "ati-spi", target_os = "linux"))]
-        "ati_spi" | "ati-spi" | "ati" | "amdgpu" => {
-            Ok(ErasedSpiMaster::new(crate::ati_spi::open(&params.as_option_pairs())?))
-        }
+        "ati_spi" => Ok(ErasedSpiMaster::new(
+            crate::ati_spi::open(&params.as_option_pairs()).map_err(|e| match e {
+                crate::ati_spi::AtiSpiError::Options(_) => {
+                    crate::Error::InvalidOptions(e.to_string())
+                }
+                other => crate::Error::backend_source(other),
+            })?,
+        )),
 
-        // Internal and MTD are opaque-only or not SPI-based
-        #[cfg(feature = "internal")]
+        #[cfg(all(feature = "internal", target_os = "linux"))]
         "internal" => {
-            Err("The REPL is only supported for SPI-based programmers. \
-                 The internal programmer in hardware sequencing mode doesn't support raw SPI commands. \
-                 If you need raw SPI access, try internal:ich_spi_mode=swseq (if supported).".into())
+            use rflasher_internal::{InternalOptions, InternalProgrammer};
+
+            let options = params.as_option_pairs();
+            let internal_opts = InternalOptions::from_options(&options).map_err(|e| {
+                crate::Error::InvalidOptions(format!("Invalid internal programmer options: {}", e))
+            })?;
+
+            match InternalProgrammer::open(internal_opts)
+                .map_err(|error| crate::Error::backend_with_source(format_internal_init_error(&error), error))?
+            {
+                InternalProgrammer::Spi(spi) => Ok(ErasedSpiMaster::new(spi)),
+                InternalProgrammer::HardwareSequencing(_) => Err(crate::Error::Unsupported(
+                    "The REPL is only supported for SPI-based programmers. \
+                     The internal programmer opened in hardware sequencing mode, which doesn't support raw SPI commands. \
+                     If your chipset supports it, try internal:ich_spi_mode=swseq."
+                        .into(),
+                )),
+            }
         }
 
-        #[cfg(feature = "linux-mtd")]
-        "linux_mtd" | "linux-mtd" | "mtd" => {
-            Err("The REPL is only supported for SPI-based programmers. \
-                 The linux_mtd programmer uses the MTD subsystem and doesn't expose raw SPI.".into())
-        }
+        #[cfg(all(feature = "internal", not(target_os = "linux")))]
+        "internal" => Err(crate::Error::Unsupported(
+            "The internal programmer is only supported on Linux".into(),
+        )),
 
-        _ => Err(format!("Unknown programmer: {}", params.name).into()),
+        #[cfg(all(feature = "linux-mtd", target_os = "linux"))]
+        "linux_mtd" => Err(crate::Error::Unsupported(
+            "The REPL is only supported for SPI-based programmers. \
+             The linux_mtd programmer uses the MTD subsystem and doesn't expose raw SPI."
+                .into(),
+        )),
+
+        _ => Err(crate::Error::UnknownProgrammer(params.name.clone())),
     }
 }
 
@@ -250,16 +280,13 @@ pub async fn open_spi_programmer(
 /// # Example
 /// ```ignore
 /// let db = ChipDatabase::new();
-/// let mut handle = open_flash("ch341a", &db)?;
+/// let mut handle = open_flash("ch341a", &db).await?;
 ///
 /// // Use the handle - works the same for all programmer types
 /// let size = handle.size();
 /// println!("Flash size: {} bytes", size);
 /// ```
-pub async fn open_flash(
-    programmer: &str,
-    db: &dyn ChipProvider,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+pub async fn open_flash(programmer: &str, db: &dyn ChipProvider) -> crate::Result<FlashHandle> {
     open_flash_with_options(programmer, db, &OpenOptions::default()).await
 }
 
@@ -273,7 +300,7 @@ pub async fn open_flash_with_options(
     programmer: &str,
     db: &dyn ChipProvider,
     options: &OpenOptions<'_>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+) -> crate::Result<FlashHandle> {
     let db = &Probing {
         db,
         options: ProbeOptions {
@@ -286,164 +313,100 @@ pub async fn open_flash_with_options(
     // `db` parameter warning.
     let _ = db;
     let params = parse_programmer_params(programmer)?;
-    if matches!(params.name.as_str(), "linux_mtd" | "linux-mtd" | "mtd")
-        && (options.chip.is_some() || options.force)
-    {
-        return Err("--chip and --force have no effect for an opaque MTD device".into());
-    }
+    let canonical = canonical_programmer_name(&params.name);
 
-    match params.name.as_str() {
-        #[cfg(feature = "dummy")]
-        "dummy" => open_dummy(&params, db).await,
-
-        #[cfg(feature = "ch341a")]
-        "ch341a" | "ch341a_spi" => open_ch341a(&params, db, options.choose_usb_device).await,
-
-        #[cfg(feature = "ch347")]
-        "ch347" | "ch347_spi" => open_ch347(&params, db, options.choose_usb_device).await,
-
-        #[cfg(feature = "dediprog")]
-        "dediprog" | "dediprog_spi" => open_dediprog(&params, db, options.choose_usb_device).await,
-
-        #[cfg(feature = "serprog-native")]
-        "serprog" => open_serprog(&params, db).await,
-
-        #[cfg(feature = "ftdi")]
-        "ftdi" | "ft2232_spi" | "ft4232_spi" => {
-            open_ftdi(&params, db, options.choose_usb_device).await
-        }
-
-        #[cfg(feature = "ft4222")]
-        "ft4222" | "ft4222_spi" => open_ft4222(&params, db, options.choose_usb_device).await,
-
-        #[cfg(feature = "linux-spi")]
-        "linux_spi" | "linux-spi" | "spidev" => open_linux_spi(&params, db).await,
-
-        #[cfg(feature = "linux-mtd")]
-        "linux_mtd" | "linux-mtd" | "mtd" => open_linux_mtd(&params).await,
-
-        #[cfg(feature = "linux-gpio")]
-        "linux_gpio_spi" | "linux-gpio-spi" | "linux_gpio" | "linux-gpio" => {
-            open_linux_gpio_spi(&params, db).await
+    match canonical {
+        #[cfg(all(feature = "linux-mtd", target_os = "linux"))]
+        Some("linux_mtd") => {
+            if options.chip.is_some() || options.force {
+                return Err(crate::Error::InvalidOptions(
+                    "--chip and --force have no effect for an opaque MTD device".into(),
+                ));
+            }
+            open_linux_mtd(&params).await
         }
 
         #[cfg(all(feature = "internal", target_os = "linux"))]
-        "internal" => open_internal(&params, db).await,
+        Some("internal") => open_internal(&params, db).await,
         #[cfg(all(feature = "internal", not(target_os = "linux")))]
-        "internal" => Err("The internal programmer is only supported on Linux".into()),
+        Some("internal") => Err(crate::Error::Unsupported(
+            "The internal programmer is only supported on Linux".into(),
+        )),
 
-        #[cfg(feature = "raiden")]
-        "raiden_debug_spi" | "raiden" | "raiden_spi" => {
-            open_raiden(&params, db, options.choose_usb_device).await
+        Some(name) => {
+            let master = open_spi_master_params(name, &params, options.choose_usb_device).await?;
+            probe_and_create_handle(master, db).await
         }
 
-        #[cfg(feature = "sunxi-fel")]
-        "sunxi_fel" | "sunxi-fel" | "fel" => {
-            open_sunxi_fel(&params, db, options.choose_usb_device).await
-        }
-
-        #[cfg(all(feature = "ati-spi", target_os = "linux"))]
-        "ati_spi" | "ati-spi" | "ati" | "amdgpu" => open_ati_spi(&params, db).await,
-
-        _ => Err(format!("Unknown programmer: {}", params.name).into()),
+        None => Err(crate::Error::UnknownProgrammer(params.name)),
     }
 }
 
 // Programmer-specific open functions
-// These handle the details of each programmer type and return a FlashHandle
 
 #[cfg(feature = "dummy")]
-async fn open_dummy_master(
-    _params: &ProgrammerParams,
-) -> Result<crate::dummy::DummyFlash, Box<dyn std::error::Error>> {
+async fn open_dummy_master(_params: &ProgrammerParams) -> crate::Result<crate::dummy::DummyFlash> {
     let master = crate::dummy::DummyFlash::new_default();
     Ok(master)
-}
-
-#[cfg(feature = "dummy")]
-async fn open_dummy(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_dummy_master(params).await?, db).await
 }
 
 #[cfg(feature = "ch341a")]
 async fn open_ch341a_master(
     _params: &ProgrammerParams,
     choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<crate::ch341a::Ch341a, Box<dyn std::error::Error>> {
+) -> crate::Result<crate::ch341a::Ch341a> {
     log::info!("Opening CH341A programmer...");
 
-    let master = crate::ch341a::Ch341a::open_matching((), choose).await.map_err(|e| {
-        format!(
+    let master = crate::ch341a::Ch341a::open_matching((), choose).await.map_err(|e| crate::Error::backend_with_source(format!(
             "Failed to open CH341A: {}\nMake sure the device is connected and you have permissions.",
             e
-        )
-    })?;
+        ), e))?;
 
     Ok(master)
-}
-
-#[cfg(feature = "ch341a")]
-async fn open_ch341a(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-    choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_ch341a_master(params, choose).await?, db).await
 }
 
 #[cfg(feature = "ch347")]
 async fn open_ch347_master(
     params: &ProgrammerParams,
     choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<crate::ch347::Ch347, Box<dyn std::error::Error>> {
+) -> crate::Result<crate::ch347::Ch347> {
     use crate::ch347::{Ch347, parse_options};
 
     log::info!("Opening CH347 programmer...");
 
     let options = params.as_option_pairs();
 
-    let config = parse_options(&options).map_err(|e| format!("Invalid CH347 parameters: {}", e))?;
+    let config = parse_options(&options)
+        .map_err(|e| crate::Error::InvalidOptions(format!("Invalid CH347 parameters: {}", e)))?;
 
     let master = Ch347::open_matching(config, choose).await.map_err(|e| {
-        format!(
+        crate::Error::backend(format!(
             "Failed to open CH347: {}\nMake sure the device is connected and you have permissions.",
             e
-        )
+        ))
     })?;
 
     Ok(master)
-}
-
-#[cfg(feature = "ch347")]
-async fn open_ch347(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-    choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_ch347_master(params, choose).await?, db).await
 }
 
 #[cfg(feature = "dediprog")]
 async fn open_dediprog_master(
     params: &ProgrammerParams,
     choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<crate::dediprog::Dediprog, Box<dyn std::error::Error>> {
+) -> crate::Result<crate::dediprog::Dediprog> {
     use crate::dediprog::{Dediprog, parse_options};
 
     let options = params.as_option_pairs();
 
-    let config =
-        parse_options(&options).map_err(|e| format!("Invalid Dediprog parameters: {}", e))?;
+    let config = parse_options(&options)
+        .map_err(|e| crate::Error::InvalidOptions(format!("Invalid Dediprog parameters: {}", e)))?;
 
     let master = Dediprog::open_matching(config, choose).await.map_err(|e| {
-        format!(
+        crate::Error::backend(format!(
             "Failed to open Dediprog: {}\n\
              Make sure the device is connected and you have USB permissions.",
             e
-        )
+        ))
     })?;
 
     log::info!(
@@ -455,42 +418,31 @@ async fn open_dediprog_master(
     Ok(master)
 }
 
-#[cfg(feature = "dediprog")]
-async fn open_dediprog(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-    choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_dediprog_master(params, choose).await?, db).await
-}
-
 #[cfg(feature = "serprog-native")]
-fn parse_serprog_config(
-    params: &ProgrammerParams,
-) -> Result<crate::serprog::SerprogConfig, Box<dyn std::error::Error>> {
+fn parse_serprog_config(params: &ProgrammerParams) -> crate::Result<crate::serprog::SerprogConfig> {
     crate::serprog::parse_options(&params.as_option_pairs())
-        .map_err(|e| format!("Invalid serprog parameters: {}", e).into())
+        .map_err(|e| crate::Error::InvalidOptions(format!("Invalid serprog parameters: {}", e)))
 }
 
 #[cfg(feature = "serprog-native")]
 async fn configure_serprog<T: crate::serprog::Transport>(
     transport: T,
     config: &crate::serprog::SerprogConfig,
-) -> Result<crate::serprog::Serprog<T>, Box<dyn std::error::Error>> {
-    let mut serprog = crate::serprog::Serprog::new(transport)
-        .await
-        .map_err(|e| format!("Failed to initialize serprog: {}", e))?;
+) -> crate::Result<crate::serprog::Serprog<T>> {
+    let mut serprog = crate::serprog::Serprog::new(transport).await.map_err(|e| {
+        crate::Error::backend_with_source(format!("Failed to initialize serprog: {}", e), e)
+    })?;
     if let Some(speed_khz) = config.spispeed_khz {
-        serprog
-            .set_spi_speed(speed_khz * 1000)
-            .await
-            .map_err(|e| format!("Failed to set requested SPI speed of {speed_khz} kHz: {e}"))?;
+        serprog.set_spi_speed(speed_khz * 1000).await.map_err(|e| {
+            crate::Error::backend(format!(
+                "Failed to set requested SPI speed of {speed_khz} kHz: {e}"
+            ))
+        })?;
     }
     if let Some(chip_select) = config.cs {
-        serprog
-            .set_spi_cs(chip_select)
-            .await
-            .map_err(|e| format!("Failed to set chip select: {}", e))?;
+        serprog.set_spi_cs(chip_select).await.map_err(|e| {
+            crate::Error::backend_with_source(format!("Failed to set chip select: {}", e), e)
+        })?;
     }
     Ok(serprog)
 }
@@ -500,9 +452,10 @@ async fn open_serprog_serial(
     device: &str,
     baud: Option<u32>,
     config: &crate::serprog::SerprogConfig,
-) -> Result<crate::serprog::Serprog<crate::serprog::SerialTransport>, Box<dyn std::error::Error>> {
-    let transport = crate::serprog::SerialTransport::open(device, baud)
-        .map_err(|e| format!("Failed to open serial port {}: {}", device, e))?;
+) -> crate::Result<crate::serprog::Serprog<crate::serprog::SerialTransport>> {
+    let transport = crate::serprog::SerialTransport::open(device, baud).map_err(|e| {
+        crate::Error::backend(format!("Failed to open serial port {}: {}", device, e))
+    })?;
     configure_serprog(transport, config).await
 }
 
@@ -511,86 +464,60 @@ async fn open_serprog_tcp(
     host: &str,
     port: u16,
     config: &crate::serprog::SerprogConfig,
-) -> Result<crate::serprog::Serprog<crate::serprog::TcpTransport>, Box<dyn std::error::Error>> {
-    let transport = crate::serprog::TcpTransport::connect(host, port)
-        .map_err(|e| format!("Failed to connect to {}:{}: {}", host, port, e))?;
+) -> crate::Result<crate::serprog::Serprog<crate::serprog::TcpTransport>> {
+    let transport = crate::serprog::TcpTransport::connect(host, port).map_err(|e| {
+        crate::Error::backend(format!("Failed to connect to {}:{}: {}", host, port, e))
+    })?;
     configure_serprog(transport, config).await
-}
-
-#[cfg(feature = "serprog-native")]
-async fn open_serprog(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    use crate::serprog::SerprogConnection;
-
-    log::info!("Opening serprog programmer...");
-    let config = parse_serprog_config(params)?;
-    match config.connection()? {
-        SerprogConnection::Serial { device, baud } => {
-            probe_and_create_handle(open_serprog_serial(&device, baud, &config).await?, db).await
-        }
-        SerprogConnection::Tcp { host, port } => {
-            probe_and_create_handle(open_serprog_tcp(&host, port, &config).await?, db).await
-        }
-    }
 }
 
 #[cfg(feature = "ftdi")]
 async fn open_ftdi_master(
     params: &ProgrammerParams,
     choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<crate::ftdi::Ftdi, Box<dyn std::error::Error>> {
+) -> crate::Result<crate::ftdi::Ftdi> {
     use crate::ftdi::{Ftdi, parse_options};
 
     log::info!("Opening FTDI programmer...");
 
     let options = params.as_option_pairs();
 
-    let config = parse_options(&options).map_err(|e| format!("Invalid FTDI parameters: {}", e))?;
+    let config = parse_options(&options)
+        .map_err(|e| crate::Error::InvalidOptions(format!("Invalid FTDI parameters: {}", e)))?;
 
     let master = Ftdi::open_matching(config, choose).await.map_err(|e| {
-        format!(
+        crate::Error::backend(format!(
             "Failed to open FTDI device: {}\n\
              Make sure the device is connected and you have permissions.\n\
              You may need to unbind the kernel ftdi_sio driver:\n\
              echo -n '<bus>-<port>' | sudo tee /sys/bus/usb/drivers/ftdi_sio/unbind",
             e
-        )
+        ))
     })?;
 
     Ok(master)
-}
-
-#[cfg(feature = "ftdi")]
-async fn open_ftdi(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-    choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_ftdi_master(params, choose).await?, db).await
 }
 
 #[cfg(feature = "ft4222")]
 async fn open_ft4222_master(
     params: &ProgrammerParams,
     choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<crate::ft4222::Ft4222, Box<dyn std::error::Error>> {
+) -> crate::Result<crate::ft4222::Ft4222> {
     use crate::ft4222::{Ft4222, parse_options};
 
     log::info!("Opening FT4222H programmer...");
 
     let options = params.as_option_pairs();
 
-    let config =
-        parse_options(&options).map_err(|e| format!("Invalid FT4222 parameters: {}", e))?;
+    let config = parse_options(&options)
+        .map_err(|e| crate::Error::InvalidOptions(format!("Invalid FT4222 parameters: {}", e)))?;
 
     let master = Ft4222::open_matching(config, choose).await.map_err(|e| {
-        format!(
+        crate::Error::backend(format!(
             "Failed to open FT4222H device: {}\n\
              Make sure the device is connected and you have USB permissions.",
             e
-        )
+        ))
     })?;
 
     log::info!(
@@ -601,68 +528,51 @@ async fn open_ft4222_master(
     Ok(master)
 }
 
-#[cfg(feature = "ft4222")]
-async fn open_ft4222(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-    choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_ft4222_master(params, choose).await?, db).await
-}
-
-#[cfg(feature = "linux-spi")]
+#[cfg(all(feature = "linux-spi", target_os = "linux"))]
 async fn open_linux_spi_master(
     params: &ProgrammerParams,
-) -> Result<crate::linux_spi::LinuxSpi, Box<dyn std::error::Error>> {
+) -> crate::Result<crate::linux_spi::LinuxSpi> {
     use crate::linux_spi::{LinuxSpi, parse_options};
 
     log::info!("Opening Linux SPI programmer...");
 
     let options = params.as_option_pairs();
 
-    let config =
-        parse_options(&options).map_err(|e| format!("Invalid linux_spi parameters: {}", e))?;
+    let config = parse_options(&options).map_err(|e| {
+        crate::Error::InvalidOptions(format!("Invalid linux_spi parameters: {}", e))
+    })?;
 
     let master = LinuxSpi::open(&config).map_err(|e| {
-        format!(
+        crate::Error::backend(format!(
             "Failed to open Linux SPI device: {}\n\
              Make sure the device exists and you have read/write permissions.\n\
              You may need to: sudo usermod -aG spi $USER",
             e
-        )
+        ))
     })?;
 
     Ok(master)
 }
 
-#[cfg(feature = "linux-spi")]
-async fn open_linux_spi(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_linux_spi_master(params).await?, db).await
-}
-
-#[cfg(feature = "linux-mtd")]
-async fn open_linux_mtd(
-    params: &ProgrammerParams,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+#[cfg(all(feature = "linux-mtd", target_os = "linux"))]
+async fn open_linux_mtd(params: &ProgrammerParams) -> crate::Result<FlashHandle> {
     use crate::linux_mtd::{LinuxMtd, parse_options};
 
     log::info!("Opening Linux MTD programmer...");
 
     let options = params.as_option_pairs();
 
-    let config =
-        parse_options(&options).map_err(|e| format!("Invalid linux_mtd parameters: {}", e))?;
+    let config = parse_options(&options).map_err(|e| {
+        crate::Error::InvalidOptions(format!("Invalid linux_mtd parameters: {}", e))
+    })?;
 
     let mtd = LinuxMtd::open(&config).map_err(|e| {
-        format!(
+        crate::Error::backend(format!(
             "Failed to open Linux MTD device: {}\n\
              Make sure the device exists and you have read/write permissions.\n\
              List available MTD devices with: cat /proc/mtd",
             e
-        )
+        ))
     })?;
 
     let info = mtd.info();
@@ -676,37 +586,30 @@ async fn open_linux_mtd(
     Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(mtd)))
 }
 
-#[cfg(feature = "linux-gpio")]
+#[cfg(all(feature = "linux-gpio", target_os = "linux"))]
 async fn open_linux_gpio_spi_master(
     params: &ProgrammerParams,
-) -> Result<crate::linux_gpio::LinuxGpioSpi, Box<dyn std::error::Error>> {
+) -> crate::Result<crate::linux_gpio::LinuxGpioSpi> {
     use crate::linux_gpio::{LinuxGpioSpi, parse_options};
 
     log::info!("Opening Linux GPIO SPI (bitbang) programmer...");
 
     let options = params.as_option_pairs();
 
-    let config =
-        parse_options(&options).map_err(|e| format!("Invalid linux_gpio_spi parameters: {}", e))?;
+    let config = parse_options(&options).map_err(|e| {
+        crate::Error::InvalidOptions(format!("Invalid linux_gpio_spi parameters: {}", e))
+    })?;
 
     let master = LinuxGpioSpi::open(&config).map_err(|e| {
-        format!(
+        crate::Error::backend(format!(
             "Failed to open Linux GPIO SPI device: {}\n\
              Make sure the GPIO chip exists and you have permissions.\n\
              You may need to run as root or add udev rules for /dev/gpiochipN",
             e
-        )
+        ))
     })?;
 
     Ok(master)
-}
-
-#[cfg(feature = "linux-gpio")]
-async fn open_linux_gpio_spi(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_linux_gpio_spi_master(params).await?, db).await
 }
 
 #[cfg(all(feature = "internal", target_os = "linux"))]
@@ -805,33 +708,31 @@ mod internal_error_tests {
 }
 
 #[cfg(all(feature = "internal", target_os = "linux"))]
-async fn open_internal(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
+async fn open_internal(params: &ProgrammerParams, db: &Probing<'_>) -> crate::Result<FlashHandle> {
     use rflasher_internal::{InternalOptions, InternalProgrammer, SpiMode};
 
     log::info!("Opening internal programmer...");
 
     let options = params.as_option_pairs();
 
-    let internal_opts = InternalOptions::from_options(&options)
-        .map_err(|e| format!("Invalid internal programmer options: {}", e))?;
+    let internal_opts = InternalOptions::from_options(&options).map_err(|e| {
+        crate::Error::InvalidOptions(format!("Invalid internal programmer options: {}", e))
+    })?;
 
     if internal_opts.mode != SpiMode::Auto {
         log::info!("Using ich_spi_mode={}", internal_opts.mode);
     }
 
-    match InternalProgrammer::open(internal_opts)
-        .map_err(|error| format_internal_init_error(&error))?
-    {
+    match InternalProgrammer::open(internal_opts).map_err(|error| {
+        crate::Error::backend_with_source(format_internal_init_error(&error), error)
+    })? {
         InternalProgrammer::Spi(spi) => {
             log::info!("Using SPI mode (swseq allows chip probing)");
             probe_and_create_handle(spi, db).await
         }
         InternalProgrammer::HardwareSequencing(flash) => {
             if db.options.chip.is_some() || db.options.force {
-                return Err("--chip and --force apply to SPI probing, not opaque hardware sequencing; use ich_spi_mode=swseq or remove them".into());
+                return Err(crate::Error::InvalidOptions("--chip and --force apply to SPI probing, not opaque hardware sequencing; use ich_spi_mode=swseq or remove them".into()));
             }
             log::info!("Using opaque mode (hwseq - no chip probing available)");
             Ok(FlashHandle::without_chip_info(ErasedFlashDevice::new(
@@ -845,69 +746,51 @@ async fn open_internal(
 async fn open_raiden_master(
     params: &ProgrammerParams,
     choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<crate::raiden::RaidenDebugSpi, Box<dyn std::error::Error>> {
+) -> crate::Result<crate::raiden::RaidenDebugSpi> {
     use crate::raiden::{RaidenDebugSpi, parse_options};
 
     log::info!("Opening Raiden Debug SPI programmer...");
 
     let options = params.as_option_pairs();
 
-    let config =
-        parse_options(&options).map_err(|e| format!("Invalid raiden parameters: {}", e))?;
+    let config = parse_options(&options)
+        .map_err(|e| crate::Error::InvalidOptions(format!("Invalid raiden parameters: {}", e)))?;
 
     let master = RaidenDebugSpi::open_matching(config, choose)
         .await
         .map_err(|e| {
-            format!(
+            crate::Error::backend(format!(
                 "Failed to open Raiden Debug SPI device: {}\n\
              Make sure a Chrome OS debug device (SuzyQable, Servo, C2D2) is connected\n\
              and you have USB permissions.",
                 e
-            )
+            ))
         })?;
 
     Ok(master)
-}
-
-#[cfg(feature = "raiden")]
-async fn open_raiden(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-    choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_raiden_master(params, choose).await?, db).await
 }
 
 #[cfg(feature = "sunxi-fel")]
 async fn open_sunxi_fel_master(
     _params: &ProgrammerParams,
     choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<crate::sunxi_fel::SunxiFel, Box<dyn std::error::Error>> {
+) -> crate::Result<crate::sunxi_fel::SunxiFel> {
     log::info!("Opening sunxi FEL programmer...");
 
     let master = crate::sunxi_fel::SunxiFel::open_matching((), choose)
         .await
         .map_err(|e| {
-            format!(
+            crate::Error::backend(format!(
                 "Failed to open sunxi FEL device: {}\n\
              Make sure the device is in FEL mode (hold FEL button while plugging in USB)\n\
              and you have USB permissions (VID:1F3A PID:EFE8).",
                 e
-            )
+            ))
         })?;
 
     log::info!("Connected to: {}", master.soc_name());
 
     Ok(master)
-}
-
-#[cfg(feature = "sunxi-fel")]
-async fn open_sunxi_fel(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-    choose: Option<ChooseUsbDevice<'_>>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    probe_and_create_handle(open_sunxi_fel_master(params, choose).await?, db).await
 }
 
 #[cfg(all(test, feature = "dummy"))]
@@ -939,8 +822,8 @@ mod dispatch_tests {
             // The flash path probes the chip rather than returning a raw master.
             let error = open_flash("dummy", &NoChips).await.err().unwrap();
             assert!(matches!(
-                error.downcast_ref::<rflasher_core::error::Error>(),
-                Some(rflasher_core::error::Error::ChipNotFound)
+                error,
+                crate::Error::Core(rflasher_core::error::Error::ChipNotFound)
             ));
         });
     }
@@ -998,10 +881,7 @@ mod chip_selection_tests {
             let db = CollidingChips::new();
 
             let error = open_flash("dummy", &db).await.err().unwrap();
-            assert!(matches!(
-                error.downcast_ref::<Error>(),
-                Some(Error::ChipAmbiguous)
-            ));
+            assert!(matches!(error, crate::Error::Core(Error::ChipAmbiguous)));
 
             let options = OpenOptions {
                 chip: Some("bigblock"),
@@ -1020,10 +900,7 @@ mod chip_selection_tests {
                 .await
                 .err()
                 .unwrap();
-            assert!(matches!(
-                error.downcast_ref::<Error>(),
-                Some(Error::ChipNotFound)
-            ));
+            assert!(matches!(error, crate::Error::Core(Error::ChipNotFound)));
         });
     }
 }
@@ -1059,13 +936,4 @@ mod serprog_open_tests {
         ));
         assert!(parse_serprog_config(&parse_programmer_params("serprog:bad=1").unwrap()).is_err());
     }
-}
-
-#[cfg(all(feature = "ati-spi", target_os = "linux"))]
-async fn open_ati_spi(
-    params: &ProgrammerParams,
-    db: &Probing<'_>,
-) -> Result<FlashHandle, Box<dyn std::error::Error>> {
-    let master = crate::ati_spi::open(&params.as_option_pairs())?;
-    probe_and_create_handle(master, db).await
 }

@@ -127,37 +127,39 @@ pub const SERPROG_BAUD_MAX: u32 = 4_000_000;
 ///
 /// Accepted keys: `dev`, `ip`, `baud`, `spispeed`, `cs`. Unknown keys are
 /// rejected so frontends cannot silently drop configuration.
-pub fn parse_options(options: &[(&str, &str)]) -> std::result::Result<SerprogConfig, String> {
+pub fn parse_options(options: &[(&str, &str)]) -> Result<SerprogConfig> {
     let mut config = SerprogConfig::default();
     for (key, value) in options {
         match *key {
             "dev" => config.dev = Some(value.to_string()),
             "ip" => config.ip = Some(value.to_string()),
             "baud" => {
-                let baud: u32 = value
-                    .parse()
-                    .map_err(|_| format!("Invalid baud value: {value}"))?;
+                let baud: u32 = value.parse().map_err(|_| {
+                    SerprogError::InvalidParameter(format!("Invalid baud value: {value}"))
+                })?;
                 if !(SERPROG_BAUD_MIN..=SERPROG_BAUD_MAX).contains(&baud) {
-                    return Err(format!(
+                    return Err(SerprogError::InvalidParameter(format!(
                         "Invalid baud value: {value} (must be {SERPROG_BAUD_MIN}-{SERPROG_BAUD_MAX})"
-                    ));
+                    )));
                 }
                 config.baud = Some(baud);
             }
             "spispeed" => {
-                config.spispeed_khz = Some(
-                    crate::catalog::parse_speed_khz(value)
-                        .ok_or_else(|| format!("Invalid spispeed value: {value}"))?,
-                );
+                config.spispeed_khz =
+                    Some(crate::catalog::parse_speed_khz(value).ok_or_else(|| {
+                        SerprogError::InvalidParameter(format!("Invalid spispeed value: {value}"))
+                    })?);
             }
             "cs" => {
-                config.cs = Some(
-                    value
-                        .parse()
-                        .map_err(|_| format!("Invalid cs value: {value}"))?,
-                );
+                config.cs = Some(value.parse().map_err(|_| {
+                    SerprogError::InvalidParameter(format!("Invalid cs value: {value}"))
+                })?);
             }
-            _ => return Err(format!("unknown option: {key}")),
+            _ => {
+                return Err(SerprogError::InvalidParameter(format!(
+                    "unknown option: {key}"
+                )));
+            }
         }
     }
     Ok(config)
@@ -389,6 +391,8 @@ pub mod schema {
     ];
 
     pub fn validate_options(options: &[(&str, &str)]) -> std::result::Result<(), String> {
-        crate::serprog::parse_options(options).map(|_| ())
+        crate::serprog::parse_options(options)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 }

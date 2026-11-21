@@ -78,6 +78,10 @@ pub enum Error {
     VerifyError {
         /// Address where mismatch was detected
         addr: u32,
+        /// Expected byte value
+        expected: u8,
+        /// Actual byte value read from flash
+        found: u8,
     },
     /// Operation timed out
     Timeout,
@@ -177,9 +181,14 @@ impl fmt::Display for Error {
             Self::WriteError { addr } => {
                 write!(f, "write operation failed at address 0x{addr:08X}")
             }
-            Self::VerifyError { addr } => {
-                write!(f, "verify failed: data mismatch at address 0x{addr:08X}")
-            }
+            Self::VerifyError {
+                addr,
+                expected,
+                found,
+            } => write!(
+                f,
+                "verify failed at 0x{addr:08X}: expected 0x{expected:02X}, got 0x{found:02X}"
+            ),
             Self::Timeout => write!(f, "operation timed out"),
             Self::AddressOutOfBounds => write!(f, "address out of bounds"),
             Self::InvalidAlignment => write!(f, "invalid alignment"),

@@ -55,6 +55,11 @@ pub mod serprog;
 #[path = "backends/sunxi_fel/mod.rs"]
 pub mod sunxi_fel;
 
+// Shared platform-aware async delay helper for programmer backends.
+#[cfg(feature = "std")]
+#[path = "backends/time.rs"]
+pub(crate) mod time;
+
 // Shared endpoint-completion timeout helper for the nusb-backed programmers.
 #[cfg(any(
     feature = "ch341a",
@@ -70,6 +75,11 @@ pub(crate) mod usb_ep;
 // Available on every `std` target so the CLI and web frontend use one source.
 #[cfg(feature = "std")]
 pub mod catalog;
+#[cfg(feature = "std")]
+mod error;
+
+#[cfg(feature = "std")]
+pub use error::{Error, Result};
 
 // The registry and its erasure layer are native-only: WASM frontends select
 // and construct their backend explicitly (WebUSB permission flow).
@@ -99,7 +109,8 @@ pub use usb::{ChooseUsbDevice, UsbDeviceSummary};
 #[cfg(feature = "std")]
 pub use catalog::{
     Choice, OptionKind, OptionSpec, ProgrammerInfo, ProgrammerParams, Scope, Transport,
-    available_programmers, parse_programmer_params, parse_speed_khz, programmer_names_short,
+    available_programmers, canonical_programmer_name, parse_programmer_params, parse_speed_khz,
+    programmer_names_short,
 };
 
 pub use rflasher_core::flash::FlashDevice;

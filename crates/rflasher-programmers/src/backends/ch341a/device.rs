@@ -16,33 +16,8 @@ use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
 
 use super::error::{Ch341aError, Result};
 use super::protocol::*;
+use crate::time::delay;
 use crate::usb_ep::EpWaitExt;
-
-// ---------------------------------------------------------------------------
-// Platform-specific endpoint wait macros
-// ---------------------------------------------------------------------------
-/// Wait for the next completion on an endpoint, giving up after the timeout.
-/// Returns `Option<Completion>` (`None` on timeout).
-macro_rules! ep_wait {
-    ($ep:expr, $timeout:expr) => {
-        $ep.next_complete_timeout($timeout).await
-    };
-}
-
-/// Try to get the next completion without blocking (non-blocking poll).
-/// Returns `Option<Completion>`.
-macro_rules! ep_try {
-    ($ep:expr) => {{
-        {
-            use std::task::Poll;
-            std::future::poll_fn(|cx| match $ep.poll_next_complete(cx) {
-                Poll::Ready(c) => Poll::Ready(Some(c)),
-                Poll::Pending => Poll::Ready(None),
-            })
-            .await
-        }
-    }};
-}
 
 // ---------------------------------------------------------------------------
 // CH341A device struct
@@ -254,7 +229,11 @@ impl Ch341a {
         let buf = Buffer::from(data.to_vec());
         self.out_ep.submit(buf);
 
-        let result = match ep_wait!(self.out_ep, Duration::from_secs(5)) {
+        let result = match self
+            .out_ep
+            .next_complete_timeout(Duration::from_secs(5))
+            .await
+        {
             Some(completion) => completion
                 .status
                 .map_err(|e| Ch341aError::TransferFailed(e.to_string()))
@@ -376,7 +355,11 @@ impl Ch341a {
             // Wait for the next IN completion (this also drives OUT progress via
             // nusb's shared event loop on the usbfs fd)
             if self.in_ep.pending() > 0 {
-                let completion = match ep_wait!(self.in_ep, Duration::from_secs(5)) {
+                let completion = match self
+                    .in_ep
+                    .next_complete_timeout(Duration::from_secs(5))
+                    .await
+                {
                     Some(c) => c,
                     None => {
                         self.abort_transfers().await;
@@ -410,9 +393,13 @@ impl Ch341a {
             // Poll while IN transfers remain; otherwise wait with a deadline.
             if !out_done {
                 let completion = if self.in_ep.pending() > 0 {
-                    ep_try!(self.out_ep)
+                    self.out_ep.try_next_complete().await
                 } else {
-                    match ep_wait!(self.out_ep, Duration::from_secs(5)) {
+                    match self
+                        .out_ep
+                        .next_complete_timeout(Duration::from_secs(5))
+                        .await
+                    {
                         Some(c) => Some(c),
                         None => {
                             self.abort_transfers().await;
@@ -474,16 +461,8 @@ impl Ch341a {
             self.failed = true;
             return;
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.out_ep.cancel_all();
-        while self.out_ep.pending() > 0 {
-            let _ = ep_wait!(self.out_ep, Duration::from_secs(1));
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.in_ep.cancel_all();
-        while self.in_ep.pending() > 0 {
-            let _ = ep_wait!(self.in_ep, Duration::from_secs(1));
-        }
+        self.out_ep.cancel_and_drain(Duration::from_secs(1)).await;
+        self.in_ep.cancel_and_drain(Duration::from_secs(1)).await;
     }
 
     /// Build the CS assertion packet with delay handling
@@ -572,29 +551,7 @@ impl SpiMaster for Ch341a {
         // Accumulate small delays into the CS packet (up to ~20us)
         let (stored_us, sleep_us) = split_delay(self.stored_delay_us, us);
         self.stored_delay_us = stored_us;
-        if sleep_us > 0 {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                std::thread::sleep(Duration::from_micros(sleep_us as u64));
-            }
-
-            #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-            {
-                let delay_ms = (sleep_us as f64 / 1000.0).ceil() as i32;
-                if delay_ms > 0 {
-                    // Use setTimeout to delay in WASM
-                    let promise = js_sys::Promise::new(&mut |resolve, _| {
-                        let window = web_sys::window().unwrap();
-                        window
-                            .set_timeout_with_callback_and_timeout_and_arguments_0(
-                                &resolve, delay_ms,
-                            )
-                            .unwrap();
-                    });
-                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-                }
-            }
-        }
+        delay(Duration::from_micros(u64::from(sleep_us))).await;
     }
 }
 

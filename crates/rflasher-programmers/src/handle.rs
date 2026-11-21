@@ -120,11 +120,7 @@ impl FlashHandle {
     /// # Arguments
     /// * `addr` - Starting address (must be < flash size)
     /// * `buf` - Buffer to read into
-    pub async fn read(
-        &mut self,
-        addr: u32,
-        buf: &mut [u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn read(&mut self, addr: u32, buf: &mut [u8]) -> crate::Result<()> {
         self.device.read(addr, buf).await.map_err(Into::into)
     }
 
@@ -136,11 +132,7 @@ impl FlashHandle {
     /// # Arguments
     /// * `addr` - Starting address (must be < flash size)
     /// * `data` - Data to write
-    pub async fn write(
-        &mut self,
-        addr: u32,
-        data: &[u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn write(&mut self, addr: u32, data: &[u8]) -> crate::Result<()> {
         self.device.write(addr, data).await.map_err(Into::into)
     }
 
@@ -149,7 +141,7 @@ impl FlashHandle {
     /// # Arguments
     /// * `addr` - Starting address (must be < flash size)
     /// * `len` - Length to erase in bytes
-    pub async fn erase(&mut self, addr: u32, len: u32) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn erase(&mut self, addr: u32, len: u32) -> crate::Result<()> {
         self.device.erase(addr, len).await.map_err(Into::into)
     }
 
@@ -158,7 +150,7 @@ impl FlashHandle {
     /// Returns the complete factory-programmed unique identifier. Currently,
     /// known Winbond W25Q80 through W25Q128 profiles support 8-byte RDUID reads.
     /// Opaque programmers and unsupported chip formats return an error.
-    pub async fn read_unique_id(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    pub async fn read_unique_id(&mut self) -> crate::Result<Vec<u8>> {
         self.device.read_unique_id().await.map_err(Into::into)
     }
 
@@ -185,9 +177,7 @@ impl FlashHandle {
     /// let layout = handle.read_fmap().await?;
     /// println!("Found {} regions", layout.len());
     /// ```
-    pub async fn read_fmap(
-        &mut self,
-    ) -> Result<rflasher_core::layout::Layout, Box<dyn std::error::Error>> {
+    pub async fn read_fmap(&mut self) -> crate::Result<rflasher_core::layout::Layout> {
         use rflasher_core::layout::search_fmap;
 
         log::debug!(

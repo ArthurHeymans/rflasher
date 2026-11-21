@@ -8,6 +8,7 @@ those layers without the core knowing about them.
 | Crate | Purpose |
 |---|---|
 | `rflasher-chip-types` | Shared `no_std` SPI NOR chip data model and provider trait |
+| `rflasher-chip-defs` | Shared RON chip definition schema and validation used by both `rflasher-chips` and `rflasher-chips-codegen` |
 | `rflasher-core` | `no_std` SPI protocol, probing, and flash operations (async, runtime-neutral) |
 | `rflasher-chips` | Runtime RON loading and optional compiled chip database provider, with chip type re-exports |
 | `rflasher-chips-codegen` | Build-time code generator for the compiled chip database |
@@ -16,6 +17,21 @@ those layers without the core knowing about them.
 | `rflasher-pci` | Small `no_std` PCI configuration-space abstraction used by the internal programmer |
 | `rflasher-repl` | Steel Scheme scripting support for native applications |
 | `rflasher-wasm` | Browser-based web interface using egui, WebSerial, and WebUSB |
+
+### Why there are four chip crates
+
+The chip database is split across four crates to avoid build-dependency cycles
+and keep firmware targets `no_std` and dependency-light:
+
+- `rflasher-chip-types` has the minimal `no_std` runtime types (`FlashChip`,
+  `EraseBlock`, `Features`, `ChipProvider`).
+- `rflasher-chip-defs` defines the serde/RON schema and validator shared by
+  both runtime loading (`rflasher-chips`) and build-time codegen
+  (`rflasher-chips-codegen`).
+- `rflasher-chips-codegen` is a build-dependency of `rflasher-chips` (and
+  firmware crates) that compiles `.ron` files into static Rust tables.
+- `rflasher-chips` combines the generated static database with optional runtime
+  `.ron` loading for native and web applications.
 
 ## Async, executor-independent core
 

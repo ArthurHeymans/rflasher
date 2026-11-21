@@ -112,6 +112,8 @@ pub mod schema {
     ];
 
     pub fn validate_options(options: &[(&str, &str)]) -> std::result::Result<(), String> {
-        crate::linux_spi::parse_options(options).map(|_| ())
+        crate::linux_spi::parse_options(options)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 }

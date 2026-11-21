@@ -23,7 +23,7 @@ fn choose_device(
     devices: &[impl Display],
     input: &mut impl BufRead,
     output: &mut impl Write,
-) -> Result<usize, Box<dyn std::error::Error>> {
+) -> crate::error::Result<usize> {
     writeln!(output, "Multiple USB programmers found:")?;
     for (index, device) in devices.iter().enumerate() {
         writeln!(output, "{index}: {device}")?;
