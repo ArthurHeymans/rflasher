@@ -54,7 +54,7 @@ pub async fn smart_write_with_policy<D: FlashDevice + ?Sized, P: WriteProgress>(
         return Err(Error::BufferTooSmall);
     }
     let layout = region_layout(0, device.size())?;
-    preflight(device, &layout, policy).await?;
+    preflight(device, &layout, policy, Some((0, data))).await?;
     validate_smart_plan(device, 0, data).await?;
     smart_write_region_prepared(device, 0, data, progress).await
 }
@@ -69,7 +69,13 @@ pub async fn smart_write_region_with_policy<D: FlashDevice + ?Sized, P: WritePro
 ) -> Result<WriteStats> {
     if !data.is_empty() {
         let len = u32::try_from(data.len()).map_err(|_| Error::AddressOutOfBounds)?;
-        preflight(device, &region_layout(addr, len)?, policy).await?;
+        preflight(
+            device,
+            &region_layout(addr, len)?,
+            policy,
+            Some((addr, data)),
+        )
+        .await?;
         validate_smart_plan(device, addr, data).await?;
     }
     smart_write_region_prepared(device, addr, data, progress).await
@@ -86,7 +92,7 @@ pub async fn smart_write_by_layout_with_policy<D: FlashDevice + ?Sized, P: Write
     if image.len() < device.size() as usize {
         return Err(Error::BufferTooSmall);
     }
-    preflight(device, layout, policy).await?;
+    preflight(device, layout, policy, Some((0, image))).await?;
     for region in layout.included_regions() {
         validate_smart_plan(
             device,
@@ -104,7 +110,7 @@ pub async fn erase_by_layout_with_policy<D: FlashDevice + ?Sized>(
     layout: &Layout,
     policy: &mut MutationPolicy<'_>,
 ) -> Result<()> {
-    preflight(device, layout, policy).await?;
+    preflight(device, layout, policy, None).await?;
     check_erase_plan_access(device, layout)?;
     erase_by_layout_prepared(device, layout).await
 }
@@ -119,7 +125,7 @@ pub async fn erase_region_with_policy<D: FlashDevice + ?Sized>(
     let mut requested = region.clone();
     requested.included = true;
     layout.add_region(requested);
-    preflight(device, &layout, policy).await?;
+    preflight(device, &layout, policy, None).await?;
     check_erase_plan_access(device, &layout)?;
     erase_region_prepared(device, region).await
 }
@@ -854,6 +860,8 @@ mod tests {
     struct FakeFlash {
         bytes: Vec<u8>,
         blocks: Vec<EraseBlock>,
+        granularity: WriteGranularity,
+        page_size: u32,
         mutations: usize,
         require_erased_writes: bool,
         reject_writes_from: Option<u32>,
@@ -877,6 +885,8 @@ mod tests {
             Self {
                 bytes: vec![0; size as usize],
                 blocks: vec![EraseBlock::with_count(0x20, 16, size / 16)],
+                granularity: WriteGranularity::Byte,
+                page_size: 1,
                 mutations: 0,
                 require_erased_writes: false,
                 reject_writes_from: None,
@@ -903,7 +913,10 @@ mod tests {
             16
         }
         fn write_granularity(&self) -> WriteGranularity {
-            WriteGranularity::Byte
+            self.granularity
+        }
+        fn page_size(&self) -> u32 {
+            self.page_size
         }
         fn erase_blocks(&self) -> &[EraseBlock] {
             &self.blocks
@@ -1678,6 +1691,82 @@ mod tests {
             Err(Error::InvalidAlignment)
         ));
         assert_eq!(device.mutations, 0);
+    }
+
+    #[test]
+    fn nonuniform_only_smart_write_does_not_require_an_unneeded_erase() {
+        let db = rflasher_chips::ChipDatabase::new();
+        for name in ["EN25B05", "EN25B05T"] {
+            let chip = db.iter().find(|chip| chip.name() == name).unwrap();
+            for len in [256, 1027] {
+                let mut device = FakeFlash::new(chip.total_size);
+                device.blocks = chip.erase_blocks().to_vec();
+                device.granularity = chip.write_granularity;
+                device.page_size = u32::from(chip.page_size);
+                device.bytes.fill(0xff);
+                device.bytes[..256].fill(0xa5);
+                device.bytes[256 + len..].fill(0xc3);
+                device.erase_error = Some(Error::ProgrammerError);
+                device.require_erased_writes = true;
+                let before = device.bytes.clone();
+                let data = vec![0x5a; len];
+                let stats =
+                    block_on(smart_write_region(&mut device, 256, &data, &mut NoProgress)).unwrap();
+                assert_eq!(stats.erases_performed, 0, "{name}, {len}");
+                assert!(stats.writes_performed > 0);
+                assert_eq!(&device.bytes[256..256 + len], data);
+                assert_eq!(&device.bytes[..256], &before[..256]);
+                assert_eq!(&device.bytes[256 + len..], &before[256 + len..]);
+                assert!(!device.failed);
+            }
+        }
+    }
+
+    #[test]
+    fn nonuniform_write_preflight_still_rejects_later_real_erases() {
+        use crate::chip::EraseRegion;
+
+        let mut device = FakeFlash::new(64);
+        device.blocks = vec![EraseBlock::with_regions(
+            0xd8,
+            &[EraseRegion::new(8, 2), EraseRegion::new(16, 3)],
+        )];
+        device.bytes[..8].fill(0xff);
+        let before = device.bytes.clone();
+        let mut image = before.clone();
+        image[..8].fill(0x5a);
+        image[32..40].fill(0xff);
+        let mut layout = Layout::new();
+        for (name, start, end) in [("already-erased", 0, 7), ("needs-erase", 32, 39)] {
+            let mut region = Region::new(name, start, end);
+            region.included = true;
+            layout.add_region(region);
+        }
+        assert!(matches!(
+            block_on(smart_write_by_layout(
+                &mut device,
+                &layout,
+                &image,
+                &mut NoProgress
+            )),
+            Err(Error::InvalidAlignment)
+        ));
+        assert_eq!(device.mutations, 0);
+        assert_eq!(device.bytes, before);
+    }
+
+    #[test]
+    fn nonuniform_only_unchanged_partial_write_is_a_noop() {
+        use crate::chip::EraseRegion;
+
+        let mut device = FakeFlash::new(64);
+        device.blocks = vec![EraseBlock::with_regions(
+            0xd8,
+            &[EraseRegion::new(8, 2), EraseRegion::new(16, 3)],
+        )];
+        let stats = block_on(smart_write_region(&mut device, 8, &[0; 8], &mut NoProgress)).unwrap();
+        assert_eq!(device.mutations, 0);
+        assert!(!stats.flash_modified);
     }
 
     #[test]
