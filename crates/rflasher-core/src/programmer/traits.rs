@@ -88,6 +88,19 @@ pub enum FlashAccess {
 ///      the `bitbang` module
 /// 3. Fall back to single I/O mode if a requested mode isn't supported
 ///
+/// ## Wrapper forwarding checklist
+///
+/// Any new defaulted method on `SpiMaster` must be forwarded by all `SpiMaster`
+/// wrappers (including the `DynSpiMaster` mirror trait and blanket impl in
+/// `erased.rs`) so capabilities, access checks, and fast paths are not silently
+/// dropped:
+/// - `ErasedSpiMaster` / `DynSpiMaster` (`crates/rflasher-programmers/src/erased.rs`)
+/// - `Programmer` (`crates/rflasher-wasm/src/programmer.rs`)
+/// - `InternalSpi` (`crates/rflasher-internal/src/programmer.rs`)
+///
+/// Also check `SpiFlashDevice` (`crates/rflasher-core/src/flash/spi_device.rs`)
+/// to see whether the new hook should map onto `FlashDevice`.
+///
 /// ## Example: Hardware-accelerated programmer
 ///
 /// ```ignore
