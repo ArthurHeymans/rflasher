@@ -64,7 +64,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         force: cli.force,
         choose_usb_device,
     };
-    let mut backup = cli.recovery_backup.map(commands::unified::FileRecovery);
+    let mut backup = cli.recovery_backup.map(commands::ops::FileRecovery);
     let mut policy = rflasher_core::flash::MutationPolicy {
         allow_dangerous: cli.allow_dangerous_regions,
         recovery: backup
@@ -87,7 +87,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout).await?;
                 let region_files = apply_region_filters(&mut layout_obj, &layout)?;
-                commands::unified::run_read_with_layout(
+                commands::ops::run_read_with_layout(
                     handle.as_device_mut(),
                     file.as_deref(),
                     &layout_obj,
@@ -96,7 +96,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .await
             } else {
                 let file = file.ok_or("Output file required")?;
-                commands::unified::run_read(handle.as_device_mut(), &file).await
+                commands::ops::run_read(handle.as_device_mut(), &file).await
             }
         }
         Commands::Write {
@@ -110,7 +110,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout).await?;
                 let region_files = apply_region_filters(&mut layout_obj, &layout)?;
-                commands::unified::run_write_with_layout(
+                commands::ops::run_write_with_layout(
                     handle.as_device_mut(),
                     file.as_deref(),
                     &mut layout_obj,
@@ -121,7 +121,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .await
             } else {
                 let file = file.ok_or("Input file required")?;
-                commands::unified::run_write(handle.as_device_mut(), &file, !no_verify, &mut policy)
+                commands::ops::run_write(handle.as_device_mut(), &file, !no_verify, &mut policy)
                     .await
             }
         }
@@ -135,14 +135,14 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 if !region_files.is_empty() {
                     return Err("Per-region files (NAME:FILE) make no sense for erase".into());
                 }
-                commands::unified::run_erase_with_layout(
+                commands::ops::run_erase_with_layout(
                     handle.as_device_mut(),
                     &layout_obj,
                     &mut policy,
                 )
                 .await
             } else {
-                commands::unified::run_erase(handle.as_device_mut(), &mut policy).await
+                commands::ops::run_erase(handle.as_device_mut(), &mut policy).await
             }
         }
         Commands::Verify { file, layout } => {
@@ -152,7 +152,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if layout.has_layout_source() || layout.has_region_filter() {
                 let mut layout_obj = load_layout(&mut handle, &layout).await?;
                 let region_files = apply_region_filters(&mut layout_obj, &layout)?;
-                commands::unified::run_verify_with_layout(
+                commands::ops::run_verify_with_layout(
                     handle.as_device_mut(),
                     file.as_deref(),
                     &layout_obj,
@@ -161,7 +161,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .await
             } else {
                 let file = file.ok_or("Input file required")?;
-                commands::unified::run_verify(handle.as_device_mut(), &file).await
+                commands::ops::run_verify(handle.as_device_mut(), &file).await
             }
         }
         Commands::Info => {
@@ -331,7 +331,7 @@ fn apply_region_filters(
         layout.exclude_region(name)?;
     }
 
-    commands::unified::validate_region_files(layout, &region_files)?;
+    commands::ops::validate_region_files(layout, &region_files)?;
 
     Ok(region_files)
 }

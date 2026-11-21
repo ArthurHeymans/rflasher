@@ -3,9 +3,9 @@
 //! This module provides command implementations that work with the unified
 //! `FlashDevice` abstraction.
 //!
-//! ## Unified commands (FlashDevice-based)
+//! ## Flash operations (`ops`)
 //!
-//! The `unified` module contains command implementations that work with any
+//! The `ops` module contains command implementations that work with any
 //! `FlashDevice` implementation - both SPI-based (CH341A, FTDI, etc.) and
 //! opaque programmers (Intel internal).
 //!
@@ -17,7 +17,7 @@
 
 pub mod layout;
 mod list;
-pub mod unified;
+pub mod ops;
 pub mod wp;
 
 #[cfg(feature = "repl")]
