@@ -5,14 +5,14 @@ use std::fs;
 use std::path::Path;
 
 /// Show layout from a file
-pub fn cmd_show(file: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn cmd_show(file: &Path) -> crate::error::Result<()> {
     let layout = Layout::from_toml_file(file)?;
     print_layout(&layout);
     Ok(())
 }
 
 /// Extract layout from flash image (auto-detect IFD or FMAP)
-pub fn cmd_extract(input: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn cmd_extract(input: &Path, output: &Path) -> crate::error::Result<()> {
     let data = fs::read(input)?;
 
     let layout = if has_ifd(&data) {
@@ -34,7 +34,7 @@ pub fn cmd_extract(input: &Path, output: &Path) -> Result<(), Box<dyn std::error
 }
 
 /// Extract IFD layout from image
-pub fn cmd_ifd(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn cmd_ifd(input: &Path, output: Option<&Path>) -> crate::error::Result<()> {
     let data = fs::read(input)?;
 
     if !has_ifd(&data) {
@@ -56,7 +56,7 @@ pub fn cmd_ifd(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::e
 }
 
 /// Extract FMAP layout from image
-pub fn cmd_fmap(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn cmd_fmap(input: &Path, output: Option<&Path>) -> crate::error::Result<()> {
     use rflasher_core::layout::search_fmap;
 
     let data = fs::read(input)?;
@@ -77,7 +77,7 @@ pub fn cmd_fmap(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::
 }
 
 /// Create a new layout file template
-pub fn cmd_create(output: &Path, size: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn cmd_create(output: &Path, size: &str) -> crate::error::Result<()> {
     let chip_size = parse_size(size).map_err(|e| format!("{e}: {size:?}"))?;
     if chip_size == 0 {
         return Err("chip size must not be zero".into());

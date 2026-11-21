@@ -69,7 +69,7 @@ pub trait UsbProgrammer: Sized {
     /// Backend configuration, including any device selector options.
     type Config;
     /// Backend error type.
-    type Error: std::error::Error + 'static;
+    type Error: std::error::Error + Send + Sync + 'static;
 
     /// Connected devices this backend supports that match the selector
     /// options in `config`.
@@ -88,12 +88,16 @@ pub trait UsbProgrammer: Sized {
     async fn open_matching(
         config: Self::Config,
         choose: Option<ChooseUsbDevice<'_>>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut devices = Self::candidates(&config).await?;
+    ) -> crate::Result<Self> {
+        let mut devices = Self::candidates(&config)
+            .await
+            .map_err(crate::Error::backend_source)?;
         let summaries: Vec<_> = devices.iter().map(UsbDeviceSummary::from).collect();
-        let index = choose_index(Self::NAME, &summaries, choose)?;
+        let index = choose_index(Self::NAME, &summaries, choose).map_err(crate::Error::backend)?;
         log::info!("Opening {} {}", Self::NAME, summaries[index]);
-        Ok(Self::open_device(devices.swap_remove(index), config).await?)
+        Self::open_device(devices.swap_remove(index), config)
+            .await
+            .map_err(crate::Error::backend_source)
     }
 }
 

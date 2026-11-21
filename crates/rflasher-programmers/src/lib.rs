@@ -75,6 +75,11 @@ pub(crate) mod usb_ep;
 // Available on every `std` target so the CLI and web frontend use one source.
 #[cfg(feature = "std")]
 pub mod catalog;
+#[cfg(feature = "std")]
+mod error;
+
+#[cfg(feature = "std")]
+pub use error::{Error, Result};
 
 // The registry and its erasure layer are native-only: WASM frontends select
 // and construct their backend explicitly (WebUSB permission flow).

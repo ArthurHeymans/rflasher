@@ -16,6 +16,7 @@
 mod cli;
 mod commands;
 mod device_selection;
+mod error;
 
 use clap::Parser;
 use cli::{Cli, Commands, LayoutArgs, LayoutCommands, WpCommands};
@@ -42,7 +43,7 @@ fn main() {
 ///
 /// The library stack below the CLI is async on every target; the native
 /// binary blocks exactly once, in `main`, around this function.
-async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(cli: Cli) -> crate::error::Result<()> {
     // Set log level based on verbosity
     match cli.verbose {
         0 => {} // default (info)
@@ -51,8 +52,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Load chip database
-    let db = load_chip_database(cli.chip_db.as_deref())
-        .map_err(|e| format!("Failed to load chip database: {}", e))?;
+    let db = load_chip_database(cli.chip_db.as_deref())?;
 
     log::info!("Loaded {} chip definitions", db.len());
 
@@ -229,14 +229,14 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Require a programmer to be specified via -p/--programmer or RFLASHER_PROGRAMMER
-fn require_programmer(programmer: &Option<String>) -> Result<&str, Box<dyn std::error::Error>> {
+fn require_programmer(programmer: &Option<String>) -> crate::error::Result<&str> {
     programmer.as_deref().ok_or_else(|| {
         "No programmer specified. Use -p/--programmer or set RFLASHER_PROGRAMMER.".into()
     })
 }
 
 /// Load the bundled database, or replace it with definitions at the specified path.
-fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::error::Error>> {
+fn load_chip_database(path: Option<&Path>) -> crate::error::Result<ChipDatabase> {
     let mut db = if path.is_some() {
         ChipDatabase::empty()
     } else {
@@ -262,10 +262,7 @@ fn load_chip_database(path: Option<&Path>) -> Result<ChipDatabase, Box<dyn std::
 // =============================================================================
 
 /// Load layout from the appropriate source for a FlashHandle
-async fn load_layout(
-    handle: &mut FlashHandle,
-    args: &LayoutArgs,
-) -> Result<Layout, Box<dyn std::error::Error>> {
+async fn load_layout(handle: &mut FlashHandle, args: &LayoutArgs) -> crate::error::Result<Layout> {
     use rflasher_core::layout::parse_ifd;
 
     if let Some(path) = &args.layout {
@@ -304,7 +301,7 @@ async fn load_layout(
 fn apply_region_filters(
     layout: &mut Layout,
     args: &LayoutArgs,
-) -> Result<Vec<(String, std::path::PathBuf)>, Box<dyn std::error::Error>> {
+) -> crate::error::Result<Vec<(String, std::path::PathBuf)>> {
     // Without explicit includes, start with every region and subtract excludes.
     // Do this before exclusions so excluding the last region stays empty.
     if args.region.is_none() && args.include.is_empty() {
@@ -322,7 +319,7 @@ fn apply_region_filters(
                 .as_ref()
                 .map(|file| (spec.name.clone(), file.clone())))
         })
-        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?
+        .collect::<crate::error::Result<Vec<_>>>()?
         .into_iter()
         .flatten()
         .collect();
@@ -344,10 +341,10 @@ async fn print_chip_info(handle: &mut FlashHandle) {
     // needs mutable access to the handle). Only SPI programmers support it.
     let unique_id = match handle.read_unique_id().await {
         Ok(id) => id.iter().map(|b| format!("{b:02X}")).collect::<String>(),
-        Err(err) => match err.downcast_ref::<rflasher_core::Error>() {
-            Some(rflasher_core::Error::ChipNotSupported) => "Not supported".to_owned(),
-            _ => format!("Read failed ({err})"),
-        },
+        Err(rflasher_programmers::Error::Core(rflasher_core::Error::ChipNotSupported)) => {
+            "Not supported".to_owned()
+        }
+        Err(err) => format!("Read failed ({err})"),
     };
 
     if let Some(info) = handle.chip_info() {
