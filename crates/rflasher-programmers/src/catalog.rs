@@ -347,6 +347,15 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
     programmers
 }
 
+/// Resolve a programmer name or alias to its canonical name (if enabled at
+/// compile time).
+pub fn canonical_programmer_name(name: &str) -> Option<&'static str> {
+    available_programmers()
+        .into_iter()
+        .find(|info| info.name == name || info.aliases.contains(&name))
+        .map(|info| info.name)
+}
+
 /// Generate a short list of programmer names for CLI help.
 pub fn programmer_names_short() -> String {
     let programmers = available_programmers();

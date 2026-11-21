@@ -104,7 +104,8 @@ pub use usb::{ChooseUsbDevice, UsbDeviceSummary};
 #[cfg(feature = "std")]
 pub use catalog::{
     Choice, OptionKind, OptionSpec, ProgrammerInfo, ProgrammerParams, Scope, Transport,
-    available_programmers, parse_programmer_params, parse_speed_khz, programmer_names_short,
+    available_programmers, canonical_programmer_name, parse_programmer_params, parse_speed_khz,
+    programmer_names_short,
 };
 
 pub use rflasher_core::flash::FlashDevice;
