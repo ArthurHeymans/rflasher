@@ -26,6 +26,7 @@ rflasher-programmers = { version = "0.1.0", path = "../rflasher-programmers", de
     "ftdi-wasm",
     "ft4222",
     "dediprog",
+    "ezp-spi",
     "raiden",
 ] }
 

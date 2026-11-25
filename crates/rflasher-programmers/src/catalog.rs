@@ -272,6 +272,16 @@ pub fn available_programmers() -> Vec<ProgrammerInfo> {
         validate: crate::dediprog::schema::validate_options,
     });
 
+    #[cfg(feature = "ezp-spi")]
+    programmers.push(ProgrammerInfo {
+        name: "ezp_spi",
+        aliases: &["ezp-spi", "ezp2013", "ep01"],
+        description: "EZP2013 / CORIGHT EP01 USB SPI programmer (VID:0314 PID:1011; 3.3V only, use a level-shifting adapter for 1.8V chips)",
+        transport: Transport::Usb,
+        options: &[],
+        validate: validate_no_options,
+    });
+
     #[cfg(feature = "serprog")]
     programmers.push(ProgrammerInfo {
         name: "serprog",

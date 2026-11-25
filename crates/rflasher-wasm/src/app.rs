@@ -333,6 +333,9 @@ impl RflasherApp {
                     Programmer::Dediprog(mut dediprog) => {
                         dediprog.shutdown().await;
                     }
+                    Programmer::EzpSpi(mut ezp) => {
+                        ezp.shutdown().await;
+                    }
                     Programmer::Raiden(mut raiden) => {
                         raiden.shutdown().await;
                     }
@@ -1030,6 +1033,12 @@ impl RflasherApp {
                 if !info.description.is_empty() {
                     ui.small(info.description);
                 }
+                if info.name == "ezp_spi" {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 160, 40),
+                        "Fixed 3.3 V supply (including during probe). Use a 1.8 V level-shifting adapter for lower-voltage chips.",
+                    );
+                }
                 let has_fields = !self.form.fields.is_empty();
                 ui.add_enabled_ui(!connected, |ui| {
                     egui::Grid::new("programmer_options")
@@ -1401,6 +1410,12 @@ impl RflasherApp {
                     ui.monospace(concat!(
                         "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0483\", ",
                         "ATTR{idProduct}==\"dada\", MODE=\"0666\"",
+                    ));
+                    ui.add_space(3.0);
+                    ui.monospace("# EZP2013 / CORIGHT EP01 (VID:0314 PID:1011)");
+                    ui.monospace(concat!(
+                        "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0314\", ",
+                        "ATTR{idProduct}==\"1011\", MODE=\"0666\"",
                     ));
                     ui.add_space(3.0);
                     ui.monospace(

@@ -37,6 +37,7 @@ pub fn list_programmers() {
         feature = "ch341a",
         feature = "ch347",
         feature = "dediprog",
+        feature = "ezp-spi",
         feature = "serprog",
         feature = "ftdi",
         feature = "ft4222",

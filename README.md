@@ -29,11 +29,14 @@ cargo install --path .
 
 ### USB device permissions
 
-USB programmers (CH341A, CH347, FTDI, Dediprog, Raiden) need udev rules for non-root access, e.g.:
+USB programmers (CH341A, CH347, FTDI, Dediprog, EZP2013, Raiden) need udev rules for non-root access, e.g.:
 
 ```text
 # CH341A
 SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5512", MODE="0660", GROUP="plugdev"
+
+# EZP2013 / CORIGHT EP01
+SUBSYSTEM=="usb", ATTR{idVendor}=="0314", ATTR{idProduct}=="1011", MODE="0660", GROUP="plugdev"
 
 # Raiden Debug SPI / Cr50 (Google debug hardware)
 # The backend matches on vendor ID alone, so this rule covers all Google
@@ -77,6 +80,7 @@ When several connected USB programmers match the `-p` specification, rflasher li
 | `ch347` | — | `rflasher probe -p ch347` |
 | `serprog` | `dev=`, baud rate, or `ip=` | `rflasher probe -p serprog:dev=/dev/ttyUSB0:115200`<br>`rflasher probe -p serprog:ip=192.168.1.100:5000` |
 | `dediprog` | `spispeed=` | `rflasher probe -p dediprog:spispeed=12M` |
+| `ezp_spi` | — | `rflasher probe -p ezp_spi` (EZP2013 / CORIGHT EP01, ≤16 MiB, 3.3 V only — use a level-shifting adapter for 1.8 V chips) |
 | `ftdi` | `type=`, `port=`, `divisor=` | `rflasher probe -p ftdi:type=2232h,port=B,divisor=10` |
 | `ft4222` | `spispeed=`, `cs=` | `rflasher probe -p ft4222:spispeed=20000,cs=0` |
 | `raiden` | — | `rflasher probe -p raiden` |
@@ -163,7 +167,7 @@ Automatic unlocking does **not** imply support for `wp` configuration. Those com
 
 ## Web interface
 
-A browser-based UI (egui) can drive a programmer straight from the browser: serprog over WebSerial, and CH341A, CH347, FTDI, FT4222H, Dediprog, and Raiden over WebUSB. Both APIs require Chrome/Edge (or Opera); Firefox and Safari support neither, and a secure context (HTTPS or localhost) is mandatory.
+A browser-based UI (egui) can drive a programmer straight from the browser: serprog over WebSerial, and CH341A, CH347, FTDI, FT4222H, Dediprog, EZP2013, and Raiden over WebUSB. Both APIs require Chrome/Edge (or Opera); Firefox and Safari support neither, and a secure context (HTTPS or localhost) is mandatory.
 
 ![rflasher Web Interface](docs/images/webui-screenshot.png)
 

@@ -458,6 +458,17 @@ async fn write_wp_bits_with_snapshot<M: SpiMaster + ?Sized>(
         return Ok(());
     }
 
+    // Verify the programmer supports the requested enable opcode + WRSR width
+    // without substituting a persistent write for an explicit volatile request.
+    let write_len = if need_sr2 { 2 } else { 1 };
+    let enable_opcode = match options.enable {
+        RegisterWriteEnable::Wren => 0x06,
+        RegisterWriteEnable::Ewsr => 0x50,
+    };
+    if !master.supports_status_write(enable_opcode, write_len) {
+        return Err(WpError::SpiError(Error::OpcodeNotSupported));
+    }
+
     // Only a resolved, documented procedure reaches the wire.
     if need_sr2 {
         if options.enable == RegisterWriteEnable::Ewsr {

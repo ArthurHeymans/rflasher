@@ -234,6 +234,15 @@ mod linux {
             self.controller.probe_opcode(opcode)
         }
 
+        fn supports_status_write(&self, enable_opcode: u8, len: usize) -> bool {
+            len > 0
+                && self.controller.max_write_len() >= len
+                && self.controller.probe_opcode(enable_opcode)
+                && self
+                    .controller
+                    .probe_opcode(rflasher_core::spi::opcodes::WRSR)
+        }
+
         fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip) {
             self.controller.chip_identified(chip)
         }

@@ -96,7 +96,7 @@ path = "src/bin/gen-completions.rs"
 required-features = ["gen-tools"]
 
 [features]
-default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden", "sunxi-fel"]
+default = ["dummy", "ch341a", "ch347", "dediprog", "ezp-spi", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden", "sunxi-fel"]
 
 # Programmer features (passed through to rflasher-programmers)
 ati-spi = ["rflasher-programmers/ati-spi"]
@@ -104,6 +104,7 @@ dummy = ["rflasher-programmers/dummy"]
 ch341a = ["rflasher-programmers/ch341a"]
 ch347 = ["rflasher-programmers/ch347"]
 dediprog = ["rflasher-programmers/dediprog"]
+ezp-spi = ["rflasher-programmers/ezp-spi"]
 serprog = ["rflasher-programmers/serprog-native"]
 ftdi = ["rflasher-programmers/ftdi"]
 ft4222 = ["rflasher-programmers/ft4222"]
@@ -121,11 +122,11 @@ repl = ["dep:rflasher-repl"]
 gen-tools = ["dep:clap_mangen", "dep:clap_complete"]
 
 # Enable all programmers
-all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "sunxi-fel", "ati-spi"]
+all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "ezp-spi", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "sunxi-fel", "ati-spi"]
 
 # Cross-platform desktop programmers: nusb-backed USB programmers plus serprog and dummy.
 # Excludes Linux-only devices and the Linux userspace internal chipset backend.
-portable-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "raiden", "sunxi-fel"]
+portable-programmers = ["dummy", "ch341a", "ch347", "dediprog", "ezp-spi", "serprog", "ftdi", "ft4222", "raiden", "sunxi-fel"]
 # Static Linux (musl) builds: portable programmers plus Linux-only backends that
 # are pure libc syscalls and need no C libraries (internal chipset, spidev, mtd).
 static-linux-programmers = ["portable-programmers", "linux-spi", "linux-mtd", "internal"]

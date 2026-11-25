@@ -172,6 +172,11 @@ async fn open_spi_master_params(
             open_dediprog_master(params, choose_usb_device).await?,
         )),
 
+        #[cfg(feature = "ezp-spi")]
+        "ezp_spi" => Ok(ErasedSpiMaster::new(
+            open_ezp_spi_master(params, choose_usb_device).await?,
+        )),
+
         #[cfg(feature = "serprog-native")]
         "serprog" => {
             log::info!("Opening serprog programmer...");
@@ -798,6 +803,35 @@ async fn open_raiden_master(
     Ok(master)
 }
 
+#[cfg(feature = "ezp-spi")]
+async fn open_ezp_spi_master(
+    params: &ProgrammerParams,
+    choose: Option<ChooseUsbDevice<'_>>,
+) -> crate::Result<crate::ezp_spi::EzpSpi> {
+    params.expect_no_options()?;
+    log::info!("Opening EZP2013 programmer...");
+
+    let master = crate::ezp_spi::EzpSpi::open_matching((), choose)
+        .await
+        .map_err(|e| {
+            crate::Error::backend_with_source(
+                format!(
+                    "Failed to open EZP2013: {e}\n\
+                     Make sure the device is connected and you have USB permissions (VID:0314 PID:1011)."
+                ),
+                e,
+            )
+        })?;
+
+    log::info!(
+        "EZP2013 \"{}\" (firmware {})",
+        master.device_type(),
+        master.firmware_version()
+    );
+
+    Ok(master)
+}
+
 #[cfg(feature = "sunxi-fel")]
 async fn open_sunxi_fel_master(
     params: &ProgrammerParams,
@@ -872,6 +906,12 @@ mod dispatch_tests {
             #[cfg(feature = "ch341a")]
             assert!(matches!(
                 open_spi_programmer("ch341a:spispeed=1000", None).await,
+                Err(crate::Error::InvalidOptions(_))
+            ));
+
+            #[cfg(feature = "ezp-spi")]
+            assert!(matches!(
+                open_spi_programmer("ezp_spi:foo=bar", None).await,
                 Err(crate::Error::InvalidOptions(_))
             ));
 

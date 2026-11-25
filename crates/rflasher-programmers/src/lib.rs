@@ -30,6 +30,9 @@ pub mod dediprog;
 #[cfg(feature = "dummy")]
 #[path = "backends/dummy/mod.rs"]
 pub mod dummy;
+#[cfg(feature = "ezp-spi")]
+#[path = "backends/ezp_spi/mod.rs"]
+pub mod ezp_spi;
 #[cfg(feature = "ft4222")]
 #[path = "backends/ft4222/mod.rs"]
 pub mod ft4222;
@@ -65,6 +68,7 @@ pub(crate) mod time;
     feature = "ch341a",
     feature = "ch347",
     feature = "dediprog",
+    feature = "ezp-spi",
     feature = "ft4222",
     feature = "raiden"
 ))]
