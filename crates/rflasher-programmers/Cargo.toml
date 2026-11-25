@@ -31,7 +31,7 @@ dediprog = ["usb", "dep:futures-lite", "dep:futures-timer", "dep:web-time"]
 ft4222 = ["usb", "dep:futures-lite", "dep:futures-timer"]
 raiden = ["usb", "dep:futures-lite", "dep:futures-timer", "dep:zerocopy"]
 sunxi-fel = ["usb"]
-serprog = ["std", "dep:thiserror", "dep:futures-lite"]
+serprog = ["std", "dep:futures-lite"]
 serprog-native = ["serprog", "dep:serialport"]
 
 # FTDI backends (pure-Rust ftdi-nusb MPSSE)
@@ -47,9 +47,9 @@ ftdi-wasm = [
     "dep:nusb",
 ]
 # Linux-only programmer backends
-linux-spi = ["std", "dep:libc", "dep:nix", "dep:thiserror"]
-linux-mtd = ["std", "dep:nix", "dep:thiserror"]
-linux-gpio = ["std", "dep:gpiocdev", "dep:thiserror"]
+linux-spi = ["std", "dep:libc", "dep:nix"]
+linux-mtd = ["std", "dep:nix"]
+linux-gpio = ["std", "dep:gpiocdev"]
 internal = ["std", "dep:rflasher-internal"]
 
 portable-programmers = [
@@ -69,7 +69,7 @@ portable-programmers = [
 rflasher-core.workspace = true
 rflasher-internal = { version = "0.1.0", path = "../rflasher-internal", optional = true }
 log.workspace = true
-thiserror = { workspace = true, optional = true }
+thiserror.workspace = true
 zerocopy = { workspace = true, optional = true }
 
 nusb = { workspace = true, optional = true }

@@ -100,7 +100,7 @@ pub fn int_error(spec: &OptionSpec, value: &str) -> Option<String> {
 
 /// Human-readable label for a kHz preset (`30000` -> `30 MHz`).
 pub fn speed_label(khz: u32) -> String {
-    if khz.is_multiple_of(1000) {
+    if khz >= 1000 && khz.is_multiple_of(1000) {
         format!("{} MHz", khz / 1000)
     } else if khz >= 1000 {
         format!("{:.3} MHz", khz as f64 / 1000.0)
@@ -226,6 +226,7 @@ mod tests {
         assert_eq!(speed_label(30000), "30 MHz");
         assert_eq!(speed_label(1875), "1.875 MHz");
         assert_eq!(speed_label(937), "937 kHz");
+        assert_eq!(speed_label(0), "0 kHz");
     }
 
     /// The real catalog: every web-visible default must survive its own

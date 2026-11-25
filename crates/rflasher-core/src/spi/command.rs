@@ -240,6 +240,36 @@ impl<'a> SpiCommand<'a> {
 
         offset
     }
+
+    /// Prepare a single-I/O outbound byte frame (`opcode + address + dummy + write_data`).
+    ///
+    /// Rejects non-single I/O modes (`Error::IoModeNotSupported`), 3-byte
+    /// addresses above `0xFF_FFFF` (`Error::AddressOutOfBounds`), mismatched
+    /// address/width pairs, and non-byte-aligned dummy cycle counts
+    /// (`Error::SpiTransferFailed`).
+    #[cfg(feature = "alloc")]
+    pub fn single_io_frame(&self) -> crate::error::Result<alloc::vec::Vec<u8>> {
+        if self.io_mode != IoMode::Single {
+            return Err(crate::error::Error::IoModeNotSupported);
+        }
+        match (self.address_width, self.address) {
+            (AddressWidth::None, None) | (AddressWidth::FourByte, Some(_)) => {}
+            (AddressWidth::ThreeByte, Some(addr)) if addr <= 0x00FF_FFFF => {}
+            (AddressWidth::ThreeByte, Some(_)) => {
+                return Err(crate::error::Error::AddressOutOfBounds);
+            }
+            _ => return Err(crate::error::Error::SpiTransferFailed),
+        }
+        if !self.dummy_cycles.is_multiple_of(8) {
+            return Err(crate::error::Error::SpiTransferFailed);
+        }
+
+        let header_len = self.header_len();
+        let mut frame = alloc::vec![0u8; header_len + self.write_data.len()];
+        self.encode_header(&mut frame);
+        frame[header_len..].copy_from_slice(self.write_data);
+        Ok(frame)
+    }
 }
 
 #[cfg(test)]
@@ -295,5 +325,58 @@ mod tests {
         let mut hdr = [0u8; 7];
         assert_eq!(quad_io.encode_header(&mut hdr), 7);
         assert_eq!(hdr, [0xEB, 0x12, 0x34, 0x56, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn single_io_frame_encodes_valid_and_rejects_malformed_commands() {
+        use crate::error::Error;
+
+        let write_cmd = SpiCommand::write_3b(0x02, 0x12_3456, &[0xAA, 0xBB]);
+        assert_eq!(
+            write_cmd.single_io_frame(),
+            Ok(alloc::vec![0x02, 0x12, 0x34, 0x56, 0xAA, 0xBB])
+        );
+
+        let mut buf = [0u8; 4];
+        let fast_read = SpiCommand::read_4b(0x0C, 0x0102_0304, &mut buf).with_dummy_cycles(8);
+        assert_eq!(
+            fast_read.single_io_frame(),
+            Ok(alloc::vec![0x0C, 0x01, 0x02, 0x03, 0x04, 0xFF])
+        );
+
+        let multi_io = SpiCommand::read_3b(0x3B, 0x1000, &mut buf).with_io_mode(IoMode::DualOut);
+        assert_eq!(multi_io.single_io_frame(), Err(Error::IoModeNotSupported));
+
+        let bad_dummy = SpiCommand::read_3b(0x0B, 0x1000, &mut buf).with_dummy_cycles(6);
+        assert_eq!(bad_dummy.single_io_frame(), Err(Error::SpiTransferFailed));
+
+        let oob_3b = SpiCommand::read_3b(0x03, 0x0100_0000, &mut buf);
+        assert_eq!(oob_3b.single_io_frame(), Err(Error::AddressOutOfBounds));
+
+        let missing_addr = SpiCommand {
+            opcode: 0x03,
+            address: None,
+            address_width: AddressWidth::ThreeByte,
+            io_mode: IoMode::Single,
+            dummy_cycles: 0,
+            write_data: &[],
+            read_buf: &mut buf,
+        };
+        assert_eq!(
+            missing_addr.single_io_frame(),
+            Err(Error::SpiTransferFailed)
+        );
+
+        let extra_addr = SpiCommand {
+            opcode: 0x9F,
+            address: Some(0),
+            address_width: AddressWidth::None,
+            io_mode: IoMode::Single,
+            dummy_cycles: 0,
+            write_data: &[],
+            read_buf: &mut buf,
+        };
+        assert_eq!(extra_addr.single_io_frame(), Err(Error::SpiTransferFailed));
     }
 }

@@ -180,11 +180,14 @@ impl FlashHandle {
     pub async fn read_fmap(&mut self) -> crate::Result<rflasher_core::layout::Layout> {
         use rflasher_core::layout::search_fmap;
 
-        log::debug!(
-            "Chip size: {} bytes ({} MiB)",
-            self.size(),
-            self.size() / (1024 * 1024)
-        );
+        let size = self.size();
+        if size >= 1024 * 1024 && size.is_multiple_of(1024 * 1024) {
+            log::debug!("Chip size: {} bytes ({} MiB)", size, size / (1024 * 1024));
+        } else if size >= 1024 && size.is_multiple_of(1024) {
+            log::debug!("Chip size: {} bytes ({} KiB)", size, size / 1024);
+        } else {
+            log::debug!("Chip size: {} bytes", size);
+        }
         log::debug!("Searching for FMAP in flash chip...");
 
         let layout = search_fmap(self).await?;

@@ -9,7 +9,7 @@ use nusb::transfer::{Buffer, Bulk, In, Out};
 use nusb::{Endpoint, Interface};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
+use rflasher_core::spi::SpiCommand;
 
 use super::error::{RaidenError, Result};
 use super::protocol::*;
@@ -462,12 +462,7 @@ impl SpiMaster for RaidenDebugSpi {
             cmd.read_buf.len()
         );
 
-        check_io_mode_supported(cmd.io_mode, self.features())?;
-
-        let header_len = cmd.header_len();
-        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
-        cmd.encode_header(&mut write_data);
-        write_data[header_len..].copy_from_slice(cmd.write_data);
+        let write_data = cmd.single_io_frame()?;
 
         let result = self
             .spi_transfer(&write_data, cmd.read_buf.len())

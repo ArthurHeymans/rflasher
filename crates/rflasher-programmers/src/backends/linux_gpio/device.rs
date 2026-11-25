@@ -677,15 +677,7 @@ impl SpiMaster for LinuxGpioSpi {
         }
 
         // Fast path for single I/O mode (most common case)
-        // Build the write data: opcode + address + dummy + write_data
-        let header_len = cmd.header_len();
-        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
-
-        // Encode opcode + address + dummy bytes
-        cmd.encode_header(&mut write_data);
-
-        // Append write data
-        write_data[header_len..].copy_from_slice(cmd.write_data);
+        let write_data = cmd.single_io_frame()?;
 
         // Perform SPI transfer
         self.spi_transaction(&write_data, cmd.read_buf)

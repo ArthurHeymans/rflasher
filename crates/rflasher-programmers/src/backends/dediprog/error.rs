@@ -1,79 +1,46 @@
 //! Error types for Dediprog programmer
 
-use std::fmt;
+use thiserror::Error;
 
 /// Result type for Dediprog operations
 pub type Result<T> = std::result::Result<T, DediprogError>;
 
 /// Errors that can occur when using the Dediprog programmer
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum DediprogError {
     /// Device not found
+    #[error("Dediprog device not found (VID:0483 PID:DADA)")]
     DeviceNotFound,
     /// Unknown or unsupported device type
+    #[error("Unknown Dediprog device: {0}")]
     UnknownDevice(String),
     /// Failed to open device
+    #[error("Failed to open Dediprog: {0}")]
     OpenFailed(String),
     /// Failed to claim interface
+    #[error("Failed to claim interface: {0}")]
     ClaimFailed(String),
     /// USB transfer failed
+    #[error("USB transfer failed: {0}")]
     TransferFailed(String),
     /// Typed USB transfer failure, preserving STALL for safe status-read retries.
-    UsbTransfer(nusb::transfer::TransferError),
+    #[error("USB transfer failed: {0}")]
+    UsbTransfer(#[source] nusb::transfer::TransferError),
     /// Invalid response from device
+    #[error("Invalid response from Dediprog: {0}")]
     InvalidResponse(String),
     /// Timeout during operation
+    #[error("Timeout during USB transfer")]
     Timeout,
-    /// Configuration error
-    ConfigError(String),
     /// Firmware version error
+    #[error("Firmware error: {0}")]
     FirmwareError(String),
     /// Unsupported operation for this device/firmware
+    #[error("Unsupported operation: {0}")]
     Unsupported(String),
     /// Parameter parsing error
+    #[error("Invalid parameter: {0}")]
     InvalidParameter(String),
-    /// Core library error
-    Core(rflasher_core::error::Error),
-}
-
-impl fmt::Display for DediprogError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DediprogError::DeviceNotFound => {
-                write!(f, "Dediprog device not found (VID:0483 PID:DADA)")
-            }
-            DediprogError::UnknownDevice(msg) => write!(f, "Unknown Dediprog device: {}", msg),
-            DediprogError::OpenFailed(msg) => write!(f, "Failed to open Dediprog: {}", msg),
-            DediprogError::ClaimFailed(msg) => write!(f, "Failed to claim interface: {}", msg),
-            DediprogError::TransferFailed(msg) => write!(f, "USB transfer failed: {}", msg),
-            DediprogError::UsbTransfer(error) => write!(f, "USB transfer failed: {error}"),
-            DediprogError::InvalidResponse(msg) => {
-                write!(f, "Invalid response from Dediprog: {}", msg)
-            }
-            DediprogError::Timeout => write!(f, "Timeout during USB transfer"),
-            DediprogError::ConfigError(msg) => write!(f, "Configuration error: {}", msg),
-            DediprogError::FirmwareError(msg) => write!(f, "Firmware error: {}", msg),
-            DediprogError::Unsupported(msg) => write!(f, "Unsupported operation: {}", msg),
-            DediprogError::InvalidParameter(msg) => write!(f, "Invalid parameter: {}", msg),
-            DediprogError::Core(e) => write!(f, "Core error: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for DediprogError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            DediprogError::Core(e) => Some(e),
-            DediprogError::UsbTransfer(error) => Some(error),
-            _ => None,
-        }
-    }
-}
-
-impl From<rflasher_core::error::Error> for DediprogError {
-    fn from(e: rflasher_core::error::Error) -> Self {
-        DediprogError::Core(e)
-    }
 }
 
 impl From<nusb::Error> for DediprogError {
