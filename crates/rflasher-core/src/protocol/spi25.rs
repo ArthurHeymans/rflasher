@@ -413,15 +413,13 @@ pub async fn program_page_with_addressing<M: SpiMaster + ?Sized>(
     data: &[u8],
     addressing: CommandAddressing,
 ) -> Result<()> {
-    if let CommandAddressing::ExtendedAddressRegister(features) = addressing {
-        set_extended_address(master, features, (addr >> 24) as u8).await?;
-    }
+    let cmd_addr = select_command_address(master, addressing, addr).await?;
 
     write_enable(master).await?;
 
     let mut cmd = SpiCommand {
         opcode,
-        address: Some(addr),
+        address: Some(cmd_addr),
         address_width: addressing.address_width(),
         io_mode: IoMode::Single,
         dummy_cycles: 0,
@@ -579,15 +577,13 @@ pub async fn erase_block<M: SpiMaster + ?Sized>(
     poll_delay_us: u32,
     timeout_us: u32,
 ) -> Result<()> {
-    if let CommandAddressing::ExtendedAddressRegister(features) = addressing {
-        set_extended_address(master, features, (addr >> 24) as u8).await?;
-    }
+    let cmd_addr = select_command_address(master, addressing, addr).await?;
 
     write_enable(master).await?;
 
     let mut cmd = SpiCommand {
         opcode,
-        address: Some(addr),
+        address: Some(cmd_addr),
         address_width: addressing.address_width(),
         io_mode: IoMode::Single,
         dummy_cycles: 0,
@@ -653,6 +649,25 @@ pub async fn set_extended_address<M: SpiMaster + ?Sized>(
 ) -> Result<()> {
     let opcode = extended_address_write_opcode(features)?;
     write_extended_address(master, opcode, addr_high).await
+}
+
+/// Prepare the chip for an addressed command and return the address to send.
+///
+/// In extended-address-register mode the high byte is written to the bank
+/// register and only the low 24 bits go on the wire. Other modes send `addr`
+/// unchanged.
+async fn select_command_address<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    addressing: CommandAddressing,
+    addr: u32,
+) -> Result<u32> {
+    match addressing {
+        CommandAddressing::ExtendedAddressRegister(features) => {
+            set_extended_address(master, features, (addr >> 24) as u8).await?;
+            Ok(addr & 0x00FF_FFFF)
+        }
+        CommandAddressing::ThreeByte | CommandAddressing::FourByte => Ok(addr),
+    }
 }
 
 async fn write_extended_address<M: SpiMaster + ?Sized>(
@@ -792,13 +807,11 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
             addressing.max_chunk_len(current_addr, core::cmp::min(max_len, buf.len() - offset));
         let chunk = &mut buf[offset..offset + chunk_len];
 
-        if let CommandAddressing::ExtendedAddressRegister(features) = addressing {
-            set_extended_address(master, features, (current_addr >> 24) as u8).await?;
-        }
+        let cmd_addr = select_command_address(master, addressing, current_addr).await?;
 
         let mut cmd = SpiCommand {
             opcode,
-            address: Some(current_addr),
+            address: Some(cmd_addr),
             address_width: addressing.address_width(),
             io_mode,
             dummy_cycles,
@@ -1282,6 +1295,98 @@ mod extended_address_tests {
             ));
             assert!(master.0.is_empty());
         }
+    }
+
+    /// Records opcode, address, and write payload of every command.
+    #[derive(Default)]
+    struct AddressRecorder(Vec<(u8, Option<u32>, Vec<u8>)>);
+
+    impl SpiMaster for AddressRecorder {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+        fn max_read_len(&self) -> usize {
+            256
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+            self.0
+                .push((cmd.opcode, cmd.address, cmd.write_data.to_vec()));
+            Ok(())
+        }
+        async fn delay_us(&mut self, _: u32) {}
+    }
+
+    #[test]
+    fn ear_commands_send_low_24_bits_after_selecting_bank() {
+        let ear = CommandAddressing::ExtendedAddressRegister(
+            Features::EXT_ADDR_REG | Features::EXT_ADDR_REG_C5C8,
+        );
+        let (wren, wrear) = (opcodes::WREN, opcodes::WREAR);
+
+        // A read crossing the 16 MiB boundary is split per bank.
+        let mut master = AddressRecorder::default();
+        let mut buf = [0u8; 4];
+        block_on(read_with_addressing(
+            &mut master,
+            opcodes::READ,
+            0x00FF_FFFE,
+            &mut buf,
+            ear,
+        ))
+        .unwrap();
+        assert_eq!(
+            master.0,
+            [
+                (wren, None, vec![]),
+                (wrear, None, vec![0x00]),
+                (opcodes::READ, Some(0x00FF_FFFE), vec![]),
+                (wren, None, vec![]),
+                (wrear, None, vec![0x01]),
+                (opcodes::READ, Some(0x0000_0000), vec![]),
+            ]
+        );
+
+        let mut master = AddressRecorder::default();
+        block_on(program_page_with_addressing(
+            &mut master,
+            opcodes::PP,
+            0x0123_4500,
+            &[0xAA],
+            ear,
+        ))
+        .unwrap();
+        assert_eq!(
+            &master.0[..4],
+            [
+                (wren, None, vec![]),
+                (wrear, None, vec![0x01]),
+                (wren, None, vec![]),
+                (opcodes::PP, Some(0x0023_4500), vec![0xAA]),
+            ]
+        );
+
+        let mut master = AddressRecorder::default();
+        block_on(erase_block(
+            &mut master,
+            opcodes::SE_20,
+            0x0300_1000,
+            ear,
+            1,
+            10,
+        ))
+        .unwrap();
+        assert_eq!(
+            &master.0[..4],
+            [
+                (wren, None, vec![]),
+                (wrear, None, vec![0x03]),
+                (wren, None, vec![]),
+                (opcodes::SE_20, Some(0x0000_1000), vec![]),
+            ]
+        );
     }
 
     #[test]
