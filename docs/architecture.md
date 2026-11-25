@@ -80,6 +80,7 @@ more capable.
 | Backend | Access |
 |---|---|
 | AMD SPI100 | SPI; reads through the checked memory window where the chip allows it |
+| AMD SB600 family (SB600-SB9x0) | SPI; 8-byte command FIFO, 3-byte addressing, restricted opcodes & Rom Protect enforced; later FCHs refused |
 | Dediprog | SPI; CMD_READ/CMD_WRITE bulk transfers for aligned blocks; chips over 16 MiB need native four-byte modes (protocol V2/V3) |
 | sunxi FEL | SPI; payload bulk reads and page programs for compatible chips |
 | Intel software sequencing | SPI |
@@ -91,7 +92,7 @@ transfer as a generic one.
 
 ## Firmware reuse of the internal programmer
 
-The Intel ICH/PCH and AMD SPI100 controller code in `rflasher-internal` is
+The Intel ICH/PCH, AMD SB600-family and AMD SPI100 controller code in `rflasher-internal` is
 structured for `no_std` firmware reuse. Embedded callers provide the
 platform-specific access layer by implementing `rflasher_internal::HostAccess`:
 

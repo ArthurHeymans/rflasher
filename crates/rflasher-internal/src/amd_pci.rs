@@ -11,11 +11,11 @@ pub const AMD_VID: u16 = 0x1022;
 /// Chipset type for AMD platforms
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AmdChipset {
-    /// SB600/SB700/SB800/SB900 (uses SMBus-based flash access)
+    /// SB600/SB700/SB800/SB900 (LPC 438d/439d, SB600-family SPI)
     Sb600,
-    /// Merlin Falcon (FCH 790b rev 0x4a, uses SMBus)
+    /// Merlin Falcon (FCH 790b rev 0x4a, Yangtze SB600-family SPI; refused as untested)
     MerlinFalcon,
-    /// Stoney Ridge (FCH 790b rev 0x4b, uses SMBus)
+    /// Stoney Ridge (FCH 790b rev 0x4b, Promontory SB600-family SPI; refused as untested)
     StoneyRidge,
     /// Renoir/Cezanne (FCH 790b rev 0x51, uses SPI100)
     RenoirCezanne,
@@ -25,6 +25,9 @@ pub enum AmdChipset {
     RavenRidgeMatisseStarship,
     /// Mendocino/Van Gogh/Rembrandt/Raphael/Genoa (FCH 790b rev 0x71, uses SPI100)
     MendoncinoRembrandt,
+    /// Hudson-2/3/4, Bolton or Yangtze FCH (LPC 780e, SB600-family SPI
+    /// variant; detected but refused as untested)
+    Hudson,
 }
 
 impl AmdChipset {
@@ -36,6 +39,15 @@ impl AmdChipset {
                 | Self::PinnacleRidge
                 | Self::RavenRidgeMatisseStarship
                 | Self::MendoncinoRembrandt
+        )
+    }
+
+    /// Returns true if this chipset uses the SB600-family SPI controller
+    /// (flashprog `sb600spi.c`)
+    pub fn uses_sb600_spi(self) -> bool {
+        matches!(
+            self,
+            Self::Sb600 | Self::MerlinFalcon | Self::StoneyRidge | Self::Hudson
         )
     }
 }
@@ -50,6 +62,7 @@ impl core::fmt::Display for AmdChipset {
             Self::PinnacleRidge => write!(f, "Pinnacle Ridge"),
             Self::RavenRidgeMatisseStarship => write!(f, "Raven Ridge/Matisse/Starship"),
             Self::MendoncinoRembrandt => write!(f, "Mendocino/Van Gogh/Rembrandt/Raphael/Genoa"),
+            Self::Hudson => write!(f, "Hudson/Bolton/Yangtze FCH"),
         }
     }
 }
@@ -192,6 +205,18 @@ pub static AMD_CHIPSETS: &[AmdChipsetEnable] = &[
         device_name: "Mendocino/Van Gogh/Rembrandt/Raphael/Genoa",
         chipset: AmdChipset::MendoncinoRembrandt,
     },
+    // AMD FCH LPC 780e - Hudson-2/3/4, Bolton, Yangtze (SB600-family SPI).
+    // The generation comes from the SMBus (780b) revision.
+    AmdChipsetEnable {
+        vendor_id: AMD_VID,
+        device_id: 0x780e,
+        revision: RevisionMatch::Any,
+        bus_types: BusType::FLS,
+        status: TestStatus::Untested,
+        vendor_name: "AMD",
+        device_name: "FCH",
+        chipset: AmdChipset::Hudson,
+    },
 ];
 
 /// Find a matching AMD chipset entry
@@ -258,5 +283,19 @@ mod tests {
         assert!(AmdChipset::MendoncinoRembrandt.uses_spi100());
         assert!(!AmdChipset::Sb600.uses_spi100());
         assert!(!AmdChipset::StoneyRidge.uses_spi100());
+    }
+
+    #[test]
+    fn every_chipset_has_exactly_one_controller() {
+        for entry in AMD_CHIPSETS {
+            assert!(
+                entry.chipset.uses_spi100() != entry.chipset.uses_sb600_spi(),
+                "{}",
+                entry.device_name
+            );
+        }
+        let sb950 = find_chipset(0x1002, 0x439d, 0x00).unwrap();
+        assert!(sb950.chipset.uses_sb600_spi());
+        assert!(find_chipset(AMD_VID, 0x780e, 0x00).is_some());
     }
 }
