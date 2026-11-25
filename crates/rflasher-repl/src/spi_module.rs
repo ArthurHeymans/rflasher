@@ -218,9 +218,10 @@ fn parse_hex_bytes(input: &str) -> Result<Vec<u8>, String> {
         return Err("hex string must have even length".to_string());
     }
 
-    Ok(digits
-        .chunks_exact(2)
-        .map(|pair| (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]))
+    let (pairs, _) = digits.as_chunks::<2>();
+    Ok(pairs
+        .iter()
+        .map(|&[hi, lo]| (hex_nibble(hi) << 4) | hex_nibble(lo))
         .collect())
 }
 
