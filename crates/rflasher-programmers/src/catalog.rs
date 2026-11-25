@@ -443,6 +443,11 @@ impl ProgrammerParams {
     pub fn as_option_pairs(&self) -> Vec<(&str, &str)> {
         self.iter().collect()
     }
+
+    /// Reject any options for programmers that take no configuration.
+    pub fn expect_no_options(&self) -> crate::Result<()> {
+        validate_no_options(&self.as_option_pairs()).map_err(crate::Error::InvalidOptions)
+    }
 }
 
 /// Parse a programmer string into name and parameters.

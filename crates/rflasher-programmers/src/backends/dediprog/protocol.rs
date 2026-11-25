@@ -213,13 +213,15 @@ pub enum Target {
 }
 
 impl Target {
-    /// Parse target from string/number
-    pub fn from_value(v: u8) -> Option<Self> {
+    /// Parse a user-facing `target=<1|2>` option value.
+    ///
+    /// Matches flashprog's CLI convention: user target `1` maps to wire value
+    /// [`Target::ApplicationFlash1`] (`0`) and user target `2` maps to wire
+    /// value [`Target::ApplicationFlash2`] (`2`).
+    pub fn from_user_option(v: u8) -> Option<Self> {
         match v {
-            0 => Some(Target::ApplicationFlash1),
-            1 => Some(Target::FlashCard),
+            1 => Some(Target::ApplicationFlash1),
             2 => Some(Target::ApplicationFlash2),
-            3 => Some(Target::Socket),
             _ => None,
         }
     }
@@ -380,29 +382,84 @@ pub fn parse_spi_speed(s: &str) -> Option<usize> {
         .position(|speed| speed.name.eq_ignore_ascii_case(s))
 }
 
-/// Parse voltage from string (e.g., "3.5V", "1800mV", "1.8")
-pub fn parse_voltage(s: &str) -> Option<u16> {
-    let s = s.trim().to_lowercase();
-
-    // Try parsing with units
-    if let Some(mv) = s.strip_suffix("mv") {
-        return mv.trim().parse().ok();
+/// Parse a non-negative integer millivolt string (ASCII digits only).
+fn parse_uint_mv(s: &str) -> Option<u16> {
+    let s = s.trim();
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
     }
-    if let Some(v) = s.strip_suffix('v') {
-        let parsed: f32 = v.trim().parse().ok()?;
-        return Some((parsed * 1000.0) as u16);
+    s.parse().ok()
+}
+
+/// Parse a non-negative decimal volt string into exact millivolts.
+///
+/// Rejects signs, non-finite literals, overflow, and sub-millivolt fractional
+/// digits (e.g. `"0.0001"` must not silently truncate to `0` mV / Off).
+fn parse_volts_to_mv(s: &str) -> Option<u16> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
     }
 
-    // Try parsing as a number (assume volts if > 100, else millivolts)
-    if let Ok(n) = s.parse::<f32>() {
-        if n < 10.0 {
-            return Some((n * 1000.0) as u16);
-        } else {
-            return Some(n as u16);
+    let (whole_str, frac_str) = match s.split_once('.') {
+        Some((w, f)) => (w, f),
+        None => (s, ""),
+    };
+
+    if whole_str.is_empty() && frac_str.is_empty() {
+        return None;
+    }
+    if !whole_str.bytes().all(|b| b.is_ascii_digit())
+        || !frac_str.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let whole: u32 = if whole_str.is_empty() {
+        0
+    } else {
+        whole_str.parse().ok()?
+    };
+
+    let mut frac_mv: u32 = 0;
+    let mut scale: u32 = 100;
+    for &b in frac_str.as_bytes() {
+        let digit = u32::from(b - b'0');
+        if scale > 0 {
+            frac_mv += digit * scale;
+            scale /= 10;
+        } else if digit != 0 {
+            // Non-zero sub-millivolt digit would truncate.
+            return None;
         }
     }
 
-    None
+    let total_mv = whole.checked_mul(1000)?.checked_add(frac_mv)?;
+    u16::try_from(total_mv).ok()
+}
+
+/// Parse voltage from string (e.g., "3.5V", "1800mV", "1.8", "0").
+///
+/// Rejects negative values, non-finite numbers, overflow, and sub-millivolt
+/// values that would silently truncate to 0 mV (Off).
+pub fn parse_voltage(s: &str) -> Option<u16> {
+    let s = s.trim().to_ascii_lowercase();
+
+    // Try parsing with explicit units
+    if let Some(mv) = s.strip_suffix("mv") {
+        return parse_uint_mv(mv);
+    }
+    if let Some(v) = s.strip_suffix('v') {
+        return parse_volts_to_mv(v);
+    }
+
+    // Plain number without suffix: decimal strings and integers < 10 are volts;
+    // integers >= 10 are millivolts.
+    if s.contains('.') {
+        return parse_volts_to_mv(&s);
+    }
+    let n = parse_uint_mv(&s)?;
+    if n < 10 { n.checked_mul(1000) } else { Some(n) }
 }
 
 #[cfg(test)]
@@ -411,14 +468,40 @@ mod tests {
 
     #[test]
     fn test_parse_voltage() {
+        assert_eq!(parse_voltage("0"), Some(0));
+        assert_eq!(parse_voltage("0V"), Some(0));
+        assert_eq!(parse_voltage("0.0V"), Some(0));
+        assert_eq!(parse_voltage("0mV"), Some(0));
         assert_eq!(parse_voltage("3.5V"), Some(3500));
         assert_eq!(parse_voltage("3.5v"), Some(3500));
         assert_eq!(parse_voltage("3.5"), Some(3500));
         assert_eq!(parse_voltage("1800mV"), Some(1800));
         assert_eq!(parse_voltage("1800mv"), Some(1800));
+        assert_eq!(parse_voltage("1800"), Some(1800));
         assert_eq!(parse_voltage("1.8V"), Some(1800));
         assert_eq!(parse_voltage("1.8"), Some(1800));
         assert_eq!(parse_voltage("2.5"), Some(2500));
+        assert_eq!(parse_voltage("1.8000V"), Some(1800));
+    }
+
+    #[test]
+    fn test_parse_voltage_rejects_invalid_and_truncating_inputs() {
+        for bad in [
+            "", "-1", "-1.8", "-1.8V", "-1800mV", "-0", "-0V", "NaN", "nanV", "inf", "infV",
+            "0.0001", "0.0001V", "0.0005V", "1.8001V", "70V", "70000mV", "1.2.3V", ".", "abc",
+        ] {
+            assert_eq!(parse_voltage(bad), None, "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn test_target_user_option_mapping() {
+        assert_eq!(Target::from_user_option(1), Some(Target::ApplicationFlash1));
+        assert_eq!(Target::from_user_option(2), Some(Target::ApplicationFlash2));
+        assert_eq!(Target::from_user_option(0), None);
+        assert_eq!(Target::from_user_option(3), None);
+        assert_eq!(Target::ApplicationFlash1 as u8, 0);
+        assert_eq!(Target::ApplicationFlash2 as u8, 2);
     }
 
     #[test]

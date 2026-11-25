@@ -362,6 +362,8 @@ impl CommandV1 {
 pub struct ResponseV1 {
     /// Status code
     pub status_code: u16,
+    /// Number of valid payload bytes received
+    pub data_len: usize,
     /// Read data (up to 62 bytes)
     pub data: [u8; V1_MAX_PAYLOAD],
 }
@@ -370,24 +372,33 @@ impl Default for ResponseV1 {
     fn default() -> Self {
         Self {
             status_code: 0,
+            data_len: 0,
             data: [0; V1_MAX_PAYLOAD],
         }
     }
 }
 
 impl ResponseV1 {
-    /// Parse from a 64-byte packet
-    pub fn from_bytes(buf: &[u8]) -> Self {
-        let mut rsp = Self::default();
-        if buf.len() >= 2 {
-            rsp.status_code = u16::from_le_bytes([buf[0], buf[1]]);
+    /// Parse from a USB response packet (2-byte status header + up to 62 bytes payload).
+    ///
+    /// Returns `None` if the packet is shorter than the 2-byte status header
+    /// or exceeds [`USB_PACKET_SIZE`].
+    pub fn from_bytes(buf: &[u8]) -> Option<Self> {
+        if buf.len() < 2 || buf.len() > USB_PACKET_SIZE {
+            return None;
         }
-        if buf.len() >= 64 {
-            rsp.data.copy_from_slice(&buf[2..64]);
-        } else if buf.len() > 2 {
-            rsp.data[..buf.len() - 2].copy_from_slice(&buf[2..]);
-        }
-        rsp
+        let mut rsp = Self {
+            status_code: u16::from_le_bytes([buf[0], buf[1]]),
+            data_len: buf.len() - 2,
+            ..Default::default()
+        };
+        rsp.data[..rsp.data_len].copy_from_slice(&buf[2..]);
+        Some(rsp)
+    }
+
+    /// Valid payload bytes received in this response.
+    pub fn payload(&self) -> &[u8] {
+        &self.data[..self.data_len]
     }
 
     /// Get the status as a StatusCode enum
@@ -563,6 +574,8 @@ pub struct ResponseV2Start {
     pub packet_id: u16,
     /// Status code
     pub status_code: u16,
+    /// Number of valid payload bytes received
+    pub data_len: usize,
     /// First chunk of read data (up to 60 bytes)
     pub data: [u8; V2_CONTINUE_PAYLOAD],
 }
@@ -572,25 +585,35 @@ impl Default for ResponseV2Start {
         Self {
             packet_id: 0,
             status_code: 0,
+            data_len: 0,
             data: [0; V2_CONTINUE_PAYLOAD],
         }
     }
 }
 
 impl ResponseV2Start {
-    /// Parse from a 64-byte packet
-    pub fn from_bytes(buf: &[u8]) -> Self {
-        let Ok((header, payload)) = ResponseV2StartHeader::ref_from_prefix(buf) else {
-            return Self::default();
-        };
+    /// Parse from a USB response packet (4-byte header + up to 60 bytes payload).
+    ///
+    /// Returns `None` if the packet is shorter than the header or exceeds
+    /// [`USB_PACKET_SIZE`].
+    pub fn from_bytes(buf: &[u8]) -> Option<Self> {
+        if buf.len() > USB_PACKET_SIZE {
+            return None;
+        }
+        let (header, payload) = ResponseV2StartHeader::ref_from_prefix(buf).ok()?;
         let mut rsp = Self {
             packet_id: header.packet_id.get(),
             status_code: header.status_code.get(),
+            data_len: payload.len(),
             ..Default::default()
         };
-        let data_len = payload.len().min(V2_CONTINUE_PAYLOAD);
-        rsp.data[..data_len].copy_from_slice(&payload[..data_len]);
-        rsp
+        rsp.data[..rsp.data_len].copy_from_slice(payload);
+        Some(rsp)
+    }
+
+    /// Valid payload bytes received in this response.
+    pub fn payload(&self) -> &[u8] {
+        &self.data[..self.data_len]
     }
 
     /// Get the status as a StatusCode enum
@@ -606,6 +629,8 @@ pub struct ResponseV2Continue {
     pub packet_id: u16,
     /// Byte offset for validation
     pub data_index: u16,
+    /// Number of valid payload bytes received
+    pub data_len: usize,
     /// Additional read data (up to 60 bytes)
     pub data: [u8; V2_CONTINUE_PAYLOAD],
 }
@@ -615,25 +640,35 @@ impl Default for ResponseV2Continue {
         Self {
             packet_id: 0,
             data_index: 0,
+            data_len: 0,
             data: [0; V2_CONTINUE_PAYLOAD],
         }
     }
 }
 
 impl ResponseV2Continue {
-    /// Parse from a 64-byte packet
-    pub fn from_bytes(buf: &[u8]) -> Self {
-        let Ok((header, payload)) = PacketV2ContinueHeader::ref_from_prefix(buf) else {
-            return Self::default();
-        };
+    /// Parse from a USB response packet (4-byte header + up to 60 bytes payload).
+    ///
+    /// Returns `None` if the packet is shorter than the header or exceeds
+    /// [`USB_PACKET_SIZE`].
+    pub fn from_bytes(buf: &[u8]) -> Option<Self> {
+        if buf.len() > USB_PACKET_SIZE {
+            return None;
+        }
+        let (header, payload) = PacketV2ContinueHeader::ref_from_prefix(buf).ok()?;
         let mut rsp = Self {
             packet_id: header.packet_id.get(),
             data_index: header.data_index.get(),
+            data_len: payload.len(),
             ..Default::default()
         };
-        let data_len = payload.len().min(V2_CONTINUE_PAYLOAD);
-        rsp.data[..data_len].copy_from_slice(&payload[..data_len]);
-        rsp
+        rsp.data[..rsp.data_len].copy_from_slice(payload);
+        Some(rsp)
+    }
+
+    /// Valid payload bytes received in this response.
+    pub fn payload(&self) -> &[u8] {
+        &self.data[..self.data_len]
     }
 }
 
@@ -651,17 +686,21 @@ pub struct ResponseV2Config {
 }
 
 impl ResponseV2Config {
-    /// Parse from a 64-byte packet
-    pub fn from_bytes(buf: &[u8]) -> Self {
-        let Ok((wire, _)) = ResponseV2ConfigWire::ref_from_prefix(buf) else {
-            return Self::default();
-        };
-        Self {
+    /// Parse from a USB response packet (at least 8 bytes).
+    ///
+    /// Returns `None` if the packet is shorter than 8 bytes or exceeds
+    /// [`USB_PACKET_SIZE`].
+    pub fn from_bytes(buf: &[u8]) -> Option<Self> {
+        if buf.len() > USB_PACKET_SIZE {
+            return None;
+        }
+        let (wire, _) = ResponseV2ConfigWire::ref_from_prefix(buf).ok()?;
+        Some(Self {
             packet_id: wire.packet_id.get(),
             max_write_count: wire.max_write_count.get(),
             max_read_count: wire.max_read_count.get(),
             feature_bitmap: wire.feature_bitmap.get(),
-        }
+        })
     }
 
     /// Check if full duplex is supported
@@ -690,5 +729,32 @@ mod tests {
     fn v2_continue_packet_contains_only_valid_payload() {
         let cmd = CommandV2Continue::new(58, &[0xde, 0xad]);
         assert_eq!(cmd.to_bytes(), vec![3, 0, 58, 0, 0xde, 0xad]);
+    }
+
+    #[test]
+    fn response_parsers_reject_short_or_oversized_packets_and_preserve_lengths() {
+        assert!(ResponseV1::from_bytes(&[]).is_none());
+        assert!(ResponseV1::from_bytes(&[0x00]).is_none());
+        assert!(ResponseV1::from_bytes(&[0u8; USB_PACKET_SIZE + 1]).is_none());
+
+        let v1 = ResponseV1::from_bytes(&[0x00, 0x00, 0xde, 0xad]).unwrap();
+        assert_eq!(v1.status(), StatusCode::Success);
+        assert_eq!(v1.payload(), &[0xde, 0xad]);
+
+        assert!(ResponseV2Start::from_bytes(&[5, 0, 0]).is_none());
+        assert!(ResponseV2Start::from_bytes(&[0u8; USB_PACKET_SIZE + 1]).is_none());
+        let v2_start = ResponseV2Start::from_bytes(&[5, 0, 0, 0, 0xab, 0xcd]).unwrap();
+        assert_eq!(v2_start.payload(), &[0xab, 0xcd]);
+
+        assert!(ResponseV2Continue::from_bytes(&[6, 0, 0]).is_none());
+        let v2_cont = ResponseV2Continue::from_bytes(&[6, 0, 60, 0, 0xef]).unwrap();
+        assert_eq!(v2_cont.data_index, 60);
+        assert_eq!(v2_cont.payload(), &[0xef]);
+
+        assert!(ResponseV2Config::from_bytes(&[1, 0, 60, 0, 60, 0, 0]).is_none());
+        let cfg = ResponseV2Config::from_bytes(&[1, 0, 0x00, 0x01, 0x00, 0x02, 1, 0]).unwrap();
+        assert_eq!(cfg.max_write_count, 256);
+        assert_eq!(cfg.max_read_count, 512);
+        assert!(cfg.supports_full_duplex());
     }
 }

@@ -37,6 +37,193 @@ pub fn create_spi_module<M: SpiMaster + Send + 'static>(master: SharedMaster<M>)
     module
 }
 
+/// All function and constant names exported by `rflasher/spi` and `rflasher/spi25`.
+pub(crate) const KNOWN_SYMBOLS: &[&str] = &[
+    // Low-level SPI commands
+    "spi-execute",
+    "spi-simple",
+    "spi-read-reg",
+    "spi-write-reg",
+    "spi-read",
+    "spi-read-4b",
+    "spi-write",
+    "spi-write-4b",
+    // Multi-I/O reads
+    "spi-read-dual-out",
+    "spi-read-dual-io",
+    "spi-read-quad-out",
+    "spi-read-quad-io",
+    // High-level helpers
+    "read-jedec-id",
+    "read-status1",
+    "read-status2",
+    "read-status3",
+    "write-status1",
+    "write-status2",
+    "write-status3",
+    "write-enable",
+    "write-disable",
+    "chip-erase",
+    "reset-enable",
+    "reset",
+    "enter-4byte-mode",
+    "exit-4byte-mode",
+    "deep-power-down",
+    "release-power-down",
+    "read-sfdp",
+    "is-busy?",
+    "wait-ready",
+    "sector-erase",
+    "block-erase-32k",
+    "block-erase-64k",
+    "page-program",
+    "page-program-4b",
+    // Byte utilities
+    "make-bytes",
+    "random-bytes",
+    "bytes-length",
+    "bytes-ref",
+    "bytes->list",
+    "list->bytes",
+    "bytes->hex",
+    "hex->bytes",
+    // Help
+    "rflasher-help",
+    // SPI25 constants
+    "WREN",
+    "WRDI",
+    "EWSR",
+    "RDSR",
+    "RDSR2",
+    "RDSR3",
+    "WRSR",
+    "WRSR2",
+    "WRSR3",
+    "RDID",
+    "REMS",
+    "RES",
+    "RDUID",
+    "READ",
+    "FAST_READ",
+    "READ_4B",
+    "FAST_READ_4B",
+    "DOR",
+    "DIOR",
+    "QOR",
+    "QIOR",
+    "DOR_4B",
+    "DIOR_4B",
+    "QOR_4B",
+    "QIOR_4B",
+    "PP",
+    "PP_4B",
+    "QPP",
+    "QPP_4B",
+    "SE_20",
+    "BE_52",
+    "BE_D8",
+    "CE_60",
+    "CE_C7",
+    "SE_21",
+    "BE_5C",
+    "BE_DC",
+    "EN4B",
+    "EX4B",
+    "RDEAR",
+    "WREAR",
+    "DP",
+    "RDP",
+    "ERSR",
+    "PRSR",
+    "RDSR_SEC",
+    "EQIO",
+    "RSTQIO",
+    "RSTEN",
+    "RST",
+    "RDSFDP",
+    "SUSPEND",
+    "RESUME",
+    "SR1_WIP",
+    "SR1_WEL",
+    "SR1_BP0",
+    "SR1_BP1",
+    "SR1_BP2",
+    "SR1_TB",
+    "SR1_SEC",
+    "SR1_SRP0",
+    "SR2_SRP1",
+    "SR2_QE",
+    "SR2_BP3",
+    "SR2_LB1",
+    "SR2_LB2",
+    "SR2_LB3",
+    "SR2_CMP",
+    "SR2_SUS",
+    "SR3_WPS",
+    "SR3_ADP",
+    "SR3_ADS",
+];
+
+fn checked_u8(name: &str, value: isize) -> Result<u8, String> {
+    u8::try_from(value).map_err(|_| format!("{name} must be in 0..=255, got {value}"))
+}
+
+fn checked_u32(name: &str, value: isize) -> Result<u32, String> {
+    u32::try_from(value).map_err(|_| format!("{name} must be in 0..={}, got {value}", u32::MAX))
+}
+
+fn checked_addr_3b(value: isize) -> Result<u32, String> {
+    let addr = checked_u32("address", value)?;
+    if addr > 0x00FF_FFFF {
+        return Err(format!(
+            "3-byte address must be in 0..=0xFFFFFF, got 0x{addr:X} (use the -4b command)"
+        ));
+    }
+    Ok(addr)
+}
+
+fn checked_usize(name: &str, value: isize) -> Result<usize, String> {
+    usize::try_from(value).map_err(|_| format!("{name} must be non-negative, got {value}"))
+}
+
+fn hex_nibble(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => unreachable!("hex_nibble called on non-hex byte"),
+    }
+}
+
+/// Parse a hex string into bytes without slicing across UTF-8 character boundaries.
+fn parse_hex_bytes(input: &str) -> Result<Vec<u8>, String> {
+    let mut digits = Vec::new();
+    for token in input.split(|c: char| c.is_whitespace() || c == ',') {
+        if token.is_empty() {
+            continue;
+        }
+        let token = token
+            .strip_prefix("0x")
+            .or_else(|| token.strip_prefix("0X"))
+            .unwrap_or(token);
+        for ch in token.chars() {
+            if !ch.is_ascii_hexdigit() {
+                return Err(format!("invalid hex character: '{ch}'"));
+            }
+            digits.push(ch as u8);
+        }
+    }
+
+    if !digits.len().is_multiple_of(2) {
+        return Err("hex string must have even length".to_string());
+    }
+
+    Ok(digits
+        .chunks_exact(2)
+        .map(|pair| (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]))
+        .collect())
+}
+
 /// Register all SPI command functions that require the master
 fn register_spi_commands<M: SpiMaster + Send + 'static>(
     module: &mut BuiltInModule,
@@ -53,40 +240,54 @@ fn register_spi_commands<M: SpiMaster + Send + 'static>(
               read_len: isize| {
             spi_execute(
                 &m,
-                opcode as u8,
+                checked_u8("opcode", opcode)?,
                 addr,
-                dummy as u8,
+                checked_u8("dummy", dummy)?,
                 write_data,
-                read_len as usize,
+                checked_usize("read-len", read_len)?,
             )
         },
     );
 
     let m = Arc::clone(master);
     module.register_fn("spi-simple", move |opcode: isize| {
-        spi_simple(&m, opcode as u8)
+        spi_simple(&m, checked_u8("opcode", opcode)?)
     });
 
     let m = Arc::clone(master);
     module.register_fn("spi-read-reg", move |opcode: isize, len: isize| {
-        spi_read_reg(&m, opcode as u8, len as usize)
+        spi_read_reg(
+            &m,
+            checked_u8("opcode", opcode)?,
+            checked_usize("len", len)?,
+        )
     });
 
     let m = Arc::clone(master);
     module.register_fn("spi-write-reg", move |opcode: isize, data: SteelVal| {
-        spi_write_reg(&m, opcode as u8, data)
+        spi_write_reg(&m, checked_u8("opcode", opcode)?, data)
     });
 
     let m = Arc::clone(master);
     module.register_fn("spi-read", move |opcode: isize, addr: isize, len: isize| {
-        spi_read_3b(&m, opcode as u8, addr as u32, len as usize)
+        spi_read_3b(
+            &m,
+            checked_u8("opcode", opcode)?,
+            checked_addr_3b(addr)?,
+            checked_usize("len", len)?,
+        )
     });
 
     let m = Arc::clone(master);
     module.register_fn(
         "spi-read-4b",
         move |opcode: isize, addr: isize, len: isize| {
-            spi_read_4b(&m, opcode as u8, addr as u32, len as usize)
+            spi_read_4b(
+                &m,
+                checked_u8("opcode", opcode)?,
+                checked_u32("address", addr)?,
+                checked_usize("len", len)?,
+            )
         },
     );
 
@@ -94,7 +295,12 @@ fn register_spi_commands<M: SpiMaster + Send + 'static>(
     module.register_fn(
         "spi-write",
         move |opcode: isize, addr: isize, data: SteelVal| {
-            spi_write_3b(&m, opcode as u8, addr as u32, data)
+            spi_write_3b(
+                &m,
+                checked_u8("opcode", opcode)?,
+                checked_addr_3b(addr)?,
+                data,
+            )
         },
     );
 
@@ -102,7 +308,12 @@ fn register_spi_commands<M: SpiMaster + Send + 'static>(
     module.register_fn(
         "spi-write-4b",
         move |opcode: isize, addr: isize, data: SteelVal| {
-            spi_write_4b(&m, opcode as u8, addr as u32, data)
+            spi_write_4b(
+                &m,
+                checked_u8("opcode", opcode)?,
+                checked_u32("address", addr)?,
+                data,
+            )
         },
     );
 
@@ -113,9 +324,9 @@ fn register_spi_commands<M: SpiMaster + Send + 'static>(
         move |opcode: isize, addr: isize, len: isize| {
             spi_read_multi(
                 &m,
-                opcode as u8,
-                addr as u32,
-                len as usize,
+                checked_u8("opcode", opcode)?,
+                checked_addr_3b(addr)?,
+                checked_usize("len", len)?,
                 IoMode::DualOut,
                 AddressWidth::ThreeByte,
             )
@@ -128,9 +339,9 @@ fn register_spi_commands<M: SpiMaster + Send + 'static>(
         move |opcode: isize, addr: isize, len: isize| {
             spi_read_multi(
                 &m,
-                opcode as u8,
-                addr as u32,
-                len as usize,
+                checked_u8("opcode", opcode)?,
+                checked_addr_3b(addr)?,
+                checked_usize("len", len)?,
                 IoMode::DualIo,
                 AddressWidth::ThreeByte,
             )
@@ -144,9 +355,9 @@ fn register_spi_commands<M: SpiMaster + Send + 'static>(
         move |opcode: isize, addr: isize, len: isize| {
             spi_read_multi(
                 &m,
-                opcode as u8,
-                addr as u32,
-                len as usize,
+                checked_u8("opcode", opcode)?,
+                checked_addr_3b(addr)?,
+                checked_usize("len", len)?,
                 IoMode::QuadOut,
                 AddressWidth::ThreeByte,
             )
@@ -159,9 +370,9 @@ fn register_spi_commands<M: SpiMaster + Send + 'static>(
         move |opcode: isize, addr: isize, len: isize| {
             spi_read_multi(
                 &m,
-                opcode as u8,
-                addr as u32,
-                len as usize,
+                checked_u8("opcode", opcode)?,
+                checked_addr_3b(addr)?,
+                checked_usize("len", len)?,
                 IoMode::QuadIo,
                 AddressWidth::ThreeByte,
             )
@@ -210,7 +421,7 @@ fn register_spi_commands<M: SpiMaster + Send + 'static>(
 
     let m = Arc::clone(master);
     module.register_fn("read-sfdp", move |addr: isize, len: isize| {
-        read_sfdp(&m, addr as u32, len as usize)
+        read_sfdp(&m, checked_addr_3b(addr)?, checked_usize("len", len)?)
     });
 
     let m = Arc::clone(master);
@@ -218,82 +429,89 @@ fn register_spi_commands<M: SpiMaster + Send + 'static>(
 
     let m = Arc::clone(master);
     module.register_fn("wait-ready", move |timeout_us: isize| {
-        wait_ready(&m, timeout_us as u32)
+        wait_ready(&m, checked_u32("timeout-us", timeout_us)?)
     });
 
     let m = Arc::clone(master);
     module.register_fn("write-status1", move |value: isize| {
-        write_status(&m, opcodes::WRSR, value as u8)
+        write_status(&m, opcodes::WRSR, checked_u8("value", value)?)
     });
 
     let m = Arc::clone(master);
     module.register_fn("write-status2", move |value: isize| {
-        write_status(&m, opcodes::WRSR2, value as u8)
+        write_status(&m, opcodes::WRSR2, checked_u8("value", value)?)
     });
 
     let m = Arc::clone(master);
     module.register_fn("write-status3", move |value: isize| {
-        write_status(&m, opcodes::WRSR3, value as u8)
+        write_status(&m, opcodes::WRSR3, checked_u8("value", value)?)
     });
 
     let m = Arc::clone(master);
     module.register_fn("sector-erase", move |addr: isize| {
-        erase_block(&m, opcodes::SE_20, addr as u32, false)
+        erase_block(&m, opcodes::SE_20, checked_addr_3b(addr)?, false)
     });
 
     let m = Arc::clone(master);
     module.register_fn("block-erase-32k", move |addr: isize| {
-        erase_block(&m, opcodes::BE_52, addr as u32, false)
+        erase_block(&m, opcodes::BE_52, checked_addr_3b(addr)?, false)
     });
 
     let m = Arc::clone(master);
     module.register_fn("block-erase-64k", move |addr: isize| {
-        erase_block(&m, opcodes::BE_D8, addr as u32, false)
+        erase_block(&m, opcodes::BE_D8, checked_addr_3b(addr)?, false)
     });
 
     // Page program helpers
     let m = Arc::clone(master);
     module.register_fn("page-program", move |addr: isize, data: SteelVal| {
-        page_program(&m, addr as u32, data, false)
+        page_program(&m, checked_addr_3b(addr)?, data, false)
     });
 
     let m = Arc::clone(master);
     module.register_fn("page-program-4b", move |addr: isize, data: SteelVal| {
-        page_program(&m, addr as u32, data, true)
+        page_program(&m, checked_u32("address", addr)?, data, true)
     });
 }
 
 /// Register byte vector utility functions (independent of master)
 fn register_byte_utilities(module: &mut BuiltInModule) {
-    module.register_fn("make-bytes", |len: isize, fill: isize| -> SteelVal {
-        let bytes: Vec<u8> = vec![fill as u8; len as usize];
-        bytes_to_steel(&bytes)
-    });
+    module.register_fn(
+        "make-bytes",
+        |len: isize, fill: isize| -> Result<SteelVal, String> {
+            let len = checked_usize("len", len)?;
+            let fill = checked_u8("fill", fill)?;
+            let bytes = vec![fill; len];
+            Ok(bytes_to_steel(&bytes))
+        },
+    );
 
-    module.register_fn("random-bytes", |len: isize| -> SteelVal {
+    module.register_fn("random-bytes", |len: isize| -> Result<SteelVal, String> {
         use std::collections::hash_map::RandomState;
         use std::hash::{BuildHasher, Hasher};
-        let mut bytes = Vec::with_capacity(len as usize);
+        let len = checked_usize("len", len)?;
+        let mut bytes = Vec::with_capacity(len);
         for _ in 0..len {
             let s = RandomState::new();
             let mut hasher = s.build_hasher();
             hasher.write_u8(0);
             bytes.push(hasher.finish() as u8);
         }
-        bytes_to_steel(&bytes)
+        Ok(bytes_to_steel(&bytes))
     });
 
     module.register_fn("bytes-length", |data: SteelVal| -> Result<isize, String> {
         let bytes = steel_to_bytes(&data)?;
-        Ok(bytes.len() as isize)
+        isize::try_from(bytes.len()).map_err(|_| "byte list length overflows isize".to_string())
     });
 
     module.register_fn(
         "bytes-ref",
         |data: SteelVal, index: isize| -> Result<isize, String> {
             let bytes = steel_to_bytes(&data)?;
+            let idx = checked_usize("index", index)?;
             bytes
-                .get(index as usize)
+                .get(idx)
                 .map(|&b| b as isize)
                 .ok_or_else(|| format!("index {} out of bounds", index))
         },
@@ -317,7 +535,7 @@ fn register_byte_utilities(module: &mut BuiltInModule) {
                     let bytes: Result<Vec<u8>, String> = items
                         .iter()
                         .map(|v| match v {
-                            SteelVal::IntV(i) => Ok(*i as u8),
+                            SteelVal::IntV(i) => checked_u8("byte", *i),
                             _ => Err("list->bytes: expected list of integers".to_string()),
                         })
                         .collect();
@@ -338,17 +556,8 @@ fn register_byte_utilities(module: &mut BuiltInModule) {
     });
 
     module.register_fn("hex->bytes", |hex: String| -> Result<SteelVal, String> {
-        let hex = hex.replace(" ", "").replace("0x", "").replace(",", "");
-        if !hex.len().is_multiple_of(2) {
-            return Err("hex string must have even length".to_string());
-        }
-        let bytes: Result<Vec<u8>, _> = (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
-            .collect();
-        bytes
-            .map(|b| bytes_to_steel(&b))
-            .map_err(|e| format!("invalid hex: {}", e))
+        let bytes = parse_hex_bytes(&hex)?;
+        Ok(bytes_to_steel(&bytes))
     });
 }
 
@@ -489,7 +698,7 @@ fn steel_to_bytes(val: &SteelVal) -> Result<Vec<u8>, String> {
         SteelVal::ListV(items) => items
             .iter()
             .map(|v| match v {
-                SteelVal::IntV(i) => Ok(*i as u8),
+                SteelVal::IntV(i) => checked_u8("byte", *i),
                 _ => Err("expected list of integers".to_string()),
             })
             .collect(),
@@ -514,7 +723,7 @@ fn spi_execute<M: SpiMaster>(
 
     let address = match addr {
         SteelVal::BoolV(false) => None,
-        SteelVal::IntV(a) => Some(a as u32),
+        SteelVal::IntV(a) => Some(checked_u32("address", a)?),
         _ => return Err("address must be #f or integer".to_string()),
     };
 
@@ -768,19 +977,12 @@ fn is_busy<M: SpiMaster>(master: &SharedMaster<M>) -> Result<bool, String> {
 }
 
 fn wait_ready<M: SpiMaster>(master: &SharedMaster<M>, timeout_us: u32) -> Result<bool, String> {
-    let poll_interval_us = 100;
-    let max_polls = timeout_us / poll_interval_us;
-
-    for _ in 0..max_polls {
-        let status = read_status(master, opcodes::RDSR)?;
-        if (status & (opcodes::SR1_WIP as isize)) == 0 {
-            return Ok(true);
-        }
-
-        std::thread::sleep(std::time::Duration::from_micros(poll_interval_us as u64));
-    }
-
-    Err("timeout waiting for ready".to_string())
+    let mut m = master.lock().map_err(|e| format!("lock error: {}", e))?;
+    block_on(rflasher_core::protocol::wait_ready(
+        &mut *m, 100, timeout_us,
+    ))
+    .map_err(|e| format!("wait-ready error: {}", e))?;
+    Ok(true)
 }
 
 fn erase_block<M: SpiMaster>(

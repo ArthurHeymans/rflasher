@@ -345,16 +345,18 @@ pub async fn open_flash_with_options(
 // Programmer-specific open functions
 
 #[cfg(feature = "dummy")]
-async fn open_dummy_master(_params: &ProgrammerParams) -> crate::Result<crate::dummy::DummyFlash> {
+async fn open_dummy_master(params: &ProgrammerParams) -> crate::Result<crate::dummy::DummyFlash> {
+    params.expect_no_options()?;
     let master = crate::dummy::DummyFlash::new_default();
     Ok(master)
 }
 
 #[cfg(feature = "ch341a")]
 async fn open_ch341a_master(
-    _params: &ProgrammerParams,
+    params: &ProgrammerParams,
     choose: Option<ChooseUsbDevice<'_>>,
 ) -> crate::Result<crate::ch341a::Ch341a> {
+    params.expect_no_options()?;
     log::info!("Opening CH341A programmer...");
 
     let master = crate::ch341a::Ch341a::open_matching((), choose).await.map_err(|e| crate::Error::backend_with_source(format!(
@@ -772,9 +774,10 @@ async fn open_raiden_master(
 
 #[cfg(feature = "sunxi-fel")]
 async fn open_sunxi_fel_master(
-    _params: &ProgrammerParams,
+    params: &ProgrammerParams,
     choose: Option<ChooseUsbDevice<'_>>,
 ) -> crate::Result<crate::sunxi_fel::SunxiFel> {
+    params.expect_no_options()?;
     log::info!("Opening sunxi FEL programmer...");
 
     let master = crate::sunxi_fel::SunxiFel::open_matching((), choose)
@@ -824,6 +827,32 @@ mod dispatch_tests {
             assert!(matches!(
                 error,
                 crate::Error::Core(rflasher_core::error::Error::ChipNotFound)
+            ));
+        });
+    }
+
+    #[test]
+    fn optionless_programmers_reject_unknown_options() {
+        futures_lite::future::block_on(async {
+            assert!(matches!(
+                open_spi_programmer("dummy:foo=bar", None).await,
+                Err(crate::Error::InvalidOptions(_))
+            ));
+            assert!(matches!(
+                open_flash("dummy:foo=bar", &NoChips).await,
+                Err(crate::Error::InvalidOptions(_))
+            ));
+
+            #[cfg(feature = "ch341a")]
+            assert!(matches!(
+                open_spi_programmer("ch341a:spispeed=1000", None).await,
+                Err(crate::Error::InvalidOptions(_))
+            ));
+
+            #[cfg(feature = "sunxi-fel")]
+            assert!(matches!(
+                open_spi_programmer("sunxi_fel:foo=bar", None).await,
+                Err(crate::Error::InvalidOptions(_))
             ));
         });
     }

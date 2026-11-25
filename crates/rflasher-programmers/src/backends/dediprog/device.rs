@@ -68,7 +68,7 @@ where
 }
 
 /// Configuration options for opening a Dediprog device
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DediprogConfig {
     /// Device index (when multiple devices are connected)
     pub device_index: Option<usize>,
@@ -116,8 +116,9 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<DediprogConfig> {
                 let t: u8 = value
                     .parse()
                     .map_err(|_| DediprogError::InvalidParameter(format!("target: {}", value)))?;
-                config.target = Target::from_value(t)
-                    .ok_or_else(|| DediprogError::InvalidParameter(format!("target: {}", value)))?;
+                config.target = Target::from_user_option(t).ok_or_else(|| {
+                    DediprogError::InvalidParameter(format!("target: {} (supported: 1, 2)", value))
+                })?;
             }
             "spispeed" => {
                 config.spi_speed_index = parse_spi_speed(value).ok_or_else(|| {
