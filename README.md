@@ -48,7 +48,7 @@ Install to `/etc/udev/rules.d/`, run `udevadm control --reload-rules && udevadm 
 The man page is generated from the CLI definitions:
 
 ```bash
-cargo run --bin gen-manpage   # writes man/rflasher.1
+cargo run --features gen-tools --bin gen-manpage   # writes man/rflasher.1
 man -l man/rflasher.1
 ```
 
@@ -198,7 +198,7 @@ rflasher repl -p serprog:dev=/dev/ttyACM0
 => #t
 λ > (spi-write PP #x1000 data)
 => #t
-λ > (wait-ready)
+λ > (wait-ready 5000000)
 => #t
 ```
 

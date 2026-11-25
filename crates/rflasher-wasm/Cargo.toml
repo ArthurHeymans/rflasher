@@ -35,7 +35,6 @@ eframe = { version = "0.33", default-features = false, features = [
     "web_screen_reader",
 ] }
 egui = "0.33"
-egui_extras = "0.33"
 
 # Async runtime for WASM
 wasm-bindgen = "0.2"

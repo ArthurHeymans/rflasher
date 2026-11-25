@@ -27,17 +27,25 @@ pub fn list_programmers() {
     println!();
     println!("Examples:");
     println!("  rflasher probe -p ch341a");
-    println!("  rflasher read -p ch341a -o flash.bin");
-    println!("  rflasher write -p ch341a -i flash.bin");
+    println!("  rflasher read -p ch341a flash.bin");
+    println!("  rflasher write -p ch341a flash.bin");
 
     // Show which programmers are available vs compiled out
     #[cfg(not(all(
+        feature = "ati-spi",
         feature = "dummy",
         feature = "ch341a",
+        feature = "ch347",
+        feature = "dediprog",
         feature = "serprog",
         feature = "ftdi",
+        feature = "ft4222",
         feature = "linux-spi",
-        feature = "internal"
+        feature = "linux-mtd",
+        feature = "linux-gpio",
+        feature = "internal",
+        feature = "raiden",
+        feature = "sunxi-fel"
     )))]
     {
         println!();
@@ -56,10 +64,11 @@ pub fn list_chips(db: &ChipDatabase, vendor_filter: Option<&str>) {
     );
     println!("{}", "-".repeat(60));
 
+    let vendor_filter_lower = vendor_filter.map(str::to_lowercase);
     for chip in db.iter() {
         // Apply vendor filter if specified
-        if let Some(vendor) = vendor_filter
-            && !chip.vendor.to_lowercase().contains(&vendor.to_lowercase())
+        if let Some(ref vendor) = vendor_filter_lower
+            && !chip.vendor.to_lowercase().contains(vendor.as_str())
         {
             continue;
         }

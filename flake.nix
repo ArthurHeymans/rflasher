@@ -35,7 +35,6 @@
 
           runtimeBuildInputs = p: [
             p.udev
-            p.pciutils
           ];
 
           packageAttrs = {
@@ -48,7 +47,6 @@
               fileset = lib.fileset.unions [
                 ./Cargo.toml
                 ./Cargo.lock
-                ./build.rs
                 ./src
                 ./crates
               ];
@@ -59,7 +57,7 @@
               "--package=rflasher"
               "--bin=rflasher"
             ];
-            # Run the whole workspace's tests; the root package has none.
+            # Run the whole workspace's tests.
             # rflasher-wasm is excluded (needs the wasm32 target).
             cargoTestFlags = [
               "--workspace"
@@ -74,7 +72,10 @@
             meta = {
               description = "A modern Rust port of flashprog for reading, writing, and erasing flash chips";
               homepage = "https://github.com/ArthurHeymans/rflasher";
-              license = lib.licenses.gpl2Plus;
+              license = with lib.licenses; [
+                mit
+                asl20
+              ];
               mainProgram = "rflasher";
               platforms = lib.platforms.linux;
             };
@@ -83,7 +84,10 @@
           nativePackage = pkgs.rustPlatform.buildRustPackage (
             packageAttrs
             // {
-              cargoBuildFlags = packageAttrs.cargoBuildFlags ++ [ "--bin=gen-completions" ];
+              cargoBuildFlags = packageAttrs.cargoBuildFlags ++ [
+                "--features=gen-tools"
+                "--bin=gen-completions"
+              ];
               buildInputs = runtimeBuildInputs pkgs;
               nativeBuildInputs = [
                 pkgs.installShellFiles

@@ -4,18 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Intel chipset internal flash programmer support for rflasher"
+description = "Internal chipset flash programmer support for rflasher"
 
 [features]
 default = ["std"]
-std = ["alloc", "rflasher-core/std", "rflasher-pci/std", "dep:thiserror", "dep:libc"]
+std = ["alloc", "rflasher-core/std", "rflasher-pci/std", "dep:libc"]
 alloc = ["rflasher-core/alloc"]
 
 [dependencies]
 rflasher-core.workspace = true
 rflasher-pci.workspace = true
 log.workspace = true
-thiserror = { workspace = true, optional = true }
 libc = { version = "0.2", optional = true }
 
 [dev-dependencies]

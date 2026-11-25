@@ -1,6 +1,6 @@
 //! Man page generator for rflasher
 //!
-//! Usage: cargo run --bin gen-manpage -- [output-dir]
+//! Usage: cargo run --features gen-tools --bin gen-manpage -- [output-dir]
 
 use clap::CommandFactory;
 use std::fs;
