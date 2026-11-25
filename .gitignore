@@ -4,3 +4,4 @@
 /crates/rflasher-wasm/dist
 /firmware
 opencode.json
+__pycache__/

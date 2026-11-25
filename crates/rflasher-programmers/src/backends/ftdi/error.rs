@@ -1,62 +1,45 @@
 //! Error types for FTDI programmer (ftdi-nusb backend, shared by native and wasm)
 
-use std::fmt;
+use thiserror::Error;
 
 /// Result type for FTDI operations
 pub type Result<T> = std::result::Result<T, FtdiError>;
 
 /// Errors that can occur during FTDI operations
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum FtdiError {
-    /// No FTDI device found
-    DeviceNotFound,
-
     /// Failed to open device
+    #[error("Failed to open device: {0}")]
     OpenFailed(String),
 
-    /// Failed to claim USB interface
-    ClaimFailed(String),
-
     /// USB transfer failed
+    #[error("USB transfer failed: {0}")]
     TransferFailed(String),
 
     /// Failed to configure device
+    #[error("Failed to configure device: {0}")]
     ConfigFailed(String),
 
     /// Invalid device type
+    #[error("Invalid device type: {0}")]
     InvalidDeviceType(String),
 
     /// Invalid channel/port specification
+    #[error("Invalid channel: {0}")]
     InvalidChannel(String),
 
     /// Invalid parameter
+    #[error("Invalid parameter: {0}")]
     InvalidParameter(String),
 
     /// ftdi-nusb error
+    #[error("ftdi-nusb error: {0}")]
     FtdiNusb(String),
 
     /// USB enumeration error
+    #[error("USB error: {0}")]
     UsbError(String),
 }
-
-impl fmt::Display for FtdiError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FtdiError::DeviceNotFound => write!(f, "No FTDI device found"),
-            FtdiError::OpenFailed(s) => write!(f, "Failed to open device: {}", s),
-            FtdiError::ClaimFailed(s) => write!(f, "Failed to claim interface: {}", s),
-            FtdiError::TransferFailed(s) => write!(f, "USB transfer failed: {}", s),
-            FtdiError::ConfigFailed(s) => write!(f, "Failed to configure device: {}", s),
-            FtdiError::InvalidDeviceType(s) => write!(f, "Invalid device type: {}", s),
-            FtdiError::InvalidChannel(s) => write!(f, "Invalid channel: {}", s),
-            FtdiError::InvalidParameter(s) => write!(f, "Invalid parameter: {}", s),
-            FtdiError::FtdiNusb(s) => write!(f, "ftdi-nusb error: {}", s),
-            FtdiError::UsbError(s) => write!(f, "USB error: {}", s),
-        }
-    }
-}
-
-impl std::error::Error for FtdiError {}
 
 impl From<ftdi_nusb::Error> for FtdiError {
     fn from(e: ftdi_nusb::Error) -> Self {

@@ -39,14 +39,15 @@ pub(super) fn usable_erasers<D: FlashDevice + ?Sized>(device: &D) -> alloc::vec:
 }
 
 /// Validate every included region and erase footprint before any mutation.
+///
+/// When `policy.recovery` is set, persists a full-device snapshot and returns
+/// it so callers can reuse it without re-reading the flash.
 pub(super) async fn preflight<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
     policy: &mut MutationPolicy<'_>,
-) -> Result<()> {
-    layout
-        .validate(device.size())
-        .map_err(|_| Error::LayoutError)?;
+) -> Result<Option<alloc::vec::Vec<u8>>> {
+    layout.validate(device.size())?;
     let regions: alloc::vec::Vec<_> = layout.included_regions().collect();
     if let Some(r) = layout.regions_overlapping_included().find(|r| r.readonly) {
         return Err(refuse(
@@ -78,7 +79,7 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
                         && let Some(p) = actual
                             .regions
                             .iter()
-                            .find(|p| p.dangerous && regions.iter().any(|r| overlaps(r, p)))
+                            .find(|p| p.dangerous && regions.iter().any(|r| r.overlaps(p)))
                     {
                         return Err(refuse(
                             Refusal::DangerousRegion,
@@ -161,8 +162,9 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         let mut image = vec![0; device.size() as usize];
         device.read(0, &mut image).await?;
         sink.persist(&image)?;
+        return Ok(Some(image));
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Refuse an erase whose block the device restricts. The whole block is
@@ -217,10 +219,6 @@ const DANGEROUS_HINT: &str =
 fn refuse(refusal: Refusal, details: core::fmt::Arguments<'_>) -> Error {
     log::error!("Refusing to modify flash: {}", details);
     Error::MutationRefused(refusal)
-}
-
-fn overlaps(a: &Region, b: &Region) -> bool {
-    a.start <= b.end && b.start <= a.end
 }
 
 pub(super) fn region_layout(start: u32, len: u32) -> Result<Layout> {

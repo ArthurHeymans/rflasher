@@ -1,6 +1,6 @@
 //! Shell completion generator for rflasher
 //!
-//! Usage: cargo run --bin gen-completions -- [output-dir]
+//! Usage: cargo run --features gen-tools --bin gen-completions -- [output-dir]
 
 use clap::CommandFactory;
 use clap_complete::{Shell, generate_to};

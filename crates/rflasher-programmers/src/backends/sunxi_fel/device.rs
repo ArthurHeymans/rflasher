@@ -438,10 +438,7 @@ impl SpiMaster for SunxiFel {
     }
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        let header_len = cmd.header_len();
-        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
-        cmd.encode_header(&mut write_data);
-        write_data[header_len..].copy_from_slice(cmd.write_data);
+        let write_data = cmd.single_io_frame()?;
 
         self.spi_xfer(&write_data, cmd.read_buf)
             .map_err(|_| CoreError::ProgrammerError)

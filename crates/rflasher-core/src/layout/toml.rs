@@ -146,7 +146,7 @@ impl Layout {
         // Write metadata
         output.push_str("[layout]\n");
         if let Some(name) = &self.name {
-            output.push_str(&format!("name = \"{}\"\n", name));
+            output.push_str(&format!("name = {}\n", toml::Value::String(name.clone())));
         }
         if let Some(size) = self.chip_size {
             output.push_str(&format!("chip_size = \"{}\"\n", format_size(size)));
@@ -156,7 +156,10 @@ impl Layout {
         // Write regions
         for region in &self.regions {
             output.push_str("[[region]]\n");
-            output.push_str(&format!("name = \"{}\"\n", region.name));
+            output.push_str(&format!(
+                "name = {}\n",
+                toml::Value::String(region.name.clone())
+            ));
             output.push_str(&format!("start = 0x{:08X}\n", region.start));
             output.push_str(&format!("end = 0x{:08X}\n", region.end));
             if region.readonly {
@@ -224,5 +227,19 @@ end = 0xFFFFFF
         assert!(layout.regions[0].readonly);
         assert_eq!(layout.regions[1].name, "bios");
         assert!(!layout.regions[1].readonly);
+    }
+
+    #[test]
+    fn test_toml_roundtrip_escapes_special_names() {
+        let mut layout = Layout::with_source(LayoutSource::Fmap);
+        layout.name = Some("FMAP: \"weird\"\\name\nline2".to_string());
+        layout.chip_size = Some(4096);
+        layout.add_region(Region::new("reg\"with\\slash\nnewline", 0, 4095));
+
+        let serialized = layout.to_toml_string().unwrap();
+        let parsed = Layout::from_toml_str(&serialized).unwrap();
+        assert_eq!(parsed.name, layout.name);
+        assert_eq!(parsed.regions.len(), 1);
+        assert_eq!(parsed.regions[0].name, "reg\"with\\slash\nnewline");
     }
 }

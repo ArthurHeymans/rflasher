@@ -273,9 +273,10 @@ impl<H: HostAccess> IchSpiController<H> {
     pub(super) fn framing_fits(&self, opcode: u8, spi_type: u8) -> bool {
         match opcode {
             0x35 if self.rdsr2 => spi_type == SPI_OPCODE_TYPE_READ_NO_ADDRESS,
-            JEDEC_READ | JEDEC_FAST_READ | JEDEC_REMS | JEDEC_RES => {
-                spi_type == SPI_OPCODE_TYPE_READ_WITH_ADDRESS
-            }
+            // ICH software sequencing cannot emit dummy cycles, so FAST_READ (0x0B)
+            // cannot be executed without shifting every read by one dummy byte.
+            JEDEC_FAST_READ => false,
+            JEDEC_READ | JEDEC_REMS | JEDEC_RES => spi_type == SPI_OPCODE_TYPE_READ_WITH_ADDRESS,
             JEDEC_RDSR | 0x15 | JEDEC_RDID => spi_type == SPI_OPCODE_TYPE_READ_NO_ADDRESS,
             0x4b => matches!(
                 spi_type,
@@ -456,8 +457,9 @@ impl<H: HostAccess> IchSpiController<H> {
             0x35 if self.rdsr2 => Some(MutationIntent::ReadOnly),
             // RES can also release the device from deep power-down; it does not
             // modify flash contents or protection. 0x4b reads a unique ID.
-            JEDEC_READ | JEDEC_FAST_READ | JEDEC_RDSR | 0x15 | JEDEC_REMS | JEDEC_RDID
-            | JEDEC_RES | 0x4b => Some(MutationIntent::ReadOnly),
+            JEDEC_READ | JEDEC_RDSR | 0x15 | JEDEC_REMS | JEDEC_RDID | JEDEC_RES | 0x4b => {
+                Some(MutationIntent::ReadOnly)
+            }
             JEDEC_BYTE_PROGRAM | JEDEC_SE | JEDEC_BE_52 | JEDEC_BE_D8 | JEDEC_CE_C7
             | JEDEC_CE_60 | JEDEC_WRSR | 0x31 | 0x11 => Some(MutationIntent::Mutating),
             _ => None,

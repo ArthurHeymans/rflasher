@@ -266,19 +266,33 @@ pub async fn wait_ready<M: SpiMaster + ?Sized>(
     poll_delay_us: u32,
     timeout_us: u32,
 ) -> Result<()> {
-    let max_polls = timeout_us.checked_div(poll_delay_us).unwrap_or(timeout_us);
+    if poll_delay_us == 0 {
+        let max_polls = timeout_us.max(1);
+        for _ in 0..max_polls {
+            let status = read_status1(master).await?;
+            if status & opcodes::SR1_WIP == 0 {
+                return Ok(());
+            }
+        }
+        return Err(Error::Timeout);
+    }
 
-    for _ in 0..max_polls {
+    let timeout = u64::from(timeout_us);
+    let step = u64::from(poll_delay_us);
+    let mut elapsed = 0u64;
+
+    loop {
         let status = read_status1(master).await?;
         if status & opcodes::SR1_WIP == 0 {
             return Ok(());
         }
-        if poll_delay_us > 0 {
-            master.delay_us(poll_delay_us).await;
+        if elapsed >= timeout {
+            return Err(Error::Timeout);
         }
+        let delay = step.min(timeout - elapsed) as u32;
+        master.delay_us(delay).await;
+        elapsed += u64::from(delay);
     }
-
-    Err(Error::Timeout)
 }
 
 /// Write the status register 1
@@ -399,15 +413,13 @@ pub async fn program_page_with_addressing<M: SpiMaster + ?Sized>(
     data: &[u8],
     addressing: CommandAddressing,
 ) -> Result<()> {
-    if let CommandAddressing::ExtendedAddressRegister(features) = addressing {
-        set_extended_address(master, features, (addr >> 24) as u8).await?;
-    }
+    let cmd_addr = select_command_address(master, addressing, addr).await?;
 
     write_enable(master).await?;
 
     let mut cmd = SpiCommand {
         opcode,
-        address: Some(addr),
+        address: Some(cmd_addr),
         address_width: addressing.address_width(),
         io_mode: IoMode::Single,
         dummy_cycles: 0,
@@ -500,7 +512,7 @@ pub async fn aai_word_program<M: SpiMaster + ?Sized>(
 
     // AAI streaming: requires at least 2 bytes remaining
     if pos + 1 < data.len() {
-        let result = async {
+        let result: Result<()> = async {
             // First AAI command: WREN then AAI_WP + 3-byte address + 2 data bytes
             write_enable(master).await?;
             let mut cmd = SpiCommand::write_3b(opcodes::AAI_WP, current_addr, &data[pos..pos + 2]);
@@ -565,15 +577,13 @@ pub async fn erase_block<M: SpiMaster + ?Sized>(
     poll_delay_us: u32,
     timeout_us: u32,
 ) -> Result<()> {
-    if let CommandAddressing::ExtendedAddressRegister(features) = addressing {
-        set_extended_address(master, features, (addr >> 24) as u8).await?;
-    }
+    let cmd_addr = select_command_address(master, addressing, addr).await?;
 
     write_enable(master).await?;
 
     let mut cmd = SpiCommand {
         opcode,
-        address: Some(addr),
+        address: Some(cmd_addr),
         address_width: addressing.address_width(),
         io_mode: IoMode::Single,
         dummy_cycles: 0,
@@ -639,6 +649,25 @@ pub async fn set_extended_address<M: SpiMaster + ?Sized>(
 ) -> Result<()> {
     let opcode = extended_address_write_opcode(features)?;
     write_extended_address(master, opcode, addr_high).await
+}
+
+/// Prepare the chip for an addressed command and return the address to send.
+///
+/// In extended-address-register mode the high byte is written to the bank
+/// register and only the low 24 bits go on the wire. Other modes send `addr`
+/// unchanged.
+async fn select_command_address<M: SpiMaster + ?Sized>(
+    master: &mut M,
+    addressing: CommandAddressing,
+    addr: u32,
+) -> Result<u32> {
+    match addressing {
+        CommandAddressing::ExtendedAddressRegister(features) => {
+            set_extended_address(master, features, (addr >> 24) as u8).await?;
+            Ok(addr & 0x00FF_FFFF)
+        }
+        CommandAddressing::ThreeByte | CommandAddressing::FourByte => Ok(addr),
+    }
 }
 
 async fn write_extended_address<M: SpiMaster + ?Sized>(
@@ -709,7 +738,13 @@ pub async fn read_sfdp<M: SpiMaster + ?Sized>(
     addr: u32,
     buf: &mut [u8],
 ) -> Result<()> {
+    if buf.is_empty() {
+        return Ok(());
+    }
     let max_read = master.max_read_len();
+    if max_read == 0 {
+        return Err(Error::ProgrammerError);
+    }
     let mut offset = 0;
 
     while offset < buf.len() {
@@ -757,7 +792,13 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
     io_mode: IoMode,
     dummy_cycles: u8,
 ) -> Result<()> {
+    if buf.is_empty() {
+        return Ok(());
+    }
     let max_len = master.max_read_len();
+    if max_len == 0 {
+        return Err(Error::ProgrammerError);
+    }
     let mut offset = 0;
 
     while offset < buf.len() {
@@ -766,13 +807,11 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
             addressing.max_chunk_len(current_addr, core::cmp::min(max_len, buf.len() - offset));
         let chunk = &mut buf[offset..offset + chunk_len];
 
-        if let CommandAddressing::ExtendedAddressRegister(features) = addressing {
-            set_extended_address(master, features, (current_addr >> 24) as u8).await?;
-        }
+        let cmd_addr = select_command_address(master, addressing, current_addr).await?;
 
         let mut cmd = SpiCommand {
             opcode,
-            address: Some(current_addr),
+            address: Some(cmd_addr),
             address_width: addressing.address_width(),
             io_mode,
             dummy_cycles,
@@ -1258,6 +1297,98 @@ mod extended_address_tests {
         }
     }
 
+    /// Records opcode, address, and write payload of every command.
+    #[derive(Default)]
+    struct AddressRecorder(Vec<(u8, Option<u32>, Vec<u8>)>);
+
+    impl SpiMaster for AddressRecorder {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+        fn max_read_len(&self) -> usize {
+            256
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+            self.0
+                .push((cmd.opcode, cmd.address, cmd.write_data.to_vec()));
+            Ok(())
+        }
+        async fn delay_us(&mut self, _: u32) {}
+    }
+
+    #[test]
+    fn ear_commands_send_low_24_bits_after_selecting_bank() {
+        let ear = CommandAddressing::ExtendedAddressRegister(
+            Features::EXT_ADDR_REG | Features::EXT_ADDR_REG_C5C8,
+        );
+        let (wren, wrear) = (opcodes::WREN, opcodes::WREAR);
+
+        // A read crossing the 16 MiB boundary is split per bank.
+        let mut master = AddressRecorder::default();
+        let mut buf = [0u8; 4];
+        block_on(read_with_addressing(
+            &mut master,
+            opcodes::READ,
+            0x00FF_FFFE,
+            &mut buf,
+            ear,
+        ))
+        .unwrap();
+        assert_eq!(
+            master.0,
+            [
+                (wren, None, vec![]),
+                (wrear, None, vec![0x00]),
+                (opcodes::READ, Some(0x00FF_FFFE), vec![]),
+                (wren, None, vec![]),
+                (wrear, None, vec![0x01]),
+                (opcodes::READ, Some(0x0000_0000), vec![]),
+            ]
+        );
+
+        let mut master = AddressRecorder::default();
+        block_on(program_page_with_addressing(
+            &mut master,
+            opcodes::PP,
+            0x0123_4500,
+            &[0xAA],
+            ear,
+        ))
+        .unwrap();
+        assert_eq!(
+            &master.0[..4],
+            [
+                (wren, None, vec![]),
+                (wrear, None, vec![0x01]),
+                (wren, None, vec![]),
+                (opcodes::PP, Some(0x0023_4500), vec![0xAA]),
+            ]
+        );
+
+        let mut master = AddressRecorder::default();
+        block_on(erase_block(
+            &mut master,
+            opcodes::SE_20,
+            0x0300_1000,
+            ear,
+            1,
+            10,
+        ))
+        .unwrap();
+        assert_eq!(
+            &master.0[..4],
+            [
+                (wren, None, vec![]),
+                (wrear, None, vec![0x03]),
+                (wren, None, vec![]),
+                (opcodes::SE_20, Some(0x0000_1000), vec![]),
+            ]
+        );
+    }
+
     #[test]
     fn ear7_mode_switch_uses_bank_register_even_with_c5c8() {
         let db = rflasher_chips::ChipDatabase::new();
@@ -1276,5 +1407,112 @@ mod extended_address_tests {
                 ]
             );
         }
+    }
+
+    struct WaitReadyMaster {
+        status_sequence: Vec<u8>,
+        polls: usize,
+        delays: Vec<u32>,
+    }
+
+    impl WaitReadyMaster {
+        fn new(status_sequence: Vec<u8>) -> Self {
+            Self {
+                status_sequence,
+                polls: 0,
+                delays: Vec::new(),
+            }
+        }
+    }
+
+    impl SpiMaster for WaitReadyMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+        fn max_read_len(&self) -> usize {
+            256
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+            assert_eq!(cmd.opcode, opcodes::RDSR);
+            let status = self
+                .status_sequence
+                .get(self.polls)
+                .copied()
+                .unwrap_or(opcodes::SR1_WIP);
+            self.polls += 1;
+            cmd.read_buf[0] = status;
+            Ok(())
+        }
+        async fn delay_us(&mut self, us: u32) {
+            self.delays.push(us);
+        }
+    }
+
+    #[test]
+    fn wait_ready_polls_once_when_timeout_shorter_than_poll_interval() {
+        // Ready immediately even with timeout == 0 or timeout < poll_us
+        let mut master = WaitReadyMaster::new(vec![0x00]);
+        block_on(wait_ready(&mut master, 1000, 0)).unwrap();
+        assert_eq!(master.polls, 1);
+        assert!(master.delays.is_empty());
+
+        // Busy with timeout < poll_us: polls once, delays remaining, polls one final time
+        let mut master = WaitReadyMaster::new(vec![opcodes::SR1_WIP, 0x00]);
+        block_on(wait_ready(&mut master, 1000, 250)).unwrap();
+        assert_eq!(master.polls, 2);
+        assert_eq!(master.delays, [250]);
+
+        // Still busy after final poll -> Timeout
+        let mut master = WaitReadyMaster::new(vec![opcodes::SR1_WIP, opcodes::SR1_WIP]);
+        assert!(matches!(
+            block_on(wait_ready(&mut master, 1000, 250)),
+            Err(Error::Timeout)
+        ));
+        assert_eq!(master.polls, 2);
+        assert_eq!(master.delays, [250]);
+    }
+
+    #[test]
+    fn wait_ready_polls_after_final_delay_on_exact_timeout() {
+        // Becomes ready right after the last delay step
+        let mut master = WaitReadyMaster::new(vec![opcodes::SR1_WIP, opcodes::SR1_WIP, 0x00]);
+        block_on(wait_ready(&mut master, 100, 200)).unwrap();
+        assert_eq!(master.polls, 3);
+        assert_eq!(master.delays, [100, 100]);
+    }
+
+    struct ZeroReadLenMaster;
+
+    impl SpiMaster for ZeroReadLenMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+        fn max_read_len(&self) -> usize {
+            0
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        async fn execute(&mut self, _cmd: &mut SpiCommand<'_>) -> Result<()> {
+            panic!("execute must not be called when max_read_len is 0");
+        }
+        async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    #[test]
+    fn zero_max_read_len_returns_error_instead_of_looping() {
+        let mut master = ZeroReadLenMaster;
+        let mut buf = [0u8; 4];
+        assert!(matches!(
+            block_on(read_sfdp(&mut master, 0, &mut buf)),
+            Err(Error::ProgrammerError)
+        ));
+        assert!(matches!(
+            block_on(read_dual_out_3b(&mut master, 0, &mut buf)),
+            Err(Error::ProgrammerError)
+        ));
     }
 }

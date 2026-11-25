@@ -14,7 +14,7 @@ use rflasher_core::chip::{Features, WriteGranularity};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::flash::{self, AddressMode, FlashContext};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::{SpiCommand, check_io_mode_supported, opcodes};
+use rflasher_core::spi::{SpiCommand, opcodes};
 
 use super::error::{DediprogError, Result};
 use super::protocol::*;
@@ -68,7 +68,7 @@ where
 }
 
 /// Configuration options for opening a Dediprog device
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DediprogConfig {
     /// Device index (when multiple devices are connected)
     pub device_index: Option<usize>,
@@ -116,8 +116,9 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<DediprogConfig> {
                 let t: u8 = value
                     .parse()
                     .map_err(|_| DediprogError::InvalidParameter(format!("target: {}", value)))?;
-                config.target = Target::from_value(t)
-                    .ok_or_else(|| DediprogError::InvalidParameter(format!("target: {}", value)))?;
+                config.target = Target::from_user_option(t).ok_or_else(|| {
+                    DediprogError::InvalidParameter(format!("target: {} (supported: 1, 2)", value))
+                })?;
             }
             "spispeed" => {
                 config.spi_speed_index = parse_spi_speed(value).ok_or_else(|| {
@@ -1243,14 +1244,7 @@ impl SpiMaster for Dediprog {
     }
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        // Check I/O mode support
-        check_io_mode_supported(cmd.io_mode, self.features())?;
-
-        // For simple commands, use transceive
-        let header_len = cmd.header_len();
-        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
-        cmd.encode_header(&mut write_data);
-        write_data[header_len..].copy_from_slice(cmd.write_data);
+        let write_data = cmd.single_io_frame()?;
 
         let read_len = cmd.read_buf.len();
         let result = self

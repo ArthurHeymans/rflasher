@@ -4,7 +4,8 @@ use futures_lite::future::block_on;
 use rflasher_core::flash::{FlashContext, FlashDevice, SpiFlashDevice};
 
 fn controller() -> Spi100Controller<FakeHost> {
-    Spi100Controller::new_with_host(FakeHost::default(), 0xfed8_0200, None, 0).unwrap()
+    // SAFETY: FakeHost does not perform real physical MMIO.
+    unsafe { Spi100Controller::new_with_host(FakeHost::default(), 0xfed8_0200, None, 0) }.unwrap()
 }
 
 pub(crate) fn context() -> FlashContext {
@@ -13,9 +14,11 @@ pub(crate) fn context() -> FlashContext {
 }
 
 pub(crate) fn mapped_controller() -> Spi100Controller<FakeHost> {
-    let mut controller =
+    // SAFETY: FakeHost does not perform real physical MMIO.
+    let mut controller = unsafe {
         Spi100Controller::new_with_host(FakeHost::default(), 0xfed8_0200, Some(0xffff_ff00), 256)
-            .unwrap();
+    }
+    .unwrap();
     let data: Vec<u8> = (0..256).map(|i| (i * 17) as u8).collect();
     controller.memory.as_ref().unwrap().set_bytes(0, &data);
     controller.spibar.set32(regs::ROM2_ADDR_OVERRIDE, 0x14c0);
@@ -364,4 +367,39 @@ fn mapped_reads_validate_bounds_and_capabilities_before_preparing_chip_mode() {
     let (controller, _) = device.into_parts();
     assert!(controller.spibar.spi_commands().is_empty());
     assert!(controller.memory.as_ref().unwrap().reads().is_empty());
+}
+
+#[test]
+fn reserved_speed_nibbles_do_not_panic_or_overwrite_altspeed() {
+    for nibble in 0u8..=15 {
+        let speed = decode_spi_speed(nibble);
+        if nibble >= 6 {
+            assert_eq!(speed.khz, 0);
+            assert_eq!(speed.name, "Reserved");
+        } else {
+            assert!(speed.khz > 0);
+        }
+    }
+
+    for reserved_norm in [6u16, 7, 8, 0xf] {
+        let mut controller = controller();
+        let initial_speed_cfg = (reserved_norm << 12) | 0x0f9a;
+        controller.original_altspeed = None;
+        controller
+            .spibar
+            .set32(regs::SPEED_CFG, u32::from(initial_speed_cfg));
+        let writes_before = controller.spibar.writes().len();
+
+        // Must neither panic on nibbles 8..=15 nor speculatively overwrite SPEED_CFG.
+        controller.print_config();
+        controller.set_altspeed();
+        assert_eq!(controller.spibar.writes().len(), writes_before);
+        assert_eq!(controller.spibar.read16(regs::SPEED_CFG), initial_speed_cfg);
+        assert_eq!(controller.original_altspeed, None);
+
+        // Dropping must also not touch SPEED_CFG when set_altspeed left it unchanged.
+        let spibar = controller.spibar.clone();
+        drop(controller);
+        assert_eq!(spibar.writes().len(), writes_before);
+    }
 }

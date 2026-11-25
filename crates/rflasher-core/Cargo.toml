@@ -8,20 +8,17 @@ description = "Core library for flash chip programming (no_std compatible)"
 
 [features]
 default = []
-std = ["alloc", "thiserror", "serde", "toml", "rflasher-chip-types/std"]
+std = ["alloc", "serde", "toml", "rflasher-chip-types/std"]
 alloc = ["rflasher-chip-types/alloc"]
 
 [dependencies]
 rflasher-chip-types.workspace = true
 bitflags.workspace = true
-embedded-io.workspace = true
-embedded-io-async.workspace = true
-thiserror = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 toml = { version = "0.8", optional = true }
-zerocopy = { version = "0.8", features = ["derive"] }
+zerocopy.workspace = true
 log.workspace = true
 
 [dev-dependencies]
-futures-lite = "2"
+futures-lite.workspace = true
 rflasher-chips = { workspace = true, features = ["static-chips"] }

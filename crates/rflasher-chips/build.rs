@@ -29,11 +29,6 @@ fn main() {
         // Generate the chip database
         rflasher_chips_codegen::generate(&chips_dir, &output_file)
             .expect("Failed to generate chip database");
-
-        println!(
-            "cargo::warning=Generated chip database at {}",
-            output_file.display()
-        );
     }
 
     #[cfg(not(feature = "static-chips"))]

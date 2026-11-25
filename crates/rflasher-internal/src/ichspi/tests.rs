@@ -2105,3 +2105,71 @@ fn test_get_spibar_address_with_host_rejects_disabled_rcba() {
         InternalError::ChipsetEnable("RCBA not enabled")
     ));
 }
+
+#[test]
+fn swseq_read_refuses_fast_read_fallback_without_read_opcode() {
+    for ich7 in [false, true] {
+        let mut c = test_controller();
+        if ich7 {
+            c.generation = IchChipset::Ich7;
+        }
+        c.mode = SpiMode::SoftwareSequencing;
+        let mut opcodes = Opcodes::default();
+        let read_idx = opcodes
+            .opcode
+            .iter()
+            .position(|op| op.opcode == JEDEC_READ)
+            .unwrap();
+        opcodes.opcode[read_idx].opcode = JEDEC_FAST_READ;
+        c.opcodes = Some(opcodes);
+
+        assert!(
+            !Controller::probe_opcode(&c, JEDEC_FAST_READ),
+            "FAST_READ must not be advertised by swseq probe_opcode"
+        );
+
+        let mut buf = [0u8; 4];
+        let res = if ich7 {
+            c.ich7_swseq_read(0, &mut buf)
+        } else {
+            c.swseq_read(0, &mut buf)
+        };
+        assert!(matches!(res, Err(InternalError::NotSupported(_))));
+
+        // Raw swseq dispatcher must also reject FAST_READ even when present in OPMENU.
+        let writearr = [JEDEC_FAST_READ, 0x00, 0x00, 0x00];
+        let raw_res = if ich7 {
+            c.ich7_swseq_send_command(&writearr, &mut buf)
+        } else {
+            c.swseq_send_command(&writearr, &mut buf)
+        };
+        assert!(matches!(raw_res, Err(InternalError::NotSupported(_))));
+
+        let mut cmd = SpiCommand::read_3b(JEDEC_FAST_READ, 0, &mut buf);
+        assert_eq!(
+            Controller::execute(&mut c, &mut cmd),
+            Err(CoreError::OpcodeNotSupported)
+        );
+    }
+}
+
+#[test]
+fn gpr0_ignores_reserved_dlock_bit_13() {
+    let mut c = test_controller();
+    // DLOCK bit 13 (`DLOCK_PR0_LOCKDN << 5`) is reserved; only FPR0..=FPR4 have DLOCK bits.
+    let reserved_bit_13 = DLOCK_PR0_LOCKDN << 5;
+    c.dlock = reserved_bit_13;
+    c.spibar.set32(PCH100_REG_DLOCK, reserved_bit_13);
+    c.locked = false;
+    c.spibar.set32(ICH9_REG_HSFS, 0);
+
+    // GPR0 is index 5: neither pr_clearable nor pr_locked_now should inspect reserved bit 13.
+    assert!(c.pr_clearable(5));
+    assert!(!c.pr_locked_now(5));
+
+    // FPR4 (index 4) IS governed by bit 12 (`DLOCK_PR0_LOCKDN << 4`).
+    c.dlock = DLOCK_PR0_LOCKDN << 4;
+    c.spibar.set32(PCH100_REG_DLOCK, DLOCK_PR0_LOCKDN << 4);
+    assert!(!c.pr_clearable(4));
+    assert!(c.pr_locked_now(4));
+}

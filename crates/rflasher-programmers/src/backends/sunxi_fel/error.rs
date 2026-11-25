@@ -1,40 +1,26 @@
 //! Error types for the sunxi FEL programmer
 
-use std::fmt;
+use thiserror::Error;
 
 /// Errors that can occur during FEL operations
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum Error {
     /// USB communication error
+    #[error("USB error: {0}")]
     Usb(String),
     /// FEL protocol error
+    #[error("FEL protocol error: {0}")]
     Protocol(String),
     /// Unsupported SoC
+    #[error("Unsupported SoC ID: 0x{0:08x}")]
     UnsupportedSoc(u32),
-    /// SPI initialization failed
-    SpiInitFailed,
     /// SPI transfer failed
+    #[error("SPI transfer failed")]
     SpiTransferFailed,
     /// No FEL device found
+    #[error("No Allwinner FEL device found")]
     DeviceNotFound,
 }
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::Usb(msg) => write!(f, "USB error: {}", msg),
-            Error::Protocol(msg) => write!(f, "FEL protocol error: {}", msg),
-            Error::UnsupportedSoc(id) => {
-                write!(f, "Unsupported SoC ID: 0x{:08x}", id)
-            }
-            Error::SpiInitFailed => write!(f, "SPI initialization failed"),
-            Error::SpiTransferFailed => write!(f, "SPI transfer failed"),
-            Error::DeviceNotFound => write!(f, "No Allwinner FEL device found"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
 
 /// Result type for FEL operations
 pub type Result<T> = std::result::Result<T, Error>;

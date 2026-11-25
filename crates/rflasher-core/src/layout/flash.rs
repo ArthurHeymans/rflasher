@@ -9,19 +9,29 @@ use std::vec;
 use crate::flash::{self, FlashContext};
 use crate::programmer::SpiMaster;
 
-use super::{Layout, LayoutError, fmap, has_fmap, has_ifd, ifd, is_valid_fmap_header};
+use super::{Layout, LayoutError, fmap, has_ifd, ifd};
 
 /// Size of the IFD region (first 4KB of flash)
 const IFD_SIZE: usize = 0x1000;
 
-/// FMAP signature for search
-const FMAP_SIGNATURE: &[u8; 8] = b"__FMAP__";
+/// Thin adapter exposing an `(&mut SpiMaster, &FlashContext)` pair to
+/// [`fmap::search_fmap`] via [`fmap::FmapSearchable`].
+struct SpiFlashFmapReader<'a, M: SpiMaster + ?Sized> {
+    master: &'a mut M,
+    ctx: &'a FlashContext,
+}
 
-/// FMAP header size
-const FMAP_HEADER_SIZE: usize = 56;
+impl<M: SpiMaster + ?Sized> fmap::FmapSearchable for SpiFlashFmapReader<'_, M> {
+    fn size(&self) -> u32 {
+        self.ctx.total_size() as u32
+    }
 
-/// FMAP area entry size
-const FMAP_AREA_SIZE: usize = 42;
+    async fn read_at(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), LayoutError> {
+        flash::read(self.master, self.ctx, offset, buf)
+            .await
+            .map_err(|e| LayoutError::IoError(e.to_string()))
+    }
+}
 
 /// Read Intel Flash Descriptor from flash chip and parse into Layout
 ///
@@ -61,9 +71,8 @@ pub async fn read_ifd_from_flash<M: SpiMaster + ?Sized>(
 
 /// Read FMAP from flash chip and parse into Layout
 ///
-/// This function searches the flash for the FMAP signature using a
-/// combination of binary search (for common power-of-2 locations) and
-/// linear search as a fallback. This follows the same strategy as flashprog.
+/// Searches the flash for the FMAP signature via [`fmap::search_fmap`] using
+/// binary search at power-of-2 offsets followed by a linear fallback.
 ///
 /// # Arguments
 /// * `master` - SPI master for flash communication
@@ -82,161 +91,8 @@ pub async fn read_fmap_from_flash<M: SpiMaster + ?Sized>(
     master: &mut M,
     ctx: &FlashContext,
 ) -> std::result::Result<Layout, LayoutError> {
-    let chip_size = ctx.total_size() as u32;
-
-    // Try binary search first (common locations at power-of-2 offsets)
-    if let Some(layout) = fmap_bsearch_rom(master, ctx, 0, chip_size, 256).await? {
-        return Ok(layout);
-    }
-
-    // Fallback to linear search - read the entire flash
-    // This is expensive but ensures we find the FMAP if it exists
-    fmap_lsearch_rom(master, ctx, 0, chip_size).await
-}
-
-/// Binary search for FMAP at common power-of-2 offsets
-///
-/// This follows flashprog's approach of checking aligned locations first
-/// since FMAPs are commonly placed at power-of-2 boundaries.
-async fn fmap_bsearch_rom<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    ctx: &FlashContext,
-    rom_offset: u32,
-    len: u32,
-    min_stride: u32,
-) -> std::result::Result<Option<Layout>, LayoutError> {
-    let chip_size = ctx.total_size() as u32;
-
-    if rom_offset + len > chip_size {
-        return Err(LayoutError::IoError(
-            "offset + length exceeds chip size".into(),
-        ));
-    }
-
-    if (len as usize) < FMAP_HEADER_SIZE {
-        return Ok(None);
-    }
-
-    // Buffer for reading the FMAP signature (8 bytes)
-    let mut sig_buf = [0u8; 8];
-
-    // Start with the largest stride and decrease
-    let mut stride = chip_size / 2;
-    let mut check_offset_0 = true;
-
-    while stride >= min_stride {
-        if stride > len {
-            stride /= 2;
-            continue;
-        }
-
-        let mut offset = rom_offset;
-        while offset <= rom_offset + len - FMAP_HEADER_SIZE as u32 {
-            // Skip offsets we've already checked at larger strides
-            if offset.is_multiple_of(stride * 2) && offset != 0 {
-                offset += stride;
-                continue;
-            }
-
-            if offset == 0 && !check_offset_0 {
-                offset += stride;
-                continue;
-            }
-
-            if offset == 0 {
-                check_offset_0 = false;
-            }
-
-            // Read the signature
-            if flash::read(master, ctx, offset, &mut sig_buf)
-                .await
-                .is_err()
-            {
-                offset += stride;
-                continue;
-            }
-
-            // Check for FMAP signature
-            if &sig_buf != FMAP_SIGNATURE {
-                offset += stride;
-                continue;
-            }
-
-            // Found potential FMAP - read and validate the header
-            let mut header_buf = vec![0u8; FMAP_HEADER_SIZE];
-            if flash::read(master, ctx, offset, &mut header_buf)
-                .await
-                .is_err()
-            {
-                offset += stride;
-                continue;
-            }
-
-            // Validate the header
-            if is_valid_fmap_header(&header_buf) {
-                // Read the full FMAP including areas
-                if let Ok(layout) = read_fmap_at_offset(master, ctx, offset).await {
-                    return Ok(Some(layout));
-                }
-            }
-
-            offset += stride;
-        }
-
-        stride /= 2;
-    }
-
-    Ok(None)
-}
-
-/// Linear search for FMAP by reading the entire region
-async fn fmap_lsearch_rom<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    ctx: &FlashContext,
-    rom_offset: u32,
-    len: u32,
-) -> std::result::Result<Layout, LayoutError> {
-    // Read the entire region into memory
-    // This is expensive for large chips but necessary as a fallback
-    let mut buf = vec![0u8; len as usize];
-
-    flash::read(master, ctx, rom_offset, &mut buf)
-        .await
-        .map_err(|e| LayoutError::IoError(e.to_string()))?;
-
-    if !has_fmap(&buf) {
-        return Err(LayoutError::InvalidFmapSignature);
-    }
-
-    fmap::parse_fmap(&buf)
-}
-
-/// Read FMAP from a specific offset in flash
-async fn read_fmap_at_offset<M: SpiMaster + ?Sized>(
-    master: &mut M,
-    ctx: &FlashContext,
-    offset: u32,
-) -> std::result::Result<Layout, LayoutError> {
-    // First read just the header to get the number of areas
-    let mut header = vec![0u8; FMAP_HEADER_SIZE];
-    flash::read(master, ctx, offset, &mut header)
-        .await
-        .map_err(|e| LayoutError::IoError(e.to_string()))?;
-
-    if !is_valid_fmap_header(&header) {
-        return Err(LayoutError::InvalidFmapSignature);
-    }
-
-    let nareas = u16::from_le_bytes([header[54], header[55]]) as usize;
-    let total_size = FMAP_HEADER_SIZE + nareas * FMAP_AREA_SIZE;
-
-    // Now read the full FMAP
-    let mut fmap_data = vec![0u8; total_size];
-    flash::read(master, ctx, offset, &mut fmap_data)
-        .await
-        .map_err(|e| LayoutError::IoError(e.to_string()))?;
-
-    fmap::parse_fmap_at(&fmap_data, 0)
+    let mut reader = SpiFlashFmapReader { master, ctx };
+    fmap::search_fmap(&mut reader).await
 }
 
 /// Auto-detect and read layout from flash (tries IFD first, then FMAP)
@@ -246,7 +102,7 @@ async fn read_fmap_at_offset<M: SpiMaster + ?Sized>(
 /// 2. If not found, searching for FMAP signature
 ///
 /// # Arguments
-/// * `master` - SPI master for flash communication  
+/// * `master` - SPI master for flash communication
 /// * `ctx` - Flash context with chip information
 ///
 /// # Returns
@@ -267,34 +123,154 @@ pub async fn read_layout_from_flash<M: SpiMaster + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chip::{ChipTestStatus, EraseBlock, Features, FlashChip, WriteGranularity};
+    use crate::error::Result as CoreResult;
+    use crate::programmer::SpiFeatures;
+    use crate::spi::{SpiCommand, opcodes};
+    use alloc::vec::Vec;
+
+    struct CountingSpiFlash {
+        data: Vec<u8>,
+        bytes_read: usize,
+    }
+
+    impl SpiMaster for CountingSpiFlash {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+
+        fn max_read_len(&self) -> usize {
+            4096
+        }
+
+        fn max_write_len(&self) -> usize {
+            256
+        }
+
+        async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+            match cmd.opcode {
+                opcodes::READ => {
+                    let addr = cmd.address.unwrap_or(0) as usize;
+                    let len = cmd.read_buf.len();
+                    cmd.read_buf.copy_from_slice(&self.data[addr..addr + len]);
+                    self.bytes_read += len;
+                    Ok(())
+                }
+                _ => Ok(()),
+            }
+        }
+
+        async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    fn test_ctx(size: u32) -> FlashContext {
+        let chip = FlashChip {
+            vendor: "Test".into(),
+            name: "FMAP64K".into(),
+            jedec_manufacturer: 0xEF,
+            jedec_device: 0x4010,
+            ids: Default::default(),
+            total_size: size,
+            page_size: 256,
+            features: Features::empty(),
+            unlock: Default::default(),
+            voltage_min_mv: 2700,
+            voltage_max_mv: 3600,
+            write_granularity: WriteGranularity::Page,
+            erase_blocks: vec![EraseBlock::with_count(0x20, 4096, size / 4096)].into(),
+            tested: ChipTestStatus::default(),
+        };
+        FlashContext::new(chip)
+    }
+
+    fn build_fmap(size: u32, areas: &[(&str, u32, u32)]) -> Vec<u8> {
+        let mut out = vec![0u8; 56 + areas.len() * 42];
+        out[0..8].copy_from_slice(b"__FMAP__");
+        out[8] = 1;
+        out[9] = 1;
+        out[18..22].copy_from_slice(&size.to_le_bytes());
+        out[22..26].copy_from_slice(b"FMAP");
+        out[54..56].copy_from_slice(&(areas.len() as u16).to_le_bytes());
+        for (i, (name, offset, area_size)) in areas.iter().enumerate() {
+            let base = 56 + i * 42;
+            out[base..base + 4].copy_from_slice(&offset.to_le_bytes());
+            out[base + 4..base + 8].copy_from_slice(&area_size.to_le_bytes());
+            out[base + 8..base + 8 + name.len()].copy_from_slice(name.as_bytes());
+        }
+        out
+    }
 
     #[test]
-    fn test_is_valid_fmap_header() {
-        // Valid header with space for 5 areas
-        let mut header = vec![0u8; FMAP_HEADER_SIZE + 5 * FMAP_AREA_SIZE];
-        header[0..8].copy_from_slice(FMAP_SIGNATURE);
-        header[8] = 1; // ver_major
-        header[9] = 0; // ver_minor
-        header[54..56].copy_from_slice(&5u16.to_le_bytes()); // 5 areas
+    fn aligned_nonempty_fmap_avoids_full_chip_read() {
+        let size = 64 * 1024;
+        let mut rom = vec![0xFFu8; size];
+        let table = build_fmap(size as u32, &[("RO", 0, 0x8000), ("RW", 0x8000, 0x8000)]);
+        rom[0x8000..0x8000 + table.len()].copy_from_slice(&table);
 
-        assert!(is_valid_fmap_header(&header));
+        let mut master = CountingSpiFlash {
+            data: rom,
+            bytes_read: 0,
+        };
+        let ctx = test_ctx(size as u32);
+        let layout = futures_lite::future::block_on(read_fmap_from_flash(&mut master, &ctx))
+            .expect("aligned FMAP should be found");
 
-        // Invalid signature
-        let mut bad_sig = header.clone();
-        bad_sig[0] = 0xFF;
-        assert!(!is_valid_fmap_header(&bad_sig));
+        assert_eq!(layout.regions.len(), 2);
+        assert_eq!(layout.regions[0].name, "RO");
+        assert_eq!(layout.regions[1].name, "RW");
+        assert!(
+            master.bytes_read < size / 4,
+            "expected binary search without full-chip read, read {} bytes",
+            master.bytes_read
+        );
+    }
 
-        // Invalid version
-        let mut bad_ver = header.clone();
-        bad_ver[8] = 5; // Major version too high
-        assert!(!is_valid_fmap_header(&bad_ver));
+    #[test]
+    fn false_signature_before_valid_aligned_fmap_avoids_full_chip_read() {
+        let size = 64 * 1024;
+        let mut rom = vec![0xFFu8; size];
+        // False signature at 0x8000 (first stride hit) with plausible nareas=1
+        // and unsupported major version, so validation reaches UnsupportedFmapVersion.
+        let mut bad = build_fmap(size as u32, &[("BAD", 0, 0x1000)]);
+        bad[8] = 99;
+        rom[0x8000..0x8000 + bad.len()].copy_from_slice(&bad);
+        // Valid FMAP at 0x4000 (second stride level)
+        let table = build_fmap(size as u32, &[("BIOS", 0, 0x10000)]);
+        rom[0x4000..0x4000 + table.len()].copy_from_slice(&table);
 
-        // Too many areas
-        let mut too_many_areas = header.clone();
-        too_many_areas[54..56].copy_from_slice(&2000u16.to_le_bytes());
-        assert!(!is_valid_fmap_header(&too_many_areas));
+        let mut master = CountingSpiFlash {
+            data: rom,
+            bytes_read: 0,
+        };
+        let ctx = test_ctx(size as u32);
+        let layout = futures_lite::future::block_on(read_fmap_from_flash(&mut master, &ctx))
+            .expect("valid FMAP after unsupported-version candidate should be found");
 
-        // Too short
-        assert!(!is_valid_fmap_header(&[0u8; 10]));
+        assert_eq!(layout.regions.len(), 1);
+        assert_eq!(layout.regions[0].name, "BIOS");
+        assert!(
+            master.bytes_read < size / 4,
+            "expected binary search recovery without full-chip read, read {} bytes",
+            master.bytes_read
+        );
+    }
+
+    #[test]
+    fn unsupported_version_reported_when_no_valid_fmap_exists() {
+        let size = 64 * 1024;
+        let mut rom = vec![0xFFu8; size];
+        let mut bad = build_fmap(size as u32, &[("FUTURE", 0, 0x1000)]);
+        bad[8] = 99;
+        rom[0x8000..0x8000 + bad.len()].copy_from_slice(&bad);
+
+        let mut master = CountingSpiFlash {
+            data: rom,
+            bytes_read: 0,
+        };
+        let ctx = test_ctx(size as u32);
+        let err = futures_lite::future::block_on(read_fmap_from_flash(&mut master, &ctx))
+            .expect_err("unsupported-version FMAP should fail when no valid table exists");
+
+        assert!(matches!(err, LayoutError::UnsupportedFmapVersion));
     }
 }

@@ -88,73 +88,10 @@ fn get_history_path() -> PathBuf {
 fn collect_globals(_engine: &Engine) -> HashSet<InternedString> {
     let mut globals = HashSet::new();
 
-    // Add our known rflasher functions
-    let known_functions = [
-        // SPI operations
-        "spi-transfer",
-        "spi-read",
-        "spi-write",
-        "read-jedec-id",
-        "read-status1",
-        "read-status2",
-        "read-status3",
-        "write-enable",
-        "write-disable",
-        "is-busy?",
-        "wait-ready",
-        "chip-erase",
-        "sector-erase",
-        "block-erase-32k",
-        "block-erase-64k",
-        "page-program",
-        "page-program-4b",
-        // Byte utilities
-        "make-bytes",
-        "random-bytes",
-        "bytes-length",
-        "bytes-ref",
-        "bytes-set!",
-        "bytes->list",
-        "list->bytes",
-        "bytes->hex",
-        "hex->bytes",
-        "bytes-slice",
-        // Help
-        "rflasher-help",
-        // SPI25 constants
-        "WREN",
-        "WRDI",
-        "RDSR",
-        "WRSR",
-        "READ",
-        "FAST_READ",
-        "PP",
-        "SE",
-        "BE_32K",
-        "BE_64K",
-        "CE",
-        "RDID",
-        "RDSFDP",
-        "RDSR2",
-        "RDSR3",
-        "WRSR2",
-        "WRSR3",
-        "SR1_WIP",
-        "SR1_WEL",
-        "SR1_BP0",
-        "SR1_BP1",
-        "SR1_BP2",
-        "SR1_TB",
-        "SR1_SEC",
-        "SR1_SRP0",
-    ];
-
-    for name in known_functions {
-        globals.insert(InternedString::try_get(name).unwrap_or_else(|| InternedString::from(name)));
+    for name in spi_module::KNOWN_SYMBOLS {
+        globals
+            .insert(InternedString::try_get(name).unwrap_or_else(|| InternedString::from(*name)));
     }
-
-    // Try to get globals from engine (this may not be available in all steel versions)
-    // For now we rely on the known functions list
 
     globals
 }
@@ -293,13 +230,11 @@ pub fn run_repl<M: SpiMaster + Send + 'static>(master: M) -> Result<(), ReplErro
 fn print_help() {
     println!(
         "
-    {}           -- toggles the timing of expressions
     {} -- displays help dialog
     {}    -- exits the REPL
 
     {}   -- show rflasher SPI commands
     ",
-        ":time".bright_cyan(),
         ":? | :help".bright_cyan(),
         ":q | :quit".bright_cyan(),
         "(rflasher-help)".bright_cyan(),
@@ -348,4 +283,139 @@ pub fn run_script<M: SpiMaster + Send + 'static>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rflasher_core::error::Result as CoreResult;
+    use rflasher_core::programmer::SpiFeatures;
+    use rflasher_core::spi::{SpiCommand, opcodes};
+
+    struct MockMaster {
+        status_polls_remaining: usize,
+        polls: usize,
+        delays_us: Vec<u32>,
+    }
+
+    impl MockMaster {
+        fn new(status_polls_remaining: usize) -> Self {
+            Self {
+                status_polls_remaining,
+                polls: 0,
+                delays_us: Vec::new(),
+            }
+        }
+    }
+
+    impl SpiMaster for MockMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::FOUR_BYTE_ADDR
+        }
+
+        fn max_read_len(&self) -> usize {
+            256
+        }
+
+        fn max_write_len(&self) -> usize {
+            256
+        }
+
+        async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
+            if cmd.opcode == opcodes::RDSR && !cmd.read_buf.is_empty() {
+                self.polls += 1;
+                if self.status_polls_remaining > 0 {
+                    self.status_polls_remaining -= 1;
+                    cmd.read_buf[0] = opcodes::SR1_WIP;
+                } else {
+                    cmd.read_buf[0] = 0;
+                }
+            }
+            Ok(())
+        }
+
+        async fn delay_us(&mut self, us: u32) {
+            self.delays_us.push(us);
+        }
+    }
+
+    fn make_engine(master: MockMaster) -> (Engine, Arc<Mutex<MockMaster>>) {
+        let mut engine = Engine::new();
+        let shared = Arc::new(Mutex::new(master));
+        engine.register_module(spi_module::create_spi_module(Arc::clone(&shared)));
+        engine.register_module(spi_module::create_constants_module());
+        engine
+            .run(
+                r#"
+                (require-builtin rflasher/spi)
+                (require-builtin rflasher/spi25)
+            "#,
+            )
+            .unwrap();
+        (engine, shared)
+    }
+
+    #[test]
+    fn all_collected_globals_resolve_in_engine() {
+        let (mut engine, _) = make_engine(MockMaster::new(0));
+        let globals = collect_globals(&engine);
+        assert_eq!(globals.len(), spi_module::KNOWN_SYMBOLS.len());
+
+        for name in spi_module::KNOWN_SYMBOLS {
+            engine
+                .run(name.to_string())
+                .unwrap_or_else(|e| panic!("known REPL global `{name}` did not resolve: {e}"));
+        }
+    }
+
+    #[test]
+    fn repl_rejects_negative_lengths_and_non_ascii_hex_without_panicking() {
+        let (mut engine, _) = make_engine(MockMaster::new(0));
+
+        for bad_expr in [
+            "(make-bytes -1 0)",
+            "(make-bytes 4 -1)",
+            "(make-bytes 4 256)",
+            "(random-bytes -5)",
+            "(spi-read READ 0 -1)",
+            "(spi-read READ -1 4)",
+            "(spi-read READ #x1000000 4)",
+            "(spi-execute READ -1 0 #f 4)",
+            "(wait-ready -1)",
+            "(list->bytes '(-1))",
+            "(list->bytes '(256))",
+            r#"(hex->bytes "a€")"#,
+            r#"(hex->bytes "é")"#,
+            r#"(hex->bytes "abc")"#,
+        ] {
+            assert!(
+                engine.run(bad_expr.to_string()).is_err(),
+                "expression `{bad_expr}` should fail cleanly"
+            );
+        }
+
+        // Valid hex formats including 0x/0X and whitespace work.
+        let vals = engine
+            .run(r#"(hex->bytes "0xde, 0XAD be ef")"#.to_string())
+            .unwrap();
+        assert_eq!(vals.len(), 1);
+    }
+
+    #[test]
+    fn wait_ready_polls_at_least_once_for_short_timeout() {
+        let (mut engine, shared) = make_engine(MockMaster::new(0));
+        let res = engine.run("(wait-ready 50)".to_string()).unwrap();
+        assert_eq!(res, vec![SteelVal::BoolV(true)]);
+        assert_eq!(shared.lock().unwrap().polls, 1);
+    }
+
+    #[test]
+    fn wait_ready_uses_100us_poll_interval_and_caller_timeout() {
+        let (mut engine, shared) = make_engine(MockMaster::new(5));
+        let res = engine.run("(wait-ready 10000)".to_string()).unwrap();
+        assert_eq!(res, vec![SteelVal::BoolV(true)]);
+        let master = shared.lock().unwrap();
+        assert_eq!(master.polls, 6);
+        assert_eq!(master.delays_us, vec![100; 5]);
+    }
 }

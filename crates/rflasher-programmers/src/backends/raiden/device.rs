@@ -9,7 +9,7 @@ use nusb::transfer::{Buffer, Bulk, In, Out};
 use nusb::{Endpoint, Interface};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
+use rflasher_core::spi::SpiCommand;
 
 use super::error::{RaidenError, Result};
 use super::protocol::*;
@@ -251,9 +251,9 @@ impl RaidenDebugSpi {
             self.write_packet(&cmd.to_bytes()).await?;
 
             let rsp_buf = self.read_packet().await?;
-            let rsp = ResponseV2Config::from_bytes(&rsp_buf);
-
-            if rsp.packet_id == PacketId::RspUsbSpiConfig as u16 {
+            if let Some(rsp) = ResponseV2Config::from_bytes(&rsp_buf)
+                && rsp.packet_id == PacketId::RspUsbSpiConfig as u16
+            {
                 self.max_spi_write = rsp.max_write_count;
                 self.max_spi_read = rsp.max_read_count;
                 self.supports_full_duplex = rsp.supports_full_duplex();
@@ -295,6 +295,13 @@ impl RaidenDebugSpi {
         completion
             .status
             .map_err(|e| RaidenError::TransferFailed(e.to_string()))?;
+        if completion.actual_len != data.len() {
+            return Err(RaidenError::TransferFailed(format!(
+                "Short USB write: expected {} bytes, wrote {}",
+                data.len(),
+                completion.actual_len
+            )));
+        }
 
         log::trace!("USB write {} bytes", data.len());
         Ok(())
@@ -318,7 +325,8 @@ impl RaidenDebugSpi {
             .status
             .map_err(|e| RaidenError::TransferFailed(e.to_string()))?;
 
-        let data = completion.buffer[..].to_vec();
+        let len = completion.actual_len.min(completion.buffer.len());
+        let data = completion.buffer[..len].to_vec();
         log::trace!("USB read {} bytes", data.len());
         Ok(data)
     }
@@ -351,19 +359,7 @@ impl RaidenDebugSpi {
         self.write_packet(&packet).await?;
 
         let rsp_buf = self.read_packet().await?;
-        let rsp = ResponseV1::from_bytes(&rsp_buf);
-
-        let status = rsp.status();
-        log::debug!(
-            "V1 response: status_code=0x{:04X} ({:?})",
-            rsp.status_code,
-            status
-        );
-        if !status.is_success() {
-            return Err(RaidenError::ProtocolError(rsp.status_code));
-        }
-
-        Ok(rsp.data[..read_len].to_vec())
+        decode_v1_response(&rsp_buf, read_len)
     }
 
     /// Execute an SPI transaction using V2 protocol.
@@ -403,45 +399,11 @@ impl RaidenDebugSpi {
         }
 
         let rsp_buf = self.read_packet().await?;
-        let rsp = ResponseV2Start::from_bytes(&rsp_buf);
-
-        if rsp.packet_id != PacketId::RspTransferStart as u16 {
-            return Err(RaidenError::InvalidResponse(format!(
-                "Expected RspTransferStart, got {}",
-                rsp.packet_id
-            )));
-        }
-
-        let status = rsp.status();
-        if !status.is_success() {
-            return Err(RaidenError::ProtocolError(rsp.status_code));
-        }
-
-        let mut result = Vec::with_capacity(read_len);
-        let first_read_len = std::cmp::min(read_len, V2_CONTINUE_PAYLOAD);
-        result.extend_from_slice(&rsp.data[..first_read_len]);
+        let mut result = decode_v2_start_response(&rsp_buf, read_len)?;
 
         while result.len() < read_len {
             let rsp_buf = self.read_packet().await?;
-            let rsp = ResponseV2Continue::from_bytes(&rsp_buf);
-
-            if rsp.packet_id != PacketId::RspTransferContinue as u16 {
-                return Err(RaidenError::InvalidResponse(format!(
-                    "Expected RspTransferContinue, got {}",
-                    rsp.packet_id
-                )));
-            }
-
-            if rsp.data_index != result.len() as u16 {
-                return Err(RaidenError::InvalidResponse(format!(
-                    "Data index mismatch: expected {}, got {}",
-                    result.len(),
-                    rsp.data_index
-                )));
-            }
-
-            let chunk_len = std::cmp::min(read_len - result.len(), V2_CONTINUE_PAYLOAD);
-            result.extend_from_slice(&rsp.data[..chunk_len]);
+            append_v2_continue_response(&rsp_buf, &mut result, read_len)?;
         }
 
         Ok(result)
@@ -500,12 +462,7 @@ impl SpiMaster for RaidenDebugSpi {
             cmd.read_buf.len()
         );
 
-        check_io_mode_supported(cmd.io_mode, self.features())?;
-
-        let header_len = cmd.header_len();
-        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
-        cmd.encode_header(&mut write_data);
-        write_data[header_len..].copy_from_slice(cmd.write_data);
+        let write_data = cmd.single_io_frame()?;
 
         let result = self
             .spi_transfer(&write_data, cmd.read_buf.len())
@@ -522,6 +479,116 @@ impl SpiMaster for RaidenDebugSpi {
     async fn delay_us(&mut self, us: u32) {
         delay(Duration::from_micros(u64::from(us))).await;
     }
+}
+
+/// Decode a V1 response packet, validating status before payload length.
+fn decode_v1_response(rsp_buf: &[u8], read_len: usize) -> Result<Vec<u8>> {
+    let rsp = ResponseV1::from_bytes(rsp_buf).ok_or_else(|| {
+        RaidenError::InvalidResponse(format!(
+            "V1 response packet has invalid length ({} bytes)",
+            rsp_buf.len()
+        ))
+    })?;
+
+    let status = rsp.status();
+    log::debug!(
+        "V1 response: status_code=0x{:04X} ({:?}), payload={} bytes",
+        rsp.status_code,
+        status,
+        rsp.data_len
+    );
+    if !status.is_success() {
+        return Err(RaidenError::ProtocolError(rsp.status_code));
+    }
+
+    if rsp.data_len < read_len {
+        return Err(RaidenError::InvalidResponse(format!(
+            "V1 response payload truncated: expected {read_len} bytes, got {}",
+            rsp.data_len
+        )));
+    }
+
+    Ok(rsp.payload()[..read_len].to_vec())
+}
+
+/// Decode a V2 start response packet, validating header and status before payload length.
+fn decode_v2_start_response(rsp_buf: &[u8], read_len: usize) -> Result<Vec<u8>> {
+    let rsp = ResponseV2Start::from_bytes(rsp_buf).ok_or_else(|| {
+        RaidenError::InvalidResponse(format!(
+            "V2 start response packet has invalid length ({} bytes)",
+            rsp_buf.len()
+        ))
+    })?;
+
+    if rsp.packet_id != PacketId::RspTransferStart as u16 {
+        return Err(RaidenError::InvalidResponse(format!(
+            "Expected RspTransferStart, got {}",
+            rsp.packet_id
+        )));
+    }
+
+    let status = rsp.status();
+    if !status.is_success() {
+        return Err(RaidenError::ProtocolError(rsp.status_code));
+    }
+
+    let expected_first = std::cmp::min(read_len, V2_CONTINUE_PAYLOAD);
+    if rsp.data_len < expected_first {
+        return Err(RaidenError::InvalidResponse(format!(
+            "V2 start response payload truncated: expected {expected_first} bytes, got {}",
+            rsp.data_len
+        )));
+    }
+
+    let mut result = Vec::with_capacity(read_len);
+    result.extend_from_slice(&rsp.payload()[..expected_first]);
+    Ok(result)
+}
+
+/// Decode and append one V2 continuation packet, validating packet ID, offset, and payload length.
+fn append_v2_continue_response(
+    rsp_buf: &[u8],
+    result: &mut Vec<u8>,
+    read_len: usize,
+) -> Result<()> {
+    let rsp = ResponseV2Continue::from_bytes(rsp_buf).ok_or_else(|| {
+        RaidenError::InvalidResponse(format!(
+            "V2 continue response packet has invalid length ({} bytes)",
+            rsp_buf.len()
+        ))
+    })?;
+
+    if rsp.packet_id != PacketId::RspTransferContinue as u16 {
+        return Err(RaidenError::InvalidResponse(format!(
+            "Expected RspTransferContinue, got {}",
+            rsp.packet_id
+        )));
+    }
+
+    let expected_index = u16::try_from(result.len()).map_err(|_| {
+        RaidenError::InvalidResponse(format!(
+            "V2 continuation offset overflow at {} bytes",
+            result.len()
+        ))
+    })?;
+    if rsp.data_index != expected_index {
+        return Err(RaidenError::InvalidResponse(format!(
+            "Data index mismatch: expected {}, got {}",
+            expected_index, rsp.data_index
+        )));
+    }
+
+    let remaining = read_len - result.len();
+    let expected_chunk = std::cmp::min(remaining, V2_CONTINUE_PAYLOAD);
+    if rsp.data_len == 0 || rsp.data_len < expected_chunk {
+        return Err(RaidenError::InvalidResponse(format!(
+            "V2 continue response payload truncated: expected {expected_chunk} bytes, got {}",
+            rsp.data_len
+        )));
+    }
+
+    result.extend_from_slice(&rsp.payload()[..expected_chunk]);
+    Ok(())
 }
 
 /// Parse programmer options from key-value pairs
@@ -552,4 +619,110 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<RaidenConfig> {
     }
 
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_response_rejects_short_header_and_truncated_payload() {
+        assert!(matches!(
+            decode_v1_response(&[], 0),
+            Err(RaidenError::InvalidResponse(_))
+        ));
+        assert!(matches!(
+            decode_v1_response(&[0x00], 0),
+            Err(RaidenError::InvalidResponse(_))
+        ));
+        // Header-only error response reports ProtocolError before checking payload length.
+        assert!(matches!(
+            decode_v1_response(&(StatusCode::Busy as u16).to_le_bytes(), 16),
+            Err(RaidenError::ProtocolError(code)) if code == StatusCode::Busy as u16
+        ));
+        // Success with fewer bytes than requested must not zero-fill.
+        assert!(matches!(
+            decode_v1_response(&[0x00, 0x00, 0xaa, 0xbb], 4),
+            Err(RaidenError::InvalidResponse(_))
+        ));
+        // Legitimately short exact-length response succeeds.
+        assert_eq!(
+            decode_v1_response(&[0x00, 0x00, 0xaa, 0xbb, 0xcc], 3).unwrap(),
+            vec![0xaa, 0xbb, 0xcc]
+        );
+        // Header-only success for read_len == 0 succeeds.
+        assert!(decode_v1_response(&[0x00, 0x00], 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn v2_start_and_continue_validate_headers_status_and_lengths() {
+        // Short header rejected.
+        assert!(matches!(
+            decode_v2_start_response(&[5, 0, 0], 1),
+            Err(RaidenError::InvalidResponse(_))
+        ));
+        // Header-only error response reports ProtocolError even when read_len > 0.
+        let mut err_pkt = Vec::new();
+        err_pkt.extend_from_slice(&(PacketId::RspTransferStart as u16).to_le_bytes());
+        err_pkt.extend_from_slice(&(StatusCode::Timeout as u16).to_le_bytes());
+        assert!(matches!(
+            decode_v2_start_response(&err_pkt, 32),
+            Err(RaidenError::ProtocolError(code)) if code == StatusCode::Timeout as u16
+        ));
+        // Success with read_len == 0 and header-only packet succeeds.
+        let mut ok_empty = Vec::new();
+        ok_empty.extend_from_slice(&(PacketId::RspTransferStart as u16).to_le_bytes());
+        ok_empty.extend_from_slice(&(StatusCode::Success as u16).to_le_bytes());
+        assert!(decode_v2_start_response(&ok_empty, 0).unwrap().is_empty());
+
+        // Truncated start payload must fail rather than zero-fill.
+        let mut short_start = ok_empty.clone();
+        short_start.extend_from_slice(&[1, 2, 3]);
+        assert!(matches!(
+            decode_v2_start_response(&short_start, 5),
+            Err(RaidenError::InvalidResponse(_))
+        ));
+        // Legitimately short single-packet read succeeds.
+        assert_eq!(
+            decode_v2_start_response(&short_start, 3).unwrap(),
+            vec![1, 2, 3]
+        );
+
+        // Full multi-packet read with legitimately short final continuation packet.
+        let total = V2_CONTINUE_PAYLOAD + 4;
+        let mut full_start = ok_empty;
+        full_start.extend(0u8..V2_CONTINUE_PAYLOAD as u8);
+        let mut assembled = decode_v2_start_response(&full_start, total).unwrap();
+        assert_eq!(assembled.len(), V2_CONTINUE_PAYLOAD);
+
+        // Wrong data_index rejected.
+        let mut bad_idx = Vec::new();
+        bad_idx.extend_from_slice(&(PacketId::RspTransferContinue as u16).to_le_bytes());
+        bad_idx.extend_from_slice(&0u16.to_le_bytes());
+        bad_idx.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        assert!(matches!(
+            append_v2_continue_response(&bad_idx, &mut assembled, total),
+            Err(RaidenError::InvalidResponse(_))
+        ));
+
+        // Zero-length or truncated continuation rejected.
+        let mut short_cont = Vec::new();
+        short_cont.extend_from_slice(&(PacketId::RspTransferContinue as u16).to_le_bytes());
+        short_cont.extend_from_slice(&(V2_CONTINUE_PAYLOAD as u16).to_le_bytes());
+        assert!(matches!(
+            append_v2_continue_response(&short_cont, &mut assembled, total),
+            Err(RaidenError::InvalidResponse(_))
+        ));
+        short_cont.extend_from_slice(&[0xde, 0xad]);
+        assert!(matches!(
+            append_v2_continue_response(&short_cont, &mut assembled, total),
+            Err(RaidenError::InvalidResponse(_))
+        ));
+
+        // Exact short final continuation succeeds.
+        short_cont.extend_from_slice(&[0xbe, 0xef]);
+        append_v2_continue_response(&short_cont, &mut assembled, total).unwrap();
+        assert_eq!(assembled.len(), total);
+        assert_eq!(&assembled[V2_CONTINUE_PAYLOAD..], &[0xde, 0xad, 0xbe, 0xef]);
+    }
 }

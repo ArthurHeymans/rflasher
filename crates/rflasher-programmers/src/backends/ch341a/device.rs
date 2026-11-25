@@ -12,7 +12,7 @@ use nusb::Endpoint;
 use nusb::transfer::{Buffer, Bulk, In, Out};
 use rflasher_core::error::{Error as CoreError, Result as CoreResult};
 use rflasher_core::programmer::{SpiFeatures, SpiMaster};
-use rflasher_core::spi::{SpiCommand, check_io_mode_supported};
+use rflasher_core::spi::SpiCommand;
 
 use super::error::{Ch341aError, Result};
 use super::protocol::*;
@@ -521,18 +521,7 @@ impl SpiMaster for Ch341a {
     }
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        // Check that the requested I/O mode is supported
-        check_io_mode_supported(cmd.io_mode, self.features())?;
-
-        // Build the command bytes to send
-        let header_len = cmd.header_len();
-        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
-
-        // Encode opcode + address + dummy bytes
-        cmd.encode_header(&mut write_data);
-
-        // Append write data (for write commands)
-        write_data[header_len..].copy_from_slice(cmd.write_data);
+        let write_data = cmd.single_io_frame()?;
 
         // Perform the transfer
         let read_len = cmd.read_buf.len();

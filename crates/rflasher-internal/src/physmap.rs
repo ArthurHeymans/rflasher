@@ -19,6 +19,59 @@ fn map_physmap_error(error: std::io::Error, address: u64, size: usize) -> Intern
     }
 }
 
+#[cfg(all(feature = "std", target_os = "linux"))]
+fn compute_mmap_range(
+    phys_addr: u64,
+    size: usize,
+    page_size: libc::c_long,
+) -> Option<(libc::off_t, usize, usize)> {
+    if size == 0 || page_size <= 0 {
+        return None;
+    }
+    let page_size = usize::try_from(page_size).ok()?;
+    if !page_size.is_power_of_two() {
+        return None;
+    }
+    // Ensure `[phys_addr, phys_addr + size)` does not wrap 64-bit physical space.
+    let size_u64 = u64::try_from(size).ok()?;
+    phys_addr.checked_add(size_u64 - 1)?;
+
+    let page_mask = page_size - 1;
+    let offset = (phys_addr & (page_mask as u64)) as usize;
+    let aligned_addr = phys_addr & !(page_mask as u64);
+    let aligned_off = libc::off_t::try_from(aligned_addr).ok()?;
+    let aligned_size = size.checked_add(offset)?;
+    let map_size = aligned_size.checked_add(page_mask)? & !page_mask;
+    if map_size == 0 || map_size > isize::MAX as usize {
+        return None;
+    }
+    Some((aligned_off, offset, map_size))
+}
+
+#[cfg(any(not(feature = "std"), test))]
+fn validate_firmware_range(phys_addr: u64, size: usize) -> Option<usize> {
+    if phys_addr == 0 || size == 0 || size > isize::MAX as usize {
+        return None;
+    }
+    let base = usize::try_from(phys_addr).ok()?;
+    base.checked_add(size)?;
+    Some(base)
+}
+
+#[inline(always)]
+fn checked_mmio_ptr<T>(base: *mut u8, size: usize, offset: usize) -> *mut T {
+    let end = offset
+        .checked_add(core::mem::size_of::<T>())
+        .expect("MMIO offset overflow");
+    assert!(end <= size, "MMIO access out of range");
+    // Use `wrapping_add` rather than `add`: on firmware targets `base` is an
+    // integer-derived MMIO address rather than a Rust allocation, so `ptr::add`'s
+    // in-allocated-object precondition does not apply. Bounds were verified above.
+    let ptr = base.wrapping_add(offset) as *mut T;
+    assert!(ptr.is_aligned(), "unaligned MMIO access");
+    ptr
+}
+
 /// A mapped region of physical memory.
 pub struct PhysMap {
     /// Pointer to the mapped memory (adjusted into the requested window).
@@ -49,20 +102,20 @@ impl PhysMap {
         use std::os::unix::fs::OpenOptionsExt;
         use std::os::unix::io::AsRawFd;
 
+        // SAFETY: sysconf is thread-safe and does not touch Rust-managed memory.
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        let (aligned_off, offset, map_size) = compute_mmap_range(phys_addr, size, page_size)
+            .ok_or(InternalError::MemoryMap {
+                address: phys_addr,
+                size,
+            })?;
+
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .custom_flags(libc::O_SYNC)
             .open("/dev/mem")
             .map_err(|error| map_physmap_error(error, phys_addr, size))?;
-
-        // SAFETY: sysconf is thread-safe and does not touch Rust-managed memory.
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-        let page_mask = page_size - 1;
-        let offset = (phys_addr as usize) & page_mask;
-        let aligned_addr = phys_addr & !(page_mask as u64);
-        let aligned_size = size + offset;
-        let map_size = (aligned_size + page_mask) & !page_mask;
 
         // SAFETY: arguments are derived from the requested physical range; the
         // caller is responsible for only mapping valid MMIO.
@@ -73,7 +126,7 @@ impl PhysMap {
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED,
                 file.as_raw_fd(),
-                aligned_addr as libc::off_t,
+                aligned_off,
             )
         };
 
@@ -106,15 +159,13 @@ impl PhysMap {
     /// volatile accesses performed through this object.
     #[cfg(not(feature = "std"))]
     pub unsafe fn new(phys_addr: u64, size: usize) -> Result<Self, InternalError> {
-        if phys_addr == 0 || size == 0 {
-            return Err(InternalError::MemoryMap {
-                address: phys_addr,
-                size,
-            });
-        }
+        let base = validate_firmware_range(phys_addr, size).ok_or(InternalError::MemoryMap {
+            address: phys_addr,
+            size,
+        })?;
 
         Ok(Self {
-            ptr: phys_addr as *mut u8,
+            ptr: base as *mut u8,
             size,
             phys_addr,
         })
@@ -134,90 +185,77 @@ impl PhysMap {
         ))
     }
 
+    #[inline(always)]
+    fn ptr<T>(&self, offset: usize) -> *mut T {
+        checked_mmio_ptr::<T>(self.ptr, self.size, offset)
+    }
+
     /// Reads an 8-bit value from the mapped region.
     #[inline(always)]
     pub fn read8(&self, offset: usize) -> u8 {
-        assert!(offset < self.size, "8-bit MMIO read out of range");
-        // SAFETY: `ptr` points at a valid MMIO window for this mapping.
-        unsafe { core::ptr::read_volatile(self.ptr.add(offset)) }
+        let ptr = self.ptr::<u8>(offset);
+        // SAFETY: bounds and alignment are checked by `ptr`; MMIO validity is
+        // a constructor invariant.
+        unsafe { core::ptr::read_volatile(ptr) }
     }
 
     /// Reads a 16-bit value from the mapped region.
     #[inline(always)]
     pub fn read16(&self, offset: usize) -> u16 {
-        assert!(
-            offset <= self.size.saturating_sub(2),
-            "16-bit MMIO read out of range"
-        );
-        assert!(offset & 1 == 0, "unaligned 16-bit MMIO read");
-        // SAFETY: bounds/alignment are checked above; MMIO validity is a
-        // constructor invariant.
-        unsafe { core::ptr::read_volatile(self.ptr.add(offset) as *const u16) }
+        let ptr = self.ptr::<u16>(offset);
+        // SAFETY: bounds and alignment are checked by `ptr`; MMIO validity is
+        // a constructor invariant.
+        unsafe { core::ptr::read_volatile(ptr) }
     }
 
     /// Reads a 32-bit value from the mapped region.
     #[inline(always)]
     pub fn read32(&self, offset: usize) -> u32 {
-        assert!(
-            offset <= self.size.saturating_sub(4),
-            "32-bit MMIO read out of range"
-        );
-        assert!(offset & 3 == 0, "unaligned 32-bit MMIO read");
-        // SAFETY: bounds/alignment are checked above; MMIO validity is a
-        // constructor invariant.
-        unsafe { core::ptr::read_volatile(self.ptr.add(offset) as *const u32) }
+        let ptr = self.ptr::<u32>(offset);
+        // SAFETY: bounds and alignment are checked by `ptr`; MMIO validity is
+        // a constructor invariant.
+        unsafe { core::ptr::read_volatile(ptr) }
     }
 
     /// Reads an aligned 64-bit value from a mapped data window.
     #[inline(always)]
     pub fn read64(&self, offset: usize) -> u64 {
-        assert!(
-            offset.checked_add(8).is_some_and(|end| end <= self.size),
-            "64-bit MMIO read out of range"
-        );
-        assert!(offset & 7 == 0, "unaligned 64-bit MMIO read");
-        // SAFETY: bounds/alignment are checked above; MMIO validity is a
-        // constructor invariant. Callers use this only for flash data windows.
-        unsafe { core::ptr::read_volatile(self.ptr.add(offset) as *const u64) }
+        let ptr = self.ptr::<u64>(offset);
+        // SAFETY: bounds and alignment are checked by `ptr`; MMIO validity is
+        // a constructor invariant. Callers use this only for flash data windows.
+        unsafe { core::ptr::read_volatile(ptr) }
     }
 
     /// Writes an 8-bit value to the mapped region.
     #[inline(always)]
     pub fn write8(&self, offset: usize, value: u8) {
-        assert!(offset < self.size, "8-bit MMIO write out of range");
-        // SAFETY: `ptr` points at a valid MMIO window for this mapping.
+        let ptr = self.ptr::<u8>(offset);
+        // SAFETY: bounds and alignment are checked by `ptr`; MMIO validity is
+        // a constructor invariant.
         unsafe {
-            core::ptr::write_volatile(self.ptr.add(offset), value);
+            core::ptr::write_volatile(ptr, value);
         }
     }
 
     /// Writes a 16-bit value to the mapped region.
     #[inline(always)]
     pub fn write16(&self, offset: usize, value: u16) {
-        assert!(
-            offset <= self.size.saturating_sub(2),
-            "16-bit MMIO write out of range"
-        );
-        assert!(offset & 1 == 0, "unaligned 16-bit MMIO write");
-        // SAFETY: bounds/alignment are checked above; MMIO validity is a
-        // constructor invariant.
+        let ptr = self.ptr::<u16>(offset);
+        // SAFETY: bounds and alignment are checked by `ptr`; MMIO validity is
+        // a constructor invariant.
         unsafe {
-            core::ptr::write_volatile(self.ptr.add(offset) as *mut u16, value);
+            core::ptr::write_volatile(ptr, value);
         }
     }
 
     /// Writes a 32-bit value to the mapped region.
     #[inline(always)]
     pub fn write32(&self, offset: usize, value: u32) {
-        assert!(
-            offset <= self.size.saturating_sub(4),
-            "32-bit MMIO write out of range"
-        );
-        assert!(offset & 3 == 0, "unaligned 32-bit MMIO write");
-        // SAFETY: bounds/alignment are checked above; MMIO validity is a
-        // constructor invariant.
+        let ptr = self.ptr::<u32>(offset);
+        // SAFETY: bounds and alignment are checked by `ptr`; MMIO validity is
+        // a constructor invariant.
         unsafe {
-            core::ptr::write_volatile(self.ptr.add(offset) as *mut u32, value);
+            core::ptr::write_volatile(ptr, value);
         }
     }
 
@@ -243,11 +281,10 @@ impl Drop for PhysMap {
     }
 }
 
-// Send + Sync are safe because these pointers refer to MMIO registers, not
-// Rust-owned memory. Hardware/register-level synchronization is the caller's
-// responsibility.
+// Moving an owned MMIO mapping between threads does not create concurrent
+// register access. `PhysMap` is deliberately not `Sync`: shared unsynchronized
+// access to stateful controller registers is unsafe.
 unsafe impl Send for PhysMap {}
-unsafe impl Sync for PhysMap {}
 
 impl crate::host::MmioAccess for PhysMap {
     fn read8(&self, offset: usize) -> u8 {
@@ -281,8 +318,9 @@ impl crate::host::MmioAccess for PhysMap {
 
 #[cfg(test)]
 mod tests {
+    use super::{checked_mmio_ptr, validate_firmware_range};
     #[cfg(all(feature = "std", target_os = "linux"))]
-    use super::map_physmap_error;
+    use super::{compute_mmap_range, map_physmap_error};
     #[cfg(all(feature = "std", target_os = "linux"))]
     use crate::error::{InternalError, RestrictedResource};
 
@@ -322,6 +360,80 @@ mod tests {
                 size: 4096,
             }
         ));
+    }
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    #[test]
+    fn compute_mmap_range_handles_unaligned_and_invalid_inputs() {
+        assert_eq!(
+            compute_mmap_range(0xfedc_3800, 0x200, 4096),
+            Some((0xfedc_3000, 0x800, 4096))
+        );
+        assert_eq!(
+            compute_mmap_range(0xfedc_3f00, 0x200, 4096),
+            Some((0xfedc_3000, 0xf00, 8192))
+        );
+        // Zero size, invalid page size, overflow, and negative off_t rejected.
+        assert_eq!(compute_mmap_range(0xfedc_0000, 0, 4096), None);
+        assert_eq!(compute_mmap_range(0xfedc_0000, 4096, -1), None);
+        assert_eq!(compute_mmap_range(0xfedc_0000, 4096, 0), None);
+        assert_eq!(compute_mmap_range(0xfedc_0000, 4096, 3000), None);
+        assert_eq!(compute_mmap_range(0xfedc_0000, usize::MAX, 4096), None);
+        assert_eq!(compute_mmap_range(u64::MAX, 4, 4096), None);
+        assert_eq!(compute_mmap_range(u64::MAX - 4095, 4096, 4096), None);
+    }
+
+    #[test]
+    fn validate_firmware_range_checks_bounds() {
+        assert_eq!(validate_firmware_range(0, 4096), None);
+        assert_eq!(validate_firmware_range(0xfedc_0000, 0), None);
+        assert_eq!(validate_firmware_range(u64::MAX, 16), None);
+        assert_eq!(
+            validate_firmware_range(0xfedc_0000, 4096),
+            Some(0xfedc_0000)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn checked_mmio_ptr_rejects_short_region_for_u16() {
+        let mut buf = [0u64; 1];
+        let _ = checked_mmio_ptr::<u16>(buf.as_mut_ptr().cast(), 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn checked_mmio_ptr_rejects_short_region_for_u32() {
+        let mut buf = [0u64; 1];
+        let _ = checked_mmio_ptr::<u32>(buf.as_mut_ptr().cast(), 3, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "overflow")]
+    fn checked_mmio_ptr_rejects_offset_overflow() {
+        let mut buf = [0u64; 2];
+        let _ = checked_mmio_ptr::<u32>(buf.as_mut_ptr().cast(), 16, usize::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "unaligned")]
+    fn checked_mmio_ptr_checks_effective_pointer_alignment() {
+        let mut buf = [0u64; 2];
+        // Base pointer itself is misaligned by 1 byte, even though offset == 0.
+        let unaligned_base = unsafe { buf.as_mut_ptr().cast::<u8>().add(1) };
+        let _ = checked_mmio_ptr::<u64>(unaligned_base, 8, 0);
+    }
+
+    #[test]
+    fn checked_mmio_ptr_accepts_aligned_in_bounds_access() {
+        let mut buf = [0u64; 2];
+        let base = buf.as_mut_ptr().cast::<u8>();
+        let p64 = checked_mmio_ptr::<u64>(base, 16, 8);
+        assert!(p64.is_aligned());
+        let p32 = checked_mmio_ptr::<u32>(base, 16, 12);
+        assert!(p32.is_aligned());
+        let p16 = checked_mmio_ptr::<u16>(base, 16, 14);
+        assert!(p16.is_aligned());
     }
 
     #[test]

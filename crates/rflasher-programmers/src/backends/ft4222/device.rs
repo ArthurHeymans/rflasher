@@ -745,10 +745,7 @@ impl SpiMaster for Ft4222 {
     }
 
     async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> CoreResult<()> {
-        let header_len = cmd.header_len();
-        let mut write_data = vec![0u8; header_len + cmd.write_data.len()];
-        cmd.encode_header(&mut write_data);
-        write_data[header_len..].copy_from_slice(cmd.write_data);
+        let write_data = cmd.single_io_frame()?;
 
         let read_len = cmd.read_buf.len();
         if read_len == 0 {

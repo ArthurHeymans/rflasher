@@ -258,3 +258,47 @@ fn three_byte_packets_are_unchanged_on_every_protocol() {
         ctx.chip.features.remove(Features::AAI_WORD);
     }
 }
+
+#[test]
+fn explicit_schema_defaults_match_omitted_options() {
+    let omitted = parse_options(&[]).unwrap();
+    let schema_defaults: Vec<(&str, &str)> = crate::dediprog::schema::OPTIONS
+        .iter()
+        .filter_map(|spec| spec.default.map(|d| (spec.key, d)))
+        .collect();
+    let explicit = parse_options(&schema_defaults).unwrap();
+
+    assert_eq!(omitted, DediprogConfig::default());
+    assert_eq!(explicit, omitted);
+    assert_eq!(explicit.target, Target::ApplicationFlash1);
+}
+
+#[test]
+fn target_and_voltage_options_reject_invalid_values() {
+    assert_eq!(
+        parse_options(&[("target", "1")]).unwrap().target,
+        Target::ApplicationFlash1
+    );
+    assert_eq!(
+        parse_options(&[("target", "2")]).unwrap().target,
+        Target::ApplicationFlash2
+    );
+    for bad_target in ["0", "3", "4", "-1", "flash1"] {
+        assert!(
+            parse_options(&[("target", bad_target)]).is_err(),
+            "target={bad_target} should be rejected"
+        );
+    }
+
+    assert_eq!(parse_options(&[("voltage", "0")]).unwrap().voltage_mv, 0);
+    assert_eq!(
+        parse_options(&[("voltage", "1.8")]).unwrap().voltage_mv,
+        1800
+    );
+    for bad_voltage in ["-1", "-1.8V", "NaN", "inf", "0.0001V", "0.0001", "3.3V"] {
+        assert!(
+            parse_options(&[("voltage", bad_voltage)]).is_err(),
+            "voltage={bad_voltage} should be rejected"
+        );
+    }
+}

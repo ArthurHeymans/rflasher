@@ -48,19 +48,53 @@ pub struct AmdSpi100Info {
 
 impl AmdSpi100Info {
     /// Create a new SPI100 controller instance from this info using Linux host access.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `self.spibar_addr`, `self.memory_addr`, and
+    /// `self.mapped_len` describe valid MMIO/ROM windows on the current Linux host
+    /// (for example, returned unmodified by [`enable_amd_spi100_with_host`] using
+    /// [`DefaultPciAccess`]).
     #[cfg(all(feature = "std", target_os = "linux"))]
-    pub fn create_controller(&self) -> Result<Spi100Controller<LinuxHost>, InternalError> {
-        Spi100Controller::new(self.spibar_addr, self.memory_addr, self.mapped_len)
+    pub unsafe fn create_controller(&self) -> Result<Spi100Controller<LinuxHost>, InternalError> {
+        // SAFETY: forwarded to the caller's safety contract.
+        unsafe { Spi100Controller::new(self.spibar_addr, self.memory_addr, self.mapped_len) }
     }
 
     /// Create a new SPI100 controller instance from this info using caller-provided host access.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `self.spibar_addr`, `self.memory_addr`, and
+    /// `self.mapped_len` describe valid MMIO/ROM windows for `host` (for example,
+    /// returned unmodified by [`enable_amd_spi100_with_host`] on the same host).
     #[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
-    pub fn create_controller_with_host<H: HostAccess>(
+    pub unsafe fn create_controller_with_host<H: HostAccess>(
         &self,
         host: H,
     ) -> Result<Spi100Controller<H>, InternalError> {
-        Spi100Controller::new_with_host(host, self.spibar_addr, self.memory_addr, self.mapped_len)
+        // SAFETY: forwarded to the caller's safety contract.
+        unsafe {
+            Spi100Controller::new_with_host(
+                host,
+                self.spibar_addr,
+                self.memory_addr,
+                self.mapped_len,
+            )
+        }
     }
+}
+
+/// Decode AMD LPC ROM Range 2 register into `(start, end_inclusive, length)`.
+///
+/// Bits 15:0 hold `start[31:16]`; bits 31:16 hold `end[31:16]` (inclusive,
+/// with low 16 bits fixed to `0xffff`). Arithmetic is done in `u64` so a full
+/// 4 GiB range (`0xffff_0000`) does not overflow `u32`.
+fn decode_rom_range2(rom_range2: u32) -> (u64, u64, u64) {
+    let start = u64::from(rom_range2 & 0xffff) << 16;
+    let end = u64::from(rom_range2 | 0xffff);
+    let len = if end >= start { end - start + 1 } else { 0 };
+    (start, end, len)
 }
 
 /// Enables AMD SPI100 using host-provided PCI config access.
@@ -74,6 +108,12 @@ pub fn enable_amd_spi100_with_host<H: PciConfigAccess<Error = InternalError>>(
     smbus_bdf: PciAddress,
     revision_id: u8,
 ) -> Result<AmdSpi100Info, InternalError> {
+    if !enable.chipset.uses_spi100() {
+        return Err(InternalError::NotSupported(
+            "AMD chipset does not use an SPI100 controller",
+        ));
+    }
+
     log::info!(
         "Enabling AMD {} SPI100 controller at {:02x}:{:02x}.0",
         enable.device_name,
@@ -123,23 +163,18 @@ pub fn enable_amd_spi100_with_host<H: PciConfigAccess<Error = InternalError>>(
     log::debug!("SPI100 BAR at {:#010x}", phys_spibar);
 
     let rom_range2 = host.read32(lpc_bdf, AMD_ROM_RANGE2_OFFSET as u16)?;
-    let rom_range_end = rom_range2 | 0xffff;
-    let rom_range_start = (rom_range2 & 0xffff) << 16;
-    let mapped_len = if rom_range_end > rom_range_start {
-        (rom_range_end - rom_range_start + 1) as usize
-    } else {
-        0
-    };
+    let (rom_range_start, rom_range_end, rom_range_len) = decode_rom_range2(rom_range2);
+    let mapped_len = usize::try_from(rom_range_len).unwrap_or(0);
 
     log::debug!(
         "ROM Range 2: {:#010x}..{:#010x} ({} KB)",
         rom_range_start,
         rom_range_end,
-        mapped_len / 1024
+        rom_range_len / 1024
     );
 
     let memory_addr = if spirom_enabled && mapped_len > 0 && rom_range_start != 0 {
-        Some(rom_range_start as u64)
+        Some(rom_range_start)
     } else {
         None
     };
@@ -225,21 +260,51 @@ mod tests {
             .expect("AMD SPI100 chipset table entry")
     }
 
+    fn non_spi100_enable() -> &'static AmdChipsetEnable {
+        AMD_CHIPSETS
+            .iter()
+            .find(|chipset| !chipset.chipset.uses_spi100())
+            .expect("non-SPI100 AMD chipset table entry")
+    }
+
     #[test]
     fn test_rom_range_calculation() {
-        // ROM Range 2 = 0xff000000
-        let rom_range2: u32 = 0xff00_0000;
-        let rom_range_end = rom_range2 | 0xffff;
-        let rom_range_start = (rom_range2 & 0xffff) << 16;
-        let mapped_len = if rom_range_end > rom_range_start {
-            (rom_range_end - rom_range_start + 1) as usize
-        } else {
-            0
-        };
+        assert_eq!(
+            decode_rom_range2(0xff00_0000),
+            (0x0000_0000, 0xff00_ffff, 0xff01_0000)
+        );
+        // Full 4 GiB range must not overflow u32 arithmetic.
+        assert_eq!(
+            decode_rom_range2(0xffff_0000),
+            (0x0000_0000, 0xffff_ffff, 0x1_0000_0000)
+        );
+        // Standard 16 MiB window at top of 4 GiB.
+        assert_eq!(
+            decode_rom_range2(0xffff_ff00),
+            (0xff00_0000, 0xffff_ffff, 0x0100_0000)
+        );
+        // Inverted range (start > end) is disabled.
+        assert_eq!(
+            decode_rom_range2(0xff00_ffff),
+            (0xffff_0000, 0xff00_ffff, 0)
+        );
+    }
 
-        assert_eq!(rom_range_start, 0x0000_0000);
-        assert_eq!(rom_range_end, 0xff00_ffff);
-        assert_eq!(mapped_len, 0xff01_0000);
+    #[test]
+    fn test_enable_amd_spi100_rejects_non_spi100_before_pci_access() {
+        let mut host = FakeHost::default();
+        host.deny_reads();
+        host.deny_writes();
+
+        let err = enable_amd_spi100_with_host(
+            &host,
+            non_spi100_enable(),
+            PciAddress::new(0, 0, 0x14, 0),
+            0x49,
+        )
+        .unwrap_err();
+        assert!(matches!(err, InternalError::NotSupported(_)));
+        assert!(host.writes().is_empty());
     }
 
     #[test]
@@ -262,6 +327,23 @@ mod tests {
         assert!(info.spirom_enabled);
         assert_eq!(info.memory_addr, None);
         assert_eq!(info.mapped_len, 0xff01_0000);
+    }
+
+    #[test]
+    fn test_enable_amd_spi100_with_host_handles_full_4gib_rom_range2() {
+        let host = FakeHost::default();
+        let lpc_bdf = PciAddress::new(0, 0, 0x14, AMD_LPC_FUNCTION);
+        host.set_config32(lpc_bdf, AMD_SPI_BAR_OFFSET as u16, 0xfed8_0203);
+        host.set_config32(lpc_bdf, AMD_ROM_RANGE2_OFFSET as u16, 0xffff_0000);
+
+        let info = enable_amd_spi100_with_host(
+            &host,
+            spi100_enable(),
+            PciAddress::new(0, 0, 0x14, 0),
+            0x51,
+        )
+        .unwrap();
+        assert_eq!(info.memory_addr, None);
     }
 
     #[test]

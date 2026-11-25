@@ -370,43 +370,16 @@ impl AccessProtection {
 }
 
 // ============================================================================
-// JEDEC opcodes (common SPI flash commands)
+// JEDEC opcodes (re-exported from rflasher_core::spi::opcodes)
 // ============================================================================
 
-/// Write Enable
-pub const JEDEC_WREN: u8 = 0x06;
-/// Write Disable
-pub const JEDEC_WRDI: u8 = 0x04;
-/// Enable Write Status Register
-pub const JEDEC_EWSR: u8 = 0x50;
-/// Read Status Register
-pub const JEDEC_RDSR: u8 = 0x05;
-/// Write Status Register
-pub const JEDEC_WRSR: u8 = 0x01;
-/// Read Data
-pub const JEDEC_READ: u8 = 0x03;
-/// Fast Read
-pub const JEDEC_FAST_READ: u8 = 0x0B;
-/// Page Program
-pub const JEDEC_BYTE_PROGRAM: u8 = 0x02;
-/// Sector Erase (4KB typically)
-pub const JEDEC_SE: u8 = 0x20;
-/// Block Erase (32KB)
-pub const JEDEC_BE_52: u8 = 0x52;
-/// Block Erase (64KB)
-pub const JEDEC_BE_D8: u8 = 0xD8;
-/// Chip Erase (0x60)
-pub const JEDEC_CE_60: u8 = 0x60;
-/// Chip Erase (0xC7)
-pub const JEDEC_CE_C7: u8 = 0xC7;
-/// Read JEDEC ID
-pub const JEDEC_RDID: u8 = 0x9F;
-/// Read Electronic Manufacturer Signature
-pub const JEDEC_REMS: u8 = 0x90;
-/// Read Electronic Signature
-pub const JEDEC_RES: u8 = 0xAB;
-/// AAI Word Program (SST specific)
-pub const JEDEC_AAI_WORD_PROGRAM: u8 = 0xAD;
+pub use rflasher_core::spi::opcodes::{
+    AAI_WP as JEDEC_AAI_WORD_PROGRAM, BE_52 as JEDEC_BE_52, BE_D8 as JEDEC_BE_D8,
+    CE_60 as JEDEC_CE_60, CE_C7 as JEDEC_CE_C7, EWSR as JEDEC_EWSR, FAST_READ as JEDEC_FAST_READ,
+    PP as JEDEC_BYTE_PROGRAM, RDID as JEDEC_RDID, RDSR as JEDEC_RDSR, READ as JEDEC_READ,
+    REMS as JEDEC_REMS, RES as JEDEC_RES, SE_20 as JEDEC_SE, WRDI as JEDEC_WRDI,
+    WREN as JEDEC_WREN, WRSR as JEDEC_WRSR,
+};
 
 // ============================================================================
 // Hardware Sequencing Cycle Types

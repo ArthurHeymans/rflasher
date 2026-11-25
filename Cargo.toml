@@ -41,8 +41,6 @@ rflasher-pci = { version = "0.1.0", path = "crates/rflasher-pci", default-featur
 
 # Core
 bitflags = "2"
-embedded-io = "0.6"
-embedded-io-async = "0.6"
 log = "0.4"
 
 # std-only
@@ -83,6 +81,20 @@ exclude = [
     "/web",
 ]
 
+[[bin]]
+name = "rflasher"
+path = "src/main.rs"
+
+[[bin]]
+name = "gen-manpage"
+path = "src/bin/gen-manpage.rs"
+required-features = ["gen-tools"]
+
+[[bin]]
+name = "gen-completions"
+path = "src/bin/gen-completions.rs"
+required-features = ["gen-tools"]
+
 [features]
 default = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ft4222", "ftdi", "linux-spi", "linux-mtd", "internal", "raiden", "sunxi-fel"]
 
@@ -105,6 +117,9 @@ sunxi-fel = ["rflasher-programmers/sunxi-fel"]
 # REPL feature for scripting with Steel Scheme
 repl = ["dep:rflasher-repl"]
 
+# Packaging tools (man page and shell completion generators)
+gen-tools = ["dep:clap_mangen", "dep:clap_complete"]
+
 # Enable all programmers
 all-programmers = ["dummy", "ch341a", "ch347", "dediprog", "serprog", "ftdi", "ft4222", "linux-spi", "linux-mtd", "linux-gpio", "internal", "raiden", "sunxi-fel", "ati-spi"]
 
@@ -122,16 +137,13 @@ rflasher-programmers = { workspace = true, features = ["std"] }
 rflasher-repl = { version = "0.1.0", path = "crates/rflasher-repl", optional = true }
 futures-lite.workspace = true
 clap.workspace = true
-clap_mangen = "0.2"
+clap_mangen = { version = "0.2", optional = true }
 env_logger.workspace = true
 log.workspace = true
 indicatif.workspace = true
 same-file = "1"
 thiserror.workspace = true
-clap_complete.workspace = true
-
-[dev-dependencies]
-nusb = { workspace = true }
+clap_complete = { workspace = true, optional = true }
 
 [profile.release]
 lto = true

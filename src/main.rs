@@ -449,7 +449,7 @@ async fn print_chip_info(handle: &mut FlashHandle) {
                         region.name,
                         region.start,
                         region.end,
-                        commands::format_size(region.end - region.start + 1)
+                        commands::format_size(region.size())
                     );
                 }
             } else {
