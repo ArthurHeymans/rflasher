@@ -120,8 +120,11 @@ mod linux {
                 ),
                 chipset.revision_id,
             )?;
+            // SAFETY: `info` was just discovered from the current Linux host via
+            // `DefaultPciAccess` and has not been modified.
+            let controller = unsafe { info.create_controller()? };
             Ok(Self::Spi(InternalSpi {
-                controller: Box::new(info.create_controller()?),
+                controller: Box::new(controller),
             }))
         }
     }

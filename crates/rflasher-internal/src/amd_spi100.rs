@@ -158,6 +158,11 @@ struct SpiSpeed {
     name: &'static str,
 }
 
+const RESERVED_SPI_SPEED: SpiSpeed = SpiSpeed {
+    khz: 0,
+    name: "Reserved",
+};
+
 const SPI_SPEEDS: [SpiSpeed; 8] = [
     SpiSpeed {
         khz: 66666,
@@ -183,15 +188,16 @@ const SPI_SPEEDS: [SpiSpeed; 8] = [
         khz: 800,
         name: "800 kHz",
     },
-    SpiSpeed {
-        khz: 0,
-        name: "Reserved",
-    },
-    SpiSpeed {
-        khz: 0,
-        name: "Reserved",
-    },
+    RESERVED_SPI_SPEED,
+    RESERVED_SPI_SPEED,
 ];
+
+fn decode_spi_speed(nibble: u8) -> SpiSpeed {
+    SPI_SPEEDS
+        .get(usize::from(nibble))
+        .copied()
+        .unwrap_or(RESERVED_SPI_SPEED)
+}
 
 /// AMD SPI100 Controller
 #[cfg(any(all(feature = "std", target_os = "linux"), not(feature = "std")))]
@@ -206,25 +212,26 @@ pub struct Spi100Controller<H: HostAccess> {
     mapped_len: usize,
     /// Whether 4-byte addressing memory map is disabled
     no_4ba_mmap: bool,
-    /// Original alternate speed (for restoration on shutdown)
-    altspeed: u8,
+    /// Original alternate speed when modified during init (for restoration on drop)
+    original_altspeed: Option<u8>,
 }
 
 #[cfg(all(feature = "std", target_os = "linux"))]
 impl Spi100Controller<LinuxHost> {
-    /// Create a new SPI100 controller instance
+    /// Create a new SPI100 controller instance.
     ///
-    /// # Arguments
+    /// # Safety
     ///
-    /// * `spibar_addr` - Physical address of SPI BAR
-    /// * `memory_addr` - Optional physical address of memory-mapped flash
-    /// * `mapped_len` - Size of memory-mapped flash region (0 if none)
-    pub fn new(
+    /// `spibar_addr` must point to a valid 256-byte AMD SPI100 register MMIO
+    /// window, and if `memory_addr` is `Some(addr)` with `mapped_len > 0`,
+    /// `[addr, addr + mapped_len)` must be a valid read-only flash MMIO window.
+    pub unsafe fn new(
         spibar_addr: u64,
         memory_addr: Option<u64>,
         mapped_len: usize,
     ) -> Result<Self, InternalError> {
-        Self::new_with_host(LinuxHost::new(), spibar_addr, memory_addr, mapped_len)
+        // SAFETY: forwarded to caller.
+        unsafe { Self::new_with_host(LinuxHost::new(), spibar_addr, memory_addr, mapped_len) }
     }
 }
 
@@ -232,21 +239,19 @@ impl Spi100Controller<LinuxHost> {
 impl<H: HostAccess> Spi100Controller<H> {
     /// Create a new SPI100 controller instance using caller-provided host access.
     ///
-    /// # Arguments
+    /// # Safety
     ///
-    /// * `host` - PCI/MMIO/delay backend for this execution environment
-    /// * `spibar_addr` - Physical address of SPI BAR
-    /// * `memory_addr` - Optional physical address of memory-mapped flash
-    /// * `mapped_len` - Size of memory-mapped flash region (0 if none)
-    pub fn new_with_host(
+    /// `spibar_addr` must name a valid 256-byte AMD SPI100 register window for
+    /// `host`, and if `memory_addr` is `Some(addr)` with `mapped_len > 0`,
+    /// `[addr, addr + mapped_len)` must name a valid flash MMIO window.
+    pub unsafe fn new_with_host(
         host: H,
         spibar_addr: u64,
         memory_addr: Option<u64>,
         mapped_len: usize,
     ) -> Result<Self, InternalError> {
         // Map the SPI registers (256 bytes)
-        // SAFETY: `spibar_addr` comes from chipset enable code or the caller's
-        // platform-specific discovery and must name the SPI100 register window.
+        // SAFETY: forwarded from caller's safety contract.
         let spibar = unsafe { host.map_mmio(spibar_addr, 256)? };
 
         // Map the memory region if provided. A zero address is treated as no
@@ -254,8 +259,7 @@ impl<H: HostAccess> Spi100Controller<H> {
         let memory = memory_addr
             .filter(|&addr| addr != 0 && mapped_len > 0)
             .map(|addr| {
-                // SAFETY: the optional memory window is supplied by chipset
-                // ROM range registers or the caller's platform discovery.
+                // SAFETY: forwarded from caller's safety contract.
                 unsafe { host.map_mmio(addr, mapped_len) }
             })
             .transpose()?;
@@ -267,7 +271,7 @@ impl<H: HostAccess> Spi100Controller<H> {
             memory,
             mapped_len,
             no_4ba_mmap: false,
-            altspeed: 0,
+            original_altspeed: None,
         };
 
         // Initialize the controller
@@ -621,17 +625,20 @@ impl<H: HostAccess> Spi100Controller<H> {
         let speed_cfg = self.read16(regs::SPEED_CFG);
         log::debug!(
             "NormSpeed: {}",
-            SPI_SPEEDS[(speed_cfg >> 12 & 0xf) as usize].name
+            decode_spi_speed(((speed_cfg >> 12) & 0xf) as u8).name
         );
         log::debug!(
             "FastSpeed: {}",
-            SPI_SPEEDS[(speed_cfg >> 8 & 0xf) as usize].name
+            decode_spi_speed(((speed_cfg >> 8) & 0xf) as u8).name
         );
         log::debug!(
             "AltSpeed:  {}",
-            SPI_SPEEDS[(speed_cfg >> 4 & 0xf) as usize].name
+            decode_spi_speed(((speed_cfg >> 4) & 0xf) as u8).name
         );
-        log::debug!("TpmSpeed:  {}", SPI_SPEEDS[(speed_cfg & 0xf) as usize].name);
+        log::debug!(
+            "TpmSpeed:  {}",
+            decode_spi_speed((speed_cfg & 0xf) as u8).name
+        );
     }
 
     /// Check 4-byte addressing configuration
@@ -666,31 +673,39 @@ impl<H: HostAccess> Spi100Controller<H> {
     /// Set alternate speed for programming
     fn set_altspeed(&mut self) {
         let speed_cfg = self.read16(regs::SPEED_CFG);
-        let normspeed = (speed_cfg >> 12 & 0xf) as usize;
-        self.altspeed = (speed_cfg >> 4 & 0xf) as u8;
+        let normspeed = ((speed_cfg >> 12) & 0xf) as u8;
+        let current_altspeed = ((speed_cfg >> 4) & 0xf) as u8;
+
+        let norm = decode_spi_speed(normspeed);
+        if norm.khz == 0 {
+            log::warn!(
+                "AMD SPI100 NormSpeed uses reserved encoding ({normspeed:#x}); leaving AltSpeed unchanged"
+            );
+            return;
+        }
 
         // Set SPI speed to 33MHz but not higher than `normal read` speed
-        let altspeed = if SPI_SPEEDS[normspeed].khz != 0 && SPI_SPEEDS[normspeed].khz < 33333 {
-            normspeed as u8
+        let altspeed = if norm.khz < 33333 {
+            normspeed
         } else {
             1 // 33.33 MHz
         };
 
-        if altspeed != self.altspeed {
-            log::info!(
-                "Setting SPI speed to {}",
-                SPI_SPEEDS[altspeed as usize].name
-            );
-            let new_speed_cfg = (speed_cfg & !0xf0) | ((altspeed as u16) << 4);
+        if altspeed != current_altspeed {
+            log::info!("Setting SPI speed to {}", decode_spi_speed(altspeed).name);
+            let new_speed_cfg = (speed_cfg & !0xf0) | (u16::from(altspeed) << 4);
             self.write16(regs::SPEED_CFG, new_speed_cfg);
+            self.original_altspeed = Some(current_altspeed);
         }
     }
 
-    /// Restore original alternate speed
+    /// Restore original alternate speed if [`Self::set_altspeed`] modified it.
     fn restore_altspeed(&self) {
-        let speed_cfg = self.read16(regs::SPEED_CFG);
-        let new_speed_cfg = (speed_cfg & !0xf0) | ((self.altspeed as u16) << 4);
-        self.write16(regs::SPEED_CFG, new_speed_cfg);
+        if let Some(original) = self.original_altspeed {
+            let speed_cfg = self.read16(regs::SPEED_CFG);
+            let new_speed_cfg = (speed_cfg & !0xf0) | (u16::from(original) << 4);
+            self.write16(regs::SPEED_CFG, new_speed_cfg);
+        }
     }
 
     fn write_enable(&self) -> Result<(), InternalError> {
@@ -921,7 +936,13 @@ pub struct Spi100Controller {
 
 #[cfg(all(feature = "std", not(target_os = "linux")))]
 impl Spi100Controller {
-    pub fn new(
+    /// Stub for non-Linux std targets.
+    ///
+    /// # Safety
+    ///
+    /// This target does not map MMIO, but the constructor is unsafe to match
+    /// the Linux signature.
+    pub unsafe fn new(
         _spibar_addr: u64,
         _memory_addr: Option<u64>,
         _mapped_len: usize,

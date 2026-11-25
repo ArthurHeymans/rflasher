@@ -415,314 +415,25 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Send a raw SPI command using ICH7 software sequencing.
-    ///
-    /// Only classified opcodes in OPMENU are accepted. Mutating commands
-    /// enable BIOS writes first; unknown commands are rejected, as is 0x35
-    /// unless the identified chip reads status register 2 with it. Opcode
-    /// meanings must match the connected flash.
-    pub fn ich7_swseq_send_command(
-        &mut self,
-        writearr: &[u8],
-        readarr: &mut [u8],
+    fn swseq_run_opcode(
+        &self,
+        ich7: bool,
+        opcode: u8,
+        addr: u32,
+        data: &mut [u8],
+        is_write: bool,
+        atomic: u8,
     ) -> Result<(), InternalError> {
-        self.ich7_swseq_send_command_after(writearr, readarr, None, false)
-    }
-
-    /// Send a raw command, allowing unknown opcodes through the mutation gate.
-    ///
-    /// Known opcodes retain their normal classification; OPMENU and framing
-    /// checks still apply. This does not bypass BIOS write protection.
-    ///
-    /// # Safety
-    /// The caller must verify the command's meaning and effects on the connected
-    /// flash and platform, including for opcodes classified as read-only.
-    pub unsafe fn ich7_swseq_send_command_unchecked(
-        &mut self,
-        writearr: &[u8],
-        readarr: &mut [u8],
-    ) -> Result<(), InternalError> {
-        self.ich7_swseq_send_command_after(writearr, readarr, None, true)
-    }
-
-    /// [`Self::ich7_swseq_send_command`] after an explicit `preop`.
-    pub(super) fn ich7_swseq_send_command_after(
-        &mut self,
-        writearr: &[u8],
-        readarr: &mut [u8],
-        preop: Option<u8>,
-        allow_unknown: bool,
-    ) -> Result<(), InternalError> {
-        if writearr.is_empty() {
-            return Err(InternalError::Io("Empty write array"));
-        }
-
-        let opcode = writearr[0];
-        let writecnt = writearr.len();
-        let readcnt = readarr.len();
-
-        self.menu_type(opcode)?;
-        // Find opcode in table
-        let opcode_index = self.find_opcode_index(opcode).ok_or_else(|| {
-            log::debug!("ICH7: Opcode {:#04x} not found in opcode table", opcode);
-            InternalError::NotSupported("Opcode not available in OPMENU")
-        })?;
-
-        // Invariant: init() always populates `opcodes` before the controller
-        // is returned; find_opcode_index() above already returns an error if
-        // it were somehow absent.
-        let opcodes = self
-            .opcodes
-            .as_ref()
-            .expect("opcodes initialized by IchSpiController::init");
-        let spi_type = opcodes.opcode[opcode_index].spi_type;
-
-        // Validate command format based on opcode type
-        match spi_type {
-            SPI_OPCODE_TYPE_READ_WITH_ADDRESS if writecnt != 4 => {
-                return Err(InternalError::Io(
-                    "Read with address requires exactly 4 write bytes",
-                ));
-            }
-            SPI_OPCODE_TYPE_READ_NO_ADDRESS if writecnt != 1 => {
-                return Err(InternalError::Io(
-                    "Read without address requires exactly 1 write byte",
-                ));
-            }
-            SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS if writecnt < 4 => {
-                return Err(InternalError::Io(
-                    "Write with address requires at least 4 write bytes",
-                ));
-            }
-            SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS if readcnt > 0 => {
-                return Err(InternalError::Io("Write commands cannot have read data"));
-            }
-            SPI_OPCODE_TYPE_WRITE_NO_ADDRESS if readcnt > 0 => {
-                return Err(InternalError::Io("Write commands cannot have read data"));
-            }
-            _ => {}
-        }
-
-        // Extract address and data based on opcode type
-        let (addr, data_slice, is_write): (u32, &[u8], bool) = match spi_type {
-            SPI_OPCODE_TYPE_WRITE_NO_ADDRESS => {
-                // Data starts after opcode
-                (0, &writearr[1..], true)
-            }
-            SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS => {
-                // Address is bytes 1-3, data is bytes 4+
-                let addr = ((writearr[1] as u32) << 16)
-                    | ((writearr[2] as u32) << 8)
-                    | (writearr[3] as u32);
-                (addr, &writearr[4..], true)
-            }
-            SPI_OPCODE_TYPE_READ_WITH_ADDRESS => {
-                // Address is bytes 1-3
-                let addr = ((writearr[1] as u32) << 16)
-                    | ((writearr[2] as u32) << 8)
-                    | (writearr[3] as u32);
-                (addr, &[], false)
-            }
-            SPI_OPCODE_TYPE_READ_NO_ADDRESS => {
-                // No address, just read data
-                (0, &[], false)
-            }
-            _ => (0, &[], false),
-        };
-
-        if data_slice.len() > Self::SWSEQ_MAX_DATA || readcnt > Self::SWSEQ_MAX_DATA {
-            return Err(InternalError::Io("Data length exceeds swseq maximum"));
-        }
-        if matches!(
-            spi_type,
-            SPI_OPCODE_TYPE_READ_WITH_ADDRESS | SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS
-        ) {
-            Self::check_swseq_range(addr, if is_write { data_slice.len() } else { readcnt })?;
-        }
-
-        // Determine if we need atomic mode (preop + main op)
-        let atomic = if is_write {
-            self.select_atomic(opcode, preop)?
+        if ich7 {
+            self.ich7_run_opcode(opcode, addr, data, is_write, atomic)
         } else {
-            0
-        };
-
-        // For read operations, we need to use the readarr
-        // For write operations, we use the data from writearr
-        let footprint = self.command_footprint(opcode, addr, data_slice.len());
-        self.gate_opcode(opcode, allow_unknown, footprint)?;
-        if is_write {
-            let mut data_buf: [u8; 64] = [0; 64];
-            let len = data_slice.len().min(64);
-            data_buf[..len].copy_from_slice(&data_slice[..len]);
-            self.ich7_run_opcode(opcode, addr, &mut data_buf[..len], true, atomic)
-        } else {
-            let len = readcnt.min(64);
-            self.ich7_run_opcode(opcode, addr, &mut readarr[..len], false, 0)
+            self.ich9_run_opcode(opcode, addr, data, is_write, atomic)
         }
     }
 
-    /// Read data using ICH7 software sequencing
-    pub fn ich7_swseq_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
-        Self::check_swseq_range(addr, buf.len())?;
-        // Check we have a read opcode available
-        let read_opcode = if self.find_opcode_index(JEDEC_READ).is_some() {
-            JEDEC_READ
-        } else if self.find_opcode_index(JEDEC_FAST_READ).is_some() {
-            JEDEC_FAST_READ
-        } else {
-            return Err(InternalError::NotSupported("No read opcode available"));
-        };
-
-        let len = buf.len();
-        let mut offset = 0;
-        let mut current_addr = addr;
-
-        while offset < len {
-            // Avoid transfers that cross 4 KiB boundaries. The ICH SPI
-            // controller is known to fail on some platforms when a single
-            // transaction spans such a boundary; coreboot applies the same
-            // restriction in its Intel common SPI driver.
-            let remaining = len - offset;
-            let boundary_remaining = 0x1000 - (current_addr as usize & 0xfff);
-            let block_len = remaining.min(Self::SWSEQ_MAX_DATA).min(boundary_remaining);
-
-            // Build write array: opcode + 3-byte address
-            let writearr = [
-                read_opcode,
-                ((current_addr >> 16) & 0xff) as u8,
-                ((current_addr >> 8) & 0xff) as u8,
-                (current_addr & 0xff) as u8,
-            ];
-
-            self.ich7_swseq_send_command(&writearr, &mut buf[offset..offset + block_len])?;
-
-            offset += block_len;
-            current_addr += block_len as u32;
-        }
-
-        Ok(())
-    }
-
-    /// Write data using ICH7 software sequencing
-    pub fn ich7_swseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
-        Self::check_swseq_range(addr, data.len())?;
-        // Check we have a program opcode available
-        if self.find_opcode_index(JEDEC_BYTE_PROGRAM).is_none() {
-            return Err(InternalError::NotSupported("No program opcode available"));
-        }
-
-        let len = data.len();
-        // Refuse before the first page, not part-way through.
-        self.check_range(FlashAccess::Modify, addr, len as u64)?;
-        let mut offset = 0;
-        let mut current_addr = addr;
-
-        while offset < len {
-            // Max 64 bytes per transfer, but also respect page boundaries (256 bytes)
-            let remaining = len - offset;
-            let page_remaining = 256 - (current_addr as usize & 0xff);
-            let block_len = remaining.min(Self::SWSEQ_MAX_DATA).min(page_remaining);
-
-            // Build write array: opcode + 3-byte address + data
-            let mut writearr = [0u8; 68]; // 4 header + 64 data max
-            writearr[0] = JEDEC_BYTE_PROGRAM;
-            writearr[1] = ((current_addr >> 16) & 0xff) as u8;
-            writearr[2] = ((current_addr >> 8) & 0xff) as u8;
-            writearr[3] = (current_addr & 0xff) as u8;
-            writearr[4..4 + block_len].copy_from_slice(&data[offset..offset + block_len]);
-
-            // Send program command (WREN is handled automatically via atomic mode)
-            self.ich7_swseq_send_command(&writearr[..4 + block_len], &mut [])?;
-
-            // Wait for programming to complete by polling status register
-            self.ich7_swseq_wait_wip()?;
-
-            offset += block_len;
-            current_addr += block_len as u32;
-        }
-
-        Ok(())
-    }
-
-    /// Raw controller erase is unavailable without chip-specific geometry;
-    /// see [`Self::swseq_erase_blocks`].
-    pub fn ich7_swseq_erase(&mut self, _addr: u32, _len: u32) -> Result<(), InternalError> {
-        Err(InternalError::NotSupported(
-            "Software erase requires chip-specific geometry",
-        ))
-    }
-
-    /// Wait for Write-In-Progress (WIP) bit to clear using ICH7 swseq
-    pub(super) fn ich7_swseq_wait_wip(&mut self) -> Result<(), InternalError> {
-        // Check we have RDSR opcode
-        if self.find_opcode_index(JEDEC_RDSR).is_none() {
-            // No RDSR available, just wait a fixed time
-            self.host.delay_us(100_000);
-            return Ok(());
-        }
-
-        let rdsr_arr = [JEDEC_RDSR];
-        let mut status = [0u8; 1];
-
-        // Poll for up to 60 seconds (for chip erase)
-        for _ in 0..600_000 {
-            self.ich7_swseq_send_command(&rdsr_arr, &mut status)?;
-
-            // WIP is bit 0
-            if status[0] & 0x01 == 0 {
-                return Ok(());
-            }
-
-            // Small delay between polls
-            self.host.delay_us(100);
-        }
-
-        Err(InternalError::Io("Timeout waiting for WIP to clear"))
-    }
-
-    /// Send a raw SPI command using software sequencing
-    ///
-    /// This is the main public interface for swseq commands, implementing the
-    /// same logic as ich_spi_send_command() in flashprog.
-    ///
-    /// # Arguments
-    /// * `writearr` - Data to write (opcode + address + write data)
-    /// * `readarr` - Buffer for read data
-    ///
-    /// The first byte of writearr is the opcode. For address-type commands,
-    /// bytes 1-3 are the 24-bit address. Any remaining bytes are data to write.
-    /// Only classified opcodes in OPMENU are accepted. Mutating commands enable
-    /// BIOS writes first; unknown commands are rejected, as is 0x35 unless the
-    /// identified chip reads status register 2 with it. Opcode meanings must
-    /// match the connected flash.
-    pub fn swseq_send_command(
+    fn swseq_send_command_impl(
         &mut self,
-        writearr: &[u8],
-        readarr: &mut [u8],
-    ) -> Result<(), InternalError> {
-        self.swseq_send_command_after(writearr, readarr, None, false)
-    }
-
-    /// Send a raw command, allowing unknown opcodes through the mutation gate.
-    ///
-    /// Known opcodes retain their normal classification; OPMENU and framing
-    /// checks still apply. This does not bypass BIOS write protection.
-    ///
-    /// # Safety
-    /// The caller must verify the command's meaning and effects on the connected
-    /// flash and platform, including for opcodes classified as read-only.
-    pub unsafe fn swseq_send_command_unchecked(
-        &mut self,
-        writearr: &[u8],
-        readarr: &mut [u8],
-    ) -> Result<(), InternalError> {
-        self.swseq_send_command_after(writearr, readarr, None, true)
-    }
-
-    /// [`Self::swseq_send_command`] after an explicit `preop`.
-    pub(super) fn swseq_send_command_after(
-        &mut self,
+        ich7: bool,
         writearr: &[u8],
         readarr: &mut [u8],
         preop: Option<u8>,
@@ -780,28 +491,20 @@ impl<H: HostAccess> IchSpiController<H> {
 
         // Extract address and data based on opcode type
         let (addr, data_slice, is_write): (u32, &[u8], bool) = match spi_type {
-            SPI_OPCODE_TYPE_WRITE_NO_ADDRESS => {
-                // Data starts after opcode
-                (0, &writearr[1..], true)
-            }
+            SPI_OPCODE_TYPE_WRITE_NO_ADDRESS => (0, &writearr[1..], true),
             SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS => {
-                // Address is bytes 1-3, data is bytes 4+
                 let addr = ((writearr[1] as u32) << 16)
                     | ((writearr[2] as u32) << 8)
                     | (writearr[3] as u32);
                 (addr, &writearr[4..], true)
             }
             SPI_OPCODE_TYPE_READ_WITH_ADDRESS => {
-                // Address is bytes 1-3
                 let addr = ((writearr[1] as u32) << 16)
                     | ((writearr[2] as u32) << 8)
                     | (writearr[3] as u32);
                 (addr, &[], false)
             }
-            SPI_OPCODE_TYPE_READ_NO_ADDRESS => {
-                // No address, just read data
-                (0, &[], false)
-            }
+            SPI_OPCODE_TYPE_READ_NO_ADDRESS => (0, &[], false),
             _ => (0, &[], false),
         };
 
@@ -816,7 +519,6 @@ impl<H: HostAccess> IchSpiController<H> {
         }
 
         // Determine if we need atomic mode (preop + main op)
-        // Write operations typically need WREN first
         let atomic = if is_write {
             self.select_atomic(opcode, preop)?
         } else {
@@ -826,32 +528,30 @@ impl<H: HostAccess> IchSpiController<H> {
         let footprint = self.command_footprint(opcode, addr, data_slice.len());
         self.gate_opcode(opcode, allow_unknown, footprint)?;
 
-        // For read operations, we need to use the readarr
-        // For write operations, we use the data from writearr
         if is_write {
-            // Create a mutable copy for the write path (though it won't be modified)
             let mut data_buf: [u8; 64] = [0; 64];
             let len = data_slice.len().min(64);
             data_buf[..len].copy_from_slice(&data_slice[..len]);
-            self.ich9_run_opcode(opcode, addr, &mut data_buf[..len], true, atomic)
+            self.swseq_run_opcode(ich7, opcode, addr, &mut data_buf[..len], true, atomic)
         } else {
-            // Read operation - fill readarr
             let len = readcnt.min(64);
-            self.ich9_run_opcode(opcode, addr, &mut readarr[..len], false, 0)
+            self.swseq_run_opcode(ich7, opcode, addr, &mut readarr[..len], false, 0)
         }
     }
 
-    /// Read data using software sequencing
-    pub fn swseq_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+    fn swseq_read_impl(
+        &mut self,
+        ich7: bool,
+        addr: u32,
+        buf: &mut [u8],
+    ) -> Result<(), InternalError> {
         Self::check_swseq_range(addr, buf.len())?;
-        // Check we have a read opcode available
-        let read_opcode = if self.find_opcode_index(JEDEC_READ).is_some() {
-            JEDEC_READ
-        } else if self.find_opcode_index(JEDEC_FAST_READ).is_some() {
-            JEDEC_FAST_READ
-        } else {
+        // Software sequencing cannot emit dummy cycles, so FAST_READ (0x0B)
+        // cannot be used as a drop-in fallback without shifting every block by
+        // one dummy byte. Require standard JEDEC READ (0x03).
+        if self.find_opcode_index(JEDEC_READ).is_none() {
             return Err(InternalError::NotSupported("No read opcode available"));
-        };
+        }
 
         let len = buf.len();
         let mut offset = 0;
@@ -866,15 +566,20 @@ impl<H: HostAccess> IchSpiController<H> {
             let boundary_remaining = 0x1000 - (current_addr as usize & 0xfff);
             let block_len = remaining.min(Self::SWSEQ_MAX_DATA).min(boundary_remaining);
 
-            // Build write array: opcode + 3-byte address
             let writearr = [
-                read_opcode,
+                JEDEC_READ,
                 ((current_addr >> 16) & 0xff) as u8,
                 ((current_addr >> 8) & 0xff) as u8,
                 (current_addr & 0xff) as u8,
             ];
 
-            self.swseq_send_command(&writearr, &mut buf[offset..offset + block_len])?;
+            self.swseq_send_command_impl(
+                ich7,
+                &writearr,
+                &mut buf[offset..offset + block_len],
+                None,
+                false,
+            )?;
 
             offset += block_len;
             current_addr += block_len as u32;
@@ -883,10 +588,13 @@ impl<H: HostAccess> IchSpiController<H> {
         Ok(())
     }
 
-    /// Write data using software sequencing
-    pub fn swseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+    fn swseq_write_impl(
+        &mut self,
+        ich7: bool,
+        addr: u32,
+        data: &[u8],
+    ) -> Result<(), InternalError> {
         Self::check_swseq_range(addr, data.len())?;
-        // Check we have a program opcode available
         if self.find_opcode_index(JEDEC_BYTE_PROGRAM).is_none() {
             return Err(InternalError::NotSupported("No program opcode available"));
         }
@@ -903,7 +611,6 @@ impl<H: HostAccess> IchSpiController<H> {
             let page_remaining = 256 - (current_addr as usize & 0xff);
             let block_len = remaining.min(Self::SWSEQ_MAX_DATA).min(page_remaining);
 
-            // Build write array: opcode + 3-byte address + data
             let mut writearr = [0u8; 68]; // 4 header + 64 data max
             writearr[0] = JEDEC_BYTE_PROGRAM;
             writearr[1] = ((current_addr >> 16) & 0xff) as u8;
@@ -912,16 +619,161 @@ impl<H: HostAccess> IchSpiController<H> {
             writearr[4..4 + block_len].copy_from_slice(&data[offset..offset + block_len]);
 
             // Send program command (WREN is handled automatically via atomic mode)
-            self.swseq_send_command(&writearr[..4 + block_len], &mut [])?;
+            self.swseq_send_command_impl(ich7, &writearr[..4 + block_len], &mut [], None, false)?;
 
             // Wait for programming to complete by polling status register
-            self.swseq_wait_wip()?;
+            self.swseq_wait_wip_impl(ich7)?;
 
             offset += block_len;
             current_addr += block_len as u32;
         }
 
         Ok(())
+    }
+
+    fn swseq_wait_wip_impl(&mut self, ich7: bool) -> Result<(), InternalError> {
+        if self.find_opcode_index(JEDEC_RDSR).is_none() {
+            // No RDSR available, just wait a fixed time
+            self.host.delay_us(100_000);
+            return Ok(());
+        }
+
+        let rdsr_arr = [JEDEC_RDSR];
+        let mut status = [0u8; 1];
+
+        // Poll for up to 60 seconds (for chip erase)
+        for _ in 0..600_000 {
+            self.swseq_send_command_impl(ich7, &rdsr_arr, &mut status, None, false)?;
+
+            // WIP is bit 0
+            if status[0] & 0x01 == 0 {
+                return Ok(());
+            }
+
+            // Small delay between polls
+            self.host.delay_us(100);
+        }
+
+        Err(InternalError::Io("Timeout waiting for WIP to clear"))
+    }
+
+    /// Send a raw SPI command using ICH7 software sequencing.
+    ///
+    /// Only classified opcodes in OPMENU are accepted. Mutating commands
+    /// enable BIOS writes first; unknown commands are rejected, as is 0x35
+    /// unless the identified chip reads status register 2 with it. Opcode
+    /// meanings must match the connected flash.
+    pub fn ich7_swseq_send_command(
+        &mut self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+    ) -> Result<(), InternalError> {
+        self.ich7_swseq_send_command_after(writearr, readarr, None, false)
+    }
+
+    /// Send a raw command, allowing unknown opcodes through the mutation gate.
+    ///
+    /// Known opcodes retain their normal classification; OPMENU and framing
+    /// checks still apply. This does not bypass BIOS write protection.
+    ///
+    /// # Safety
+    /// The caller must verify the command's meaning and effects on the connected
+    /// flash and platform, including for opcodes classified as read-only.
+    pub unsafe fn ich7_swseq_send_command_unchecked(
+        &mut self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+    ) -> Result<(), InternalError> {
+        self.ich7_swseq_send_command_after(writearr, readarr, None, true)
+    }
+
+    /// [`Self::ich7_swseq_send_command`] after an explicit `preop`.
+    pub(super) fn ich7_swseq_send_command_after(
+        &mut self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+        preop: Option<u8>,
+        allow_unknown: bool,
+    ) -> Result<(), InternalError> {
+        self.swseq_send_command_impl(true, writearr, readarr, preop, allow_unknown)
+    }
+
+    /// Read data using ICH7 software sequencing
+    pub fn ich7_swseq_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+        self.swseq_read_impl(true, addr, buf)
+    }
+
+    /// Write data using ICH7 software sequencing
+    pub fn ich7_swseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+        self.swseq_write_impl(true, addr, data)
+    }
+
+    /// Raw controller erase is unavailable without chip-specific geometry;
+    /// see [`Self::swseq_erase_blocks`].
+    pub fn ich7_swseq_erase(&mut self, _addr: u32, _len: u32) -> Result<(), InternalError> {
+        Err(InternalError::NotSupported(
+            "Software erase requires chip-specific geometry",
+        ))
+    }
+
+    /// Send a raw SPI command using software sequencing
+    ///
+    /// This is the main public interface for swseq commands, implementing the
+    /// same logic as ich_spi_send_command() in flashprog.
+    ///
+    /// # Arguments
+    /// * `writearr` - Data to write (opcode + address + write data)
+    /// * `readarr` - Buffer for read data
+    ///
+    /// The first byte of writearr is the opcode. For address-type commands,
+    /// bytes 1-3 are the 24-bit address. Any remaining bytes are data to write.
+    /// Only classified opcodes in OPMENU are accepted. Mutating commands enable
+    /// BIOS writes first; unknown commands are rejected, as is 0x35 unless the
+    /// identified chip reads status register 2 with it. Opcode meanings must
+    /// match the connected flash.
+    pub fn swseq_send_command(
+        &mut self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+    ) -> Result<(), InternalError> {
+        self.swseq_send_command_after(writearr, readarr, None, false)
+    }
+
+    /// Send a raw command, allowing unknown opcodes through the mutation gate.
+    ///
+    /// Known opcodes retain their normal classification; OPMENU and framing
+    /// checks still apply. This does not bypass BIOS write protection.
+    ///
+    /// # Safety
+    /// The caller must verify the command's meaning and effects on the connected
+    /// flash and platform, including for opcodes classified as read-only.
+    pub unsafe fn swseq_send_command_unchecked(
+        &mut self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+    ) -> Result<(), InternalError> {
+        self.swseq_send_command_after(writearr, readarr, None, true)
+    }
+
+    /// [`Self::swseq_send_command`] after an explicit `preop`.
+    pub(super) fn swseq_send_command_after(
+        &mut self,
+        writearr: &[u8],
+        readarr: &mut [u8],
+        preop: Option<u8>,
+        allow_unknown: bool,
+    ) -> Result<(), InternalError> {
+        self.swseq_send_command_impl(false, writearr, readarr, preop, allow_unknown)
+    }
+
+    /// Read data using software sequencing
+    pub fn swseq_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), InternalError> {
+        self.swseq_read_impl(false, addr, buf)
+    }
+
+    /// Write data using software sequencing
+    pub fn swseq_write(&mut self, addr: u32, data: &[u8]) -> Result<(), InternalError> {
+        self.swseq_write_impl(false, addr, data)
     }
 
     /// Raw controller erase is unavailable without chip-specific geometry;
@@ -967,45 +819,13 @@ impl<H: HostAccess> IchSpiController<H> {
         // The legacy wait helpers fall back to a fixed delay without RDSR.
         // That cannot guarantee erase completion, so require real polling.
         self.menu_type(JEDEC_RDSR)?;
+        let ich7 = self.generation == IchChipset::Ich7;
         for block in (addr..addr + len).step_by(block_size as usize) {
             let [_, high, middle, low] = block.to_be_bytes();
             let command = [opcode, high, middle, low];
-            if self.generation == IchChipset::Ich7 {
-                self.ich7_swseq_send_command(&command, &mut [])?;
-                self.ich7_swseq_wait_wip()?;
-            } else {
-                self.swseq_send_command(&command, &mut [])?;
-                self.swseq_wait_wip()?;
-            }
+            self.swseq_send_command_impl(ich7, &command, &mut [], None, false)?;
+            self.swseq_wait_wip_impl(ich7)?;
         }
         Ok(())
-    }
-
-    /// Wait for Write-In-Progress (WIP) bit to clear
-    pub(super) fn swseq_wait_wip(&mut self) -> Result<(), InternalError> {
-        // Check we have RDSR opcode
-        if self.find_opcode_index(JEDEC_RDSR).is_none() {
-            // No RDSR available, just wait a fixed time
-            self.host.delay_us(100_000);
-            return Ok(());
-        }
-
-        let rdsr_arr = [JEDEC_RDSR];
-        let mut status = [0u8; 1];
-
-        // Poll for up to 60 seconds (for chip erase)
-        for _ in 0..600_000 {
-            self.swseq_send_command(&rdsr_arr, &mut status)?;
-
-            // WIP is bit 0
-            if status[0] & 0x01 == 0 {
-                return Ok(());
-            }
-
-            // Small delay between polls
-            self.host.delay_us(100);
-        }
-
-        Err(InternalError::Io("Timeout waiting for WIP to clear"))
     }
 }

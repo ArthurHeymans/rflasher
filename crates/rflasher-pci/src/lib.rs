@@ -243,7 +243,14 @@ mod linux {
         ///
         /// # Safety
         ///
-        /// `T` must exactly describe the registers at the start of this BAR.
+        /// - `T` must accurately describe the register layout at the start of
+        ///   this BAR.
+        /// - Any register bytes that can be mutated by hardware or written
+        ///   through `&T` must live inside [`core::cell::UnsafeCell`] (for
+        ///   example, MMIO register wrappers) and be accessed exclusively via
+        ///   volatile loads/stores.
+        /// - Any non-`UnsafeCell` bytes in `T` must be immutable and contain
+        ///   valid bit patterns for `T`.
         pub unsafe fn registers<T>(&self) -> &T {
             assert!(
                 core::mem::size_of::<T>() <= self.size,
@@ -319,7 +326,7 @@ mod linux {
             bar: u8,
             size: usize,
         ) -> Result<MappedBar, PciError> {
-            if bar > 5 || size == 0 {
+            if bar > 5 || size == 0 || size > isize::MAX as usize {
                 return Err(PciError::InvalidBar { address, bar });
             }
             let file = OpenOptions::new()
@@ -327,7 +334,15 @@ mod linux {
                 .write(true)
                 .open(self.device_path(address).join(format!("resource{bar}")))
                 .map_err(|_| PciError::MapBar { address, bar })?;
-            // SAFETY: Linux PCI sysfs resource files are mmap-able BAR windows.
+            let resource_len = file
+                .metadata()
+                .map_err(|_| PciError::MapBar { address, bar })?
+                .len();
+            if !u64::try_from(size).is_ok_and(|req| resource_len >= req) {
+                return Err(PciError::MapBar { address, bar });
+            }
+            // SAFETY: Linux PCI sysfs resource files are mmap-able BAR windows,
+            // and we verified above that `resourceN` is at least `size` bytes.
             let ptr = unsafe {
                 libc::mmap(
                     core::ptr::null_mut(),
@@ -444,12 +459,14 @@ mod linux {
         let (segment, rest) = name.split_once(':')?;
         let (bus, rest) = rest.split_once(':')?;
         let (device, function) = rest.split_once('.')?;
-        let address = PciAddress::new(
-            u16::from_str_radix(segment, 16).ok()?,
-            u8::from_str_radix(bus, 16).ok()?,
-            u8::from_str_radix(device, 16).ok()?,
-            u8::from_str_radix(function, 16).ok()?,
-        );
+        let segment = u16::from_str_radix(segment, 16).ok()?;
+        let bus = u8::from_str_radix(bus, 16).ok()?;
+        let device = u8::from_str_radix(device, 16).ok()?;
+        let function = u8::from_str_radix(function, 16).ok()?;
+        if device > 31 || function > 7 {
+            return None;
+        }
+        let address = PciAddress::new(segment, bus, device, function);
         Some(PciDevice {
             address,
             vendor_id: read_hex_u16(&path.join("vendor"))?,
@@ -802,6 +819,28 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].address, PciAddress::new(2, 3, 0x1f, 4));
         assert_eq!(pci.read16(devices[0].address, 0x10).unwrap(), 0x1234);
+
+        // Out-of-range device/function entries in sysfs are skipped without panicking.
+        for bad in ["0002:03:20.0", "0002:03:1f.8"] {
+            let dir = root.join(bad);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("vendor"), "0x1002\n").unwrap();
+            fs::write(dir.join("device"), "0x438d\n").unwrap();
+        }
+        assert_eq!(pci.enumerate().unwrap().len(), 1);
+
+        // Short resource0 file must be rejected when a larger mapping is requested.
+        let addr = devices[0].address;
+        fs::write(device.join("resource0"), [0x5au8; 64]).unwrap();
+        assert_eq!(
+            pci.map_bar(addr, 0, 128).err(),
+            Some(PciError::MapBar {
+                address: addr,
+                bar: 0
+            })
+        );
+        let mapped = pci.map_bar(addr, 0, 64).unwrap();
+        assert_eq!(mapped.size(), 64);
 
         fs::remove_dir_all(root).unwrap();
     }

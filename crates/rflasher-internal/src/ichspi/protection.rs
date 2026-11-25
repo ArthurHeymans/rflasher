@@ -144,6 +144,16 @@ impl<H: HostAccess> IchSpiController<H> {
         }
     }
 
+    /// DLOCK lock-down bit for protected range `index` on PCH100+ (`FPR0..=FPR4`).
+    /// Index 5 is `GPR0`, which has no `DLOCK.PRx_LOCKDN` bit (bit 13 is reserved).
+    fn dlock_pr_lockdn_bit(index: usize) -> u32 {
+        if index < 5 {
+            DLOCK_PR0_LOCKDN << index
+        } else {
+            0
+        }
+    }
+
     /// Whether protected range `index` is cleared before the first mutation
     /// (flashprog clears it at open): at open, the configuration was not
     /// locked down and, on PCH100+, neither was the range itself
@@ -153,7 +163,7 @@ impl<H: HostAccess> IchSpiController<H> {
     pub(super) fn pr_clearable(&self, index: usize) -> bool {
         self.generation != IchChipset::Ich7
             && !self.locked
-            && self.dlock & (DLOCK_PR0_LOCKDN << index) == 0
+            && self.dlock & Self::dlock_pr_lockdn_bit(index) == 0
     }
 
     /// Whether protected range `index` is locked now: HSFS.FLOCKDN or, on
@@ -161,7 +171,7 @@ impl<H: HostAccess> IchSpiController<H> {
     pub(super) fn pr_locked_now(&self, index: usize) -> bool {
         self.spibar.read16(ICH9_REG_HSFS) & HSFS_FLOCKDN != 0
             || (self.generation.is_pch100_compatible()
-                && self.spibar.read32(PCH100_REG_DLOCK) & (DLOCK_PR0_LOCKDN << index) != 0)
+                && self.spibar.read32(PCH100_REG_DLOCK) & Self::dlock_pr_lockdn_bit(index) != 0)
     }
 
     /// Protected range registers that currently restrict access, and
