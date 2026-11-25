@@ -229,6 +229,9 @@ pub(crate) fn validate_spi_program<M: SpiMaster + ?Sized>(
     }
     check_mutation_opcodes(master)?;
     protection::check_supported(master, ctx)?;
+    if ctx.page_size() == 0 {
+        return Err(Error::ChipNotSupported);
+    }
     if master.max_write_len() == 0 {
         return Err(Error::ProgrammerError);
     }

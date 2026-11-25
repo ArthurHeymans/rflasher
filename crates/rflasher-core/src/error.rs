@@ -213,5 +213,16 @@ impl fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
+#[cfg(feature = "alloc")]
+impl From<crate::layout::LayoutError> for Error {
+    fn from(err: crate::layout::LayoutError) -> Self {
+        match err {
+            crate::layout::LayoutError::RegionOutOfBounds
+            | crate::layout::LayoutError::ChipSizeMismatch { .. } => Self::AddressOutOfBounds,
+            _ => Self::LayoutError,
+        }
+    }
+}
+
 /// Result type alias using the core Error type
 pub type Result<T> = core::result::Result<T, Error>;

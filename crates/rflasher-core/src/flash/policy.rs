@@ -44,9 +44,7 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
     layout: &Layout,
     policy: &mut MutationPolicy<'_>,
 ) -> Result<()> {
-    layout
-        .validate(device.size())
-        .map_err(|_| Error::LayoutError)?;
+    layout.validate(device.size())?;
     let regions: alloc::vec::Vec<_> = layout.included_regions().collect();
     if let Some(r) = layout.regions_overlapping_included().find(|r| r.readonly) {
         return Err(refuse(
@@ -78,7 +76,7 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
                         && let Some(p) = actual
                             .regions
                             .iter()
-                            .find(|p| p.dangerous && regions.iter().any(|r| overlaps(r, p)))
+                            .find(|p| p.dangerous && regions.iter().any(|r| r.overlaps(p)))
                     {
                         return Err(refuse(
                             Refusal::DangerousRegion,
@@ -217,10 +215,6 @@ const DANGEROUS_HINT: &str =
 fn refuse(refusal: Refusal, details: core::fmt::Arguments<'_>) -> Error {
     log::error!("Refusing to modify flash: {}", details);
     Error::MutationRefused(refusal)
-}
-
-fn overlaps(a: &Region, b: &Region) -> bool {
-    a.start <= b.end && b.start <= a.end
 }
 
 pub(super) fn region_layout(start: u32, len: u32) -> Result<Layout> {

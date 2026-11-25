@@ -47,16 +47,6 @@ fn format_range(range: &WpRange, total_size: u32) -> String {
     format!("{} {}", position, fraction_str)
 }
 
-/// Format a protection mode for display
-fn format_mode(mode: WpMode) -> &'static str {
-    match mode {
-        WpMode::Disabled => "disabled",
-        WpMode::Hardware => "hardware",
-        WpMode::PowerCycle => "power_cycle",
-        WpMode::Permanent => "permanent",
-    }
-}
-
 /// Parse a range specification like "0,0x100000" or "0x10000,65536"
 fn parse_range(spec: &str) -> crate::error::Result<WpRange> {
     let parts: Vec<&str> = spec.split(',').collect();
@@ -120,7 +110,7 @@ pub async fn cmd_status(handle: &mut FlashHandle) -> crate::error::Result<()> {
         config.range.len,
         format_range(&config.range, total_size)
     );
-    println!("Protection mode: {}", format_mode(config.mode));
+    println!("Protection mode: {}", config.mode);
 
     Ok(())
 }
@@ -199,7 +189,11 @@ pub async fn cmd_range(
     let total_size = handle.size();
 
     // Validate range doesn't exceed chip size
-    if range.start + range.len > total_size {
+    if range
+        .start
+        .checked_add(range.len)
+        .is_none_or(|end| end > total_size)
+    {
         return Err(format!(
             "Range 0x{:x},0x{:x} exceeds chip size (0x{:x} bytes)",
             range.start, range.len, total_size
@@ -233,14 +227,12 @@ pub async fn cmd_region(
         return Err("Write protection operations are not supported for this chip".into());
     }
 
-    // Find the region in the layout
+    // Find the region in the layout (case-insensitive, matching other layout commands)
     let region = layout
-        .regions
-        .iter()
-        .find(|r| r.name == region_name)
+        .find_region(region_name)
         .ok_or_else(|| format!("Region '{}' not found in layout", region_name))?;
 
-    let range = WpRange::new(region.start, region.end - region.start + 1);
+    let range = WpRange::new(region.start, region.size());
     let total_size = handle.size();
 
     handle

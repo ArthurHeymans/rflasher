@@ -256,6 +256,7 @@ fn busy_is_polled_and_a_stuck_chip_times_out() {
         run(protocol::wait_ready(&mut master, 100, 300)),
         Err(Error::Timeout)
     );
-    assert_eq!(master.polls, 6);
+    // 3 polls + 2 delays above, then 4 polls + 3 delays (including final poll at timeout).
+    assert_eq!(master.polls, 7);
     assert_eq!(master.delays, 5);
 }

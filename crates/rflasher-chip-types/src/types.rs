@@ -381,8 +381,9 @@ impl FlashChip {
     pub fn max_erase_size(&self) -> Option<u32> {
         self.erase_blocks()
             .iter()
-            .filter(|eb| eb.total_size() < self.total_size)
+            .filter(|eb| !eb.is_chip_erase())
             .map(|eb| eb.max_block_size())
+            .filter(|&s| s > 0)
             .max()
     }
 
@@ -526,6 +527,57 @@ mod tests {
         assert_eq!(decoded.ids, chip.ids);
         assert_eq!(decoded.features, chip.features);
         assert_eq!(decoded.erase_blocks, chip.erase_blocks);
+    }
+
+    #[test]
+    fn max_erase_size_excludes_chip_erase_only() {
+        let chip = FlashChip {
+            vendor: "Test".into(),
+            name: "T16M".into(),
+            jedec_manufacturer: 0xEF,
+            jedec_device: 0x4018,
+            ids: Default::default(),
+            total_size: 16 * 1024 * 1024,
+            page_size: 256,
+            features: Features::empty(),
+            unlock: Default::default(),
+            voltage_min_mv: 2700,
+            voltage_max_mv: 3600,
+            write_granularity: WriteGranularity::Page,
+            erase_blocks: alloc::vec![
+                EraseBlock::with_count(0x20, 4096, 4096),
+                EraseBlock::with_count(0x52, 32768, 512),
+                EraseBlock::with_count(0xD8, 65536, 256),
+                EraseBlock::new(0xC7, 16 * 1024 * 1024),
+            ]
+            .into(),
+            tested: ChipTestStatus::default(),
+        };
+
+        assert_eq!(chip.min_erase_size(), Some(4096));
+        assert_eq!(chip.max_erase_size(), Some(65536));
+    }
+
+    #[test]
+    fn max_erase_size_none_when_only_chip_erase() {
+        let chip = FlashChip {
+            vendor: "Test".into(),
+            name: "T64K".into(),
+            jedec_manufacturer: 0xEF,
+            jedec_device: 0x4010,
+            ids: Default::default(),
+            total_size: 64 * 1024,
+            page_size: 256,
+            features: Features::empty(),
+            unlock: Default::default(),
+            voltage_min_mv: 2700,
+            voltage_max_mv: 3600,
+            write_granularity: WriteGranularity::Page,
+            erase_blocks: alloc::vec![EraseBlock::new(0xC7, 64 * 1024)].into(),
+            tested: ChipTestStatus::default(),
+        };
+
+        assert_eq!(chip.max_erase_size(), None);
     }
 }
 

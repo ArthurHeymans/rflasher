@@ -57,12 +57,8 @@ pub fn cmd_ifd(input: &Path, output: Option<&Path>) -> crate::error::Result<()> 
 
 /// Extract FMAP layout from image
 pub fn cmd_fmap(input: &Path, output: Option<&Path>) -> crate::error::Result<()> {
-    use rflasher_core::layout::search_fmap;
-
     let data = fs::read(input)?;
-
-    // Use the generic search algorithm on the file buffer
-    let layout = futures_lite::future::block_on(search_fmap(&mut data.as_slice()))?;
+    let layout = Layout::from_fmap(&data)?;
     print_layout(&layout);
 
     if let Some(out) = output {
@@ -108,15 +104,7 @@ pub fn print_layout(layout: &Layout) {
         println!("Name:   {}", name);
     }
 
-    println!(
-        "Source: {}",
-        match layout.source {
-            LayoutSource::Toml => "TOML file",
-            LayoutSource::Ifd => "Intel Flash Descriptor",
-            LayoutSource::Fmap => "FMAP",
-            LayoutSource::Manual => "Manual",
-        }
-    );
+    println!("Source: {}", layout.source);
 
     if let Some(size) = layout.chip_size {
         println!("Chip:   {} bytes ({})", size, super::format_size(size));

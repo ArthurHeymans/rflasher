@@ -21,7 +21,7 @@ use crate::flash::device::{EraseOutcome, FlashDevice};
 use crate::flash::operations::{
     coalesce_write_ranges, plan_optimal_erase, plan_optimal_erase_region,
 };
-use crate::layout::{Layout, LayoutError, Region};
+use crate::layout::{Layout, Region};
 use crate::programmer::FlashAccess;
 
 /// Perform a smart write operation that minimizes flash operations
@@ -442,11 +442,7 @@ async fn smart_write_by_layout_prepared<D: FlashDevice + ?Sized, P: WriteProgres
     let flash_size = device.size();
 
     // Validate layout against device
-    layout.validate(flash_size).map_err(|e| match e {
-        LayoutError::RegionOutOfBounds => Error::AddressOutOfBounds,
-        LayoutError::ChipSizeMismatch { .. } => Error::AddressOutOfBounds,
-        _ => Error::LayoutError,
-    })?;
+    layout.validate(flash_size)?;
 
     // Image must cover the device
     if image.len() < flash_size as usize {
@@ -538,11 +534,7 @@ pub async fn read_by_layout<D: FlashDevice + ?Sized>(
     let flash_size = device.size();
 
     // Validate layout against device
-    layout.validate(flash_size).map_err(|e| match e {
-        LayoutError::RegionOutOfBounds => Error::AddressOutOfBounds,
-        LayoutError::ChipSizeMismatch { .. } => Error::AddressOutOfBounds,
-        _ => Error::LayoutError,
-    })?;
+    layout.validate(flash_size)?;
 
     if buffer.len() < flash_size as usize {
         return Err(Error::BufferTooSmall);
@@ -564,11 +556,7 @@ async fn erase_by_layout_prepared<D: FlashDevice + ?Sized>(
 ) -> Result<()> {
     let flash_size = device.size();
 
-    layout.validate(flash_size).map_err(|e| match e {
-        LayoutError::RegionOutOfBounds => Error::AddressOutOfBounds,
-        LayoutError::ChipSizeMismatch { .. } => Error::AddressOutOfBounds,
-        _ => Error::LayoutError,
-    })?;
+    layout.validate(flash_size)?;
 
     // Reject protected regions before erasing any included region.
     if layout.included_regions().any(|region| region.readonly) {
@@ -872,11 +860,7 @@ pub async fn verify_by_layout_with_progress<D: FlashDevice + ?Sized, F: FnMut(us
 ) -> Result<()> {
     let flash_size = device.size();
 
-    layout.validate(flash_size).map_err(|e| match e {
-        LayoutError::RegionOutOfBounds => Error::AddressOutOfBounds,
-        LayoutError::ChipSizeMismatch { .. } => Error::AddressOutOfBounds,
-        _ => Error::LayoutError,
-    })?;
+    layout.validate(flash_size)?;
 
     if expected.len() < flash_size as usize {
         return Err(Error::BufferTooSmall);

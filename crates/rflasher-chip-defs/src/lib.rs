@@ -309,10 +309,16 @@ impl VendorDef {
                 return Err(format!("Chip {} has no erase blocks defined", chip.name));
             }
 
-            // Validate that chip erase exists
+            // Validate chip size and page size
             let total_size = chip.total_size.checked_bytes().ok_or_else(|| {
                 format!("Chip {} has a size exceeding u32 address space", chip.name)
             })?;
+            if total_size == 0 {
+                return Err(format!("Chip {} has total_size of 0", chip.name));
+            }
+            if chip.page_size == 0 {
+                return Err(format!("Chip {} has page_size of 0", chip.name));
+            }
             let mut has_chip_erase = false;
             for eb in &chip.erase_blocks {
                 let mut erase_total = 0u32;

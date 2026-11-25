@@ -188,15 +188,14 @@ pub async fn search_fmap<S: FmapSearchable>(storage: &mut S) -> Result<Layout, L
     let size = storage.size();
 
     // Try binary search first (check power-of-2 aligned offsets)
-    if let Some(offset) = binary_search_fmap(storage, 0, size).await? {
-        match read_fmap_at(storage, offset).await {
-            Ok(layout) => return Ok(layout),
-            // The signature match was a false positive: either the structure
-            // does not validate, or its declared area table reads past the
-            // end of storage. Fall back to the exhaustive linear scan below.
-            Err(LayoutError::InvalidFmapSignature | LayoutError::IoError(_)) => {}
-            Err(e) => return Err(e),
+    let mut unsupported_version = false;
+    match binary_search_fmap(storage, 0, size).await {
+        Ok(Some(layout)) => return Ok(layout),
+        Ok(None) => {}
+        Err(LayoutError::UnsupportedFmapVersion) => {
+            unsupported_version = true;
         }
+        Err(e) => return Err(e),
     }
 
     // Fallback to linear search - read entire storage and search
@@ -205,6 +204,8 @@ pub async fn search_fmap<S: FmapSearchable>(storage: &mut S) -> Result<Layout, L
 
     if let Some(offset) = find_fmap(&buffer) {
         parse_fmap_at(&buffer, offset)
+    } else if unsupported_version {
+        Err(LayoutError::UnsupportedFmapVersion)
     } else {
         Err(LayoutError::InvalidFmapSignature)
     }
@@ -218,10 +219,11 @@ async fn binary_search_fmap<S: FmapSearchable>(
     storage: &mut S,
     rom_offset: u32,
     len: u32,
-) -> Result<Option<u32>, LayoutError> {
+) -> Result<Option<Layout>, LayoutError> {
     let size = storage.size();
 
-    if rom_offset + len > size || (len as usize) < FMAP_HEADER_SIZE {
+    if rom_offset.checked_add(len).is_none_or(|end| end > size) || (len as usize) < FMAP_HEADER_SIZE
+    {
         return Ok(None);
     }
 
@@ -236,6 +238,7 @@ async fn binary_search_fmap<S: FmapSearchable>(
     });
 
     let mut offset_0_checked = false;
+    let mut unsupported_version = false;
 
     for stride in strides.filter(|&s| s <= len) {
         // Generate candidate offsets at this stride level
@@ -265,17 +268,27 @@ async fn binary_search_fmap<S: FmapSearchable>(
                 continue;
             }
 
-            // Found a signature candidate. Full validation is deferred to
-            // the caller (read_fmap_at); a false positive here just falls
-            // back to the linear scan. Validating here would require the
-            // area records, which a fixed-size header buffer cannot hold.
-            if &sig_buf == FMAP_SIGNATURE {
-                return Ok(Some(offset));
+            // Found a signature candidate — read the full header + areas and
+            // validate. A false positive (invalid structure, area table past
+            // end of storage, or unsupported version) continues scanning
+            // remaining aligned offsets so it cannot hide a later valid table.
+            match read_fmap_at(storage, offset).await {
+                Ok(layout) => return Ok(Some(layout)),
+                Err(LayoutError::InvalidFmapSignature | LayoutError::IoError(_)) => continue,
+                Err(LayoutError::UnsupportedFmapVersion) => {
+                    unsupported_version = true;
+                    continue;
+                }
+                Err(e) => return Err(e),
             }
         }
     }
 
-    Ok(None)
+    if unsupported_version {
+        Err(LayoutError::UnsupportedFmapVersion)
+    } else {
+        Ok(None)
+    }
 }
 
 /// Parse FMAP from raw data
@@ -286,7 +299,9 @@ pub fn parse_fmap(data: &[u8]) -> Result<Layout, LayoutError> {
 
 /// Parse FMAP from a specific offset
 pub fn parse_fmap_at(data: &[u8], offset: usize) -> Result<Layout, LayoutError> {
-    let fmap_data = &data[offset..];
+    let fmap_data = data
+        .get(offset..)
+        .ok_or(LayoutError::InvalidFmapSignature)?;
     validate_fmap(fmap_data)?;
 
     // Parse header using zerocopy - ref_from_prefix returns (reference, remaining_bytes)

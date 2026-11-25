@@ -84,7 +84,14 @@ impl core::fmt::Display for WpError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for WpError {}
+impl std::error::Error for WpError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            WpError::SpiError(err) => Some(err),
+            _ => None,
+        }
+    }
+}
 
 /// Result type for write protection operations
 pub type WpResult<T> = core::result::Result<T, WpError>;

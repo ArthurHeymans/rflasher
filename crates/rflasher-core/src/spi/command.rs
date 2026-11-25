@@ -174,14 +174,19 @@ impl<'a> SpiCommand<'a> {
         self.address.is_some()
     }
 
+    /// Calculate the number of wire bytes occupied by the dummy phase.
+    ///
+    /// Dummy cycles are clock cycles transferred over the address-phase lines
+    /// (1 line for 1-1-x, 2 lines for 1-2-2, 4 lines for 1-4-4 / 4-4-4).
+    pub fn dummy_bytes(&self) -> usize {
+        (u16::from(self.dummy_cycles) * u16::from(self.io_mode.addr_lines())).div_ceil(8) as usize
+    }
+
     /// Calculate the total number of bytes to transfer (for timing/buffer allocation)
     pub fn total_bytes(&self) -> usize {
         let mut total = 1; // opcode
         total += self.address_width.bytes() as usize;
-        // Dummy cycles are in clock cycles, not bytes - depends on I/O mode.
-        // Round up like header_len()/encode_header() do: a partial dummy byte
-        // still occupies a full byte on the wire.
-        total += self.dummy_cycles.div_ceil(8) as usize;
+        total += self.dummy_bytes();
         total += self.write_data.len();
         total += self.read_buf.len();
         total
@@ -191,7 +196,7 @@ impl<'a> SpiCommand<'a> {
     ///
     /// This is useful for pre-allocating buffers in programmer implementations.
     pub fn header_len(&self) -> usize {
-        1 + self.address_width.bytes() as usize + self.dummy_cycles.div_ceil(8) as usize
+        1 + self.address_width.bytes() as usize + self.dummy_bytes()
     }
 
     /// Encode the command header (opcode + address + dummy bytes) into a buffer
@@ -228,11 +233,67 @@ impl<'a> SpiCommand<'a> {
             offset += self.address_width.bytes() as usize;
         }
 
-        // Dummy bytes (cycles / 8, rounded up, filled with 0xFF)
-        let dummy_bytes = self.dummy_cycles.div_ceil(8) as usize;
+        // Dummy bytes (filled with 0xFF)
+        let dummy_bytes = self.dummy_bytes();
         buf[offset..offset + dummy_bytes].fill(0xFF);
         offset += dummy_bytes;
 
         offset
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dummy_bytes_accounts_for_io_mode_bus_width() {
+        let mut buf = [0u8; 4];
+
+        // Single I/O (1 line): 8 dummy cycles = 1 byte
+        let single = SpiCommand::read_3b(0x0B, 0x123456, &mut buf).with_dummy_cycles(8);
+        assert_eq!(single.dummy_bytes(), 1);
+        assert_eq!(single.header_len(), 5);
+
+        // DualOut (1-1-2): address/dummy phase is 1 line, 8 cycles = 1 byte
+        let dual_out = SpiCommand {
+            opcode: 0x3B,
+            address: Some(0x123456),
+            address_width: AddressWidth::ThreeByte,
+            io_mode: IoMode::DualOut,
+            dummy_cycles: 8,
+            write_data: &[],
+            read_buf: &mut buf,
+        };
+        assert_eq!(dual_out.dummy_bytes(), 1);
+
+        // DualIo (1-2-2): address/dummy phase is 2 lines, 4 cycles = 1 byte
+        let dual_io = SpiCommand {
+            opcode: 0xBB,
+            address: Some(0x123456),
+            address_width: AddressWidth::ThreeByte,
+            io_mode: IoMode::DualIo,
+            dummy_cycles: 4,
+            write_data: &[],
+            read_buf: &mut buf,
+        };
+        assert_eq!(dual_io.dummy_bytes(), 1);
+
+        // QuadIo (1-4-4): address/dummy phase is 4 lines, 6 cycles = 3 bytes
+        let quad_io = SpiCommand {
+            opcode: 0xEB,
+            address: Some(0x123456),
+            address_width: AddressWidth::ThreeByte,
+            io_mode: IoMode::QuadIo,
+            dummy_cycles: 6,
+            write_data: &[],
+            read_buf: &mut buf,
+        };
+        assert_eq!(quad_io.dummy_bytes(), 3);
+        assert_eq!(quad_io.header_len(), 1 + 3 + 3);
+
+        let mut hdr = [0u8; 7];
+        assert_eq!(quad_io.encode_header(&mut hdr), 7);
+        assert_eq!(hdr, [0xEB, 0x12, 0x34, 0x56, 0xFF, 0xFF, 0xFF]);
     }
 }

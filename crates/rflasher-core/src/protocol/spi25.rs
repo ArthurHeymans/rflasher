@@ -266,19 +266,33 @@ pub async fn wait_ready<M: SpiMaster + ?Sized>(
     poll_delay_us: u32,
     timeout_us: u32,
 ) -> Result<()> {
-    let max_polls = timeout_us.checked_div(poll_delay_us).unwrap_or(timeout_us);
+    if poll_delay_us == 0 {
+        let max_polls = timeout_us.max(1);
+        for _ in 0..max_polls {
+            let status = read_status1(master).await?;
+            if status & opcodes::SR1_WIP == 0 {
+                return Ok(());
+            }
+        }
+        return Err(Error::Timeout);
+    }
 
-    for _ in 0..max_polls {
+    let timeout = u64::from(timeout_us);
+    let step = u64::from(poll_delay_us);
+    let mut elapsed = 0u64;
+
+    loop {
         let status = read_status1(master).await?;
         if status & opcodes::SR1_WIP == 0 {
             return Ok(());
         }
-        if poll_delay_us > 0 {
-            master.delay_us(poll_delay_us).await;
+        if elapsed >= timeout {
+            return Err(Error::Timeout);
         }
+        let delay = step.min(timeout - elapsed) as u32;
+        master.delay_us(delay).await;
+        elapsed += u64::from(delay);
     }
-
-    Err(Error::Timeout)
 }
 
 /// Write the status register 1
@@ -500,7 +514,7 @@ pub async fn aai_word_program<M: SpiMaster + ?Sized>(
 
     // AAI streaming: requires at least 2 bytes remaining
     if pos + 1 < data.len() {
-        let result = async {
+        let result: Result<()> = async {
             // First AAI command: WREN then AAI_WP + 3-byte address + 2 data bytes
             write_enable(master).await?;
             let mut cmd = SpiCommand::write_3b(opcodes::AAI_WP, current_addr, &data[pos..pos + 2]);
@@ -709,7 +723,13 @@ pub async fn read_sfdp<M: SpiMaster + ?Sized>(
     addr: u32,
     buf: &mut [u8],
 ) -> Result<()> {
+    if buf.is_empty() {
+        return Ok(());
+    }
     let max_read = master.max_read_len();
+    if max_read == 0 {
+        return Err(Error::ProgrammerError);
+    }
     let mut offset = 0;
 
     while offset < buf.len() {
@@ -757,7 +777,13 @@ async fn read_multi_io<M: SpiMaster + ?Sized>(
     io_mode: IoMode,
     dummy_cycles: u8,
 ) -> Result<()> {
+    if buf.is_empty() {
+        return Ok(());
+    }
     let max_len = master.max_read_len();
+    if max_len == 0 {
+        return Err(Error::ProgrammerError);
+    }
     let mut offset = 0;
 
     while offset < buf.len() {
@@ -1276,5 +1302,112 @@ mod extended_address_tests {
                 ]
             );
         }
+    }
+
+    struct WaitReadyMaster {
+        status_sequence: Vec<u8>,
+        polls: usize,
+        delays: Vec<u32>,
+    }
+
+    impl WaitReadyMaster {
+        fn new(status_sequence: Vec<u8>) -> Self {
+            Self {
+                status_sequence,
+                polls: 0,
+                delays: Vec::new(),
+            }
+        }
+    }
+
+    impl SpiMaster for WaitReadyMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+        fn max_read_len(&self) -> usize {
+            256
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        async fn execute(&mut self, cmd: &mut SpiCommand<'_>) -> Result<()> {
+            assert_eq!(cmd.opcode, opcodes::RDSR);
+            let status = self
+                .status_sequence
+                .get(self.polls)
+                .copied()
+                .unwrap_or(opcodes::SR1_WIP);
+            self.polls += 1;
+            cmd.read_buf[0] = status;
+            Ok(())
+        }
+        async fn delay_us(&mut self, us: u32) {
+            self.delays.push(us);
+        }
+    }
+
+    #[test]
+    fn wait_ready_polls_once_when_timeout_shorter_than_poll_interval() {
+        // Ready immediately even with timeout == 0 or timeout < poll_us
+        let mut master = WaitReadyMaster::new(vec![0x00]);
+        block_on(wait_ready(&mut master, 1000, 0)).unwrap();
+        assert_eq!(master.polls, 1);
+        assert!(master.delays.is_empty());
+
+        // Busy with timeout < poll_us: polls once, delays remaining, polls one final time
+        let mut master = WaitReadyMaster::new(vec![opcodes::SR1_WIP, 0x00]);
+        block_on(wait_ready(&mut master, 1000, 250)).unwrap();
+        assert_eq!(master.polls, 2);
+        assert_eq!(master.delays, [250]);
+
+        // Still busy after final poll -> Timeout
+        let mut master = WaitReadyMaster::new(vec![opcodes::SR1_WIP, opcodes::SR1_WIP]);
+        assert!(matches!(
+            block_on(wait_ready(&mut master, 1000, 250)),
+            Err(Error::Timeout)
+        ));
+        assert_eq!(master.polls, 2);
+        assert_eq!(master.delays, [250]);
+    }
+
+    #[test]
+    fn wait_ready_polls_after_final_delay_on_exact_timeout() {
+        // Becomes ready right after the last delay step
+        let mut master = WaitReadyMaster::new(vec![opcodes::SR1_WIP, opcodes::SR1_WIP, 0x00]);
+        block_on(wait_ready(&mut master, 100, 200)).unwrap();
+        assert_eq!(master.polls, 3);
+        assert_eq!(master.delays, [100, 100]);
+    }
+
+    struct ZeroReadLenMaster;
+
+    impl SpiMaster for ZeroReadLenMaster {
+        fn features(&self) -> SpiFeatures {
+            SpiFeatures::empty()
+        }
+        fn max_read_len(&self) -> usize {
+            0
+        }
+        fn max_write_len(&self) -> usize {
+            256
+        }
+        async fn execute(&mut self, _cmd: &mut SpiCommand<'_>) -> Result<()> {
+            panic!("execute must not be called when max_read_len is 0");
+        }
+        async fn delay_us(&mut self, _us: u32) {}
+    }
+
+    #[test]
+    fn zero_max_read_len_returns_error_instead_of_looping() {
+        let mut master = ZeroReadLenMaster;
+        let mut buf = [0u8; 4];
+        assert!(matches!(
+            block_on(read_sfdp(&mut master, 0, &mut buf)),
+            Err(Error::ProgrammerError)
+        ));
+        assert!(matches!(
+            block_on(read_dual_out_3b(&mut master, 0, &mut buf)),
+            Err(Error::ProgrammerError)
+        ));
     }
 }
