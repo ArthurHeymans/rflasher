@@ -1,7 +1,14 @@
 //! AMD chipset enable and initialization
 //!
-//! This module contains the chipset enable functions for AMD platforms,
-//! particularly the SPI100 controller initialization.
+//! This module contains the chipset enable functions for AMD platforms:
+//! the SPI100 controller and, in the `sb600` submodule, the SB600-family
+//! controller (SB600 through SB9x0).
+
+mod sb600;
+
+pub use sb600::{AmdSb600Info, Sb600BoardConfig, Sb600Straps, enable_amd_sb600_with_host};
+#[cfg(all(feature = "std", target_os = "linux"))]
+pub use sb600::{enable_amd_sb600, open_amd_sb600};
 
 use crate::amd_pci::AmdChipsetEnable;
 use crate::amd_spi100::Spi100Controller;

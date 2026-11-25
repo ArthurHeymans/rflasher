@@ -19,6 +19,10 @@
 //! - Latest platforms (Meteor Lake, Lunar Lake, Arrow Lake)
 //!
 //! ## AMD
+//! - SB600, SB7x0/SP5100, SB8x0/SB9x0 (SB600-family SPI controller)
+//! - Hudson, Bolton, Yangtze (Merlin Falcon), Promontory (Stoney Ridge):
+//!   detected, but their SB600-family controller variants are refused as
+//!   untested
 //! - Renoir/Cezanne (FCH 790b rev 0x51)
 //! - Pinnacle Ridge (FCH 790b rev 0x59)
 //! - Raven Ridge/Matisse/Starship (FCH 790b rev 0x61)
@@ -35,6 +39,7 @@
 //!
 //! - flashprog/ichspi.c - Intel SPI controller implementation
 //! - flashprog/amd_spi100.c - AMD SPI100 controller implementation
+//! - flashprog/sb600spi.c - AMD SB600-family SPI controller implementation
 //! - flashprog/chipset_enable.c - Chipset detection and enabling
 //! - flashprog/ich_descriptors.c - Intel Flash Descriptor parsing
 
@@ -47,6 +52,7 @@ extern crate std;
 
 pub mod amd_enable;
 pub mod amd_pci;
+pub mod amd_sb600spi;
 pub mod amd_spi100;
 pub mod chipset;
 pub mod controller;
@@ -60,8 +66,17 @@ pub mod pci;
 pub mod physmap;
 pub mod programmer;
 
-pub use amd_enable::{AmdSpi100Info, enable_amd_spi100, enable_amd_spi100_with_host};
+pub use amd_enable::{
+    AmdSb600Info, AmdSpi100Info, Sb600BoardConfig, Sb600Straps, enable_amd_sb600_with_host,
+    enable_amd_spi100, enable_amd_spi100_with_host,
+};
+#[cfg(all(feature = "std", target_os = "linux"))]
+pub use amd_enable::{enable_amd_sb600, open_amd_sb600};
 pub use amd_pci::{AMD_CHIPSETS, AMD_VID, AmdChipset, AmdChipsetEnable};
+pub use amd_sb600spi::regs::SB800_ACPI_MMIO_DEFAULT;
+pub use amd_sb600spi::{
+    RomProtect, Sb600Generation, Sb600Imc, Sb600SpiConfig, Sb600SpiController, Sb600SpiSpeed,
+};
 pub use amd_spi100::Spi100Controller;
 pub use chipset::{BusType, ChipsetEnable, IchChipset, TestStatus};
 pub use error::{InternalError, PciAccessError, RestrictedResource};
