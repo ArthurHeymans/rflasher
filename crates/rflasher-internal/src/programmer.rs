@@ -1,11 +1,13 @@
 //! Opening the internal programmer
 //!
 //! [`InternalProgrammer::open`] detects the chipset and returns either raw
-//! SPI access ([`InternalSpi`], Intel software sequencing and AMD SPI100) or
+//! SPI access ([`InternalSpi`], Intel software sequencing, AMD SPI100 and
+//! the AMD SB600-family controller) or
 //! address-based access ([`HwseqFlash`], Intel hardware sequencing).
 //! Embedded users wrap a controller themselves instead: in `SpiFlashDevice`
 //! for raw SPI or in [`HwseqFlash`]; see the crate README.
 
+use crate::amd_sb600spi::Sb600SpiSpeed;
 use crate::error::InternalError;
 use crate::ichspi::SpiMode;
 
@@ -14,6 +16,12 @@ use crate::ichspi::SpiMode;
 pub struct InternalOptions {
     /// SPI sequencing mode (auto, hwseq, swseq)
     pub mode: SpiMode,
+    /// AMD SB600-family command engine clock; `None` is flashprog's
+    /// default, 16.5 MHz.
+    pub spispeed: Option<Sb600SpiSpeed>,
+    /// AMD SB7xx/SP5100: the operator asserts that the IMC is strapped off,
+    /// which cannot be read through PCI configuration space.
+    pub sb7xx_imc_off: bool,
 }
 
 impl InternalOptions {
@@ -32,6 +40,8 @@ impl InternalOptions {
     ///
     /// Supported options:
     /// - ich_spi_mode=auto|hwseq|swseq
+    /// - spispeed=33mhz|22mhz|16.5mhz (AMD SB600 family)
+    /// - sb7xx_imc=off (AMD SB7xx/SP5100: assert the IMC is strapped off)
     pub fn from_options(options: &[(&str, &str)]) -> Result<Self, InternalError> {
         let mut opts = Self::default();
 
@@ -42,15 +52,41 @@ impl InternalOptions {
                         "Invalid ich_spi_mode value (use: auto, hwseq, or swseq)",
                     ))?;
                 }
+                "spispeed" => {
+                    opts.spispeed = Some(Sb600SpiSpeed::parse(value).ok_or(
+                        InternalError::NotSupported(
+                            "Invalid spispeed value (use: 33mhz, 22mhz or 16.5mhz)",
+                        ),
+                    )?);
+                }
+                "sb7xx_imc" => {
+                    if !value.eq_ignore_ascii_case("off") {
+                        return Err(InternalError::NotSupported(
+                            "Invalid sb7xx_imc value (use: off)",
+                        ));
+                    }
+                    opts.sb7xx_imc_off = true;
+                }
                 _ => {
                     return Err(InternalError::NotSupported(
-                        "Unknown internal programmer option (supported: ich_spi_mode=auto|hwseq|swseq)",
+                        "Unknown internal programmer option (supported: ich_spi_mode=auto|hwseq|swseq, spispeed=<speed>, sb7xx_imc=off)",
                     ));
                 }
             }
         }
 
         Ok(opts)
+    }
+
+    /// Refuse SB600-family options for other controllers.
+    #[cfg_attr(not(all(feature = "std", target_os = "linux")), allow(dead_code))]
+    fn reject_sb600_options(&self) -> Result<(), InternalError> {
+        if self.spispeed.is_some() || self.sb7xx_imc_off {
+            return Err(InternalError::NotSupported(
+                "spispeed and sb7xx_imc apply to the AMD SB600-family controller only",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -61,7 +97,7 @@ pub use linux::{InternalProgrammer, InternalSpi};
 #[cfg(all(feature = "std", target_os = "linux"))]
 mod linux {
     use super::{HwseqFlash, InternalOptions};
-    use crate::amd_enable::enable_amd_spi100_with_host;
+    use crate::amd_enable::{enable_amd_spi100_with_host, open_amd_sb600};
     use crate::controller::Controller;
     use crate::error::InternalError;
     use crate::host::{DefaultPciAccess, LinuxHost, PciAddress};
@@ -77,7 +113,8 @@ mod linux {
     // There is one per process; boxing the controller would buy nothing.
     #[allow(clippy::large_enum_variant)]
     pub enum InternalProgrammer {
-        /// Raw SPI commands: Intel software sequencing or AMD SPI100.
+        /// Raw SPI commands: Intel software sequencing, AMD SPI100 or the
+        /// AMD SB600-family controller.
         Spi(InternalSpi),
         /// Intel hardware sequencing: the controller runs the flash protocol.
         HardwareSequencing(HwseqFlash<IchSpiController<LinuxHost>>),
@@ -88,7 +125,9 @@ mod linux {
         pub fn open(options: InternalOptions) -> Result<Self, InternalError> {
             match crate::detect_chipset()?.ok_or(InternalError::NoChipset)? {
                 AnyDetectedChipset::Intel(chipset) => Self::from_intel_chipset(&chipset, options),
-                AnyDetectedChipset::Amd(chipset) => Self::from_amd_chipset(&chipset),
+                AnyDetectedChipset::Amd(chipset) => {
+                    Self::from_amd_chipset_with_options(&chipset, options)
+                }
             }
         }
 
@@ -97,6 +136,7 @@ mod linux {
             chipset: &DetectedChipset,
             options: InternalOptions,
         ) -> Result<Self, InternalError> {
+            options.reject_sb600_options()?;
             let controller = IchSpiController::new(chipset, options.mode)?;
             if controller.spi_mode() == SpiMode::HardwareSequencing {
                 HwseqFlash::new(controller).map(Self::HardwareSequencing)
@@ -109,15 +149,36 @@ mod linux {
 
         /// Open a specific detected AMD chipset.
         pub fn from_amd_chipset(chipset: &DetectedAmdChipset) -> Result<Self, InternalError> {
+            Self::from_amd_chipset_with_options(chipset, InternalOptions::default())
+        }
+
+        /// Open a specific detected AMD chipset with programmer options.
+        pub fn from_amd_chipset_with_options(
+            chipset: &DetectedAmdChipset,
+            options: InternalOptions,
+        ) -> Result<Self, InternalError> {
+            let device = PciAddress::new(
+                chipset.domain,
+                chipset.bus,
+                chipset.device,
+                chipset.function,
+            );
+            if chipset.chipset_type().uses_sb600_spi() {
+                let controller = open_amd_sb600(
+                    chipset.enable,
+                    device,
+                    options.spispeed,
+                    options.sb7xx_imc_off,
+                )?;
+                return Ok(Self::Spi(InternalSpi {
+                    controller: Box::new(controller),
+                }));
+            }
+            options.reject_sb600_options()?;
             let info = enable_amd_spi100_with_host(
                 &DefaultPciAccess,
                 chipset.enable,
-                PciAddress::new(
-                    chipset.domain,
-                    chipset.bus,
-                    chipset.device,
-                    chipset.function,
-                ),
+                device,
                 chipset.revision_id,
             )?;
             // SAFETY: `info` was just discovered from the current Linux host via
@@ -191,6 +252,9 @@ mod linux {
             addr: u32,
             buf: &mut [u8],
         ) -> CoreResult<()> {
+            let len = u32::try_from(buf.len())
+                .map_err(|_| rflasher_core::error::Error::AddressOutOfBounds)?;
+            self.controller.check_access(FlashAccess::Read, addr, len)?;
             match self.controller.fast_read(ctx, addr, buf) {
                 Some(result) => result,
                 None => flash::spi_read(self, ctx, addr, buf).await,
@@ -204,7 +268,7 @@ pub fn programmer_info() -> rflasher_core::programmer::ProgrammerInfo {
     rflasher_core::programmer::ProgrammerInfo {
         name: "internal",
         aliases: &[],
-        description: "Intel ICH/PCH and AMD SPI100 internal flash programmer",
+        description: "Intel ICH/PCH, AMD SB600-family and SPI100 internal flash programmer",
         requires_root: true,
     }
 }
@@ -230,6 +294,23 @@ mod tests {
         block_on(device.read(addr, &mut data)).unwrap();
         assert_eq!(data, [0, 17, 34, 51]);
         block_on(device.write(0x0100_1234, &[0xab])).unwrap();
+    }
+
+    #[test]
+    fn sb600_options_parse_only_documented_values() {
+        let opts =
+            InternalOptions::from_options(&[("spispeed", "33mhz"), ("sb7xx_imc", "off")]).unwrap();
+        assert_eq!(opts.spispeed, Some(Sb600SpiSpeed::Mhz33));
+        assert!(opts.sb7xx_imc_off);
+        for (key, value) in [
+            ("spispeed", "66mhz"),
+            ("spispeed", "100mhz"),
+            ("sb7xx_imc", "on"),
+        ] {
+            assert!(InternalOptions::from_options(&[(key, value)]).is_err());
+        }
+        assert!(opts.reject_sb600_options().is_err());
+        assert!(InternalOptions::default().reject_sb600_options().is_ok());
     }
 
     #[test]

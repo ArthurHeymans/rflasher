@@ -641,6 +641,20 @@ fn format_internal_init_error(error: &rflasher_internal::InternalError) -> Strin
         InternalError::NotSupported("SPI100 not in use") => {
             "The AMD SPI100 controller is not configured or in use."
         }
+        InternalError::NotSupported("SB600 SPI not in use")
+        | InternalError::NotSupported("SB600 SPI pins are used as GPIOs")
+        | InternalError::NotSupported("SB600 southbridge is not strapped to SPI ROM") => {
+            "The AMD SB600-family SPI controller is not in use; the flash may be on LPC or FWH, which rflasher does not support."
+        }
+        InternalError::NotSupported("AMD FCH SB600-family SPI controller variant is untested") => {
+            "This AMD FCH (Hudson, Bolton, Yangtze or Promontory) is detected, but its SPI controller variant is untested and not enabled."
+        }
+        InternalError::NotSupported("SB600-family IMC is enabled") => {
+            "The AMD integrated microcontroller (IMC) is strapped on or running and may use the flash; rflasher does not put it to sleep."
+        }
+        InternalError::NotSupported("SB7xx IMC strap unknown") => {
+            "The SB7xx/SP5100 IMC strap cannot be read; if the IMC is strapped off on this board, pass sb7xx_imc=off."
+        }
         _ => return format!("Failed to initialize internal programmer: {error}"),
     };
 
@@ -706,6 +720,18 @@ mod internal_error_tests {
         let error = InternalError::NotSupported("SPI100 not in use");
 
         assert!(format_internal_init_error(&error).contains("AMD SPI100 controller"));
+    }
+
+    #[test]
+    fn amd_sb600_not_in_use_has_specific_guidance() {
+        let error = InternalError::NotSupported("SB600 SPI not in use");
+
+        assert!(format_internal_init_error(&error).contains("SB600-family"));
+        let error = InternalError::NotSupported("SB7xx IMC strap unknown");
+        assert!(format_internal_init_error(&error).contains("sb7xx_imc=off"));
+        let error =
+            InternalError::NotSupported("AMD FCH SB600-family SPI controller variant is untested");
+        assert!(format_internal_init_error(&error).contains("untested"));
     }
 }
 

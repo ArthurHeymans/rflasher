@@ -123,7 +123,8 @@ the controller can program and erase the identified chip at all. Use it when
 opening the device to decide whether to offer a writable store, rather than
 finding out from the first failing write.
 
-The catalog applies to raw SPI: Intel software sequencing and AMD SPI100. A
+The catalog applies to raw SPI: Intel software sequencing, AMD SPI100 and the
+AMD SB600 family. A
 controller in Intel hardware sequencing runs the flash protocol itself; wrap
 it in `rflasher_internal::HwseqFlash::with_size(controller, flash_size)`
 instead, which needs no identification and no heap either.

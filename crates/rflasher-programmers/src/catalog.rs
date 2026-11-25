@@ -167,14 +167,42 @@ const INTERNAL_MODES: &[Choice] = &[
 ];
 
 #[cfg(feature = "internal")]
-const INTERNAL_OPTIONS: &[OptionSpec] = &[OptionSpec {
-    key: "ich_spi_mode",
-    label: "SPI mode",
-    help: "Chipset sequencing mode (also accepted as `mode`)",
-    kind: OptionKind::Choice(INTERNAL_MODES),
-    default: Some("auto"),
-    scope: Scope::Any,
-}];
+const INTERNAL_SPI_SPEEDS: &[Choice] = &[
+    choice("33mhz", "33 MHz"),
+    choice("22mhz", "22 MHz"),
+    choice("16.5mhz", "16.5 MHz"),
+];
+
+#[cfg(feature = "internal")]
+const INTERNAL_SB7XX_IMC: &[Choice] = &[choice("off", "Strapped off (operator assertion)")];
+
+#[cfg(feature = "internal")]
+const INTERNAL_OPTIONS: &[OptionSpec] = &[
+    OptionSpec {
+        key: "ich_spi_mode",
+        label: "SPI mode",
+        help: "Chipset sequencing mode (also accepted as `mode`)",
+        kind: OptionKind::Choice(INTERNAL_MODES),
+        default: Some("auto"),
+        scope: Scope::Any,
+    },
+    OptionSpec {
+        key: "spispeed",
+        label: "SPI speed",
+        help: "AMD SB600-family SPI clock (default 16.5 MHz)",
+        kind: OptionKind::Choice(INTERNAL_SPI_SPEEDS),
+        default: None,
+        scope: Scope::Any,
+    },
+    OptionSpec {
+        key: "sb7xx_imc",
+        label: "SB7xx IMC",
+        help: "AMD SB7xx/SP5100: assert the IMC is strapped off (its strap is not readable)",
+        kind: OptionKind::Choice(INTERNAL_SB7XX_IMC),
+        default: None,
+        scope: Scope::NativeOnly,
+    },
+];
 
 // ============================================================================
 // Validation wrappers
