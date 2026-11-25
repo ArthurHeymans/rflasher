@@ -39,11 +39,14 @@ pub(super) fn usable_erasers<D: FlashDevice + ?Sized>(device: &D) -> alloc::vec:
 }
 
 /// Validate every included region and erase footprint before any mutation.
+///
+/// When `policy.recovery` is set, persists a full-device snapshot and returns
+/// it so callers can reuse it without re-reading the flash.
 pub(super) async fn preflight<D: FlashDevice + ?Sized>(
     device: &mut D,
     layout: &Layout,
     policy: &mut MutationPolicy<'_>,
-) -> Result<()> {
+) -> Result<Option<alloc::vec::Vec<u8>>> {
     layout.validate(device.size())?;
     let regions: alloc::vec::Vec<_> = layout.included_regions().collect();
     if let Some(r) = layout.regions_overlapping_included().find(|r| r.readonly) {
@@ -159,8 +162,9 @@ pub(super) async fn preflight<D: FlashDevice + ?Sized>(
         let mut image = vec![0; device.size() as usize];
         device.read(0, &mut image).await?;
         sink.persist(&image)?;
+        return Ok(Some(image));
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Refuse an erase whose block the device restricts. The whole block is
