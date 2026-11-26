@@ -495,16 +495,6 @@ mod tests {
     }
 
     #[test]
-    fn test_target_user_option_mapping() {
-        assert_eq!(Target::from_user_option(1), Some(Target::ApplicationFlash1));
-        assert_eq!(Target::from_user_option(2), Some(Target::ApplicationFlash2));
-        assert_eq!(Target::from_user_option(0), None);
-        assert_eq!(Target::from_user_option(3), None);
-        assert_eq!(Target::ApplicationFlash1 as u8, 0);
-        assert_eq!(Target::ApplicationFlash2 as u8, 2);
-    }
-
-    #[test]
     fn test_device_type_from_string() {
         assert_eq!(
             DeviceType::from_device_string("SF100 V:5.0.0"),

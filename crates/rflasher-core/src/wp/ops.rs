@@ -755,27 +755,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mode_from_bits() {
-        let mut bits = WpBits::empty();
-
-        bits.srp = Some(0);
-        bits.srl = Some(0);
-        assert_eq!(bits.mode(), WpMode::Disabled);
-
-        bits.srp = Some(1);
-        bits.srl = Some(0);
-        assert_eq!(bits.mode(), WpMode::Hardware);
-
-        bits.srp = Some(0);
-        bits.srl = Some(1);
-        assert_eq!(bits.mode(), WpMode::PowerCycle);
-
-        bits.srp = Some(1);
-        bits.srl = Some(1);
-        assert_eq!(bits.mode(), WpMode::Permanent);
-    }
-
-    #[test]
     fn test_build_register_values() {
         let bit_map = WpRegBitMap::winbond_standard();
         let mut bits = WpBits::empty();

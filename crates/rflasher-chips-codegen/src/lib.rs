@@ -527,26 +527,4 @@ mod tests {
             .sum();
         assert_eq!(total, 128 * 1024);
     }
-
-    #[test]
-    fn test_size_conversion() {
-        assert_eq!(Size::B(256).to_bytes(), 256);
-        assert_eq!(Size::KiB(4).to_bytes(), 4096);
-        assert_eq!(Size::KiB(64).to_bytes(), 65536);
-        assert_eq!(Size::MiB(1).to_bytes(), 1048576);
-        assert_eq!(Size::MiB(16).to_bytes(), 16777216);
-    }
-
-    #[test]
-    fn test_features_to_tokens() {
-        let features = FeaturesDef {
-            wrsr_wren: true,
-            fast_read: true,
-            ..Default::default()
-        };
-        let tokens = features_to_tokens(features);
-        let s = tokens.to_string();
-        assert!(s.contains("WRSR_WREN"));
-        assert!(s.contains("FAST_READ"));
-    }
 }

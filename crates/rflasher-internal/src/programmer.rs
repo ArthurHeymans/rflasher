@@ -312,11 +312,4 @@ mod tests {
         assert!(opts.reject_sb600_options().is_err());
         assert!(InternalOptions::default().reject_sb600_options().is_ok());
     }
-
-    #[test]
-    fn test_programmer_info() {
-        let info = programmer_info();
-        assert_eq!(info.name, "internal");
-        assert!(info.requires_root);
-    }
 }

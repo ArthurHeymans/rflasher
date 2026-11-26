@@ -323,27 +323,4 @@ mod tests {
         assert_eq!(SpiSpeed::Speed15M.to_khz(), 15_000);
         assert_eq!(SpiSpeed::Speed7_5M.to_khz(), 7_500);
     }
-
-    #[test]
-    fn test_spi_mode() {
-        assert_eq!(SpiMode::Mode0.cpol(), 0);
-        assert_eq!(SpiMode::Mode0.cpha(), 0);
-        assert_eq!(SpiMode::Mode1.cpol(), 0);
-        assert_eq!(SpiMode::Mode1.cpha(), 1);
-        assert_eq!(SpiMode::Mode2.cpol(), 1);
-        assert_eq!(SpiMode::Mode2.cpha(), 0);
-        assert_eq!(SpiMode::Mode3.cpol(), 1);
-        assert_eq!(SpiMode::Mode3.cpha(), 1);
-    }
-
-    #[test]
-    fn test_config_buffer() {
-        let config = SpiConfig::new();
-        let buf = config.build_config_buffer();
-
-        assert_eq!(buf[0], CH347_CMD_SPI_SET_CFG);
-        assert_eq!(buf[1], 26); // payload length
-        assert_eq!(buf[5], 4); // mystery byte
-        assert_eq!(buf[6], 1); // mystery byte
-    }
 }

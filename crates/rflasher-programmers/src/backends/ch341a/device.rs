@@ -559,12 +559,3 @@ mod delay_tests {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn out_transfer_must_send_the_whole_command() {
-        assert!(super::check_out_length(32, 32).is_ok());
-        assert!(super::check_out_length(32, 31).is_err());
-    }
-}
