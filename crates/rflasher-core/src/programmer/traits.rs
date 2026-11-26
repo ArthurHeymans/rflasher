@@ -161,6 +161,21 @@ pub trait SpiMaster {
         true
     }
 
+    /// Check whether this programmer can execute a `WRSR` (`0x01`) write of `len`
+    /// data bytes (1 or 2) preceded by `enable_opcode` (`WREN` `0x06` or `EWSR` `0x50`).
+    ///
+    /// Defaults to checking [`Self::probe_opcode`] for both opcodes and
+    /// `self.max_write_len() >= len`. Programmers whose status-write path has
+    /// narrower constraints (for example supporting `EWSR` only with 1-byte
+    /// writes) override this so callers can preflight or pick a supported path.
+    /// Wrappers must forward it.
+    fn supports_status_write(&self, enable_opcode: u8, len: usize) -> bool {
+        len > 0
+            && self.max_write_len() >= len
+            && self.probe_opcode(enable_opcode)
+            && self.probe_opcode(crate::spi::opcodes::WRSR)
+    }
+
     /// Adapt to the chip that was identified, before operating on it.
     ///
     /// A programmer that only sends opcodes it understands (Intel software

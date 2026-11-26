@@ -7,6 +7,7 @@ use rflasher_core::spi::SpiCommand;
 use rflasher_programmers::ch341a::Ch341a;
 use rflasher_programmers::ch347::Ch347;
 use rflasher_programmers::dediprog::Dediprog;
+use rflasher_programmers::ezp_spi::EzpSpi;
 use rflasher_programmers::ft4222::Ft4222;
 use rflasher_programmers::ftdi::Ftdi;
 use rflasher_programmers::raiden::RaidenDebugSpi;
@@ -27,6 +28,7 @@ pub(crate) enum Programmer {
     Ftdi(Ftdi),
     Ft4222(Ft4222),
     Dediprog(Dediprog),
+    EzpSpi(EzpSpi),
     Raiden(RaidenDebugSpi),
 }
 
@@ -40,6 +42,7 @@ macro_rules! dispatch {
             Programmer::Ftdi($m) => $body,
             Programmer::Ft4222($m) => $body,
             Programmer::Dediprog($m) => $body,
+            Programmer::EzpSpi($m) => $body,
             Programmer::Raiden($m) => $body,
         }
     };
@@ -65,6 +68,10 @@ impl SpiMaster for Programmer {
 
     fn probe_opcode(&self, opcode: u8) -> bool {
         dispatch!(self, m => SpiMaster::probe_opcode(m, opcode))
+    }
+
+    fn supports_status_write(&self, enable_opcode: u8, len: usize) -> bool {
+        dispatch!(self, m => SpiMaster::supports_status_write(m, enable_opcode, len))
     }
 
     fn chip_identified(&mut self, chip: &rflasher_core::chip::FlashChip) {
@@ -187,6 +194,12 @@ pub(crate) async fn open_programmer(
                 .map_err(|e| e.to_string())?;
             let display = format!("Dediprog {}", dediprog.device_string());
             Ok((Programmer::Dediprog(dediprog), display))
+        }
+        "ezp_spi" => {
+            let device_info = EzpSpi::request_device().await.map_err(|e| e.to_string())?;
+            let ezp = EzpSpi::open(device_info).await.map_err(|e| e.to_string())?;
+            let display = format!("EZP2013 ({})", ezp.firmware_version());
+            Ok((Programmer::EzpSpi(ezp), display))
         }
         "raiden_debug_spi" => {
             let config =

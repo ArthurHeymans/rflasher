@@ -18,9 +18,33 @@ use crate::wp::{RegisterWriteEnable, StatusWriteMethods};
 /// offer persistent WREN writes) is preferred: a power loss mid-operation
 /// then restores protection by itself. Chips without a volatile procedure
 /// fall back to their persistent one, which `restore` rewrites explicitly.
-fn temporary_write_enable(features: Features) -> Option<RegisterWriteEnable> {
+fn enable_opcode(enable: RegisterWriteEnable) -> u8 {
+    match enable {
+        RegisterWriteEnable::Wren => 0x06,
+        RegisterWriteEnable::Ewsr => 0x50,
+    }
+}
+
+fn temporary_write_enable<M: SpiMaster + ?Sized>(
+    master: &M,
+    features: Features,
+    write_len: usize,
+) -> Result<RegisterWriteEnable> {
     let methods = StatusWriteMethods::from_features(features);
-    methods.volatile.or(methods.persistent)
+    if methods.volatile.is_none() && methods.persistent.is_none() {
+        return Err(Error::ChipNotSupported);
+    }
+    if let Some(en) = methods.volatile
+        && master.supports_status_write(enable_opcode(en), write_len)
+    {
+        return Ok(en);
+    }
+    if let Some(en) = methods.persistent
+        && master.supports_status_write(enable_opcode(en), write_len)
+    {
+        return Ok(en);
+    }
+    Err(Error::OpcodeNotSupported)
 }
 
 // Keep the bounded sector snapshot inline: core also supports no-alloc targets.
@@ -49,17 +73,14 @@ async fn write_status<M: SpiMaster + ?Sized>(
     sr1: u8,
     sr2: Option<u8>,
 ) -> Result<()> {
-    match temporary_write_enable(ctx.chip.features) {
-        Some(RegisterWriteEnable::Wren) => protocol::write_enable(master).await?,
-        Some(RegisterWriteEnable::Ewsr) => protocol::write_enable_ewsr(master).await?,
-        None => return Err(Error::ChipNotSupported),
+    let write_len = if sr2.is_some() { 2 } else { 1 };
+    match temporary_write_enable(master, ctx.chip.features, write_len)? {
+        RegisterWriteEnable::Wren => protocol::write_enable(master).await?,
+        RegisterWriteEnable::Ewsr => protocol::write_enable_ewsr(master).await?,
     }
     let data = [sr1 & !3, sr2.unwrap_or(0)];
     master
-        .execute(&mut SpiCommand::write_reg(
-            0x01,
-            &data[..if sr2.is_some() { 2 } else { 1 }],
-        ))
+        .execute(&mut SpiCommand::write_reg(0x01, &data[..write_len]))
         .await?;
     // Some parts do not assert WIP immediately after WRSR (flashprog uses 100ms).
     master.delay_us(100_000).await;
@@ -228,15 +249,16 @@ pub(crate) async fn prepare<M: SpiMaster + ?Sized>(
             // These flags do not identify either RDSR2 or the WRSR wire format.
             return Err(Error::ChipNotSupported);
         }
-        let enable = match temporary_write_enable(ctx.chip.features) {
-            Some(RegisterWriteEnable::Wren) => 0x06,
-            Some(RegisterWriteEnable::Ewsr) => 0x50,
-            None => return Err(Error::ChipNotSupported),
-        };
-        if master.max_write_len() == 0 || !master.probe_opcode(enable) || !master.probe_opcode(0x01)
+        let write_len = if unlock != Unlock::At2x && ctx.chip.features.contains(Features::WRSR_EXT)
         {
-            return Err(Error::OpcodeNotSupported);
-        }
+            if master.max_write_len() < 2 {
+                return Err(Error::ChipNotSupported);
+            }
+            2
+        } else {
+            1
+        };
+        let _enable = temporary_write_enable(master, ctx.chip.features, write_len)?;
         if sr1 & lock != 0 && wp != 0 && sr1 & wp == 0 {
             return Err(Error::WriteProtected);
         }

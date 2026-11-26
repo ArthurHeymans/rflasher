@@ -28,6 +28,7 @@ dummy = ["alloc"]
 ch341a = ["usb", "dep:futures-lite", "dep:futures-timer"]
 ch347 = ["usb", "dep:futures-lite", "dep:futures-timer"]
 dediprog = ["usb", "dep:futures-lite", "dep:futures-timer", "dep:web-time"]
+ezp-spi = ["usb", "dep:futures-lite", "dep:futures-timer", "dep:web-time"]
 ft4222 = ["usb", "dep:futures-lite", "dep:futures-timer"]
 raiden = ["usb", "dep:futures-lite", "dep:futures-timer", "dep:zerocopy"]
 sunxi-fel = ["usb"]
@@ -58,6 +59,7 @@ portable-programmers = [
     "ch341a",
     "ch347",
     "dediprog",
+    "ezp-spi",
     "serprog-native",
     "ftdi",
     "ft4222",
