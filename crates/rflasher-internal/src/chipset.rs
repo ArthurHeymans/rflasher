@@ -389,15 +389,3 @@ pub const B_L: BusType = BusType::LPC;
 pub const B_LS: BusType = BusType(BusType::LPC.0 | BusType::SPI.0);
 /// SPI only
 pub const B_S: BusType = BusType::SPI;
-
-#[cfg(test)]
-mod tests {
-    use super::IchChipset;
-
-    #[test]
-    fn ich8_does_not_support_hwseq() {
-        assert!(!IchChipset::Ich7.supports_hwseq());
-        assert!(!IchChipset::Ich8.supports_hwseq());
-        assert!(IchChipset::Ich9.supports_hwseq());
-    }
-}

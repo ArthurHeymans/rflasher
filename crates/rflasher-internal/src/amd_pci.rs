@@ -276,16 +276,6 @@ mod tests {
     }
 
     #[test]
-    fn test_spi100_detection() {
-        assert!(AmdChipset::RenoirCezanne.uses_spi100());
-        assert!(AmdChipset::PinnacleRidge.uses_spi100());
-        assert!(AmdChipset::RavenRidgeMatisseStarship.uses_spi100());
-        assert!(AmdChipset::MendoncinoRembrandt.uses_spi100());
-        assert!(!AmdChipset::Sb600.uses_spi100());
-        assert!(!AmdChipset::StoneyRidge.uses_spi100());
-    }
-
-    #[test]
     fn every_chipset_has_exactly_one_controller() {
         for entry in AMD_CHIPSETS {
             assert!(

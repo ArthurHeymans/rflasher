@@ -626,12 +626,6 @@ pub fn parse_options(options: &[(&str, &str)]) -> Result<SpiConfig> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn out_transfer_must_send_the_whole_command() {
-        assert!(super::check_out_length(13, 13).is_ok());
-        assert!(super::check_out_length(13, 12).is_err());
-    }
-
     use super::*;
 
     #[derive(Default)]

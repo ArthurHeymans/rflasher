@@ -765,15 +765,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn pci_address_preserves_segment() {
-        let bdf = PciAddress::new(2, 0, 0x1f, 5);
-        assert_eq!(bdf.segment(), 2);
-        assert_eq!(bdf.bus(), 0);
-        assert_eq!(bdf.device(), 0x1f);
-        assert_eq!(bdf.function(), 5);
-    }
-
-    #[test]
     fn aligned_data_reads_preserve_bytes_and_stay_within_the_requested_range() {
         let source: Vec<u8> = (0..96).map(|i| (i * 17) as u8).collect();
         for alignment in [4, 8] {

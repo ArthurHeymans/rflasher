@@ -881,8 +881,9 @@ mod tests {
     /// the SPI mux on real GPUs. tock stores the unshifted mask + shift.
     #[test]
     fn gpio_pad_field_positions_match_upstream_masks() {
-        assert_eq!((GpioPad::SPI.mask, GpioPad::SPI.shift), (0x7, 8)); // 0x700
-        assert_eq!((GpioPad::LEGACY.mask, GpioPad::LEGACY.shift), (0x1, 19)); // 0x80000
-        assert_eq!((GpioPad::EXTRA.mask, GpioPad::EXTRA.shift), (0x1, 30)); // 0x40000000
+        let field = |f: tock_registers::fields::Field<u32, GpioPad::Register>| f.mask << f.shift;
+        assert_eq!(field(GpioPad::SPI), 0x700);
+        assert_eq!(field(GpioPad::LEGACY), 0x80000);
+        assert_eq!(field(GpioPad::EXTRA), 0x4000_0000);
     }
 }

@@ -435,10 +435,4 @@ mod tests {
         let p16 = checked_mmio_ptr::<u16>(base, 16, 14);
         assert!(p16.is_aligned());
     }
-
-    #[test]
-    #[ignore]
-    fn test_physmap_create() {
-        // Requires root and /dev/mem on Linux or a mapped MMIO address in firmware.
-    }
 }

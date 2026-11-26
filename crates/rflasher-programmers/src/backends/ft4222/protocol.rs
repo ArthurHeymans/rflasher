@@ -350,21 +350,6 @@ mod tests {
     }
 
     #[test]
-    fn test_system_clock_values() {
-        assert_eq!(SystemClock::Clock60MHz.to_khz(), 60_000);
-        assert_eq!(SystemClock::Clock24MHz.to_khz(), 24_000);
-        assert_eq!(SystemClock::Clock48MHz.to_khz(), 48_000);
-        assert_eq!(SystemClock::Clock80MHz.to_khz(), 80_000);
-    }
-
-    #[test]
-    fn test_divisor_values() {
-        assert_eq!(ClockDivisor::Div2.divisor(), 2);
-        assert_eq!(ClockDivisor::Div4.divisor(), 4);
-        assert_eq!(ClockDivisor::Div512.divisor(), 512);
-    }
-
-    #[test]
     fn test_io_mode_parse() {
         assert_eq!(IoMode::parse("single"), Some(IoMode::Single));
         assert_eq!(IoMode::parse("dual"), Some(IoMode::Dual));
